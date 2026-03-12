@@ -30,6 +30,7 @@ polyphony-core = { path = "../polyphony-core" }
 polyphony-agents = { path = "../polyphony-agents", default-features = false }
 polyphony-git = { path = "../polyphony-git" }
 polyphony-github = { path = "../polyphony-github", optional = true }
+polyphony-feedback = { path = "../polyphony-feedback" }
 polyphony-issue-mock = { path = "../polyphony-issue-mock", optional = true, default-features = false }
 polyphony-linear = { path = "../polyphony-linear", optional = true }
 polyphony-orchestrator = { path = "../polyphony-orchestrator" }

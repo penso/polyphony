@@ -9,13 +9,19 @@ use {
     chrono::{DateTime, Utc},
     notify::{RecommendedWatcher, RecursiveMode, Watcher},
     polyphony_core::{
-        AgentEvent, AgentEventKind, AgentModelCatalog, AgentRunResult, AgentRunSpec, AgentRuntime,
-        AttemptStatus, BudgetSnapshot, CodexTotals, Error as CoreError, Issue, IssueTracker,
-        PersistedRunRecord, RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot,
-        SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, WorkspaceProvisioner,
-        sanitize_workspace_key,
+        AgentContextEntry, AgentContextSnapshot, AgentEvent, AgentEventKind, AgentModelCatalog,
+        AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CodexTotals,
+        Error as CoreError, FeedbackAction, FeedbackLink, FeedbackNotification, Issue,
+        IssueTracker, PersistedRunRecord, PullRequestCommenter, PullRequestManager,
+        PullRequestRequest, RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot,
+        SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, WorkspaceCommitRequest,
+        WorkspaceCommitter, WorkspaceProvisioner, sanitize_workspace_key,
     },
-    polyphony_workflow::{HooksConfig, LoadedWorkflow, load_workflow, render_prompt},
+    polyphony_feedback::FeedbackRegistry,
+    polyphony_workflow::{
+        HooksConfig, LoadedWorkflow, load_workflow, render_issue_template_with_strings,
+        render_prompt,
+    },
     polyphony_workspace::WorkspaceManager,
     serde_json::Value,
     thiserror::Error,
@@ -40,6 +46,11 @@ pub enum Error {
     Workspace(#[from] polyphony_workspace::Error),
 }
 
+const DEFAULT_AUTOMATION_COMMIT_MESSAGE: &str = "fix({{ issue.identifier }}): {{ issue.title }}";
+const DEFAULT_AUTOMATION_PR_TITLE: &str = "{{ issue.identifier }}: {{ issue.title }}";
+const DEFAULT_AUTOMATION_PR_BODY: &str = "Automated handoff for {{ issue.identifier }}.\n\nIssue: {{ issue.url }}\nBase branch: {{ base_branch }}\nHead branch: {{ head_branch }}\nCommit: {{ commit_sha }}";
+const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str = "Review the current branch against {{ base_branch }}.\nInspect the repository state and write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Recommended human checks\nDo not modify tracked source files other than `.polyphony/review.md`.";
+
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
     Refresh,
@@ -56,6 +67,10 @@ pub struct RuntimeService {
     tracker: Arc<dyn IssueTracker>,
     agent: Arc<dyn AgentRuntime>,
     provisioner: Arc<dyn WorkspaceProvisioner>,
+    committer: Option<Arc<dyn WorkspaceCommitter>>,
+    pull_request_manager: Option<Arc<dyn PullRequestManager>>,
+    pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
+    feedback: Option<Arc<FeedbackRegistry>>,
     store: Option<Arc<dyn StateStore>>,
     workflow_rx: watch::Receiver<LoadedWorkflow>,
     snapshot_tx: watch::Sender<RuntimeSnapshot>,
@@ -125,6 +140,7 @@ struct RuntimeState {
     throttles: HashMap<String, ActiveThrottle>,
     budgets: HashMap<String, BudgetSnapshot>,
     agent_catalogs: HashMap<String, AgentModelCatalog>,
+    saved_contexts: HashMap<String, AgentContextSnapshot>,
     recent_events: VecDeque<RuntimeEvent>,
     ended_runtime_seconds: f64,
     totals: CodexTotals,
@@ -138,6 +154,10 @@ impl RuntimeService {
         tracker: Arc<dyn IssueTracker>,
         agent: Arc<dyn AgentRuntime>,
         provisioner: Arc<dyn WorkspaceProvisioner>,
+        committer: Option<Arc<dyn WorkspaceCommitter>>,
+        pull_request_manager: Option<Arc<dyn PullRequestManager>>,
+        pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
+        feedback: Option<Arc<FeedbackRegistry>>,
         store: Option<Arc<dyn StateStore>>,
         workflow_rx: watch::Receiver<LoadedWorkflow>,
     ) -> (Self, RuntimeHandle) {
@@ -149,6 +169,10 @@ impl RuntimeService {
                 tracker,
                 agent,
                 provisioner,
+                committer,
+                pull_request_manager,
+                pull_request_commenter,
+                feedback,
                 store,
                 workflow_rx,
                 snapshot_tx,
@@ -163,6 +187,7 @@ impl RuntimeService {
                     throttles: HashMap::new(),
                     budgets: HashMap::new(),
                     agent_catalogs: HashMap::new(),
+                    saved_contexts: HashMap::new(),
                     recent_events: VecDeque::with_capacity(128),
                     ended_runtime_seconds: 0.0,
                     totals: CodexTotals::default(),
@@ -247,6 +272,36 @@ impl RuntimeService {
         )
     }
 
+    fn select_dispatch_agent(
+        &mut self,
+        issue: &Issue,
+        candidate_agents: &[polyphony_core::AgentDefinition],
+        saved_context: Option<&AgentContextSnapshot>,
+        prefer_alternate_agent: bool,
+    ) -> Result<polyphony_core::AgentDefinition, Error> {
+        if candidate_agents.is_empty() {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "no agent candidates configured for issue `{}`",
+                issue.identifier
+            ))));
+        }
+
+        let ordered_candidates = rotate_agent_candidates(
+            candidate_agents,
+            saved_context.map(|context| context.agent_name.as_str()),
+            prefer_alternate_agent,
+        );
+        ordered_candidates
+            .into_iter()
+            .find(|agent| !self.is_throttled(&format!("agent:{}", agent.name)))
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(format!(
+                    "all candidate agents are throttled for issue `{}`",
+                    issue.identifier
+                )))
+            })
+    }
+
     async fn tick(&mut self) {
         self.reconcile_running().await;
         self.poll_budgets().await;
@@ -293,7 +348,10 @@ impl RuntimeService {
             if !self.has_available_slot(&workflow, &issue.state) {
                 break;
             }
-            if let Err(error) = self.dispatch_issue(workflow.clone(), issue, None).await {
+            if let Err(error) = self
+                .dispatch_issue(workflow.clone(), issue, None, false)
+                .await
+            {
                 self.push_event("dispatch".into(), format!("dispatch failed: {error}"));
                 error!(%error, "dispatch failed");
             }
@@ -378,14 +436,16 @@ impl RuntimeService {
         workflow: LoadedWorkflow,
         issue: Issue,
         attempt: Option<u32>,
+        prefer_alternate_agent: bool,
     ) -> Result<(), Error> {
-        let selected_agent = workflow.config.select_agent_for_issue(&issue)?;
-        if self.is_throttled(&format!("agent:{}", selected_agent.name)) {
-            return Err(Error::Core(CoreError::Adapter(format!(
-                "agent `{}` is throttled",
-                selected_agent.name
-            ))));
-        }
+        let saved_context = self.state.saved_contexts.get(&issue.id).cloned();
+        let candidate_agents = workflow.config.candidate_agents_for_issue(&issue)?;
+        let selected_agent = self.select_dispatch_agent(
+            &issue,
+            &candidate_agents,
+            saved_context.as_ref(),
+            prefer_alternate_agent,
+        )?;
         let workspace_manager = self.build_workspace_manager(&workflow);
         let workspace = workspace_manager
             .ensure_workspace(
@@ -409,10 +469,34 @@ impl RuntimeService {
         let provisioner = self.provisioner.clone();
         let hooks = workflow.config.hooks.clone();
         let max_turns = workflow.config.agent.max_turns;
-        let prompt = render_prompt(&workflow.definition, &issue, attempt)?;
+        let prompt = append_saved_context(
+            render_prompt(&workflow.definition, &issue, attempt)?,
+            saved_context.as_ref(),
+            attempt.is_some()
+                || saved_context
+                    .as_ref()
+                    .is_some_and(|context| context.agent_name != selected_agent.name),
+        );
         let workspace_path = workspace.path.clone();
         let started_at = Utc::now();
         let selected_agent_for_task = selected_agent.clone();
+        if saved_context
+            .as_ref()
+            .is_some_and(|context| context.agent_name != selected_agent.name)
+        {
+            self.push_event(
+                "handoff".into(),
+                format!(
+                    "{} switched from {} to {}",
+                    issue.identifier,
+                    saved_context
+                        .as_ref()
+                        .map(|context| context.agent_name.as_str())
+                        .unwrap_or("unknown"),
+                    selected_agent.name
+                ),
+            );
+        }
         if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
             warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
         }
@@ -446,6 +530,7 @@ impl RuntimeService {
                 prompt,
                 max_turns,
                 selected_agent_for_task,
+                saved_context,
                 command_tx.clone(),
             )
             .await;
@@ -562,7 +647,12 @@ impl RuntimeService {
             return;
         }
         if let Err(error) = self
-            .dispatch_issue(workflow.clone(), issue, Some(retry.row.attempt))
+            .dispatch_issue(
+                workflow.clone(),
+                issue,
+                Some(retry.row.attempt),
+                retry.row.error.is_some(),
+            )
             .await
         {
             self.schedule_retry(
@@ -579,6 +669,7 @@ impl RuntimeService {
     async fn handle_message(&mut self, message: OrchestratorMessage) -> Result<(), Error> {
         match message {
             OrchestratorMessage::AgentEvent(event) => {
+                let mut running_model = None;
                 if let Some(running) = self.state.running.get_mut(&event.issue_id) {
                     running.session_id = event
                         .session_id
@@ -590,14 +681,16 @@ impl RuntimeService {
                     if matches!(event.kind, AgentEventKind::TurnStarted) {
                         running.turn_count += 1;
                     }
-                    if let Some(usage) = event.usage {
+                    if let Some(usage) = event.usage.clone() {
                         apply_usage_delta(&mut self.state.totals, running, usage);
                     }
-                    if let Some(rate_limits) = event.rate_limits {
+                    if let Some(rate_limits) = event.rate_limits.clone() {
                         running.rate_limits = Some(rate_limits.clone());
                         self.state.rate_limits = Some(rate_limits);
                     }
+                    running_model = running.model.clone();
                 }
+                self.update_saved_context_from_event(&event, running_model);
                 self.push_event(
                     "agent".into(),
                     format!(
@@ -649,6 +742,12 @@ impl RuntimeService {
             if let Some(error) = outcome.error.clone() {
                 details.insert("error".into(), Value::String(error));
             }
+            if let Some(context) = self.state.saved_contexts.get(&issue_id) {
+                details.insert(
+                    "saved_context".into(),
+                    serde_json::to_value(context).unwrap_or(Value::Null),
+                );
+            }
             store
                 .record_run(&PersistedRunRecord {
                     issue_id: issue_id.clone(),
@@ -677,6 +776,13 @@ impl RuntimeService {
                 {
                     warn!(%error, issue_identifier = %running.issue.identifier, "issue workflow status sync failed");
                 }
+                if let Err(error) = self.run_success_handoff(&workflow, &running).await {
+                    warn!(%error, issue_identifier = %running.issue.identifier, "post-run handoff failed");
+                    self.push_event(
+                        "handoff".into(),
+                        format!("{} handoff failed: {}", running.issue.identifier, error),
+                    );
+                }
                 self.state.completed.insert(issue_id.clone());
                 self.schedule_retry(
                     issue_id.clone(),
@@ -701,6 +807,7 @@ impl RuntimeService {
                 );
             },
         }
+        self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
         self.push_event(
             "worker".into(),
             format!("{} {:?}", issue_identifier, outcome.status),
@@ -964,6 +1071,7 @@ impl RuntimeService {
                 .collect(),
             budgets: self.state.budgets.values().cloned().collect(),
             agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
+            saved_contexts: self.state.saved_contexts.values().cloned().collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
         }
     }
@@ -971,6 +1079,7 @@ impl RuntimeService {
     fn restore_bootstrap(&mut self, bootstrap: polyphony_core::StoreBootstrap) {
         self.state.recent_events = bootstrap.recent_events.into_iter().collect();
         self.state.budgets = bootstrap.budgets;
+        self.state.saved_contexts = bootstrap.saved_contexts;
         self.state.throttles = bootstrap
             .throttles
             .into_iter()
@@ -1123,6 +1232,389 @@ impl RuntimeService {
             warn!(%error, "persisting budget snapshot failed");
         }
     }
+
+    fn update_saved_context_from_event(&mut self, event: &AgentEvent, model: Option<String>) {
+        let context = self
+            .state
+            .saved_contexts
+            .entry(event.issue_id.clone())
+            .or_insert_with(|| AgentContextSnapshot {
+                issue_id: event.issue_id.clone(),
+                issue_identifier: event.issue_identifier.clone(),
+                updated_at: event.at,
+                agent_name: event.agent_name.clone(),
+                model: model.clone(),
+                session_id: event.session_id.clone(),
+                status: None,
+                error: None,
+                usage: event.usage.clone().unwrap_or_default(),
+                transcript: Vec::new(),
+            });
+        context.updated_at = event.at;
+        context.agent_name = event.agent_name.clone();
+        context.model = model.or_else(|| context.model.clone());
+        context.session_id = event
+            .session_id
+            .clone()
+            .or_else(|| context.session_id.clone());
+        if let Some(usage) = &event.usage {
+            context.usage = usage.clone();
+        }
+        if let Some(message) = event
+            .message
+            .as_ref()
+            .filter(|message| !message.trim().is_empty())
+        {
+            context.transcript.push(AgentContextEntry {
+                at: event.at,
+                kind: format!("{:?}", event.kind),
+                message: message.clone(),
+            });
+            while context.transcript.len() > 40 {
+                context.transcript.remove(0);
+            }
+        }
+    }
+
+    fn finalize_saved_context(
+        &mut self,
+        issue_id: &str,
+        issue_identifier: &str,
+        running: &RunningTask,
+        outcome: &AgentRunResult,
+    ) {
+        let context = self
+            .state
+            .saved_contexts
+            .entry(issue_id.to_string())
+            .or_insert_with(|| AgentContextSnapshot {
+                issue_id: issue_id.to_string(),
+                issue_identifier: issue_identifier.to_string(),
+                updated_at: Utc::now(),
+                agent_name: running.agent_name.clone(),
+                model: running.model.clone(),
+                session_id: running.session_id.clone(),
+                status: None,
+                error: None,
+                usage: running.tokens.clone(),
+                transcript: Vec::new(),
+            });
+        context.updated_at = Utc::now();
+        context.issue_identifier = issue_identifier.to_string();
+        context.agent_name = running.agent_name.clone();
+        context.model = running.model.clone();
+        context.session_id = running.session_id.clone();
+        context.status = Some(format!("{:?}", outcome.status));
+        context.error = outcome.error.clone();
+        context.usage = running.tokens.clone();
+        if let Some(error) = &outcome.error {
+            context.transcript.push(AgentContextEntry {
+                at: Utc::now(),
+                kind: "outcome".into(),
+                message: format!("run ended with error: {error}"),
+            });
+        }
+        while context.transcript.len() > 40 {
+            context.transcript.remove(0);
+        }
+    }
+
+    async fn run_success_handoff(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        running: &RunningTask,
+    ) -> Result<(), Error> {
+        if !workflow.config.automation.enabled {
+            return Ok(());
+        }
+        let committer = self
+            .committer
+            .as_ref()
+            .ok_or_else(|| CoreError::Adapter("workspace committer is not configured".into()))?;
+        let pull_request_manager = self
+            .pull_request_manager
+            .as_ref()
+            .ok_or_else(|| CoreError::Adapter("pull request manager is not configured".into()))?;
+        let repository = workflow
+            .config
+            .tracker
+            .repository
+            .clone()
+            .ok_or_else(|| CoreError::Adapter("tracker.repository is required".into()))?;
+        let base_branch = workflow
+            .config
+            .workspace
+            .default_branch
+            .clone()
+            .unwrap_or_else(|| "main".into());
+        let branch_name = running.issue.branch_name.clone().unwrap_or_else(|| {
+            format!("task/{}", sanitize_workspace_key(&running.issue.identifier))
+        });
+        let commit_message = render_issue_template_with_strings(
+            workflow
+                .config
+                .automation
+                .commit_message
+                .as_deref()
+                .unwrap_or(DEFAULT_AUTOMATION_COMMIT_MESSAGE),
+            &running.issue,
+            running.attempt,
+            &[
+                ("base_branch", base_branch.clone()),
+                ("head_branch", branch_name.clone()),
+            ],
+        )?;
+        let commit_result = committer
+            .commit_and_push(&WorkspaceCommitRequest {
+                workspace_path: running.workspace_path.clone(),
+                branch_name: branch_name.clone(),
+                commit_message,
+                remote_name: workflow.config.automation.git.remote_name.clone(),
+                auth_token: workflow.config.tracker.api_key.clone(),
+                author_name: workflow.config.automation.git.author.name.clone(),
+                author_email: workflow.config.automation.git.author.email.clone(),
+            })
+            .await?;
+        let Some(commit_result) = commit_result else {
+            self.push_event(
+                "handoff".into(),
+                format!(
+                    "{} handoff skipped because the workspace is clean",
+                    running.issue.identifier
+                ),
+            );
+            return Ok(());
+        };
+
+        let pr_title = render_issue_template_with_strings(
+            workflow
+                .config
+                .automation
+                .pr_title
+                .as_deref()
+                .unwrap_or(DEFAULT_AUTOMATION_PR_TITLE),
+            &running.issue,
+            running.attempt,
+            &[
+                ("base_branch", base_branch.clone()),
+                ("head_branch", branch_name.clone()),
+                ("commit_sha", commit_result.head_sha.clone()),
+            ],
+        )?;
+        let pr_body = render_issue_template_with_strings(
+            workflow
+                .config
+                .automation
+                .pr_body
+                .as_deref()
+                .unwrap_or(DEFAULT_AUTOMATION_PR_BODY),
+            &running.issue,
+            running.attempt,
+            &[
+                ("base_branch", base_branch.clone()),
+                ("head_branch", branch_name.clone()),
+                ("commit_sha", commit_result.head_sha.clone()),
+            ],
+        )?;
+        let pull_request = pull_request_manager
+            .ensure_pull_request(&PullRequestRequest {
+                repository,
+                head_branch: branch_name.clone(),
+                base_branch: base_branch.clone(),
+                title: pr_title,
+                body: pr_body,
+                draft: workflow.config.automation.draft_pull_requests,
+            })
+            .await?;
+
+        if let Some(review_body) = self
+            .run_review_pass(workflow, running, &pull_request)
+            .await?
+            && let Some(commenter) = &self.pull_request_commenter
+        {
+            commenter
+                .comment_on_pull_request(&pull_request, &review_body)
+                .await?;
+        }
+        self.send_handoff_feedback(workflow, running, &pull_request, &commit_result)
+            .await;
+        self.push_event(
+            "handoff".into(),
+            format!(
+                "{} opened PR #{} on {}",
+                running.issue.identifier, pull_request.number, commit_result.branch_name
+            ),
+        );
+        Ok(())
+    }
+
+    async fn run_review_pass(
+        &self,
+        workflow: &LoadedWorkflow,
+        running: &RunningTask,
+        pull_request: &polyphony_core::PullRequestRef,
+    ) -> Result<Option<String>, Error> {
+        let review_agent = workflow
+            .config
+            .review_agent()?
+            .or_else(|| {
+                workflow
+                    .config
+                    .all_agents()
+                    .into_iter()
+                    .find(|agent| agent.name == running.agent_name)
+            })
+            .ok_or_else(|| CoreError::Adapter("review agent is not available".into()))?;
+        let review_path = running.workspace_path.join(".polyphony").join("review.md");
+        if let Some(parent) = review_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        if tokio::fs::metadata(&review_path).await.is_ok() {
+            let _ = tokio::fs::remove_file(&review_path).await;
+        }
+        let base_branch = workflow
+            .config
+            .workspace
+            .default_branch
+            .clone()
+            .unwrap_or_else(|| "main".into());
+        let prompt = render_issue_template_with_strings(
+            workflow
+                .config
+                .automation
+                .review_prompt
+                .as_deref()
+                .unwrap_or(DEFAULT_AUTOMATION_REVIEW_PROMPT),
+            &running.issue,
+            running.attempt,
+            &[
+                ("base_branch", base_branch),
+                (
+                    "head_branch",
+                    running.issue.branch_name.clone().unwrap_or_default(),
+                ),
+                (
+                    "pull_request_url",
+                    pull_request.url.clone().unwrap_or_default(),
+                ),
+            ],
+        )?;
+        let manager = self.build_workspace_manager(workflow);
+        manager
+            .run_before_run(&workflow.config.hooks, &running.workspace_path)
+            .await?;
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let drain = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
+        let result = self
+            .agent
+            .run(
+                AgentRunSpec {
+                    issue: running.issue.clone(),
+                    attempt: None,
+                    workspace_path: running.workspace_path.clone(),
+                    prompt,
+                    max_turns: workflow.config.agent.max_turns,
+                    agent: review_agent,
+                    prior_context: None,
+                },
+                event_tx,
+            )
+            .await;
+        drain.abort();
+        manager
+            .run_after_run_best_effort(&workflow.config.hooks, &running.workspace_path)
+            .await;
+        match result {
+            Ok(result) if matches!(result.status, AttemptStatus::Succeeded) => {
+                let review = tokio::fs::read_to_string(&review_path).await.ok();
+                let _ = tokio::fs::remove_file(&review_path).await;
+                Ok(review.and_then(|body| {
+                    let trimmed = body.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                }))
+            },
+            Ok(result) => {
+                warn!(
+                    issue_identifier = %running.issue.identifier,
+                    status = ?result.status,
+                    "review pass did not succeed"
+                );
+                Ok(None)
+            },
+            Err(error) => {
+                warn!(issue_identifier = %running.issue.identifier, %error, "review pass failed");
+                Ok(None)
+            },
+        }
+    }
+
+    async fn send_handoff_feedback(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        running: &RunningTask,
+        pull_request: &polyphony_core::PullRequestRef,
+        commit_result: &polyphony_core::WorkspaceCommitResult,
+    ) {
+        let Some(feedback) = &self.feedback else {
+            return;
+        };
+        if feedback.is_empty() {
+            return;
+        }
+        let mut links = Vec::new();
+        if let Some(url) = &pull_request.url {
+            links.push(FeedbackLink {
+                label: "Review PR".into(),
+                url: url.clone(),
+            });
+        }
+        if let Some(url) = &running.issue.url {
+            links.push(FeedbackLink {
+                label: "Issue".into(),
+                url: url.clone(),
+            });
+        }
+        let notification = FeedbackNotification {
+            key: format!("handoff:{}", running.issue.id),
+            title: format!("{} ready for review", running.issue.identifier),
+            body: format!(
+                "{}\n\nBranch: {}\nCommit: {}\nChanged files: {}\nWorkspace: {}",
+                running.issue.title,
+                commit_result.branch_name,
+                commit_result.head_sha,
+                commit_result.changed_files,
+                running.workspace_path.display()
+            ),
+            links,
+            actions: workflow
+                .config
+                .feedback
+                .action_base_url
+                .as_ref()
+                .map(|base| {
+                    vec![FeedbackAction {
+                        id: "review".into(),
+                        label: "Open Review".into(),
+                        url: pull_request.url.clone().or_else(|| Some(base.clone())),
+                    }]
+                })
+                .unwrap_or_default(),
+        };
+        for (component, error) in feedback.send_all(&notification).await {
+            warn!(%component, %error, "feedback sink failed");
+            self.push_event(
+                "feedback".into(),
+                format!(
+                    "{} sink {} failed: {}",
+                    running.issue.identifier, component, error
+                ),
+            );
+        }
+    }
 }
 
 pub fn spawn_workflow_watcher(
@@ -1166,6 +1658,7 @@ async fn run_worker_attempt(
     prompt: String,
     max_turns: u32,
     selected_agent: polyphony_core::AgentDefinition,
+    saved_context: Option<AgentContextSnapshot>,
     command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
 ) -> Result<AgentRunResult, Error> {
     workspace_manager
@@ -1188,6 +1681,7 @@ async fn run_worker_attempt(
                 prompt,
                 max_turns,
                 agent: selected_agent,
+                prior_context: saved_context,
             },
             event_tx,
         )
@@ -1246,8 +1740,77 @@ fn empty_snapshot() -> RuntimeSnapshot {
         throttles: Vec::new(),
         budgets: Vec::new(),
         agent_catalogs: Vec::new(),
+        saved_contexts: Vec::new(),
         recent_events: Vec::new(),
     }
+}
+
+fn append_saved_context(
+    prompt: String,
+    saved_context: Option<&AgentContextSnapshot>,
+    include: bool,
+) -> String {
+    if !include {
+        return prompt;
+    }
+    let Some(saved_context) = saved_context else {
+        return prompt;
+    };
+    let mut result = prompt;
+    result.push_str("\n\n## Saved Polyphony Context\n");
+    result.push_str(&format!(
+        "Last agent: {}{}\n",
+        saved_context.agent_name,
+        saved_context
+            .model
+            .as_ref()
+            .map(|model| format!(" ({model})"))
+            .unwrap_or_default()
+    ));
+    if let Some(status) = &saved_context.status {
+        result.push_str(&format!("Last status: {status}\n"));
+    }
+    if let Some(error) = &saved_context.error {
+        result.push_str(&format!("Last error: {error}\n"));
+    }
+    result.push_str("Recent transcript:\n");
+    for entry in saved_context.transcript.iter().rev().take(12).rev() {
+        result.push_str(&format!(
+            "- [{}] {}: {}\n",
+            entry.kind,
+            entry.at.to_rfc3339(),
+            entry.message
+        ));
+    }
+    result
+}
+
+fn rotate_agent_candidates(
+    candidate_agents: &[polyphony_core::AgentDefinition],
+    previous_agent_name: Option<&str>,
+    prefer_alternate_agent: bool,
+) -> Vec<polyphony_core::AgentDefinition> {
+    if !prefer_alternate_agent {
+        return candidate_agents.to_vec();
+    }
+    let Some(previous_agent_name) = previous_agent_name else {
+        return candidate_agents.to_vec();
+    };
+    let Some(previous_index) = candidate_agents
+        .iter()
+        .position(|agent| agent.name == previous_agent_name)
+    else {
+        return candidate_agents.to_vec();
+    };
+    if candidate_agents.len() <= 1 {
+        return candidate_agents.to_vec();
+    }
+
+    candidate_agents[previous_index + 1..]
+        .iter()
+        .chain(candidate_agents[..=previous_index].iter())
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -1264,6 +1827,7 @@ mod tests {
     use {
         async_trait::async_trait,
         polyphony_core::{IssueAuthor, IssueComment, Workspace, WorkspaceRequest},
+        tokio::sync::watch,
     };
 
     #[derive(Clone)]
@@ -1410,16 +1974,17 @@ mod tests {
     }
 
     fn test_workflow(workspace_root: &Path) -> LoadedWorkflow {
+        test_workflow_with_front_matter(
+            workspace_root,
+            "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nprovider:\n  kind: mock\n  command: mock\n---\nTest prompt\n",
+        )
+    }
+
+    fn test_workflow_with_front_matter(workspace_root: &Path, raw: &str) -> LoadedWorkflow {
         let workflow_path = workspace_root.join("WORKFLOW.md");
         fs::create_dir_all(workspace_root).unwrap();
-        fs::write(
-            &workflow_path,
-            format!(
-                "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: {}\nprovider:\n  kind: mock\n  command: mock\n---\nTest prompt\n",
-                workspace_root.display()
-            ),
-        )
-        .unwrap();
+        let raw = raw.replace("__ROOT__", &workspace_root.display().to_string());
+        fs::write(&workflow_path, raw).unwrap();
         load_workflow(&workflow_path).unwrap()
     }
 
@@ -1434,6 +1999,10 @@ mod tests {
             Arc::new(tracker),
             Arc::new(NoopAgent),
             Arc::new(provisioner),
+            None,
+            None,
+            None,
+            None,
             None,
             rx,
         )
@@ -1619,5 +2188,131 @@ mod tests {
             service.state.claim_states.get(&issue.id),
             Some(&IssueClaimState::RetryQueued)
         );
+    }
+
+    #[tokio::test]
+    async fn saved_context_updates_from_streamed_agent_events() {
+        let workspace_root = unique_workspace_root("context-events");
+        let provisioner = RecordingProvisioner::default();
+        let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+        let issue = sample_issue("issue-5", "FAC-5", "Todo", "Context");
+        let workspace_path = workspace_root.join("FAC-5");
+        let mut running = make_running_task(issue.clone(), workspace_path);
+        running.model = Some("kimi-2.5".into());
+        service.state.running.insert(issue.id.clone(), running);
+
+        service
+            .handle_message(OrchestratorMessage::AgentEvent(AgentEvent {
+                issue_id: issue.id.clone(),
+                issue_identifier: issue.identifier.clone(),
+                agent_name: "kimi".into(),
+                session_id: Some("sess-1".into()),
+                kind: AgentEventKind::Notification,
+                at: Utc::now(),
+                message: Some("Investigating failing test".into()),
+                usage: Some(TokenUsage {
+                    input_tokens: 12,
+                    output_tokens: 8,
+                    total_tokens: 20,
+                }),
+                rate_limits: None,
+                raw: None,
+            }))
+            .await
+            .unwrap();
+
+        let context = service.state.saved_contexts.get(&issue.id).unwrap();
+        assert_eq!(context.agent_name, "kimi");
+        assert_eq!(context.model.as_deref(), Some("kimi-2.5"));
+        assert_eq!(context.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(context.usage.total_tokens, 20);
+        assert_eq!(context.transcript.len(), 1);
+        assert!(
+            context.transcript[0]
+                .message
+                .contains("Investigating failing test")
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_dispatch_rotates_to_fallback_agent_using_saved_context() {
+        let workspace_root = unique_workspace_root("fallback");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: codex\n  profiles:\n    codex:\n      kind: codex\n      transport: app_server\n      command: codex app-server\n      fallbacks:\n        - kimi\n        - claude\n    kimi:\n      kind: kimi\n      api_key: test-kimi\n      model: kimi-2.5\n    claude:\n      kind: claude\n      transport: local_cli\n      command: claude\n---\nTest prompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow.clone());
+        let tracker = TestTracker::new(vec![sample_issue("issue-6", "FAC-6", "Todo", "Retry")]);
+        let provisioner = RecordingProvisioner::default();
+        let mut service = RuntimeService::new(
+            Arc::new(tracker),
+            Arc::new(NoopAgent),
+            Arc::new(provisioner),
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+        let issue = sample_issue("issue-6", "FAC-6", "Todo", "Retry");
+        service
+            .state
+            .saved_contexts
+            .insert(issue.id.clone(), AgentContextSnapshot {
+                issue_id: issue.id.clone(),
+                issue_identifier: issue.identifier.clone(),
+                updated_at: Utc::now(),
+                agent_name: "codex".into(),
+                model: Some("gpt-5-codex".into()),
+                session_id: Some("session-1".into()),
+                status: Some("Failed".into()),
+                error: Some("rate limited".into()),
+                usage: TokenUsage::default(),
+                transcript: vec![AgentContextEntry {
+                    at: Utc::now(),
+                    kind: "Notification".into(),
+                    message: "Partial work already completed".into(),
+                }],
+            });
+
+        service
+            .dispatch_issue(workflow, issue.clone(), Some(2), true)
+            .await
+            .unwrap();
+
+        let running = service.state.running.get(&issue.id).unwrap();
+        assert_eq!(running.agent_name, "kimi");
+        running.handle.abort();
+    }
+
+    #[test]
+    fn append_saved_context_includes_recent_transcript() {
+        let prompt = append_saved_context(
+            "Base prompt".into(),
+            Some(&AgentContextSnapshot {
+                issue_id: "issue-7".into(),
+                issue_identifier: "FAC-7".into(),
+                updated_at: Utc::now(),
+                agent_name: "claude".into(),
+                model: Some("claude-sonnet".into()),
+                session_id: Some("session-2".into()),
+                status: Some("Failed".into()),
+                error: Some("tool timeout".into()),
+                usage: TokenUsage::default(),
+                transcript: vec![AgentContextEntry {
+                    at: Utc::now(),
+                    kind: "Notification".into(),
+                    message: "Implemented parser, tests still failing".into(),
+                }],
+            }),
+            true,
+        );
+
+        assert!(prompt.contains("## Saved Polyphony Context"));
+        assert!(prompt.contains("Last agent: claude (claude-sonnet)"));
+        assert!(prompt.contains("Last error: tool timeout"));
+        assert!(prompt.contains("Implemented parser, tests still failing"));
     }
 }

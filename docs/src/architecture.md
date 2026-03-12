@@ -43,10 +43,17 @@ Trackers are abstracted behind `IssueTracker`, with current implementations for:
 Workspace provisioning is abstracted behind `WorkspaceProvisioner`, allowing directory-only,
 linked worktree, and discrete clone strategies.
 
+Post-run handoff is split across three seams:
+
+- `WorkspaceCommitter` for git commit and push behavior
+- `PullRequestManager` and `PullRequestCommenter` for GitHub PR automation
+- `FeedbackSink` for outbound human notifications
+
 ## Persistence and Observability
 
 Persistence is optional. `polyphony-sqlite` can store runtime state without coupling SQLite into
 the rest of the architecture.
 
 Observability is snapshot-driven. The TUI reads orchestrator snapshots and renders runtime state
-without owning business logic.
+without owning business logic, while feedback sinks can fan out review-ready handoff notifications
+to external channels.

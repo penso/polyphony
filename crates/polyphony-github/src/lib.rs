@@ -13,9 +13,10 @@ use {
     },
     polyphony_core::{
         BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
-        IssueTracker, PullRequestCommenter, PullRequestRef, TrackerQuery,
+        IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestRef, PullRequestRequest,
+        TrackerQuery,
     },
-    serde::de::DeserializeOwned,
+    serde::{Deserialize, Serialize, de::DeserializeOwned},
     thiserror::Error,
 };
 
@@ -464,6 +465,61 @@ impl GithubPullRequestCommenter {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct GithubPullRequestManager {
+    client: reqwest::Client,
+    token: String,
+    owner: String,
+    repo: String,
+}
+
+impl GithubPullRequestManager {
+    pub fn new(repository: String, token: String) -> Result<Self, CoreError> {
+        let (owner, repo) = split_repo(&repository)?;
+        Ok(Self {
+            client: reqwest::Client::new(),
+            token,
+            owner,
+            repo,
+        })
+    }
+
+    async fn existing_pull_request(
+        &self,
+        head_branch: &str,
+    ) -> Result<Option<PullRequestRef>, CoreError> {
+        let head = format!("{}:{head_branch}", self.owner);
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls",
+            self.owner, self.repo
+        );
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .query(&[("state", "open"), ("head", head.as_str())])
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github existing pull request lookup failed with status {status}"
+            )));
+        }
+        let pulls = response
+            .json::<Vec<GithubPullRequestResponse>>()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        Ok(pulls.into_iter().next().map(|pull| PullRequestRef {
+            repository: format!("{}/{}", self.owner, self.repo),
+            number: pull.number,
+            url: Some(pull.html_url),
+        }))
+    }
+}
+
 #[async_trait]
 impl PullRequestCommenter for GithubPullRequestCommenter {
     fn component_key(&self) -> String {
@@ -530,6 +586,103 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
         }
         Ok(())
     }
+}
+
+#[async_trait]
+impl PullRequestManager for GithubPullRequestManager {
+    fn component_key(&self) -> String {
+        "github:pulls".into()
+    }
+
+    async fn ensure_pull_request(
+        &self,
+        request: &PullRequestRequest,
+    ) -> Result<PullRequestRef, CoreError> {
+        let (owner, repo) = split_repo(&request.repository)?;
+        if owner != self.owner || repo != self.repo {
+            return Err(CoreError::Adapter(format!(
+                "pull request repository mismatch: expected {}/{} got {}",
+                self.owner, self.repo, request.repository
+            )));
+        }
+        if let Some(existing) = self.existing_pull_request(&request.head_branch).await? {
+            return Ok(existing);
+        }
+
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls",
+            self.owner, self.repo
+        );
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .json(&CreatePullRequestBody {
+                title: request.title.clone(),
+                head: request.head_branch.clone(),
+                base: request.base_branch.clone(),
+                body: request.body.clone(),
+                draft: request.draft,
+            })
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github create pull request failed with status {status}"
+            )));
+        }
+        let pull = response
+            .json::<GithubPullRequestResponse>()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        Ok(PullRequestRef {
+            repository: request.repository.clone(),
+            number: pull.number,
+            url: Some(pull.html_url),
+        })
+    }
+
+    async fn merge_pull_request(&self, pull_request: &PullRequestRef) -> Result<(), CoreError> {
+        let (owner, repo) = split_repo(&pull_request.repository)?;
+        let url = format!(
+            "https://api.github.com/repos/{owner}/{repo}/pulls/{}/merge",
+            pull_request.number
+        );
+        let response = self
+            .client
+            .put(url)
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .json(&serde_json::json!({ "merge_method": "squash" }))
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github merge pull request failed with status {status}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestResponse {
+    number: u64,
+    html_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePullRequestBody {
+    title: String,
+    head: String,
+    base: String,
+    body: String,
+    draft: bool,
 }
 
 fn to_issue(issue: GithubIssue, comments: Vec<GithubComment>) -> Issue {

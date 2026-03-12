@@ -13,5 +13,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 polyphony-core = { path = "../polyphony-core" }
+polyphony-feedback = { path = "../polyphony-feedback" }
 polyphony-workspace = { path = "../polyphony-workspace" }
 polyphony-workflow = { path = "../polyphony-workflow" }

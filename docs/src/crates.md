@@ -1,6 +1,6 @@
 # Workspace Crates
 
-The root Cargo workspace currently contains twelve crates. Each one exists to keep orchestration,
+The root Cargo workspace currently contains thirteen crates. Each one exists to keep orchestration,
 workflow parsing, workspace lifecycle, integrations, and presentation separated by clear trait
 boundaries.
 
@@ -12,6 +12,7 @@ boundaries.
 - `polyphony-orchestrator`: long-running scheduler and reconciliation loop
 - `polyphony-workspace`: workspace manager and hook executor
 - `polyphony-git`: git-backed workspace provisioner
+- `polyphony-feedback`: outbound human-feedback registry and sink implementations
 - `polyphony-tui`: terminal dashboard for runtime snapshots
 - `polyphony-cli`: executable entrypoint that assembles the runtime
 

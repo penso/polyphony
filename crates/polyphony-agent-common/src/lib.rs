@@ -68,9 +68,27 @@ pub async fn prepare_prompt_file(spec: &AgentRunSpec) -> Result<PathBuf, CoreErr
     Ok(prompt_file)
 }
 
+pub async fn prepare_context_file(spec: &AgentRunSpec) -> Result<Option<PathBuf>, CoreError> {
+    let Some(prior_context) = &spec.prior_context else {
+        return Ok(None);
+    };
+    let run_dir = spec.workspace_path.join(".polyphony");
+    fs::create_dir_all(&run_dir)
+        .await
+        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    let context_file = run_dir.join(format!("{}-context.json", spec.agent.name));
+    let payload = serde_json::to_vec_pretty(prior_context)
+        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    fs::write(&context_file, payload)
+        .await
+        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    Ok(Some(context_file))
+}
+
 pub fn base_agent_env(
     spec: &AgentRunSpec,
     prompt_file: &Path,
+    context_file: Option<&Path>,
     model: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut envs = BTreeMap::new();
@@ -89,6 +107,22 @@ pub fn base_agent_env(
     if let Some(model) = model {
         envs.insert("POLYPHONY_AGENT_MODEL".into(), model.to_string());
     }
+    if let Some(context_file) = context_file {
+        envs.insert(
+            "POLYPHONY_CONTEXT_FILE".into(),
+            context_file.to_string_lossy().to_string(),
+        );
+    }
+    if let Some(prior_context) = &spec.prior_context {
+        envs.insert(
+            "POLYPHONY_CONTEXT_JSON".into(),
+            serde_json::to_string(prior_context).unwrap_or_default(),
+        );
+        envs.insert(
+            "POLYPHONY_PRIOR_AGENT".into(),
+            prior_context.agent_name.clone(),
+        );
+    }
     envs
 }
 
@@ -98,11 +132,12 @@ pub fn shell_command(
     extra_env: &BTreeMap<String, String>,
     spec: &AgentRunSpec,
     prompt_file: &Path,
+    context_file: Option<&Path>,
     model: Option<&str>,
 ) -> Command {
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(cwd);
-    for (key, value) in base_agent_env(spec, prompt_file, model) {
+    for (key, value) in base_agent_env(spec, prompt_file, context_file, model) {
         cmd.env(key, value);
     }
     for (key, value) in extra_env {
@@ -418,7 +453,10 @@ pub fn command_with_pipes(mut command: Command) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{BudgetField, apply_budget_probe, parse_model_list};
+    use {
+        super::{BudgetField, apply_budget_probe, base_agent_env, parse_model_list},
+        polyphony_core::{AgentContextSnapshot, AgentDefinition, AgentRunSpec, Issue, TokenUsage},
+    };
 
     #[test]
     fn parses_model_list_from_json() {
@@ -452,5 +490,68 @@ mod tests {
         .unwrap();
         assert_eq!(snapshot.credits_remaining, Some(12.5));
         assert_eq!(snapshot.spent_usd, Some(3.5));
+    }
+
+    #[test]
+    fn base_agent_env_exposes_prior_context_metadata() {
+        let spec = AgentRunSpec {
+            issue: Issue {
+                id: "issue-1".into(),
+                identifier: "FAC-1".into(),
+                title: "Title".into(),
+                description: None,
+                priority: None,
+                state: "Todo".into(),
+                branch_name: None,
+                url: None,
+                author: None,
+                labels: Vec::new(),
+                comments: Vec::new(),
+                blocked_by: Vec::new(),
+                created_at: None,
+                updated_at: None,
+            },
+            attempt: Some(2),
+            workspace_path: std::env::temp_dir(),
+            prompt: "Prompt".into(),
+            max_turns: 4,
+            agent: AgentDefinition {
+                name: "kimi".into(),
+                ..AgentDefinition::default()
+            },
+            prior_context: Some(AgentContextSnapshot {
+                issue_id: "issue-1".into(),
+                issue_identifier: "FAC-1".into(),
+                updated_at: chrono::Utc::now(),
+                agent_name: "codex".into(),
+                model: Some("gpt-5-codex".into()),
+                session_id: Some("sess-1".into()),
+                status: Some("Failed".into()),
+                error: Some("rate limited".into()),
+                usage: TokenUsage::default(),
+                transcript: Vec::new(),
+            }),
+        };
+        let prompt_file = std::env::temp_dir().join("polyphony-prompt.md");
+        let context_file = std::env::temp_dir().join("polyphony-context.json");
+
+        let env = base_agent_env(&spec, &prompt_file, Some(&context_file), Some("kimi-2.5"));
+
+        assert_eq!(
+            env.get("POLYPHONY_AGENT_MODEL").map(String::as_str),
+            Some("kimi-2.5")
+        );
+        assert_eq!(
+            env.get("POLYPHONY_PRIOR_AGENT").map(String::as_str),
+            Some("codex")
+        );
+        assert_eq!(
+            env.get("POLYPHONY_CONTEXT_FILE").map(String::as_str),
+            Some(context_file.to_string_lossy().as_ref())
+        );
+        assert!(
+            env.get("POLYPHONY_CONTEXT_JSON")
+                .is_some_and(|payload| payload.contains("\"agent_name\":\"codex\""))
+        );
     }
 }

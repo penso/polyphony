@@ -7,6 +7,7 @@
 It provides:
 
 - an `IssueTracker` implementation for GitHub Issues
+- pull request creation and merge support through the REST API
 - pull request comment support through GitHub GraphQL mutations
 - best-effort GitHub Project item creation and status field updates
 

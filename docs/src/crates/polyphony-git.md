@@ -9,6 +9,7 @@ It implements git-backed workspace creation and cleanup for:
 - plain directories
 - linked worktrees
 - discrete clones
+- branch commit and push for automated review handoff
 
 ## Important behavior
 

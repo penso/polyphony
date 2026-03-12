@@ -15,6 +15,7 @@ members = [
   "crates/polyphony-linear",
   "crates/polyphony-git",
   "crates/polyphony-github",
+  "crates/polyphony-feedback",
   "crates/polyphony-sqlite",
   "crates/polyphony-tui",
   "crates/polyphony-cli",

@@ -6,7 +6,8 @@ use std::{
 use {
     async_trait::async_trait,
     polyphony_core::{
-        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+        CheckoutKind, Error as CoreError, Workspace, WorkspaceCommitRequest, WorkspaceCommitResult,
+        WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
     },
     thiserror::Error,
 };
@@ -24,6 +25,9 @@ pub enum Error {
 #[derive(Debug, Default)]
 pub struct GitWorkspaceProvisioner;
 
+#[derive(Debug, Default)]
+pub struct GitWorkspaceCommitter;
+
 #[async_trait]
 impl WorkspaceProvisioner for GitWorkspaceProvisioner {
     fn component_key(&self) -> String {
@@ -36,6 +40,21 @@ impl WorkspaceProvisioner for GitWorkspaceProvisioner {
 
     async fn cleanup_workspace(&self, request: WorkspaceRequest) -> Result<(), CoreError> {
         tokio_wrap(move || cleanup_workspace_sync(request)).await
+    }
+}
+
+#[async_trait]
+impl WorkspaceCommitter for GitWorkspaceCommitter {
+    fn component_key(&self) -> String {
+        "workspace:git-commit".into()
+    }
+
+    async fn commit_and_push(
+        &self,
+        request: &WorkspaceCommitRequest,
+    ) -> Result<Option<WorkspaceCommitResult>, CoreError> {
+        let request = request.clone();
+        tokio_wrap(move || commit_and_push_sync(&request)).await
     }
 }
 
@@ -85,6 +104,98 @@ fn cleanup_workspace_sync(request: WorkspaceRequest) -> Result<(), CoreError> {
         },
     }
     Ok(())
+}
+
+fn commit_and_push_sync(
+    request: &WorkspaceCommitRequest,
+) -> Result<Option<WorkspaceCommitResult>, CoreError> {
+    let repo = git2::Repository::open(&request.workspace_path)
+        .map_err(|error| CoreError::Adapter(format!("open workspace repo failed: {error}")))?;
+    checkout_branch(&repo, &request.branch_name, None)?;
+
+    let statuses = repo
+        .statuses(Some(
+            git2::StatusOptions::new()
+                .include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .renames_head_to_index(true)
+                .renames_index_to_workdir(true)
+                .include_ignored(false),
+        ))
+        .map_err(|error| CoreError::Adapter(format!("git status failed: {error}")))?;
+    let changed_files = statuses.iter().count();
+    if changed_files == 0 {
+        return Ok(None);
+    }
+
+    let mut index = repo
+        .index()
+        .map_err(|error| CoreError::Adapter(format!("open git index failed: {error}")))?;
+    index
+        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+        .map_err(|error| CoreError::Adapter(format!("stage changes failed: {error}")))?;
+    let tree_id = index
+        .write_tree()
+        .map_err(|error| CoreError::Adapter(format!("write git tree failed: {error}")))?;
+    let tree = repo
+        .find_tree(tree_id)
+        .map_err(|error| CoreError::Adapter(format!("find git tree failed: {error}")))?;
+    let signature = resolve_signature(
+        &repo,
+        request.author_name.as_deref(),
+        request.author_email.as_deref(),
+    )?;
+    let parents = repo
+        .head()
+        .ok()
+        .and_then(|head| head.peel_to_commit().ok())
+        .map(|commit| vec![commit])
+        .unwrap_or_default();
+    let parent_refs = parents.iter().collect::<Vec<_>>();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        &request.commit_message,
+        &tree,
+        &parent_refs,
+    )
+    .map_err(|error| CoreError::Adapter(format!("create git commit failed: {error}")))?;
+    let head_sha = repo
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(|error| CoreError::Adapter(format!("resolve pushed head failed: {error}")))?
+        .id()
+        .to_string();
+
+    let mut remote = repo
+        .find_remote(&request.remote_name)
+        .map_err(|error| CoreError::Adapter(format!("find remote failed: {error}")))?;
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed| {
+        resolve_remote_credentials(
+            &repo,
+            url,
+            username_from_url,
+            allowed,
+            request.auth_token.as_deref(),
+        )
+    });
+    let mut push_options = git2::PushOptions::new();
+    push_options.remote_callbacks(callbacks);
+    let refspec = format!(
+        "refs/heads/{}:refs/heads/{}",
+        request.branch_name, request.branch_name
+    );
+    remote
+        .push(&[refspec], Some(&mut push_options))
+        .map_err(|error| CoreError::Adapter(format!("push branch failed: {error}")))?;
+
+    Ok(Some(WorkspaceCommitResult {
+        branch_name: request.branch_name.clone(),
+        head_sha,
+        changed_files,
+    }))
 }
 
 fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> {
@@ -179,6 +290,58 @@ fn fetch_origin(repo: &git2::Repository) -> Result<(), CoreError> {
         .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
         .map_err(|error| CoreError::Adapter(format!("fetch origin failed: {error}")))?;
     Ok(())
+}
+
+fn resolve_signature(
+    repo: &git2::Repository,
+    author_name: Option<&str>,
+    author_email: Option<&str>,
+) -> Result<git2::Signature<'static>, CoreError> {
+    let config = repo.config().ok();
+    let name = author_name
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            config
+                .as_ref()
+                .and_then(|config| config.get_string("user.name").ok())
+        })
+        .unwrap_or_else(|| "polyphony".into());
+    let email = author_email
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            config
+                .as_ref()
+                .and_then(|config| config.get_string("user.email").ok())
+        })
+        .unwrap_or_else(|| "polyphony@example.com".into());
+    git2::Signature::now(&name, &email)
+        .map_err(|error| CoreError::Adapter(format!("build commit signature failed: {error}")))
+}
+
+fn resolve_remote_credentials(
+    repo: &git2::Repository,
+    url: &str,
+    username_from_url: Option<&str>,
+    allowed: git2::CredentialType,
+    auth_token: Option<&str>,
+) -> Result<git2::Cred, git2::Error> {
+    if allowed.contains(git2::CredentialType::SSH_KEY) {
+        return git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"));
+    }
+    if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+        && let Some(token) = auth_token
+    {
+        return git2::Cred::userpass_plaintext("x-access-token", token);
+    }
+    if allowed.contains(git2::CredentialType::DEFAULT) {
+        return git2::Cred::default();
+    }
+    match repo.config() {
+        Ok(config) => git2::Cred::credential_helper(&config, url, username_from_url),
+        Err(_) => git2::Cred::default(),
+    }
 }
 
 fn remove_linked_worktree(request: &WorkspaceRequest) -> Result<(), CoreError> {
@@ -300,15 +463,19 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use std::path::{Path, PathBuf};
 
     use {
-        polyphony_core::{CheckoutKind, WorkspaceProvisioner, WorkspaceRequest},
+        polyphony_core::{
+            CheckoutKind, WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner,
+            WorkspaceRequest,
+        },
         tempfile::tempdir,
     };
 
-    use super::GitWorkspaceProvisioner;
+    use super::{GitWorkspaceCommitter, GitWorkspaceProvisioner};
 
     fn make_request(
         root: &Path,
@@ -463,5 +630,45 @@ mod tests {
         let repo = git2::Repository::open(&workspace.path).unwrap();
         assert!(!workspace.created_now);
         assert_eq!(current_branch(&repo), "main");
+    }
+
+    #[tokio::test]
+    async fn committer_creates_commit_and_pushes_branch() {
+        let temp = tempdir().unwrap();
+        let remote_path = temp.path().join("remote.git");
+        git2::Repository::init_bare(&remote_path).unwrap();
+
+        let repo_path = temp.path().join("repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", &remote_path.display().to_string())
+            .unwrap();
+        std::fs::write(repo_path.join("README.md"), "updated\n").unwrap();
+
+        let committer = GitWorkspaceCommitter;
+        let result = committer
+            .commit_and_push(&WorkspaceCommitRequest {
+                workspace_path: repo_path.clone(),
+                branch_name: "main".into(),
+                commit_message: "test handoff".into(),
+                remote_name: "origin".into(),
+                auth_token: None,
+                author_name: Some("polyphony".into()),
+                author_email: Some("polyphony@example.com".into()),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result.branch_name, "main");
+        assert_eq!(result.changed_files, 1);
+
+        let remote = git2::Repository::open_bare(&remote_path).unwrap();
+        let remote_head = remote
+            .find_reference("refs/heads/main")
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        assert_eq!(remote_head, result.head_sha);
     }
 }

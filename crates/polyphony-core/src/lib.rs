@@ -207,6 +207,7 @@ pub struct AgentDefinition {
     pub kind: String,
     pub transport: AgentTransport,
     pub command: Option<String>,
+    pub fallback_agents: Vec<String>,
     pub model: Option<String>,
     pub models: Vec<String>,
     pub models_command: Option<String>,
@@ -238,6 +239,7 @@ pub struct AgentRunSpec {
     pub prompt: String,
     pub max_turns: u32,
     pub agent: AgentDefinition,
+    pub prior_context: Option<AgentContextSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -293,6 +295,7 @@ pub struct RuntimeSnapshot {
     pub throttles: Vec<ThrottleWindow>,
     pub budgets: Vec<BudgetSnapshot>,
     pub agent_catalogs: Vec<AgentModelCatalog>,
+    pub saved_contexts: Vec<AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
 }
 
@@ -335,7 +338,29 @@ pub struct StoreBootstrap {
     pub retrying: HashMap<String, RetryRow>,
     pub throttles: HashMap<String, ThrottleWindow>,
     pub budgets: HashMap<String, BudgetSnapshot>,
+    pub saved_contexts: HashMap<String, AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentContextEntry {
+    pub at: DateTime<Utc>,
+    pub kind: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentContextSnapshot {
+    pub issue_id: String,
+    pub issue_identifier: String,
+    pub updated_at: DateTime<Utc>,
+    pub agent_name: String,
+    pub model: Option<String>,
+    pub session_id: Option<String>,
+    pub status: Option<String>,
+    pub error: Option<String>,
+    pub usage: TokenUsage,
+    pub transcript: Vec<AgentContextEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,6 +399,82 @@ pub struct PullRequestRef {
     pub repository: String,
     pub number: u64,
     pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestRequest {
+    pub repository: String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub title: String,
+    pub body: String,
+    pub draft: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCommitRequest {
+    pub workspace_path: PathBuf,
+    pub branch_name: String,
+    pub commit_message: String,
+    pub remote_name: String,
+    pub auth_token: Option<String>,
+    pub author_name: Option<String>,
+    pub author_email: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCommitResult {
+    pub branch_name: String,
+    pub head_sha: String,
+    pub changed_files: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackInboundMode {
+    None,
+    Polling,
+    Webhook,
+    Websocket,
+    Cli,
+    Mcp,
+    Local,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FeedbackCapabilities {
+    pub supports_outbound: bool,
+    pub supports_links: bool,
+    pub supports_interactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackChannelDescriptor {
+    pub kind: String,
+    pub inbound_mode: FeedbackInboundMode,
+    pub capabilities: FeedbackCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackLink {
+    pub label: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackAction {
+    pub id: String,
+    pub label: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackNotification {
+    pub key: String,
+    pub title: String,
+    pub body: String,
+    pub links: Vec<FeedbackLink>,
+    pub actions: Vec<FeedbackAction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -472,6 +573,32 @@ pub trait PullRequestCommenter: Send + Sync {
         pull_request: &PullRequestRef,
         body: &str,
     ) -> Result<(), Error>;
+}
+
+#[async_trait]
+pub trait PullRequestManager: Send + Sync {
+    fn component_key(&self) -> String;
+    async fn ensure_pull_request(
+        &self,
+        request: &PullRequestRequest,
+    ) -> Result<PullRequestRef, Error>;
+    async fn merge_pull_request(&self, pull_request: &PullRequestRef) -> Result<(), Error>;
+}
+
+#[async_trait]
+pub trait WorkspaceCommitter: Send + Sync {
+    fn component_key(&self) -> String;
+    async fn commit_and_push(
+        &self,
+        request: &WorkspaceCommitRequest,
+    ) -> Result<Option<WorkspaceCommitResult>, Error>;
+}
+
+#[async_trait]
+pub trait FeedbackSink: Send + Sync {
+    fn component_key(&self) -> String;
+    fn descriptor(&self) -> FeedbackChannelDescriptor;
+    async fn send(&self, notification: &FeedbackNotification) -> Result<(), Error>;
 }
 
 #[async_trait]

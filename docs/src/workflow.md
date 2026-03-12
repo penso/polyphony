@@ -13,6 +13,8 @@ The current workspace configuration covers:
 - `hooks`: optional shell hooks around workspace lifecycle events
 - `agent`: global concurrency, turn, and retry limits
 - `agents`: named agent profiles and routing rules
+- `automation`: optional post-run git and PR handoff settings
+- `feedback`: outbound notification sink configuration
 - `server`: optional server settings
 
 ## Example
@@ -26,6 +28,10 @@ polling:
 workspace:
   root: .polyphony/workspaces
   checkout_kind: directory
+automation:
+  enabled: false
+feedback:
+  offered: []
 agent:
   max_concurrent_agents: 3
 agents:
@@ -75,6 +81,26 @@ Each agent profile can also control:
 - `discrete_clone`
 
 That separation matters because workspace lifecycle is independent from tracker and agent logic.
+
+## Post-Run Handoff
+
+`automation` currently supports:
+
+- `enabled` to turn on git commit, push, and PR creation after successful runs
+- `draft_pull_requests` to create draft PRs by default
+- `review_agent` to choose a second-pass reviewer agent
+- `commit_message`, `pr_title`, `pr_body`, and `review_prompt` as Liquid templates
+- `git.remote_name` plus optional author name/email overrides
+
+`feedback` currently supports:
+
+- `offered` to limit which sink kinds are enabled
+- `telegram.<name>` with `bot_token` and `chat_id`
+- `webhook.<name>` with `url` and optional `bearer_token`
+
+Template fields include the normal `issue.*` fields plus handoff values such as
+`base_branch`, `head_branch`, `commit_sha`, and `pull_request_url` where
+relevant.
 
 ## Prompt Rendering
 

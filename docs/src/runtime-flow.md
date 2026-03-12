@@ -38,6 +38,7 @@ When an issue is dispatched:
 4. `polyphony-agents` selects the provider runtime and runs the agent
 5. agent events stream back into the orchestrator
 6. the orchestrator updates snapshots, retry state, and budgets
+7. optional handoff automation can commit the branch, open a PR, run a review pass, and notify humans
 
 ## Completion and recovery
 

@@ -4,8 +4,8 @@ use {
     async_trait::async_trait,
     polyphony_agent_common::{
         base_agent_env, discover_models_from_command, emit, fetch_budget_for_agent,
-        forward_reader_lines, prepare_prompt_file, sanitize_session_fragment, selected_model_hint,
-        shell_command, shell_escape, status_to_result,
+        forward_reader_lines, prepare_context_file, prepare_prompt_file, sanitize_session_fragment,
+        selected_model_hint, shell_command, shell_escape, status_to_result,
     },
     polyphony_core::{
         AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
@@ -134,6 +134,7 @@ async fn run_stdio(
     );
 
     let prompt_file = prepare_prompt_file(&spec).await?;
+    let context_file = prepare_context_file(&spec).await?;
     let model = selected_model_hint(&spec.agent);
     let mut child = shell_command(
         &command,
@@ -141,6 +142,7 @@ async fn run_stdio(
         &spec.agent.env,
         &spec,
         &prompt_file,
+        context_file.as_deref(),
         model.as_deref(),
     )
     .stdout(std::process::Stdio::piped())
@@ -208,6 +210,7 @@ async fn run_tmux(
         .clone()
         .ok_or_else(|| CoreError::Adapter("agent command is required".into()))?;
     let prompt_file = prepare_prompt_file(&spec).await?;
+    let context_file = prepare_context_file(&spec).await?;
     let run_dir = spec.workspace_path.join(".polyphony");
     fs::create_dir_all(&run_dir)
         .await
@@ -238,7 +241,12 @@ async fn run_tmux(
         .arg("bash")
         .arg("-lc")
         .arg(wrapped);
-    for (key, value) in base_agent_env(&spec, &prompt_file, model.as_deref()) {
+    for (key, value) in base_agent_env(
+        &spec,
+        &prompt_file,
+        context_file.as_deref(),
+        model.as_deref(),
+    ) {
         tmux.env(key, value);
     }
     for (key, value) in &spec.agent.env {
@@ -499,6 +507,7 @@ mod tests {
                     workspace_path: dir.path().to_path_buf(),
                     prompt: "hello".into(),
                     max_turns: 1,
+                    prior_context: None,
                     agent: AgentDefinition {
                         name: "claude".into(),
                         kind: "claude".into(),
@@ -543,6 +552,7 @@ mod tests {
                     workspace_path: dir.path().to_path_buf(),
                     prompt: "hello from stdin".into(),
                     max_turns: 1,
+                    prior_context: None,
                     agent: AgentDefinition {
                         name: "claude".into(),
                         kind: "claude".into(),

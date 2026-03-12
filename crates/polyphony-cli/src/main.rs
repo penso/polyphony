@@ -2,7 +2,10 @@ use std::{path::PathBuf, sync::Arc};
 
 use {
     clap::Parser,
-    polyphony_core::{AgentRuntime, IssueTracker, StateStore, WorkspaceProvisioner},
+    polyphony_core::{
+        AgentRuntime, IssueTracker, PullRequestCommenter, PullRequestManager, StateStore,
+        WorkspaceCommitter, WorkspaceProvisioner,
+    },
     polyphony_orchestrator::{RuntimeCommand, RuntimeService, spawn_workflow_watcher},
     polyphony_workflow::load_workflow,
     thiserror::Error,
@@ -43,12 +46,23 @@ async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
     init_tracing(cli.log_json);
     let workflow = load_workflow(&cli.workflow_path)?;
-    let (tracker, agent) = build_runtime_components(&workflow)?;
+    let (tracker, agent, committer, pull_request_manager, pull_request_commenter, feedback) =
+        build_runtime_components(&workflow)?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
         Arc::new(polyphony_git::GitWorkspaceProvisioner);
     let store = build_store(cli.sqlite_url.as_deref()).await?;
     let (workflow_tx, workflow_rx) = tokio::sync::watch::channel(workflow.clone());
-    let (service, handle) = RuntimeService::new(tracker, agent, provisioner, store, workflow_rx);
+    let (service, handle) = RuntimeService::new(
+        tracker,
+        agent,
+        provisioner,
+        committer,
+        pull_request_manager,
+        pull_request_commenter,
+        feedback,
+        store,
+        workflow_rx,
+    );
     let _watcher = spawn_workflow_watcher(
         cli.workflow_path.clone(),
         workflow_tx,
@@ -83,12 +97,22 @@ fn init_tracing(log_json: bool) {
 #[allow(unused_variables)]
 fn build_runtime_components(
     workflow: &polyphony_workflow::LoadedWorkflow,
-) -> Result<(Arc<dyn IssueTracker>, Arc<dyn AgentRuntime>), Error> {
+) -> Result<
+    (
+        Arc<dyn IssueTracker>,
+        Arc<dyn AgentRuntime>,
+        Option<Arc<dyn WorkspaceCommitter>>,
+        Option<Arc<dyn PullRequestManager>>,
+        Option<Arc<dyn PullRequestCommenter>>,
+        Option<Arc<polyphony_feedback::FeedbackRegistry>>,
+    ),
+    Error,
+> {
     #[cfg(feature = "mock")]
     if is_mock_workflow(workflow) {
         let tracker = polyphony_issue_mock::MockTracker::seeded_demo();
         let agent = polyphony_issue_mock::MockAgentRuntime::new(tracker.clone());
-        return Ok((Arc::new(tracker), Arc::new(agent)));
+        return Ok((Arc::new(tracker), Arc::new(agent), None, None, None, None));
     }
 
     let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind.as_str() {
@@ -127,9 +151,55 @@ fn build_runtime_components(
         },
     };
 
+    let feedback = {
+        let registry = polyphony_feedback::FeedbackRegistry::from_config(&workflow.config.feedback);
+        (!registry.is_empty()).then_some(Arc::new(registry))
+    };
+    let committer: Option<Arc<dyn WorkspaceCommitter>> =
+        workflow.config.automation.enabled.then_some(
+            Arc::new(polyphony_git::GitWorkspaceCommitter) as Arc<dyn WorkspaceCommitter>,
+        );
+    #[cfg(feature = "github")]
+    let (pull_request_manager, pull_request_commenter) =
+        if workflow.config.automation.enabled && workflow.config.tracker.kind == "github" {
+            let repository = workflow
+                .config
+                .tracker
+                .repository
+                .clone()
+                .ok_or_else(|| Error::Config("tracker.repository is required".into()))?;
+            let token = workflow
+                .config
+                .tracker
+                .api_key
+                .clone()
+                .ok_or_else(|| Error::Config("tracker.api_key is required".into()))?;
+            (
+                Some(Arc::new(polyphony_github::GithubPullRequestManager::new(
+                    repository.clone(),
+                    token.clone(),
+                )?) as Arc<dyn PullRequestManager>),
+                Some(
+                    Arc::new(polyphony_github::GithubPullRequestCommenter::new(token))
+                        as Arc<dyn PullRequestCommenter>,
+                ),
+            )
+        } else {
+            (None, None)
+        };
+    #[cfg(not(feature = "github"))]
+    let (pull_request_manager, pull_request_commenter): (
+        Option<Arc<dyn PullRequestManager>>,
+        Option<Arc<dyn PullRequestCommenter>>,
+    ) = (None, None);
+
     Ok((
         tracker,
         Arc::new(polyphony_agents::AgentRegistryRuntime::new()),
+        committer,
+        pull_request_manager,
+        pull_request_commenter,
+        feedback,
     ))
 }
 

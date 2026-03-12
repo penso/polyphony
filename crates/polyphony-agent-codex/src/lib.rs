@@ -5,7 +5,7 @@ use {
     chrono::Utc,
     polyphony_agent_common::{
         discover_models_from_command, emit, fetch_budget_for_agent, forward_reader_lines,
-        prepare_prompt_file, selected_model_hint, shell_command,
+        prepare_context_file, prepare_prompt_file, selected_model_hint, shell_command,
     },
     polyphony_core::{
         AgentEventKind, AgentProviderRuntime, AgentRunResult, AgentRunSpec, BudgetSnapshot,
@@ -76,6 +76,7 @@ async fn run_codex_app_server(
         .clone()
         .ok_or_else(|| CoreError::Adapter("app_server command is required".into()))?;
     let prompt_file = prepare_prompt_file(&spec).await?;
+    let context_file = prepare_context_file(&spec).await?;
     let model = selected_model_hint(&spec.agent);
     let mut child = shell_command(
         &command,
@@ -83,6 +84,7 @@ async fn run_codex_app_server(
         &spec.agent.env,
         &spec,
         &prompt_file,
+        context_file.as_deref(),
         model.as_deref(),
     )
     .stdin(Stdio::piped())
@@ -537,6 +539,7 @@ done
                     workspace_path: dir.path().to_path_buf(),
                     prompt: "hello".into(),
                     max_turns: 1,
+                    prior_context: None,
                     agent: AgentDefinition {
                         name: "codex".into(),
                         kind: "codex".into(),

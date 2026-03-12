@@ -93,6 +93,7 @@ impl StateStore for SqliteStateStore {
                 retrying: Default::default(),
                 throttles: Default::default(),
                 budgets: Default::default(),
+                saved_contexts: Default::default(),
                 recent_events: Vec::new(),
             });
         };
@@ -113,6 +114,11 @@ impl StateStore for SqliteStateStore {
                 .budgets
                 .into_iter()
                 .map(|budget| (budget.component.clone(), budget))
+                .collect(),
+            saved_contexts: snapshot
+                .saved_contexts
+                .into_iter()
+                .map(|context| (context.issue_id.clone(), context))
                 .collect(),
             recent_events: snapshot.recent_events,
         })

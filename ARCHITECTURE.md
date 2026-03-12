@@ -33,6 +33,9 @@ Those runtimes cover app-server over stdio, local CLI/tmux automation, and OpenA
 Automatic model discovery now lives at the provider layer:
 - `/models` probing for OpenAI-compatible providers
 - `models_command` probing for CLI/app-server-backed agents
+The orchestrator also keeps a saved per-issue context snapshot from streamed agent events and hands
+that state forward into retries or agent fallbacks, so provider switches are prompt- and env-aware
+instead of starting blind.
 `AgentRuntime` remains the orchestrator-facing trait boundary, while `AgentProviderRuntime`
 is the provider plug-in seam used by the registry.
 `WorkspaceProvisioner` is a separate trait so the scheduler can choose between plain directories,

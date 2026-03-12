@@ -43,6 +43,8 @@ agents:
       kind: codex
       transport: app_server
       command: codex app-server
+      fallbacks:
+        - kimi_fast
       fetch_models: true
       models_command: codex models --json
       turn_timeout_ms: 3600000
@@ -58,6 +60,14 @@ agents:
       interaction_mode: interactive
       fetch_models: true
       models_command: claude models --json
+      turn_timeout_ms: 3600000
+      read_timeout_ms: 5000
+      stall_timeout_ms: 300000
+    kimi_fast:
+      kind: kimi
+      api_key: $KIMI_API_KEY
+      model: kimi-2.5
+      fetch_models: true
       turn_timeout_ms: 3600000
       read_timeout_ms: 5000
       stall_timeout_ms: 300000
@@ -109,8 +119,16 @@ Multi-agent examples:
 - `agents.default: codex` for a generic app-server-backed Codex session
 - `agents.by_state.todo: claude` to route `Todo` work to a local Claude CLI profile
 - `agents.by_label.risky: claude` to override by label
+- `agents.profiles.<name>.fallbacks` to rotate to another agent profile after failures or throttles while preserving saved context
 - `agents.profiles.<name>.transport: local_cli` with `use_tmux: true` to drive local membership-backed CLIs through tmux
 - `agents.profiles.<name>.interaction_mode: interactive` to inject prompts over stdin or tmux paste instead of requiring a one-shot wrapper command
 - `agents.profiles.<name>.transport: openai_chat` to call an OpenAI-compatible `/chat/completions` endpoint directly
 - `agents.profiles.<name>.fetch_models: true` to auto-discover model catalogs
 - `agents.profiles.<name>.models_command` for CLI/app-server wrappers that can print a JSON or line-based model list
+- `kind: kimi` / `kind: moonshotai` to target Kimi 2.5 through Moonshot's OpenAI-compatible endpoint
+
+Structured handoff environment for CLI/app-server commands:
+
+- `POLYPHONY_CONTEXT_FILE`
+- `POLYPHONY_CONTEXT_JSON`
+- `POLYPHONY_PRIOR_AGENT`

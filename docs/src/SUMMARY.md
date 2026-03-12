@@ -12,6 +12,7 @@
   - [polyphony-orchestrator](./crates/polyphony-orchestrator.md)
   - [polyphony-workspace](./crates/polyphony-workspace.md)
   - [polyphony-git](./crates/polyphony-git.md)
+  - [polyphony-feedback](./crates/polyphony-feedback.md)
   - [polyphony-issue-mock](./crates/polyphony-issue-mock.md)
   - [polyphony-linear](./crates/polyphony-linear.md)
   - [polyphony-github](./crates/polyphony-github.md)

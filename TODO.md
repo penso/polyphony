@@ -36,4 +36,9 @@ I built something similar for our internal app: when the app surfaces an issue
 in prod, it triggers a Codex GitHub Action, opens a PR, a second Codex pass
 reviews it, then sends me a Telegram with buttons to review or merge
 
+- Add remote control, PWA web, typescript, iOS app, include push notifications
+
+- Add tailscale/free version of tailscale
+
+- Add https
 

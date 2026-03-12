@@ -591,6 +591,7 @@ mod tests {
                     workspace_path: std::env::temp_dir(),
                     prompt: "hello".into(),
                     max_turns: 1,
+                    prior_context: None,
                     agent: AgentDefinition {
                         name: "openai".into(),
                         kind: "openai".into(),

@@ -2383,6 +2383,7 @@ dependencies = [
  "clap",
  "polyphony-agents",
  "polyphony-core",
+ "polyphony-feedback",
  "polyphony-git",
  "polyphony-github",
  "polyphony-issue-mock",
@@ -2407,6 +2408,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "polyphony-feedback"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "polyphony-core",
+ "polyphony-workflow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -2469,6 +2483,7 @@ dependencies = [
  "chrono",
  "notify",
  "polyphony-core",
+ "polyphony-feedback",
  "polyphony-workflow",
  "polyphony-workspace",
  "serde_json",

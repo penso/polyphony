@@ -29,6 +29,7 @@ from tracker, agent, persistence, and UI implementations.
 | [`polyphony-orchestrator`](crates/polyphony-orchestrator) | Async orchestrator loop, retries, reconciliation, and workspace hooks. | Always |
 | [`polyphony-workspace`](crates/polyphony-workspace) | Workspace manager for path safety, lifecycle hooks, rollback, and cleanup. | Always |
 | [`polyphony-git`](crates/polyphony-git) | Git-backed workspace provisioning for linked worktrees and discrete clones. | Always |
+| [`polyphony-feedback`](crates/polyphony-feedback) | Generic outbound feedback sinks such as Telegram and webhooks. | Always |
 | [`polyphony-tui`](crates/polyphony-tui) | `ratatui` status surface for live runtime snapshots. | Always |
 | [`polyphony-cli`](crates/polyphony-cli) | Thin binary that wires the build together. | Always |
 | [`polyphony-issue-mock`](crates/polyphony-issue-mock) | Mock tracker and mock agent runtime for tests and local smoke runs. | `mock` |
@@ -59,12 +60,16 @@ This repository already provides:
 - a real config layer based on the `config` crate, with defaults, env overlays, and typed deserialization from `WORKFLOW.md`
 - a long-running async orchestrator with retries, reconciliation, workspace hooks, restart bootstrap, and live snapshots
 - named agent profiles with state/label-based selection in `WORKFLOW.md`
+- fallback agent chains so retries or throttled runs can hand off to another provider profile
 - an agent registry runtime that delegates to provider-specific runtimes
 - automatic model discovery for agents, via `/models` for OpenAI-compatible providers or `models_command` for CLI/app-server-backed agents
+- saved per-issue agent context snapshots, built from streamed runtime events and reused on retries/handoffs
 - runtime throttling when adapters surface `429`-style rate limits
 - budget and spend snapshots that can be persisted and shown in the TUI
 - a `ratatui` dashboard for running work, retry queue, token totals, throttles, budgets, and recent events
 - an implementation-owned `tracker.kind: mock` extension so the system can be run locally without Linear
+- optional post-run GitHub handoff automation that can commit, push, open a draft PR, and post a review summary
+- generic outbound feedback sinks for human handoff notifications, with Telegram and webhook implementations today
 
 Git and GitHub implementation choices:
 
@@ -79,6 +84,7 @@ This repository now provides provider-specific runtime building blocks for:
 - Codex-style app-server sessions
 - local CLI and tmux-backed providers such as Claude CLI or Copilot CLI
 - OpenAI-compatible chat providers exposing `/chat/completions`
+- Moonshot/Kimi profiles through the OpenAI-compatible runtime, including `KIMI_API_KEY` / `MOONSHOT_API_KEY` env fallbacks
 
 ## Workspace strategies
 
@@ -155,8 +161,15 @@ agents:
       kind: codex
       transport: app_server
       command: codex app-server
+      fallbacks:
+        - kimi_fast
       fetch_models: true
       models_command: codex models --json
+    kimi_fast:
+      kind: kimi
+      api_key: $KIMI_API_KEY
+      model: kimi-2.5
+      fetch_models: true
     claude:
       kind: claude
       transport: local_cli
@@ -171,13 +184,40 @@ agents:
       fetch_models: true
 ```
 
+The workflow can also declare automated PR handoff and feedback sinks:
+
+```yaml
+automation:
+  enabled: true
+  draft_pull_requests: true
+  review_agent: codex
+  commit_message: "fix({{ issue.identifier }}): {{ issue.title }}"
+feedback:
+  offered:
+    - telegram
+    - webhook
+  telegram:
+    ops:
+      bot_token: $TELEGRAM_BOT_TOKEN
+      chat_id: "123456789"
+  webhook:
+    audit:
+      url: https://example.com/polyphony/handoff
+      bearer_token: $HANDOFF_WEBHOOK_TOKEN
+```
+
 When `fetch_models` is enabled:
 
 - `openai_chat` agents query the provider’s `/models` endpoint automatically
 - `local_cli` and `app_server` agents can run `models_command` and parse either JSON model lists or newline-delimited model IDs
 - interactive `local_cli` agents default to `stdin` prompt injection, or `tmux_paste` when `use_tmux: true`
+- `kimi` / `moonshotai` profiles default to `https://api.moonshot.ai/v1` and resolve `KIMI_API_KEY` or `MOONSHOT_API_KEY`
 
-That lets one provider profile expose multiple models while keeping a single auth/config block.
+Saved context and handoff behavior:
+
+- Polyphony keeps a per-issue context snapshot from streamed agent events, usage, status, and recent transcript lines.
+- Retries can rotate to fallback agents while appending that saved context into the next prompt.
+- Local CLI and app-server commands also receive `POLYPHONY_CONTEXT_FILE`, `POLYPHONY_CONTEXT_JSON`, and `POLYPHONY_PRIOR_AGENT` so wrappers can consume structured handoff state directly.
 
 ## Next steps
 
