@@ -193,6 +193,11 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("agent.max_concurrent_agents", 10)
             .map_err(config_error)?
+            .set_default(
+                "agent.max_concurrent_agents_by_state",
+                HashMap::<String, i64>::new(),
+            )
+            .map_err(config_error)?
             .set_default("agent.max_retry_backoff_ms", 300_000)
             .map_err(config_error)?
             .set_default("agent.max_turns", 20)
@@ -206,6 +211,8 @@ impl ServiceConfig {
             .set_default("provider.read_timeout_ms", 5_000)
             .map_err(config_error)?
             .set_default("provider.stall_timeout_ms", 300_000)
+            .map_err(config_error)?
+            .set_default("server", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .add_source(File::from_str(&front_matter, FileFormat::Yaml))
             .add_source(

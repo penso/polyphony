@@ -168,6 +168,20 @@ impl IssueTracker for GithubIssueTracker {
         Ok(issues_by_id.into_values().collect())
     }
 
+    async fn fetch_issues_by_ids(&self, issue_ids: &[String]) -> Result<Vec<Issue>, CoreError> {
+        let mut issues = Vec::new();
+        for issue_id in issue_ids {
+            let number = issue_id
+                .parse::<u64>()
+                .map_err(|error| CoreError::Adapter(error.to_string()))?;
+            let issue = self.issue_by_number(number).await?;
+            if issue.pull_request.is_none() {
+                issues.push(self.normalize_issue(issue).await?);
+            }
+        }
+        Ok(issues)
+    }
+
     async fn fetch_issue_states_by_ids(
         &self,
         issue_ids: &[String],

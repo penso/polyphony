@@ -10,8 +10,8 @@ path = "src/main.rs"
 
 [features]
 default = ["mock"]
-mock = ["factoryrs-adapters/mock"]
-linear = ["factoryrs-adapters/linear"]
+mock = ["dep:factoryrs-issue-mock", "factoryrs-issue-mock/mock"]
+linear = ["dep:factoryrs-linear"]
 github = ["dep:factoryrs-github"]
 sqlite = ["factoryrs-sqlite/sqlite"]
 
@@ -21,11 +21,12 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-factoryrs-adapters = { path = "../factoryrs-adapters", default-features = false }
 factoryrs-core = { path = "../factoryrs-core" }
 factoryrs-git = { path = "../factoryrs-git" }
 factoryrs-github = { path = "../factoryrs-github", optional = true }
-factoryrs-runtime = { path = "../factoryrs-runtime" }
+factoryrs-issue-mock = { path = "../factoryrs-issue-mock", optional = true, default-features = false }
+factoryrs-linear = { path = "../factoryrs-linear", optional = true }
+factoryrs-orchestrator = { path = "../factoryrs-orchestrator" }
 factoryrs-sqlite = { path = "../factoryrs-sqlite", default-features = false }
 factoryrs-tui = { path = "../factoryrs-tui" }
 factoryrs-workflow = { path = "../factoryrs-workflow" }

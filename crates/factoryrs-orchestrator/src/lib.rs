@@ -101,11 +101,18 @@ struct ActiveThrottle {
     due_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IssueClaimState {
+    Running,
+    RetryQueued,
+}
+
 #[derive(Debug)]
 struct RuntimeState {
     running: HashMap<String, RunningTask>,
-    claimed: HashSet<String>,
+    claim_states: HashMap<String, IssueClaimState>,
     retrying: HashMap<String, RetryEntry>,
+    completed: HashSet<String>,
     throttles: HashMap<String, ActiveThrottle>,
     budgets: HashMap<String, BudgetSnapshot>,
     recent_events: VecDeque<RuntimeEvent>,
@@ -296,8 +303,9 @@ impl RuntimeService {
                 external_command_rx,
                 state: RuntimeState {
                     running: HashMap::new(),
-                    claimed: HashSet::new(),
+                    claim_states: HashMap::new(),
                     retrying: HashMap::new(),
+                    completed: HashSet::new(),
                     throttles: HashMap::new(),
                     budgets: HashMap::new(),
                     recent_events: VecDeque::with_capacity(128),
@@ -356,6 +364,18 @@ impl RuntimeService {
                 }
             }
         }
+    }
+
+    fn claim_issue(&mut self, issue_id: impl Into<String>, state: IssueClaimState) {
+        self.state.claim_states.insert(issue_id.into(), state);
+    }
+
+    fn release_issue(&mut self, issue_id: &str) {
+        self.state.claim_states.remove(issue_id);
+    }
+
+    fn is_claimed(&self, issue_id: &str) -> bool {
+        self.state.claim_states.contains_key(issue_id)
     }
 
     fn build_workspace_manager(&self, workflow: &LoadedWorkflow) -> WorkspaceManager {
@@ -456,8 +476,8 @@ impl RuntimeService {
         if self.is_throttled(&self.tracker.component_key()) {
             return;
         }
-        let states = match self.tracker.fetch_issue_states_by_ids(&running_ids).await {
-            Ok(states) => states,
+        let issues = match self.tracker.fetch_issues_by_ids(&running_ids).await {
+            Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
                 self.register_throttle(signal);
                 return;
@@ -467,16 +487,30 @@ impl RuntimeService {
                 return;
             }
         };
-        for update in states {
-            if workflow.config.is_terminal_state(&update.state) {
-                self.stop_running(&update.id, true).await;
-            } else if workflow.config.is_active_state(&update.state) {
-                if let Some(running) = self.state.running.get_mut(&update.id) {
-                    running.issue.state = update.state;
+        let refreshed_ids = issues
+            .iter()
+            .map(|issue| issue.id.clone())
+            .collect::<HashSet<_>>();
+        for issue in issues {
+            if workflow.config.is_terminal_state(&issue.state) {
+                self.stop_running(&issue.id, true).await;
+            } else if workflow.config.is_active_state(&issue.state) {
+                if let Some(running) = self.state.running.get_mut(&issue.id) {
+                    running.issue = issue;
                 }
             } else {
-                self.stop_running(&update.id, false).await;
+                self.stop_running(&issue.id, false).await;
             }
+        }
+        for missing_issue_id in running_ids
+            .into_iter()
+            .filter(|issue_id| !refreshed_ids.contains(issue_id))
+        {
+            self.stop_running(&missing_issue_id, false).await;
+            self.push_event(
+                "reconcile".into(),
+                format!("released missing issue {}", missing_issue_id),
+            );
         }
     }
 
@@ -555,7 +589,7 @@ impl RuntimeService {
             });
         });
 
-        self.state.claimed.insert(issue.id.clone());
+        self.claim_issue(issue.id.clone(), IssueClaimState::Running);
         self.state.retrying.remove(&issue.id);
         self.state.running.insert(
             issue.id.clone(),
@@ -626,7 +660,7 @@ impl RuntimeService {
             .into_iter()
             .find(|issue| issue.id == retry.row.issue_id)
         else {
-            self.state.claimed.remove(&issue_id);
+            self.release_issue(&issue_id);
             return;
         };
         if !self.has_available_slot(&workflow, &issue.state) {
@@ -745,6 +779,7 @@ impl RuntimeService {
         let workflow = self.workflow_rx.borrow().clone();
         match outcome.status {
             AttemptStatus::Succeeded => {
+                self.state.completed.insert(issue_id.clone());
                 self.schedule_retry(
                     issue_id.clone(),
                     issue_identifier.clone(),
@@ -755,7 +790,7 @@ impl RuntimeService {
                 );
             }
             AttemptStatus::CancelledByReconciliation => {
-                self.state.claimed.remove(&issue_id);
+                self.release_issue(&issue_id);
             }
             _ => {
                 self.schedule_retry(
@@ -813,7 +848,7 @@ impl RuntimeService {
         let workflow = self.workflow_rx.borrow().clone();
         if let Some(running) = self.state.running.remove(issue_id) {
             running.handle.abort();
-            self.state.claimed.remove(issue_id);
+            self.release_issue(issue_id);
             if cleanup_workspace {
                 let manager = self.build_workspace_manager(&workflow);
                 if let Err(error) = manager
@@ -868,7 +903,7 @@ impl RuntimeService {
         {
             return false;
         }
-        if self.state.running.contains_key(&issue.id) || self.state.claimed.contains(&issue.id) {
+        if self.state.running.contains_key(&issue.id) || self.is_claimed(&issue.id) {
             return false;
         }
         let state = issue.normalized_state();
@@ -926,7 +961,7 @@ impl RuntimeService {
             let delay = 10_000u64.saturating_mul(2u64.saturating_pow(exponent));
             delay.min(max_retry_backoff_ms)
         };
-        self.state.claimed.insert(issue_id.clone());
+        self.claim_issue(issue_id.clone(), IssueClaimState::RetryQueued);
         self.state.retrying.insert(
             issue_id.clone(),
             RetryEntry {
@@ -1058,6 +1093,7 @@ impl RuntimeService {
                 .to_std()
                 .map(|delta| Instant::now() + delta)
                 .unwrap_or_else(|_| Instant::now());
+            self.claim_issue(issue_id.clone(), IssueClaimState::RetryQueued);
             self.state
                 .retrying
                 .insert(issue_id, RetryEntry { row, due_at });
@@ -1290,5 +1326,368 @@ fn empty_snapshot() -> RuntimeSnapshot {
         throttles: Vec::new(),
         budgets: Vec::new(),
         recent_events: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use factoryrs_core::{IssueAuthor, IssueComment};
+
+    #[derive(Clone)]
+    struct TestTracker {
+        issues: Arc<Mutex<HashMap<String, Issue>>>,
+    }
+
+    impl TestTracker {
+        fn new(issues: Vec<Issue>) -> Self {
+            Self {
+                issues: Arc::new(Mutex::new(
+                    issues
+                        .into_iter()
+                        .map(|issue| (issue.id.clone(), issue))
+                        .collect(),
+                )),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl IssueTracker for TestTracker {
+        fn component_key(&self) -> String {
+            "tracker:test".into()
+        }
+
+        async fn fetch_candidate_issues(
+            &self,
+            _query: &factoryrs_core::TrackerQuery,
+        ) -> Result<Vec<Issue>, factoryrs_core::Error> {
+            Ok(self.issues.lock().unwrap().values().cloned().collect())
+        }
+
+        async fn fetch_issues_by_states(
+            &self,
+            _project_slug: Option<&str>,
+            states: &[String],
+        ) -> Result<Vec<Issue>, factoryrs_core::Error> {
+            let normalized = states
+                .iter()
+                .map(|state| state.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            Ok(self
+                .issues
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|issue| normalized.contains(&issue.state.to_ascii_lowercase()))
+                .cloned()
+                .collect())
+        }
+
+        async fn fetch_issues_by_ids(
+            &self,
+            issue_ids: &[String],
+        ) -> Result<Vec<Issue>, factoryrs_core::Error> {
+            let issues = self.issues.lock().unwrap();
+            Ok(issue_ids
+                .iter()
+                .filter_map(|issue_id| issues.get(issue_id))
+                .cloned()
+                .collect())
+        }
+
+        async fn fetch_issue_states_by_ids(
+            &self,
+            issue_ids: &[String],
+        ) -> Result<Vec<factoryrs_core::IssueStateUpdate>, factoryrs_core::Error> {
+            let issues = self.issues.lock().unwrap();
+            Ok(issue_ids
+                .iter()
+                .filter_map(|issue_id| issues.get(issue_id))
+                .map(|issue| factoryrs_core::IssueStateUpdate {
+                    id: issue.id.clone(),
+                    identifier: issue.identifier.clone(),
+                    state: issue.state.clone(),
+                    updated_at: issue.updated_at,
+                })
+                .collect())
+        }
+    }
+
+    struct NoopAgent;
+
+    #[async_trait]
+    impl AgentRuntime for NoopAgent {
+        fn component_key(&self) -> String {
+            "provider:test".into()
+        }
+
+        async fn run(
+            &self,
+            _spec: AgentRunSpec,
+            _event_tx: mpsc::UnboundedSender<AgentEvent>,
+        ) -> Result<AgentRunResult, factoryrs_core::Error> {
+            Ok(AgentRunResult {
+                status: AttemptStatus::Succeeded,
+                turns_completed: 1,
+                error: None,
+                final_issue_state: None,
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingProvisioner {
+        cleaned: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingProvisioner {
+        fn cleaned_issue_identifiers(&self) -> Vec<String> {
+            self.cleaned.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl WorkspaceProvisioner for RecordingProvisioner {
+        fn component_key(&self) -> String {
+            "workspace:test".into()
+        }
+
+        async fn ensure_workspace(
+            &self,
+            request: WorkspaceRequest,
+        ) -> Result<Workspace, factoryrs_core::Error> {
+            Ok(Workspace {
+                path: request.workspace_path,
+                workspace_key: request.workspace_key,
+                created_now: false,
+                branch_name: request.branch_name,
+            })
+        }
+
+        async fn cleanup_workspace(
+            &self,
+            request: WorkspaceRequest,
+        ) -> Result<(), factoryrs_core::Error> {
+            self.cleaned
+                .lock()
+                .unwrap()
+                .push(request.issue_identifier.clone());
+            Ok(())
+        }
+    }
+
+    fn test_workflow(workspace_root: &Path) -> LoadedWorkflow {
+        let workflow_path = workspace_root.join("WORKFLOW.md");
+        fs::create_dir_all(workspace_root).unwrap();
+        fs::write(
+            &workflow_path,
+            format!(
+                "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: {}\nprovider:\n  kind: mock\n  command: mock\n---\nTest prompt\n",
+                workspace_root.display()
+            ),
+        )
+        .unwrap();
+        load_workflow(&workflow_path).unwrap()
+    }
+
+    fn test_service(
+        tracker: TestTracker,
+        provisioner: RecordingProvisioner,
+        workspace_root: &Path,
+    ) -> RuntimeService {
+        let workflow = test_workflow(workspace_root);
+        let (_tx, rx) = watch::channel(workflow);
+        RuntimeService::new(
+            Arc::new(tracker),
+            Arc::new(NoopAgent),
+            Arc::new(provisioner),
+            None,
+            rx,
+        )
+        .0
+    }
+
+    fn sample_issue(issue_id: &str, identifier: &str, state: &str, title: &str) -> Issue {
+        Issue {
+            id: issue_id.to_string(),
+            identifier: identifier.to_string(),
+            title: title.to_string(),
+            description: Some(format!("Description for {title}")),
+            priority: Some(1),
+            state: state.to_string(),
+            branch_name: Some(format!("task/{}", identifier.to_ascii_lowercase())),
+            url: None,
+            author: None,
+            labels: vec!["test".into()],
+            comments: Vec::new(),
+            blocked_by: Vec::new(),
+            created_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
+        }
+    }
+
+    fn make_running_task(issue: Issue, workspace_path: PathBuf) -> RunningTask {
+        RunningTask {
+            issue,
+            attempt: None,
+            workspace_path,
+            started_at: Utc::now(),
+            session_id: None,
+            last_event: None,
+            last_message: None,
+            last_event_at: None,
+            tokens: TokenUsage::default(),
+            last_reported_tokens: TokenUsage::default(),
+            turn_count: 0,
+            rate_limits: None,
+            handle: tokio::spawn(async {
+                let _: () = std::future::pending().await;
+            }),
+        }
+    }
+
+    fn unique_workspace_root(test_name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "factoryrs-orchestrator-{test_name}-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+    }
+
+    #[tokio::test]
+    async fn reconcile_running_releases_missing_issue() {
+        let workspace_root = unique_workspace_root("missing");
+        let provisioner = RecordingProvisioner::default();
+        let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+        let issue = sample_issue("issue-1", "FAC-1", "Todo", "Old");
+        let workspace_path = workspace_root.join("FAC-1");
+        service.state.running.insert(
+            issue.id.clone(),
+            make_running_task(issue.clone(), workspace_path),
+        );
+        service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+
+        service.reconcile_running().await;
+
+        assert!(!service.state.running.contains_key(&issue.id));
+        assert!(!service.is_claimed(&issue.id));
+    }
+
+    #[tokio::test]
+    async fn reconcile_running_cleans_workspace_for_terminal_issue() {
+        let workspace_root = unique_workspace_root("terminal");
+        let provisioner = RecordingProvisioner::default();
+        let tracker_issue = sample_issue("issue-2", "FAC-2", "Done", "Closed");
+        let mut service = test_service(
+            TestTracker::new(vec![tracker_issue.clone()]),
+            provisioner.clone(),
+            &workspace_root,
+        );
+        let running_issue = sample_issue("issue-2", "FAC-2", "Todo", "Open");
+        let workspace_path = workspace_root.join("FAC-2");
+        fs::create_dir_all(&workspace_path).unwrap();
+        service.state.running.insert(
+            running_issue.id.clone(),
+            make_running_task(running_issue.clone(), workspace_path),
+        );
+        service.claim_issue(running_issue.id.clone(), IssueClaimState::Running);
+
+        service.reconcile_running().await;
+
+        assert!(!service.state.running.contains_key(&running_issue.id));
+        assert_eq!(
+            provisioner.cleaned_issue_identifiers(),
+            vec![running_issue.identifier]
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_running_replaces_full_issue_snapshot() {
+        let workspace_root = unique_workspace_root("refresh");
+        let provisioner = RecordingProvisioner::default();
+        let mut refreshed_issue = sample_issue("issue-3", "FAC-3", "Todo", "Updated title");
+        refreshed_issue.author = Some(IssueAuthor {
+            id: Some("author-1".into()),
+            username: Some("outsider".into()),
+            display_name: Some("Outsider".into()),
+            role: Some("none".into()),
+            trust_level: Some("outsider".into()),
+            url: None,
+        });
+        refreshed_issue.comments.push(IssueComment {
+            id: "comment-1".into(),
+            body: "New follow-up context".into(),
+            author: refreshed_issue.author.clone(),
+            url: None,
+            created_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
+        });
+        let mut service = test_service(
+            TestTracker::new(vec![refreshed_issue.clone()]),
+            provisioner,
+            &workspace_root,
+        );
+        let stale_issue = sample_issue("issue-3", "FAC-3", "Todo", "Old title");
+        let workspace_path = workspace_root.join("FAC-3");
+        service.state.running.insert(
+            stale_issue.id.clone(),
+            make_running_task(stale_issue.clone(), workspace_path),
+        );
+        service.claim_issue(stale_issue.id.clone(), IssueClaimState::Running);
+
+        service.reconcile_running().await;
+
+        let running = service.state.running.get(&stale_issue.id).unwrap();
+        assert_eq!(running.issue.title, "Updated title");
+        assert_eq!(running.issue.comments.len(), 1);
+        assert_eq!(
+            running
+                .issue
+                .author
+                .as_ref()
+                .and_then(|author| author.trust_level.as_deref()),
+            Some("outsider")
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_running_success_marks_completed_and_queues_retry() {
+        let workspace_root = unique_workspace_root("finish");
+        let provisioner = RecordingProvisioner::default();
+        let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+        let issue = sample_issue("issue-4", "FAC-4", "Todo", "Work");
+        let workspace_path = workspace_root.join("FAC-4");
+        service.state.running.insert(
+            issue.id.clone(),
+            make_running_task(issue.clone(), workspace_path),
+        );
+        service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+
+        service
+            .finish_running(
+                issue.id.clone(),
+                issue.identifier.clone(),
+                None,
+                Utc::now(),
+                AgentRunResult {
+                    status: AttemptStatus::Succeeded,
+                    turns_completed: 1,
+                    error: None,
+                    final_issue_state: Some("Human Review".into()),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(service.state.completed.contains(&issue.id));
+        assert!(service.state.retrying.contains_key(&issue.id));
+        assert_eq!(
+            service.state.claim_states.get(&issue.id),
+            Some(&IssueClaimState::RetryQueued)
+        );
     }
 }

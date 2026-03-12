@@ -25,6 +25,7 @@ Always run these checks before committing and fix any issues:
 
 If any check fails, fix the issue, then commit the fix.
 Never skip `just format` or `just lint` before a commit, even for small changes.
+New features are not complete without test coverage. Whenever you add a feature, add or update tests that exercise the new behavior.
 
 ## Git Workflow
 

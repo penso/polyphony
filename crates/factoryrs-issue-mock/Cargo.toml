@@ -1,13 +1,16 @@
 [package]
-name = "factoryrs-tui"
+name = "factoryrs-issue-mock"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+[features]
+default = ["mock"]
+mock = []
+
 [dependencies]
-crossterm.workspace = true
-ratatui.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 factoryrs-core = { path = "../factoryrs-core" }
-factoryrs-orchestrator = { path = "../factoryrs-orchestrator" }

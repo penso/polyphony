@@ -15,7 +15,7 @@ typed deserialization, `$VAR` secret indirection, path expansion, and prompt ren
 
 ## Coordination
 
-`factoryrs-runtime` owns all mutable scheduling state. Running sessions, claims, retry timers, runtime totals,
+`factoryrs-orchestrator` owns all mutable scheduling state. Running sessions, claims, retry timers, runtime totals,
 and recent events live in one async orchestrator loop and are surfaced through a snapshot channel.
 
 ## Execution
@@ -28,8 +28,9 @@ linked git worktrees, and discrete clones without entangling git lifecycle with 
 
 ## Integration
 
-`IssueTracker` is the tracker seam. `factoryrs-adapters` currently ships a demo `MockTracker` and a feature-gated
-`LinearTracker`. `factoryrs-github` provides the GitHub Issues implementation. The mock path is what makes the TUI runnable now.
+`IssueTracker` is the tracker seam. `factoryrs-issue-mock` currently ships the demo `MockTracker`.
+`factoryrs-linear` provides the feature-gated Linear implementation. `factoryrs-github` provides the GitHub Issues implementation.
+The mock path is what makes the TUI runnable now.
 `factoryrs-github` owns GitHub-specific integrations built on `octocrab` and `graphql_client`,
 including PR comment mutations.
 

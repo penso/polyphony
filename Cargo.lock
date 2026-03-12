@@ -842,32 +842,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "factoryrs-adapters"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "factoryrs-core",
- "factoryrs-workflow",
- "graphql_client",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "factoryrs-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "factoryrs-adapters",
  "factoryrs-core",
  "factoryrs-git",
  "factoryrs-github",
- "factoryrs-runtime",
+ "factoryrs-issue-mock",
+ "factoryrs-linear",
+ "factoryrs-orchestrator",
  "factoryrs-sqlite",
  "factoryrs-tui",
  "factoryrs-workflow",
@@ -916,9 +900,35 @@ dependencies = [
 ]
 
 [[package]]
-name = "factoryrs-runtime"
+name = "factoryrs-issue-mock"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
+ "factoryrs-core",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "factoryrs-linear"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "factoryrs-core",
+ "graphql_client",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "factoryrs-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
  "chrono",
  "factoryrs-core",
  "factoryrs-workflow",
@@ -946,7 +956,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm 0.29.0",
  "factoryrs-core",
- "factoryrs-runtime",
+ "factoryrs-orchestrator",
  "ratatui",
  "thiserror 2.0.18",
  "tokio",

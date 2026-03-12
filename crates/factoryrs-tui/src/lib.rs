@@ -5,7 +5,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use factoryrs_core::RuntimeSnapshot;
-use factoryrs_runtime::RuntimeCommand;
+use factoryrs_orchestrator::RuntimeCommand;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};

@@ -311,6 +311,7 @@ pub trait IssueTracker: Send + Sync {
         project_slug: Option<&str>,
         states: &[String],
     ) -> Result<Vec<Issue>, Error>;
+    async fn fetch_issues_by_ids(&self, issue_ids: &[String]) -> Result<Vec<Issue>, Error>;
     async fn fetch_issue_states_by_ids(
         &self,
         issue_ids: &[String],

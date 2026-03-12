@@ -11,8 +11,9 @@ from tracker, agent, persistence, and UI implementations.
 
 - `crates/factoryrs-core`: domain model and trait contracts.
 - `crates/factoryrs-workflow`: `WORKFLOW.md` loader, typed config, prompt rendering.
-- `crates/factoryrs-runtime`: async orchestrator, retry loop, reconciliation, workspace hooks.
-- `crates/factoryrs-adapters`: pluggable tracker and agent adapters.
+- `crates/factoryrs-orchestrator`: async orchestrator, retry loop, reconciliation, workspace hooks.
+- `crates/factoryrs-issue-mock`: feature-gated mock tracker and mock agent runtime for tests and local smoke runs.
+- `crates/factoryrs-linear`: Linear tracker adapter using typed GraphQL queries.
 - `crates/factoryrs-git`: git-backed workspace provisioning for linked worktrees and discrete clones.
 - `crates/factoryrs-github`: GitHub Issues + PR integration using `octocrab` and `graphql_client`.
 - `crates/factoryrs-sqlite`: optional SQLite-backed state store.
@@ -22,7 +23,7 @@ from tracker, agent, persistence, and UI implementations.
 ## Feature flags
 
 - `mock`: demo tracker and demo agent runtime. Enabled by default.
-- `linear`: Linear tracker adapter.
+- `linear`: Linear tracker adapter from `factoryrs-linear`.
 - `github`: GitHub Issues tracker adapter.
 - `sqlite`: SQLite-backed persistence adapter.
 

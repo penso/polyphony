@@ -2,8 +2,9 @@
 members = [
   "crates/factoryrs-core",
   "crates/factoryrs-workflow",
-  "crates/factoryrs-runtime",
-  "crates/factoryrs-adapters",
+  "crates/factoryrs-orchestrator",
+  "crates/factoryrs-issue-mock",
+  "crates/factoryrs-linear",
   "crates/factoryrs-git",
   "crates/factoryrs-github",
   "crates/factoryrs-sqlite",

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use factoryrs_core::{AgentRuntime, IssueTracker, StateStore, WorkspaceProvisioner};
-use factoryrs_runtime::{RuntimeCommand, RuntimeService, spawn_workflow_watcher};
+use factoryrs_orchestrator::{RuntimeCommand, RuntimeService, spawn_workflow_watcher};
 use factoryrs_workflow::load_workflow;
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
@@ -28,7 +28,7 @@ enum Error {
     #[error("workflow error: {0}")]
     Workflow(#[from] factoryrs_workflow::Error),
     #[error("runtime error: {0}")]
-    Runtime(#[from] factoryrs_runtime::Error),
+    Runtime(#[from] factoryrs_orchestrator::Error),
     #[error("tui error: {0}")]
     Tui(#[from] factoryrs_tui::Error),
     #[error("io error: {0}")]
@@ -85,14 +85,14 @@ fn build_runtime_components(
 ) -> Result<(Arc<dyn IssueTracker>, Arc<dyn AgentRuntime>), Error> {
     #[cfg(feature = "mock")]
     if workflow.config.tracker.kind == "mock" && workflow.config.provider.kind == "mock" {
-        let tracker = factoryrs_adapters::MockTracker::seeded_demo();
-        let agent = factoryrs_adapters::MockAgentRuntime::new(tracker.clone());
+        let tracker = factoryrs_issue_mock::MockTracker::seeded_demo();
+        let agent = factoryrs_issue_mock::MockAgentRuntime::new(tracker.clone());
         return Ok((Arc::new(tracker), Arc::new(agent)));
     }
 
     let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind.as_str() {
         #[cfg(feature = "mock")]
-        "mock" => Arc::new(factoryrs_adapters::MockTracker::seeded_demo()),
+        "mock" => Arc::new(factoryrs_issue_mock::MockTracker::seeded_demo()),
         #[cfg(feature = "linear")]
         "linear" => {
             let api_key = workflow
@@ -101,7 +101,7 @@ fn build_runtime_components(
                 .api_key
                 .clone()
                 .ok_or_else(|| Error::Config("tracker.api_key is required".into()))?;
-            Arc::new(factoryrs_adapters::LinearTracker::new(
+            Arc::new(factoryrs_linear::LinearTracker::new(
                 workflow.config.tracker.endpoint.clone(),
                 api_key,
             ))

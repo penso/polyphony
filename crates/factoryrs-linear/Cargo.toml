@@ -1,15 +1,15 @@
 [package]
-name = "factoryrs-runtime"
+name = "factoryrs-linear"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 chrono.workspace = true
-notify.workspace = true
+graphql_client.workspace = true
+reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-tracing.workspace = true
 factoryrs-core = { path = "../factoryrs-core" }
-factoryrs-workflow = { path = "../factoryrs-workflow" }
