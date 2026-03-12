@@ -4,13 +4,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
-#[cfg(any(feature = "linear", feature = "github"))]
+#[cfg(feature = "linear")]
 use factoryrs_core::RateLimitSignal;
 use factoryrs_core::{
     AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus,
-    BudgetSnapshot, Error as CoreError, Issue, IssueStateUpdate, IssueTracker, TokenUsage,
-    TrackerQuery,
+    BlockerRef, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
+    IssueStateUpdate, IssueTracker, TokenUsage, TrackerQuery,
 };
+#[cfg(feature = "linear")]
+use graphql_client::GraphQLQuery;
 use thiserror::Error;
 use tokio::sync::{RwLock, mpsc};
 
@@ -22,6 +24,27 @@ pub enum Error {
     #[error("linear adapter error: {0}")]
     Linear(String),
 }
+
+#[cfg(feature = "linear")]
+type DateTime = String;
+
+#[cfg(feature = "linear")]
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/linear_schema.json",
+    query_path = "src/issues.graphql",
+    response_derives = "Debug, Serialize, Deserialize"
+)]
+pub struct LinearIssuesPage;
+
+#[cfg(feature = "linear")]
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/linear_schema.json",
+    query_path = "src/issue_states.graphql",
+    response_derives = "Debug, Serialize, Deserialize"
+)]
+pub struct LinearIssueStates;
 
 #[cfg(feature = "mock")]
 #[derive(Debug, Clone)]
@@ -269,19 +292,12 @@ impl LinearTracker {
         }
     }
 
-    async fn graphql(
-        &self,
-        query: &str,
-        variables: serde_json::Value,
-    ) -> Result<serde_json::Value, CoreError> {
+    async fn graphql(&self, body: serde_json::Value) -> Result<serde_json::Value, CoreError> {
         let response = self
             .client
             .post(&self.endpoint)
             .header("Authorization", &self.api_key)
-            .json(&serde_json::json!({
-                "query": query,
-                "variables": variables,
-            }))
+            .json(&body)
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
@@ -310,6 +326,48 @@ impl LinearTracker {
         }
         Ok(payload)
     }
+
+    async fn fetch_issues_for_states(
+        &self,
+        project_slug: &str,
+        states: &[String],
+    ) -> Result<Vec<Issue>, CoreError> {
+        let mut after = None::<String>;
+        let mut issues = Vec::new();
+
+        loop {
+            let payload = self
+                .graphql(
+                    serde_json::to_value(LinearIssuesPage::build_query(
+                        linear_issues_page::Variables {
+                            project_slug: project_slug.to_string(),
+                            states: states.to_vec(),
+                            after: after.clone(),
+                        },
+                    ))
+                    .map_err(|error| CoreError::Adapter(error.to_string()))?,
+                )
+                .await?;
+            let response: graphql_client::Response<linear_issues_page::ResponseData> =
+                serde_json::from_value(payload)
+                    .map_err(|error| CoreError::Adapter(error.to_string()))?;
+            if response.errors.is_some() {
+                return Err(CoreError::Adapter("linear_graphql_errors".into()));
+            }
+            let data = response
+                .data
+                .ok_or_else(|| CoreError::Adapter("linear_unknown_payload".into()))?;
+            issues.extend(data.issues.nodes.iter().map(linear_issue_from_node));
+
+            let has_next_page = data.issues.page_info.has_next_page;
+            after = data.issues.page_info.end_cursor;
+            if !has_next_page || after.is_none() {
+                break;
+            }
+        }
+
+        Ok(issues)
+    }
 }
 
 #[cfg(feature = "linear")]
@@ -324,44 +382,8 @@ impl IssueTracker for LinearTracker {
             .project_slug
             .clone()
             .ok_or_else(|| CoreError::Adapter("missing_tracker_project_slug".into()))?;
-        let payload = self
-            .graphql(
-                r#"
-                query CandidateIssues($projectSlug: String!, $states: [String!]!) {
-                  issues(
-                    filter: {
-                      project: { slugId: { eq: $projectSlug } }
-                      state: { name: { in: $states } }
-                    }
-                  ) {
-                    nodes {
-                      id
-                      identifier
-                      title
-                      description
-                      priority
-                      branchName
-                      url
-                      createdAt
-                      updatedAt
-                      state { name }
-                      labels { nodes { name } }
-                    }
-                  }
-                }
-                "#,
-                serde_json::json!({
-                    "projectSlug": project_slug,
-                    "states": query.active_states,
-                }),
-            )
-            .await?;
-        Ok(parse_linear_issue_nodes(
-            payload
-                .pointer("/data/issues/nodes")
-                .and_then(|value| value.as_array())
-                .ok_or_else(|| CoreError::Adapter("linear_unknown_payload".into()))?,
-        ))
+        self.fetch_issues_for_states(&project_slug, &query.active_states)
+            .await
     }
 
     async fn fetch_issues_by_states(
@@ -374,44 +396,7 @@ impl IssueTracker for LinearTracker {
         }
         let project_slug = project_slug
             .ok_or_else(|| CoreError::Adapter("missing_tracker_project_slug".into()))?;
-        let payload = self
-            .graphql(
-                r#"
-                query IssuesByStates($projectSlug: String!, $states: [String!]!) {
-                  issues(
-                    filter: {
-                      project: { slugId: { eq: $projectSlug } }
-                      state: { name: { in: $states } }
-                    }
-                  ) {
-                    nodes {
-                      id
-                      identifier
-                      title
-                      description
-                      priority
-                      branchName
-                      url
-                      createdAt
-                      updatedAt
-                      state { name }
-                      labels { nodes { name } }
-                    }
-                  }
-                }
-                "#,
-                serde_json::json!({
-                    "projectSlug": project_slug,
-                    "states": states,
-                }),
-            )
-            .await?;
-        Ok(parse_linear_issue_nodes(
-            payload
-                .pointer("/data/issues/nodes")
-                .and_then(|value| value.as_array())
-                .ok_or_else(|| CoreError::Adapter("linear_unknown_payload".into()))?,
-        ))
+        self.fetch_issues_for_states(project_slug, states).await
     }
 
     async fn fetch_issue_states_by_ids(
@@ -423,242 +408,188 @@ impl IssueTracker for LinearTracker {
         }
         let payload = self
             .graphql(
-                r#"
-                query IssueStates($issueIds: [ID!]!) {
-                  issues(filter: { id: { in: $issueIds } }) {
-                    nodes {
-                      id
-                      identifier
-                      updatedAt
-                      state { name }
-                    }
-                  }
-                }
-                "#,
-                serde_json::json!({
-                    "issueIds": issue_ids,
-                }),
+                serde_json::to_value(LinearIssueStates::build_query(
+                    linear_issue_states::Variables {
+                        issue_ids: issue_ids.to_vec(),
+                    },
+                ))
+                .map_err(|error| CoreError::Adapter(error.to_string()))?,
             )
             .await?;
-        let nodes = payload
-            .pointer("/data/issues/nodes")
-            .and_then(|value| value.as_array())
+        let response: graphql_client::Response<linear_issue_states::ResponseData> =
+            serde_json::from_value(payload)
+                .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if response.errors.is_some() {
+            return Err(CoreError::Adapter("linear_graphql_errors".into()));
+        }
+        let data = response
+            .data
             .ok_or_else(|| CoreError::Adapter("linear_unknown_payload".into()))?;
-        Ok(nodes
+        Ok(data
+            .issues
+            .nodes
             .iter()
             .map(|node| IssueStateUpdate {
-                id: node["id"].as_str().unwrap_or_default().to_string(),
-                identifier: node["identifier"].as_str().unwrap_or_default().to_string(),
-                state: node["state"]["name"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                updated_at: node["updatedAt"]
-                    .as_str()
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&Utc)),
-            })
-            .collect())
-    }
-}
-
-#[cfg(feature = "github")]
-#[derive(Debug, Clone)]
-pub struct GithubTracker {
-    client: reqwest::Client,
-    token: Option<String>,
-    repository: String,
-}
-
-#[cfg(feature = "github")]
-impl GithubTracker {
-    pub fn new(repository: String, token: Option<String>) -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            token,
-            repository,
-        }
-    }
-
-    async fn get_issues(&self, state: &str) -> Result<Vec<serde_json::Value>, CoreError> {
-        let mut request = self
-            .client
-            .get(format!(
-                "https://api.github.com/repos/{}/issues?state={state}&per_page=100",
-                self.repository
-            ))
-            .header("User-Agent", "factoryrs");
-        if let Some(token) = &self.token {
-            request = request.bearer_auth(token);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| CoreError::Adapter(error.to_string()))?;
-        if response.status().as_u16() == 429 || response.status().as_u16() == 403 {
-            let remaining = response
-                .headers()
-                .get("x-ratelimit-remaining")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(1);
-            if remaining == 0 || response.status().as_u16() == 429 {
-                return Err(CoreError::RateLimited(rate_limit_signal(
-                    "tracker:github",
-                    "github_rate_limit",
-                    &response,
-                )));
-            }
-        }
-        response
-            .json::<Vec<serde_json::Value>>()
-            .await
-            .map_err(|error| CoreError::Adapter(error.to_string()))
-    }
-}
-
-#[cfg(feature = "github")]
-#[async_trait]
-impl IssueTracker for GithubTracker {
-    fn component_key(&self) -> String {
-        "tracker:github".into()
-    }
-
-    async fn fetch_candidate_issues(&self, query: &TrackerQuery) -> Result<Vec<Issue>, CoreError> {
-        let mut items = Vec::new();
-        for state in &query.active_states {
-            let api_state =
-                if state.eq_ignore_ascii_case("done") || state.eq_ignore_ascii_case("closed") {
-                    "closed"
-                } else {
-                    "open"
-                };
-            items.extend(self.get_issues(api_state).await?);
-        }
-        Ok(parse_github_issues(&items))
-    }
-
-    async fn fetch_issues_by_states(
-        &self,
-        _project_slug: Option<&str>,
-        states: &[String],
-    ) -> Result<Vec<Issue>, CoreError> {
-        let mut items = Vec::new();
-        for state in states {
-            let api_state =
-                if state.eq_ignore_ascii_case("done") || state.eq_ignore_ascii_case("closed") {
-                    "closed"
-                } else {
-                    "open"
-                };
-            items.extend(self.get_issues(api_state).await?);
-        }
-        Ok(parse_github_issues(&items))
-    }
-
-    async fn fetch_issue_states_by_ids(
-        &self,
-        issue_ids: &[String],
-    ) -> Result<Vec<IssueStateUpdate>, CoreError> {
-        let items = self.get_issues("all").await?;
-        Ok(parse_github_issues(&items)
-            .into_iter()
-            .filter(|issue| issue_ids.iter().any(|id| id == &issue.id))
-            .map(|issue| IssueStateUpdate {
-                id: issue.id,
-                identifier: issue.identifier,
-                state: issue.state,
-                updated_at: issue.updated_at,
+                id: node.id.clone(),
+                identifier: node.identifier.clone(),
+                state: node.state.name.clone(),
+                updated_at: parse_rfc3339(&node.updated_at),
             })
             .collect())
     }
 }
 
 #[cfg(feature = "linear")]
-fn parse_linear_issue_nodes(nodes: &[serde_json::Value]) -> Vec<Issue> {
-    nodes
-        .iter()
-        .map(|node| Issue {
-            id: node["id"].as_str().unwrap_or_default().to_string(),
-            identifier: node["identifier"].as_str().unwrap_or_default().to_string(),
-            title: node["title"].as_str().unwrap_or_default().to_string(),
-            description: node["description"].as_str().map(ToOwned::to_owned),
-            priority: node["priority"].as_i64().map(|value| value as i32),
-            state: node["state"]["name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            branch_name: node["branchName"].as_str().map(ToOwned::to_owned),
-            url: node["url"].as_str().map(ToOwned::to_owned),
-            labels: node["labels"]["nodes"]
-                .as_array()
-                .map(|labels| {
-                    labels
-                        .iter()
-                        .filter_map(|label| label["name"].as_str())
-                        .map(|label| label.to_ascii_lowercase())
-                        .collect()
-                })
-                .unwrap_or_default(),
-            blocked_by: Vec::new(),
-            created_at: node["createdAt"]
-                .as_str()
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&Utc)),
-            updated_at: node["updatedAt"]
-                .as_str()
-                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&Utc)),
-        })
-        .collect()
+fn linear_issue_from_node(node: &linear_issues_page::LinearIssuesPageIssuesNodes) -> Issue {
+    Issue {
+        id: node.id.clone(),
+        identifier: node.identifier.clone(),
+        title: node.title.clone(),
+        description: node.description.clone(),
+        priority: parse_linear_priority(node.priority),
+        state: node.state.name.clone(),
+        branch_name: Some(node.branch_name.clone()),
+        url: Some(node.url.clone()),
+        author: node.creator.as_ref().map(linear_author_from_user),
+        labels: node
+            .labels
+            .nodes
+            .iter()
+            .map(|label| label.name.to_ascii_lowercase())
+            .collect(),
+        comments: linear_comments_from_connection(&node.comments.nodes),
+        blocked_by: node
+            .inverse_relations
+            .nodes
+            .iter()
+            .filter(|relation| relation.type_ == "blocks")
+            .map(|relation| BlockerRef {
+                id: Some(relation.related_issue.id.clone()),
+                identifier: Some(relation.related_issue.identifier.clone()),
+                state: Some(relation.related_issue.state.name.clone()),
+            })
+            .collect(),
+        created_at: parse_rfc3339(&node.created_at),
+        updated_at: parse_rfc3339(&node.updated_at),
+    }
 }
 
-#[cfg(feature = "github")]
-fn parse_github_issues(nodes: &[serde_json::Value]) -> Vec<Issue> {
-    nodes
-        .iter()
-        .filter(|node| node.get("pull_request").is_none())
-        .map(|node| {
-            let number = node["number"].as_i64().unwrap_or_default();
-            let state = if node["state"].as_str().unwrap_or("open") == "open" {
-                "Todo"
-            } else {
-                "Done"
-            };
-            Issue {
-                id: node["node_id"].as_str().unwrap_or_default().to_string(),
-                identifier: format!("#{}", number),
-                title: node["title"].as_str().unwrap_or_default().to_string(),
-                description: node["body"].as_str().map(ToOwned::to_owned),
-                priority: None,
-                state: state.to_string(),
-                branch_name: None,
-                url: node["html_url"].as_str().map(ToOwned::to_owned),
-                labels: node["labels"]
-                    .as_array()
-                    .map(|labels| {
-                        labels
-                            .iter()
-                            .filter_map(|label| label["name"].as_str())
-                            .map(|label| label.to_ascii_lowercase())
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                blocked_by: Vec::new(),
-                created_at: node["created_at"]
-                    .as_str()
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&Utc)),
-                updated_at: node["updated_at"]
-                    .as_str()
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&Utc)),
-            }
-        })
-        .collect()
+#[cfg(feature = "linear")]
+fn linear_author_from_user(
+    user: &linear_issues_page::LinearIssuesPageIssuesNodesCreator,
+) -> IssueAuthor {
+    IssueAuthor {
+        id: Some(user.id.clone()),
+        username: Some(user.name.clone()),
+        display_name: Some(user.display_name.clone()),
+        role: Some(linear_role(user.owner, user.admin, user.guest)),
+        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
+        url: Some(user.url.clone()),
+    }
 }
 
-#[cfg(any(feature = "linear", feature = "github"))]
+#[cfg(feature = "linear")]
+fn linear_comment_author_from_user(
+    user: &linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodesUser,
+) -> IssueAuthor {
+    IssueAuthor {
+        id: Some(user.id.clone()),
+        username: Some(user.name.clone()),
+        display_name: Some(user.display_name.clone()),
+        role: Some(linear_role(user.owner, user.admin, user.guest)),
+        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
+        url: Some(user.url.clone()),
+    }
+}
+
+#[cfg(feature = "linear")]
+fn linear_comments_from_connection(
+    comments: &[linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodes],
+) -> Vec<IssueComment> {
+    let mut collected = Vec::new();
+    for comment in comments {
+        collected.push(IssueComment {
+            id: comment.id.clone(),
+            body: comment.body.clone(),
+            author: comment.user.as_ref().map(linear_comment_author_from_user),
+            url: Some(comment.url.clone()),
+            created_at: parse_rfc3339(&comment.created_at),
+            updated_at: parse_rfc3339(&comment.updated_at),
+        });
+        for child in &comment.children.nodes {
+            collected.push(IssueComment {
+                id: child.id.clone(),
+                body: child.body.clone(),
+                author: child
+                    .user
+                    .as_ref()
+                    .map(linear_child_comment_author_from_user),
+                url: Some(child.url.clone()),
+                created_at: parse_rfc3339(&child.created_at),
+                updated_at: parse_rfc3339(&child.updated_at),
+            });
+        }
+    }
+    collected
+}
+
+#[cfg(feature = "linear")]
+fn linear_child_comment_author_from_user(
+    user: &linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodesChildrenNodesUser,
+) -> IssueAuthor {
+    IssueAuthor {
+        id: Some(user.id.clone()),
+        username: Some(user.name.clone()),
+        display_name: Some(user.display_name.clone()),
+        role: Some(linear_role(user.owner, user.admin, user.guest)),
+        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
+        url: Some(user.url.clone()),
+    }
+}
+
+#[cfg(feature = "linear")]
+fn linear_role(owner: bool, admin: bool, guest: bool) -> String {
+    if owner {
+        "owner".into()
+    } else if admin {
+        "admin".into()
+    } else if guest {
+        "guest".into()
+    } else {
+        "member".into()
+    }
+}
+
+#[cfg(feature = "linear")]
+fn linear_trust_level(owner: bool, admin: bool, guest: bool) -> String {
+    if guest {
+        "external_guest".into()
+    } else if owner {
+        "internal_owner".into()
+    } else if admin {
+        "internal_admin".into()
+    } else {
+        "internal_member".into()
+    }
+}
+
+#[cfg(feature = "linear")]
+fn parse_linear_priority(priority: f64) -> Option<i32> {
+    if priority.fract() == 0.0 {
+        Some(priority as i32)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "linear")]
+fn parse_rfc3339(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+#[cfg(feature = "linear")]
 fn rate_limit_signal(
     component: &str,
     reason: &str,
@@ -698,7 +629,30 @@ fn demo_issue(identifier: &str, title: &str, priority: Option<i32>, state: &str)
         state: state.to_string(),
         branch_name: Some(format!("feat/{}", identifier.to_ascii_lowercase())),
         url: None,
+        author: Some(IssueAuthor {
+            id: Some("mock-user".into()),
+            username: Some("factory-bot".into()),
+            display_name: Some("Factory Bot".into()),
+            role: Some("member".into()),
+            trust_level: Some("internal_member".into()),
+            url: None,
+        }),
         labels: vec!["automation".into(), "rust".into()],
+        comments: vec![IssueComment {
+            id: format!("{identifier}-comment-1"),
+            body: "Please include tests and note any follow-up risks.".into(),
+            author: Some(IssueAuthor {
+                id: Some("mock-reviewer".into()),
+                username: Some("maintainer".into()),
+                display_name: Some("Maintainer".into()),
+                role: Some("admin".into()),
+                trust_level: Some("internal_admin".into()),
+                url: None,
+            }),
+            url: None,
+            created_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
+        }],
         blocked_by: Vec::new(),
         created_at: Some(Utc::now()),
         updated_at: Some(Utc::now()),

@@ -37,6 +37,8 @@ Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): descripti
 - Use clear error handling with typed errors (`thiserror`/`anyhow` where appropriate).
 - Use `arbor_core::ResultExt` and `arbor_core::OptionExt` for `.context()` on `Result<T, E>` and `Option<T>` — prefer these over ad-hoc `.map_err()` with format strings.
 - Use `SessionId` and `WorkspaceId` newtypes from `arbor_core::id` instead of raw `String` for session/workspace identifiers. These are `#[serde(transparent)]` for wire compatibility.
+- Leverage Rust's type system directly: prefer typed structs and semantic helper methods over accessor-object wrappers or blanket getter layers.
+- Remove any other accessor object patterns that do not buy real semantics. If a method only mirrors a field, prefer direct field access; add methods only for derived behavior, invariants, or domain meaning.
 - Keep modules focused and delete dead code instead of leaving it around.
 - Collapse nested `if` / `if let` statements when possible (clippy `collapsible_if`).
 - **Never shell out to external CLIs** (`gh`, `git` via `Command::new`, etc.) for GitHub API calls or operations that can be done with Rust crates. Use `octocrab`, `reqwest`, or other Rust HTTP/API crates instead. The only acceptable use of `std::process::Command` is where no Rust crate equivalent exists.

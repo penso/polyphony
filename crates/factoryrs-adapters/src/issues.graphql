@@ -1,0 +1,91 @@
+query LinearIssuesPage($projectSlug: String!, $states: [String!]!, $after: String) {
+  issues(
+    first: 50
+    after: $after
+    filter: {
+      project: { slugId: { eq: $projectSlug } }
+      state: { name: { in: $states } }
+    }
+  ) {
+    nodes {
+      id
+      identifier
+      title
+      description
+      priority
+      branchName
+      url
+      createdAt
+      updatedAt
+      state {
+        name
+      }
+      creator {
+        id
+        name
+        displayName
+        url
+        guest
+        admin
+        owner
+      }
+      labels {
+        nodes {
+          name
+        }
+      }
+      comments(first: 20) {
+        nodes {
+          id
+          body
+          url
+          createdAt
+          updatedAt
+          user {
+            id
+            name
+            displayName
+            url
+            guest
+            admin
+            owner
+          }
+          children(first: 10) {
+            nodes {
+              id
+              body
+              url
+              createdAt
+              updatedAt
+              user {
+                id
+                name
+                displayName
+                url
+                guest
+                admin
+                owner
+              }
+            }
+          }
+        }
+      }
+      inverseRelations {
+        nodes {
+          type
+          relatedIssue {
+            id
+            identifier
+            state {
+              name
+            }
+          }
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}

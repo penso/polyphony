@@ -225,12 +225,21 @@ impl ServiceConfig {
     }
 
     fn resolve(&mut self) {
-        self.tracker.api_key = resolve_env_token(
-            self.tracker
+        let tracker_api_key = match self.tracker.kind.as_str() {
+            "linear" => self
+                .tracker
                 .api_key
                 .clone()
                 .or_else(|| env::var("LINEAR_API_KEY").ok()),
-        );
+            "github" => self
+                .tracker
+                .api_key
+                .clone()
+                .or_else(|| env::var("GITHUB_TOKEN").ok())
+                .or_else(|| env::var("GH_TOKEN").ok()),
+            _ => self.tracker.api_key.clone(),
+        };
+        self.tracker.api_key = resolve_env_token(tracker_api_key);
         self.workspace.root = expand_path_like(&self.workspace.root);
         self.workspace.source_repo_path = self
             .workspace
@@ -285,17 +294,29 @@ impl ServiceConfig {
                 ));
             }
         }
-        if self.tracker.kind == "github"
-            && self
+        if self.tracker.kind == "github" {
+            if self
                 .tracker
                 .repository
                 .as_deref()
                 .unwrap_or_default()
                 .is_empty()
-        {
-            return Err(Error::InvalidConfig(
-                "tracker.repository is required for github".into(),
-            ));
+            {
+                return Err(Error::InvalidConfig(
+                    "tracker.repository is required for github".into(),
+                ));
+            }
+            if self
+                .tracker
+                .api_key
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                return Err(Error::InvalidConfig(
+                    "tracker.api_key is required for github".into(),
+                ));
+            }
         }
         if self.provider.command.trim().is_empty() {
             return Err(Error::InvalidConfig(
@@ -412,6 +433,14 @@ fn issue_to_liquid(issue: &Issue) -> Value {
             .unwrap_or(Value::Nil),
     );
     issue_obj.insert(
+        "author".into(),
+        issue
+            .author
+            .as_ref()
+            .map(issue_author_to_liquid)
+            .unwrap_or(Value::Nil),
+    );
+    issue_obj.insert(
         "labels".into(),
         Value::Array(
             issue
@@ -419,6 +448,51 @@ fn issue_to_liquid(issue: &Issue) -> Value {
                 .iter()
                 .cloned()
                 .map(Value::scalar)
+                .collect::<Array>(),
+        ),
+    );
+    issue_obj.insert(
+        "comments".into(),
+        Value::Array(
+            issue
+                .comments
+                .iter()
+                .map(|comment| {
+                    let mut obj = Object::new();
+                    obj.insert("id".into(), Value::scalar(comment.id.clone()));
+                    obj.insert("body".into(), Value::scalar(comment.body.clone()));
+                    obj.insert(
+                        "author".into(),
+                        comment
+                            .author
+                            .as_ref()
+                            .map(issue_author_to_liquid)
+                            .unwrap_or(Value::Nil),
+                    );
+                    obj.insert(
+                        "url".into(),
+                        comment
+                            .url
+                            .as_ref()
+                            .map(|value| Value::scalar(value.clone()))
+                            .unwrap_or(Value::Nil),
+                    );
+                    obj.insert(
+                        "created_at".into(),
+                        comment
+                            .created_at
+                            .map(|value| Value::scalar(value.to_rfc3339()))
+                            .unwrap_or(Value::Nil),
+                    );
+                    obj.insert(
+                        "updated_at".into(),
+                        comment
+                            .updated_at
+                            .map(|value| Value::scalar(value.to_rfc3339()))
+                            .unwrap_or(Value::Nil),
+                    );
+                    Value::Object(obj)
+                })
                 .collect::<Array>(),
         ),
     );
@@ -460,6 +534,59 @@ fn issue_to_liquid(issue: &Issue) -> Value {
         ),
     );
     Value::Object(issue_obj)
+}
+
+fn issue_author_to_liquid(author: &factoryrs_core::IssueAuthor) -> Value {
+    let mut obj = Object::new();
+    obj.insert(
+        "id".into(),
+        author
+            .id
+            .as_ref()
+            .map(|value| Value::scalar(value.clone()))
+            .unwrap_or(Value::Nil),
+    );
+    obj.insert(
+        "username".into(),
+        author
+            .username
+            .as_ref()
+            .map(|value| Value::scalar(value.clone()))
+            .unwrap_or(Value::Nil),
+    );
+    obj.insert(
+        "display_name".into(),
+        author
+            .display_name
+            .as_ref()
+            .map(|value| Value::scalar(value.clone()))
+            .unwrap_or(Value::Nil),
+    );
+    obj.insert(
+        "role".into(),
+        author
+            .role
+            .as_ref()
+            .map(|value| Value::scalar(value.clone()))
+            .unwrap_or(Value::Nil),
+    );
+    obj.insert(
+        "trust_level".into(),
+        author
+            .trust_level
+            .as_ref()
+            .map(|value| Value::scalar(value.clone()))
+            .unwrap_or(Value::Nil),
+    );
+    obj.insert(
+        "url".into(),
+        author
+            .url
+            .as_ref()
+            .map(|value| Value::scalar(value.clone()))
+            .unwrap_or(Value::Nil),
+    );
+    Value::Object(obj)
 }
 
 fn resolve_env_token(value: Option<String>) -> Option<String> {

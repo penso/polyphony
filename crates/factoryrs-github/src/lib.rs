@@ -1,11 +1,19 @@
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use factoryrs_core::{
-    BudgetSnapshot, Error as CoreError, Issue, IssueStateUpdate, IssueTracker,
-    PullRequestCommenter, PullRequestRef, TrackerQuery,
+    BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
+    IssueTracker, PullRequestCommenter, PullRequestRef, TrackerQuery,
 };
 use graphql_client::GraphQLQuery;
-use octocrab::{Octocrab, models::issues::Issue as GithubIssue};
+use octocrab::{
+    Octocrab,
+    models::{
+        Author, AuthorAssociation,
+        issues::{Comment as GithubComment, Issue as GithubIssue},
+    },
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -83,6 +91,37 @@ impl GithubIssueTracker {
             .await
             .map_err(map_github_error)
     }
+
+    async fn comments_for_issue(&self, number: u64) -> Result<Vec<GithubComment>, CoreError> {
+        let mut page = self
+            .crab
+            .issues(&self.owner, &self.repo)
+            .list_comments(number)
+            .per_page(100)
+            .send()
+            .await
+            .map_err(map_github_error)?;
+        let mut comments = page.take_items();
+        while let Some(next) = self
+            .crab
+            .get_page::<GithubComment>(&page.next)
+            .await
+            .map_err(map_github_error)?
+        {
+            page = next;
+            comments.extend(page.take_items());
+        }
+        Ok(comments)
+    }
+
+    async fn normalize_issue(&self, issue: GithubIssue) -> Result<Issue, CoreError> {
+        let comments = if issue.comments > 0 {
+            self.comments_for_issue(issue.number).await?
+        } else {
+            Vec::new()
+        };
+        Ok(to_issue(issue, comments))
+    }
 }
 
 #[async_trait]
@@ -91,14 +130,17 @@ impl IssueTracker for GithubIssueTracker {
         "tracker:github".into()
     }
 
-    async fn fetch_candidate_issues(&self, _query: &TrackerQuery) -> Result<Vec<Issue>, CoreError> {
-        Ok(self
-            .all_issues(octocrab::params::State::Open)
-            .await?
-            .into_iter()
-            .filter(|issue| issue.pull_request.is_none())
-            .map(|issue| to_issue(&self.owner, &self.repo, issue))
-            .collect())
+    async fn fetch_candidate_issues(&self, query: &TrackerQuery) -> Result<Vec<Issue>, CoreError> {
+        if !wants_open_states(&query.active_states) {
+            return Ok(Vec::new());
+        }
+        let mut normalized = Vec::new();
+        for issue in self.all_issues(octocrab::params::State::Open).await? {
+            if issue.pull_request.is_none() {
+                normalized.push(self.normalize_issue(issue).await?);
+            }
+        }
+        Ok(normalized)
     }
 
     async fn fetch_issues_by_states(
@@ -106,30 +148,24 @@ impl IssueTracker for GithubIssueTracker {
         _project_slug: Option<&str>,
         states: &[String],
     ) -> Result<Vec<Issue>, CoreError> {
-        let wants_open = states.iter().any(|state| {
-            !matches!(
-                state.to_ascii_lowercase().as_str(),
-                "done" | "closed" | "cancelled"
-            )
-        });
-        let wants_closed = states.iter().any(|state| {
-            matches!(
-                state.to_ascii_lowercase().as_str(),
-                "done" | "closed" | "cancelled"
-            )
-        });
-        let mut issues = Vec::new();
+        let mut issues_by_id = BTreeMap::new();
+        let wants_open = wants_open_states(states);
+        let wants_closed = wants_closed_states(states);
         if wants_open {
-            issues.extend(self.all_issues(octocrab::params::State::Open).await?);
+            for issue in self.all_issues(octocrab::params::State::Open).await? {
+                if issue.pull_request.is_none() {
+                    issues_by_id.insert(issue.number, self.normalize_issue(issue).await?);
+                }
+            }
         }
         if wants_closed {
-            issues.extend(self.all_issues(octocrab::params::State::Closed).await?);
+            for issue in self.all_issues(octocrab::params::State::Closed).await? {
+                if issue.pull_request.is_none() {
+                    issues_by_id.insert(issue.number, self.normalize_issue(issue).await?);
+                }
+            }
         }
-        Ok(issues
-            .into_iter()
-            .filter(|issue| issue.pull_request.is_none())
-            .map(|issue| to_issue(&self.owner, &self.repo, issue))
-            .collect())
+        Ok(issues_by_id.into_values().collect())
     }
 
     async fn fetch_issue_states_by_ids(
@@ -145,11 +181,7 @@ impl IssueTracker for GithubIssueTracker {
             updates.push(IssueStateUpdate {
                 id: issue.number.to_string(),
                 identifier: format!("#{}", issue.number),
-                state: if issue.state == octocrab::models::IssueState::Open {
-                    "Todo".into()
-                } else {
-                    "Done".into()
-                },
+                state: normalize_issue_state(&issue),
                 updated_at: Some(issue.updated_at.with_timezone(&Utc)),
             });
         }
@@ -244,29 +276,109 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
     }
 }
 
-fn to_issue(_owner: &str, _repo: &str, issue: GithubIssue) -> Issue {
+fn to_issue(issue: GithubIssue, comments: Vec<GithubComment>) -> Issue {
+    let state = normalize_issue_state(&issue);
     Issue {
         id: issue.number.to_string(),
         identifier: format!("#{}", issue.number),
         title: issue.title,
         description: issue.body,
         priority: None,
-        state: if issue.state == octocrab::models::IssueState::Open {
-            "Todo".into()
-        } else {
-            "Done".into()
-        },
+        state,
         branch_name: Some(format!("issue-{}", issue.number)),
         url: Some(issue.html_url.to_string()),
+        author: Some(github_author(
+            &issue.user,
+            issue.author_association.as_ref(),
+        )),
         labels: issue
             .labels
             .into_iter()
             .map(|label| label.name.to_ascii_lowercase())
             .collect(),
+        comments: comments.into_iter().map(github_comment).collect(),
         blocked_by: Vec::new(),
         created_at: Some(issue.created_at.with_timezone(&Utc)),
         updated_at: Some(issue.updated_at.with_timezone(&Utc)),
     }
+}
+
+fn github_comment(comment: GithubComment) -> IssueComment {
+    IssueComment {
+        id: comment.id.to_string(),
+        body: comment.body.unwrap_or_default(),
+        author: Some(github_author(
+            &comment.user,
+            comment.author_association.as_ref(),
+        )),
+        url: Some(comment.html_url.to_string()),
+        created_at: Some(comment.created_at.with_timezone(&Utc)),
+        updated_at: comment.updated_at.map(|value| value.with_timezone(&Utc)),
+    }
+}
+
+fn github_author(author: &Author, association: Option<&AuthorAssociation>) -> IssueAuthor {
+    IssueAuthor {
+        id: Some(author.id.to_string()),
+        username: Some(author.login.clone()),
+        display_name: author.name.clone().or_else(|| Some(author.login.clone())),
+        role: association.map(github_role),
+        trust_level: association.map(github_trust_level),
+        url: Some(author.html_url.to_string()),
+    }
+}
+
+fn github_role(association: &AuthorAssociation) -> String {
+    match association {
+        AuthorAssociation::Owner => "owner".into(),
+        AuthorAssociation::Member => "member".into(),
+        AuthorAssociation::Collaborator => "collaborator".into(),
+        AuthorAssociation::Contributor => "contributor".into(),
+        AuthorAssociation::FirstTimer => "first_timer".into(),
+        AuthorAssociation::FirstTimeContributor => "first_time_contributor".into(),
+        AuthorAssociation::Mannequin => "mannequin".into(),
+        AuthorAssociation::None => "none".into(),
+        AuthorAssociation::Other(value) => value.to_ascii_lowercase(),
+        _ => "unknown".into(),
+    }
+}
+
+fn github_trust_level(association: &AuthorAssociation) -> String {
+    match association {
+        AuthorAssociation::Owner => "trusted_owner".into(),
+        AuthorAssociation::Member => "trusted_member".into(),
+        AuthorAssociation::Collaborator => "trusted_collaborator".into(),
+        AuthorAssociation::Contributor => "external_contributor".into(),
+        AuthorAssociation::FirstTimer => "outsider".into(),
+        AuthorAssociation::FirstTimeContributor => "outsider".into(),
+        AuthorAssociation::Mannequin => "unknown".into(),
+        AuthorAssociation::None => "outsider".into(),
+        AuthorAssociation::Other(_) => "unknown".into(),
+        _ => "unknown".into(),
+    }
+}
+
+fn normalize_issue_state(issue: &GithubIssue) -> String {
+    if issue.state == octocrab::models::IssueState::Open {
+        "Todo".into()
+    } else {
+        "Done".into()
+    }
+}
+
+fn wants_open_states(states: &[String]) -> bool {
+    states.iter().any(|state| !is_terminalish_state(state))
+}
+
+fn wants_closed_states(states: &[String]) -> bool {
+    states.iter().any(|state| is_terminalish_state(state))
+}
+
+fn is_terminalish_state(state: &str) -> bool {
+    matches!(
+        state.to_ascii_lowercase().as_str(),
+        "done" | "closed" | "cancelled" | "canceled" | "duplicate"
+    )
 }
 
 fn split_repo(repository: &str) -> Result<(String, String), CoreError> {

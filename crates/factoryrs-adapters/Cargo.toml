@@ -8,11 +8,11 @@ license.workspace = true
 default = ["mock"]
 mock = []
 linear = ["dep:reqwest"]
-github = ["dep:reqwest"]
 
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+graphql_client.workspace = true
 reqwest = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

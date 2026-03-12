@@ -30,6 +30,26 @@ pub struct BlockerRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueAuthor {
+    pub id: Option<String>,
+    pub username: Option<String>,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    pub trust_level: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IssueComment {
+    pub id: String,
+    pub body: String,
+    pub author: Option<IssueAuthor>,
+    pub url: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Issue {
     pub id: String,
     pub identifier: String,
@@ -39,7 +59,9 @@ pub struct Issue {
     pub state: String,
     pub branch_name: Option<String>,
     pub url: Option<String>,
+    pub author: Option<IssueAuthor>,
     pub labels: Vec<String>,
+    pub comments: Vec<IssueComment>,
     pub blocked_by: Vec<BlockerRef>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,

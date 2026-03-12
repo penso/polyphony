@@ -1,0 +1,12 @@
+query LinearIssueStates($issueIds: [ID!]!) {
+  issues(filter: { id: { in: $issueIds } }) {
+    nodes {
+      id
+      identifier
+      updatedAt
+      state {
+        name
+      }
+    }
+  }
+}

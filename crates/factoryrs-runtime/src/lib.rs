@@ -8,8 +8,8 @@ use factoryrs_core::{
     AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus,
     BudgetSnapshot, CheckoutKind, CodexTotals, Error as CoreError, Issue, IssueTracker,
     PersistedRunRecord, RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot,
-    SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, TrackerQuery, Workspace,
-    WorkspaceProvisioner, WorkspaceRequest, sanitize_workspace_key,
+    SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, Workspace, WorkspaceProvisioner,
+    WorkspaceRequest, sanitize_workspace_key,
 };
 use factoryrs_workflow::{HooksConfig, LoadedWorkflow, load_workflow, render_prompt};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -362,7 +362,7 @@ impl RuntimeService {
         WorkspaceManager::new(
             workflow.config.workspace.root.clone(),
             self.provisioner.clone(),
-            parse_checkout_kind(&workflow.config.workspace.checkout_kind),
+            workflow.config.workspace_checkout_kind(),
             workflow.config.workspace.source_repo_path.clone(),
             workflow.config.workspace.clone_url.clone(),
             workflow.config.workspace.default_branch.clone(),
@@ -389,12 +389,7 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
             return;
         }
-        let query = TrackerQuery {
-            project_slug: workflow.config.tracker.project_slug.clone(),
-            repository: workflow.config.tracker.repository.clone(),
-            active_states: workflow.config.tracker.active_states.clone(),
-            terminal_states: workflow.config.tracker.terminal_states.clone(),
-        };
+        let query = workflow.config.tracker_query();
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
@@ -472,13 +467,10 @@ impl RuntimeService {
                 return;
             }
         };
-        let active = normalize_states(&workflow.config.tracker.active_states);
-        let terminal = normalize_states(&workflow.config.tracker.terminal_states);
         for update in states {
-            let state = update.state.to_ascii_lowercase();
-            if terminal.contains(&state) {
+            if workflow.config.is_terminal_state(&update.state) {
                 self.stop_running(&update.id, true).await;
-            } else if active.contains(&state) {
+            } else if workflow.config.is_active_state(&update.state) {
                 if let Some(running) = self.state.running.get_mut(&update.id) {
                     running.issue.state = update.state;
                 }
@@ -526,7 +518,7 @@ impl RuntimeService {
             let manager = WorkspaceManager::new(
                 workflow.config.workspace.root.clone(),
                 provisioner,
-                parse_checkout_kind(&workflow.config.workspace.checkout_kind),
+                workflow.config.workspace_checkout_kind(),
                 workflow.config.workspace.source_repo_path.clone(),
                 workflow.config.workspace.clone_url.clone(),
                 workflow.config.workspace.default_branch.clone(),
@@ -611,12 +603,7 @@ impl RuntimeService {
             return;
         };
         let workflow = self.workflow_rx.borrow().clone();
-        let query = TrackerQuery {
-            project_slug: workflow.config.tracker.project_slug.clone(),
-            repository: workflow.config.tracker.repository.clone(),
-            active_states: workflow.config.tracker.active_states.clone(),
-            terminal_states: workflow.config.tracker.terminal_states.clone(),
-        };
+        let query = workflow.config.tracker_query();
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
@@ -884,10 +871,10 @@ impl RuntimeService {
         if self.state.running.contains_key(&issue.id) || self.state.claimed.contains(&issue.id) {
             return false;
         }
-        let active = normalize_states(&workflow.config.tracker.active_states);
-        let terminal = normalize_states(&workflow.config.tracker.terminal_states);
         let state = issue.normalized_state();
-        if !active.contains(&state) || terminal.contains(&state) {
+        if !workflow.config.is_active_state(&issue.state)
+            || workflow.config.is_terminal_state(&issue.state)
+        {
             return false;
         }
         if state == "todo" {
@@ -897,7 +884,7 @@ impl RuntimeService {
                     .clone()
                     .unwrap_or_default()
                     .to_ascii_lowercase();
-                if !blocker_state.is_empty() && !terminal.contains(&blocker_state) {
+                if !blocker_state.is_empty() && !workflow.config.is_terminal_state(&blocker_state) {
                     return false;
                 }
             }
@@ -910,19 +897,14 @@ impl RuntimeService {
             return false;
         }
         let normalized = state.to_ascii_lowercase();
-        if let Some(limit) = workflow
-            .config
-            .agent
-            .max_concurrent_agents_by_state
-            .get(&normalized)
-        {
+        if let Some(limit) = workflow.config.state_concurrency_limit(state) {
             let count = self
                 .state
                 .running
                 .values()
                 .filter(|entry| entry.issue.normalized_state() == normalized)
                 .count();
-            count < *limit
+            count < limit
         } else {
             true
         }
@@ -1269,21 +1251,6 @@ fn absolute_path(path: &Path) -> PathBuf {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(path)
-    }
-}
-
-fn normalize_states(states: &[String]) -> HashSet<String> {
-    states
-        .iter()
-        .map(|state| state.to_ascii_lowercase())
-        .collect()
-}
-
-fn parse_checkout_kind(value: &str) -> CheckoutKind {
-    match value {
-        "linked_worktree" => CheckoutKind::LinkedWorktree,
-        "discrete_clone" => CheckoutKind::DiscreteClone,
-        _ => CheckoutKind::Directory,
     }
 }
 
