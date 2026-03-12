@@ -1,6 +1,9 @@
 ---
 tracker:
   kind: mock
+  project_owner: null
+  project_number: null
+  project_status_field: Status
   active_states:
     - Todo
     - In Progress
@@ -14,6 +17,10 @@ polling:
 workspace:
   root: .factoryrs/workspaces
   checkout_kind: directory
+  sync_on_reuse: true
+  transient_paths:
+    - tmp
+    - .elixir_ls
   source_repo_path: null
   clone_url: null
   default_branch: main
@@ -49,3 +56,15 @@ Git-backed workspace examples:
 
 - `checkout_kind: linked_worktree` with `source_repo_path: /abs/path/to/repo`
 - `checkout_kind: discrete_clone` with `clone_url: git@github.com:owner/repo.git`
+- `sync_on_reuse: false` to preserve an existing checkout without re-checking out the target branch
+
+GitHub Project parity example:
+
+- `tracker.kind: github`
+- `tracker.repository: owner/repo`
+- `tracker.project_owner: owner-or-org`
+- `tracker.project_number: 7`
+- `tracker.project_status_field: Status`
+
+When configured, `factoryrs` will add dispatched GitHub issues to that Project and best-effort sync the
+project status field for workflow visibility.

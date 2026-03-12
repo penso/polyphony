@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use factoryrs_core::{
     AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus,
-    BudgetSnapshot, CheckoutKind, CodexTotals, Error as CoreError, Issue, IssueTracker,
-    PersistedRunRecord, RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot,
-    SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, Workspace, WorkspaceProvisioner,
-    WorkspaceRequest, sanitize_workspace_key,
+    BudgetSnapshot, CodexTotals, Error as CoreError, Issue, IssueTracker, PersistedRunRecord,
+    RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot, SnapshotCounts,
+    StateStore, ThrottleWindow, TokenUsage, WorkspaceProvisioner, sanitize_workspace_key,
 };
 use factoryrs_workflow::{HooksConfig, LoadedWorkflow, load_workflow, render_prompt};
+use factoryrs_workspace::WorkspaceManager;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::process::Command;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -30,8 +29,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("notify error: {0}")]
     Notify(#[from] notify::Error),
-    #[error("hook failure: {0}")]
-    Hook(String),
+    #[error("workspace error: {0}")]
+    Workspace(#[from] factoryrs_workspace::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -120,163 +119,6 @@ struct RuntimeState {
     totals: CodexTotals,
     rate_limits: Option<Value>,
     last_budget_poll_at: Option<DateTime<Utc>>,
-}
-
-pub struct WorkspaceManager {
-    root: PathBuf,
-    provisioner: Arc<dyn WorkspaceProvisioner>,
-    checkout_kind: CheckoutKind,
-    source_repo_path: Option<PathBuf>,
-    clone_url: Option<String>,
-    default_branch: Option<String>,
-}
-
-impl WorkspaceManager {
-    pub fn new(
-        root: PathBuf,
-        provisioner: Arc<dyn WorkspaceProvisioner>,
-        checkout_kind: CheckoutKind,
-        source_repo_path: Option<PathBuf>,
-        clone_url: Option<String>,
-        default_branch: Option<String>,
-    ) -> Self {
-        Self {
-            root,
-            provisioner,
-            checkout_kind,
-            source_repo_path,
-            clone_url,
-            default_branch,
-        }
-    }
-
-    pub async fn ensure_workspace(
-        &self,
-        issue_identifier: &str,
-        branch_name: Option<String>,
-        hooks: &HooksConfig,
-    ) -> Result<Workspace, Error> {
-        tokio::fs::create_dir_all(&self.root).await?;
-        let workspace_key = sanitize_workspace_key(issue_identifier);
-        let workspace_path = self.root.join(&workspace_key);
-        ensure_contained(&self.root, &workspace_path)?;
-        let workspace = self
-            .provisioner
-            .ensure_workspace(WorkspaceRequest {
-                issue_identifier: issue_identifier.to_string(),
-                workspace_root: self.root.clone(),
-                workspace_path: workspace_path.clone(),
-                workspace_key,
-                branch_name,
-                checkout_kind: self.checkout_kind.clone(),
-                source_repo_path: self.source_repo_path.clone(),
-                clone_url: self.clone_url.clone(),
-                default_branch: self.default_branch.clone(),
-            })
-            .await
-            .map_err(Error::Core)?;
-        if workspace.created_now {
-            self.run_hook(
-                "after_create",
-                hooks.after_create.as_deref(),
-                &workspace_path,
-                hooks.timeout_ms,
-            )
-            .await?;
-        }
-        Ok(workspace)
-    }
-
-    pub async fn run_before_run(
-        &self,
-        hooks: &HooksConfig,
-        workspace_path: &Path,
-    ) -> Result<(), Error> {
-        self.run_hook(
-            "before_run",
-            hooks.before_run.as_deref(),
-            workspace_path,
-            hooks.timeout_ms,
-        )
-        .await
-    }
-
-    pub async fn run_after_run_best_effort(&self, hooks: &HooksConfig, workspace_path: &Path) {
-        if let Err(error) = self
-            .run_hook(
-                "after_run",
-                hooks.after_run.as_deref(),
-                workspace_path,
-                hooks.timeout_ms,
-            )
-            .await
-        {
-            warn!(%error, "after_run hook failed");
-        }
-    }
-
-    pub async fn cleanup_workspace(
-        &self,
-        issue_identifier: &str,
-        branch_name: Option<String>,
-        hooks: &HooksConfig,
-    ) -> Result<(), Error> {
-        let workspace_key = sanitize_workspace_key(issue_identifier);
-        let workspace_path = self.root.join(workspace_key.clone());
-        if tokio::fs::metadata(&workspace_path).await.is_err() {
-            return Ok(());
-        }
-        ensure_contained(&self.root, &workspace_path)?;
-        if let Err(error) = self
-            .run_hook(
-                "before_remove",
-                hooks.before_remove.as_deref(),
-                &workspace_path,
-                hooks.timeout_ms,
-            )
-            .await
-        {
-            warn!(%error, "before_remove hook failed");
-        }
-        self.provisioner
-            .cleanup_workspace(WorkspaceRequest {
-                issue_identifier: issue_identifier.to_string(),
-                workspace_root: self.root.clone(),
-                workspace_path,
-                workspace_key,
-                branch_name,
-                checkout_kind: self.checkout_kind.clone(),
-                source_repo_path: self.source_repo_path.clone(),
-                clone_url: self.clone_url.clone(),
-                default_branch: self.default_branch.clone(),
-            })
-            .await
-            .map_err(Error::Core)?;
-        Ok(())
-    }
-
-    async fn run_hook(
-        &self,
-        hook_name: &str,
-        script: Option<&str>,
-        cwd: &Path,
-        timeout_ms: u64,
-    ) -> Result<(), Error> {
-        let Some(script) = script else {
-            return Ok(());
-        };
-        let mut command = Command::new("bash");
-        command.arg("-lc").arg(script).current_dir(cwd);
-        let status = tokio::time::timeout(Duration::from_millis(timeout_ms), command.status())
-            .await
-            .map_err(|_| Error::Hook(format!("{hook_name} timed out")))??;
-        if !status.success() {
-            return Err(Error::Hook(format!(
-                "{hook_name} exited with status {status}"
-            )));
-        }
-        Ok(())
-    }
 }
 
 impl RuntimeService {
@@ -383,6 +225,8 @@ impl RuntimeService {
             workflow.config.workspace.root.clone(),
             self.provisioner.clone(),
             workflow.config.workspace_checkout_kind(),
+            workflow.config.workspace.sync_on_reuse,
+            workflow.config.workspace.transient_paths.clone(),
             workflow.config.workspace.source_repo_path.clone(),
             workflow.config.workspace.clone_url.clone(),
             workflow.config.workspace.default_branch.clone(),
@@ -547,12 +391,24 @@ impl RuntimeService {
         let prompt = render_prompt(&workflow.definition, &issue, attempt)?;
         let workspace_path = workspace.path.clone();
         let started_at = Utc::now();
+        if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
+            warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
+        }
+        if let Err(error) = self
+            .tracker
+            .update_issue_workflow_status(&issue, "In Progress")
+            .await
+        {
+            warn!(%error, issue_identifier = %issue.identifier, "issue workflow status sync failed");
+        }
 
         let handle = tokio::spawn(async move {
             let manager = WorkspaceManager::new(
                 workflow.config.workspace.root.clone(),
                 provisioner,
                 workflow.config.workspace_checkout_kind(),
+                workflow.config.workspace.sync_on_reuse,
+                workflow.config.workspace.transient_paths.clone(),
                 workflow.config.workspace.source_repo_path.clone(),
                 workflow.config.workspace.clone_url.clone(),
                 workflow.config.workspace.default_branch.clone(),
@@ -779,6 +635,17 @@ impl RuntimeService {
         let workflow = self.workflow_rx.borrow().clone();
         match outcome.status {
             AttemptStatus::Succeeded => {
+                let workflow_status = outcome
+                    .final_issue_state
+                    .clone()
+                    .unwrap_or_else(|| "Human Review".into());
+                if let Err(error) = self
+                    .tracker
+                    .update_issue_workflow_status(&running.issue, &workflow_status)
+                    .await
+                {
+                    warn!(%error, issue_identifier = %running.issue.identifier, "issue workflow status sync failed");
+                }
                 self.state.completed.insert(issue_id.clone());
                 self.schedule_retry(
                     issue_id.clone(),
@@ -1268,28 +1135,6 @@ async fn run_worker_attempt(
     }
 }
 
-fn ensure_contained(root: &Path, workspace: &Path) -> Result<(), Error> {
-    let root = absolute_path(root);
-    let workspace = absolute_path(workspace);
-    if !workspace.starts_with(&root) {
-        return Err(Error::Hook(format!(
-            "workspace path escapes root: {}",
-            workspace.display()
-        )));
-    }
-    Ok(())
-}
-
-fn absolute_path(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    }
-}
-
 fn apply_usage_delta(totals: &mut CodexTotals, running: &mut RunningTask, usage: TokenUsage) {
     let delta_input = usage
         .input_tokens
@@ -1333,10 +1178,11 @@ fn empty_snapshot() -> RuntimeSnapshot {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
-    use factoryrs_core::{IssueAuthor, IssueComment};
+    use factoryrs_core::{IssueAuthor, IssueComment, Workspace, WorkspaceRequest};
 
     #[derive(Clone)]
     struct TestTracker {

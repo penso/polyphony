@@ -20,7 +20,9 @@ and recent events live in one async orchestrator loop and are surfaced through a
 
 ## Execution
 
-`WorkspaceManager` enforces workspace-root containment, sanitized directory names, and hook execution.
+`factoryrs-workspace` owns `WorkspaceManager`, which enforces workspace-root containment, sanitized
+directory names, hook execution, transient artifact cleanup, configurable reuse behavior, and
+rollback on failed initialization.
 `AgentRuntime` is a trait so the worker lifecycle can host different app-server integrations later
 without changing orchestrator logic.
 `WorkspaceProvisioner` is a separate trait so the scheduler can choose between plain directories,
@@ -32,7 +34,9 @@ linked git worktrees, and discrete clones without entangling git lifecycle with 
 `factoryrs-linear` provides the feature-gated Linear implementation. `factoryrs-github` provides the GitHub Issues implementation.
 The mock path is what makes the TUI runnable now.
 `factoryrs-github` owns GitHub-specific integrations built on `octocrab` and `graphql_client`,
-including PR comment mutations.
+including PR comment mutations and best-effort GitHub Project workflow syncing.
+Both the Linear and GitHub GraphQL integrations use checked-in schemas plus checked-in `.graphql`
+operation files so query shapes stay compile-checked.
 
 ## Persistence
 

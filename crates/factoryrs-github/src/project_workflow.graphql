@@ -1,0 +1,80 @@
+query ResolveProjectIssueContext(
+  $owner: String!
+  $repo: String!
+  $number: Int!
+  $projectOwner: String!
+  $projectNumber: Int!
+) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      id
+    }
+  }
+  organization(login: $projectOwner) {
+    projectV2(number: $projectNumber) {
+      id
+    }
+  }
+  user(login: $projectOwner) {
+    projectV2(number: $projectNumber) {
+      id
+    }
+  }
+}
+
+query ResolveProjectStatusField($projectId: ID!) {
+  node(id: $projectId) {
+    __typename
+    ... on ProjectV2 {
+      fields(first: 100) {
+        nodes {
+          __typename
+          ... on ProjectV2Field {
+            id
+            name
+          }
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options {
+              id
+              name
+            }
+          }
+          ... on ProjectV2IterationField {
+            id
+            name
+          }
+        }
+      }
+    }
+  }
+}
+
+mutation AddIssueToProject($projectId: ID!, $contentId: ID!) {
+  addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+    item {
+      id
+    }
+  }
+}
+
+mutation UpdateIssueProjectStatus(
+  $projectId: ID!
+  $itemId: ID!
+  $fieldId: ID!
+  $optionId: String!
+) {
+  updateProjectV2ItemFieldValue(
+    input: {
+      projectId: $projectId
+      itemId: $itemId
+      fieldId: $fieldId
+      value: {singleSelectOptionId: $optionId}
+    }
+  ) {
+    projectV2Item {
+      id
+    }
+  }
+}

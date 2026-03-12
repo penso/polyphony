@@ -115,6 +115,9 @@ fn build_runtime_components(
                 .clone()
                 .ok_or_else(|| Error::Config("tracker.repository is required".into()))?,
             workflow.config.tracker.api_key.clone(),
+            workflow.config.tracker.project_owner.clone(),
+            workflow.config.tracker.project_number,
+            workflow.config.tracker.project_status_field.clone(),
         )?),
         other => {
             return Err(Error::Config(format!(

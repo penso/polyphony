@@ -96,6 +96,7 @@ pub struct WorkspaceRequest {
     pub workspace_key: String,
     pub branch_name: Option<String>,
     pub checkout_kind: CheckoutKind,
+    pub sync_on_reuse: bool,
     pub source_repo_path: Option<PathBuf>,
     pub clone_url: Option<String>,
     pub default_branch: Option<String>,
@@ -318,6 +319,16 @@ pub trait IssueTracker: Send + Sync {
     ) -> Result<Vec<IssueStateUpdate>, Error>;
     async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, Error> {
         Ok(None)
+    }
+    async fn ensure_issue_workflow_tracking(&self, _issue: &Issue) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn update_issue_workflow_status(
+        &self,
+        _issue: &Issue,
+        _status: &str,
+    ) -> Result<(), Error> {
+        Ok(())
     }
 }
 

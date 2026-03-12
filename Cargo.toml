@@ -3,6 +3,7 @@ members = [
   "crates/factoryrs-core",
   "crates/factoryrs-workflow",
   "crates/factoryrs-orchestrator",
+  "crates/factoryrs-workspace",
   "crates/factoryrs-issue-mock",
   "crates/factoryrs-linear",
   "crates/factoryrs-git",

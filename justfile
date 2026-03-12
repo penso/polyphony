@@ -9,11 +9,24 @@ format:
 format-check:
     cargo +{{nightly_toolchain}} fmt --all -- --check
 
+lockfile-check:
+    cargo metadata --locked --format-version=1 > /dev/null
+
 lint: lockfile-check
     cargo +{{nightly_toolchain}} clippy --workspace --all-features --all-targets -- -D warnings
 
 test:
     cargo +{{nightly_toolchain}} test --workspace
+
+schema-github:
+    ./scripts/refresh_github_schema.sh
+
+schema-linear:
+    ./scripts/refresh_linear_schema.sh
+
+schema-refresh:
+    just schema-github
+    just schema-linear
 
 changelog:
     git-cliff --config cliff.toml --output CHANGELOG.md

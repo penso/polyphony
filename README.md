@@ -12,6 +12,7 @@ from tracker, agent, persistence, and UI implementations.
 - `crates/factoryrs-core`: domain model and trait contracts.
 - `crates/factoryrs-workflow`: `WORKFLOW.md` loader, typed config, prompt rendering.
 - `crates/factoryrs-orchestrator`: async orchestrator, retry loop, reconciliation, workspace hooks.
+- `crates/factoryrs-workspace`: workspace manager for path safety, lifecycle hooks, rollback, and cleanup.
 - `crates/factoryrs-issue-mock`: feature-gated mock tracker and mock agent runtime for tests and local smoke runs.
 - `crates/factoryrs-linear`: Linear tracker adapter using typed GraphQL queries.
 - `crates/factoryrs-git`: git-backed workspace provisioning for linked worktrees and discrete clones.
@@ -34,6 +35,7 @@ This repository already provides:
 - a global Cargo workspace with crate-local `Error` enums built with `thiserror`
 - trait seams for trackers, app-server runtimes, and persistence
 - a dedicated workspace provisioner seam, with `git2`-backed linked worktree and clone support
+- a separate workspace manager crate that handles sanitized path mapping, containment checks, hook execution, transient artifact cleanup, and rollback on failed initialization
 - a real config layer based on the `config` crate, with defaults, env overlays, and typed deserialization from `WORKFLOW.md`
 - a long-running async orchestrator with retries, reconciliation, workspace hooks, restart bootstrap, and live snapshots
 - runtime throttling when adapters surface `429`-style rate limits
@@ -45,7 +47,9 @@ Git and GitHub implementation choices:
 
 - `git2` is used for automatic linked worktree and discrete clone lifecycle, following the same direction Arbor uses.
 - `octocrab` is used for GitHub Issues reads.
-- `graphql_client` is used for GitHub PR comment mutations.
+- `graphql_client` is used for Linear queries, GitHub PR comment mutations, and GitHub Project workflow sync.
+- GitHub Issues can also be auto-linked into a canonical GitHub Project and have a project `Status` field updated best-effort when `tracker.project_owner` and `tracker.project_number` are configured.
+- GraphQL schemas are checked in and can be refreshed with `just schema-github` and `just schema-linear`.
 
 This repository does not yet provide production app-server clients for Codex, Copilot, or Claude. The runtime,
 provider config, throttling model, and trait boundaries are in place for them, but the current runnable path is
@@ -58,6 +62,11 @@ the mock/demo flow.
 - `directory`: just create and reuse a plain directory.
 - `linked_worktree`: create a git linked worktree from `workspace.source_repo_path`.
 - `discrete_clone`: clone from `workspace.clone_url` or `workspace.source_repo_path`.
+
+Related workspace controls:
+
+- `workspace.sync_on_reuse`: when `true`, reused git workspaces are re-checked out to the target branch and clones fetch `origin` before reuse.
+- `workspace.transient_paths`: paths to delete inside a workspace before runs, defaulting to `tmp` and `.elixir_ls`.
 
 Branch names default to the issue branch metadata when present, otherwise `task/<sanitized-issue-id>`.
 
@@ -86,6 +95,16 @@ Build everything, including optional adapters:
 ```bash
 cargo check --workspace --all-features
 ```
+
+Refresh checked-in GraphQL schemas:
+
+```bash
+just schema-github
+just schema-linear
+```
+
+`schema-linear` requires `LINEAR_API_KEY` in the environment and refreshes
+`crates/factoryrs-linear/src/linear_schema.json` from the live Linear endpoint.
 
 ## Next steps
 

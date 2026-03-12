@@ -1,15 +1,16 @@
 [package]
-name = "factoryrs-git"
+name = "factoryrs-workspace"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
-git2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 factoryrs-core = { path = "../factoryrs-core" }
+factoryrs-workflow = { path = "../factoryrs-workflow" }
 
 [dev-dependencies]
 tempfile.workspace = true

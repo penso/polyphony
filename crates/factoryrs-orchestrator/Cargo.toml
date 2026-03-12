@@ -13,4 +13,5 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 factoryrs-core = { path = "../factoryrs-core" }
+factoryrs-workspace = { path = "../factoryrs-workspace" }
 factoryrs-workflow = { path = "../factoryrs-workflow" }

@@ -41,6 +41,9 @@ pub struct TrackerConfig {
     pub endpoint: String,
     pub api_key: Option<String>,
     pub project_slug: Option<String>,
+    pub project_owner: Option<String>,
+    pub project_number: Option<u32>,
+    pub project_status_field: Option<String>,
     pub repository: Option<String>,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
@@ -55,6 +58,8 @@ pub struct PollingConfig {
 pub struct WorkspaceConfig {
     pub root: PathBuf,
     pub checkout_kind: String,
+    pub sync_on_reuse: bool,
+    pub transient_paths: Vec<String>,
     pub source_repo_path: Option<PathBuf>,
     pub clone_url: Option<String>,
     pub default_branch: Option<String>,
@@ -189,6 +194,13 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("workspace.checkout_kind", "directory")
             .map_err(config_error)?
+            .set_default("workspace.sync_on_reuse", true)
+            .map_err(config_error)?
+            .set_default(
+                "workspace.transient_paths",
+                vec!["tmp".to_string(), ".elixir_ls".to_string()],
+            )
+            .map_err(config_error)?
             .set_default("hooks.timeout_ms", 60_000)
             .map_err(config_error)?
             .set_default("agent.max_concurrent_agents", 10)
@@ -256,6 +268,12 @@ impl ServiceConfig {
     }
 
     fn normalize(&mut self) {
+        self.workspace.transient_paths = self
+            .workspace
+            .transient_paths
+            .drain(..)
+            .filter(|path| !path.trim().is_empty())
+            .collect();
         self.agent.max_concurrent_agents_by_state = self
             .agent
             .max_concurrent_agents_by_state
@@ -629,4 +647,46 @@ fn expand_path_like(path: &Path) -> PathBuf {
 
 fn config_error(error: config::ConfigError) -> Error {
     Error::Config(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ServiceConfig, WorkflowDefinition};
+    use serde_yaml::Value as YamlValue;
+
+    #[test]
+    fn workspace_defaults_include_reuse_and_transient_paths() {
+        let workflow = WorkflowDefinition {
+            config: YamlValue::Mapping(Default::default()),
+            prompt_template: String::new(),
+        };
+
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert!(config.workspace.sync_on_reuse);
+        assert_eq!(config.workspace.transient_paths, vec!["tmp", ".elixir_ls"]);
+    }
+
+    #[test]
+    fn workspace_config_parses_reuse_and_transient_paths() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+workspace:
+  sync_on_reuse: false
+  transient_paths:
+    - target
+    - .cache
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert!(!config.workspace.sync_on_reuse);
+        assert_eq!(config.workspace.transient_paths, vec!["target", ".cache"]);
+    }
 }
