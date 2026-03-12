@@ -5,6 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+config.workspace = true
 dirs.workspace = true
 liquid.workspace = true
 serde.workspace = true

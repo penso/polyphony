@@ -33,6 +33,7 @@ This repository already provides:
 - a global Cargo workspace with crate-local `Error` enums built with `thiserror`
 - trait seams for trackers, app-server runtimes, and persistence
 - a dedicated workspace provisioner seam, with `git2`-backed linked worktree and clone support
+- a real config layer based on the `config` crate, with defaults, env overlays, and typed deserialization from `WORKFLOW.md`
 - a long-running async orchestrator with retries, reconciliation, workspace hooks, restart bootstrap, and live snapshots
 - runtime throttling when adapters surface `429`-style rate limits
 - budget and spend snapshots that can be persisted and shown in the TUI

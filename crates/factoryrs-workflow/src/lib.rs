@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use factoryrs_core::Issue;
+use config::{Config, Environment, File, FileFormat};
+use factoryrs_core::{CheckoutKind, Issue, TrackerQuery};
 use liquid::model::{Array, Object, Value};
 use liquid::{ParserBuilder, object};
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,8 @@ pub enum Error {
     TemplateParse(String),
     #[error("template_render_error: {0}")]
     TemplateRender(String),
+    #[error("config_error: {0}")]
+    Config(String),
     #[error("invalid_config: {0}")]
     InvalidConfig(String),
 }
@@ -68,7 +72,7 @@ pub struct HooksConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub max_concurrent_agents: usize,
-    pub max_concurrent_agents_by_state: std::collections::HashMap<String, usize>,
+    pub max_concurrent_agents_by_state: HashMap<String, usize>,
     pub max_retry_backoff_ms: u64,
     pub max_turns: u32,
 }
@@ -152,28 +156,105 @@ pub fn parse_workflow(raw: &str) -> Result<WorkflowDefinition, Error> {
 
 impl ServiceConfig {
     pub fn from_workflow(workflow: &WorkflowDefinition) -> Result<Self, Error> {
-        let root = workflow
-            .config
-            .as_mapping()
-            .ok_or(Error::FrontMatterNotMap)?;
-        let tracker = parse_tracker(root)?;
-        let polling = parse_polling(root)?;
-        let workspace = parse_workspace(root)?;
-        let hooks = parse_hooks(root)?;
-        let agent = parse_agent(root)?;
-        let provider = parse_provider(root)?;
-        let server = parse_server(root)?;
-        let config = Self {
-            tracker,
-            polling,
-            workspace,
-            hooks,
-            agent,
-            provider,
-            server,
-        };
+        let front_matter = serde_yaml::to_string(&workflow.config)
+            .map_err(|err| Error::WorkflowParse(err.to_string()))?;
+        let built = Config::builder()
+            .set_default("tracker.kind", "mock")
+            .map_err(config_error)?
+            .set_default("tracker.endpoint", "https://api.linear.app/graphql")
+            .map_err(config_error)?
+            .set_default("tracker.active_states", vec!["Todo", "In Progress"])
+            .map_err(config_error)?
+            .set_default(
+                "tracker.terminal_states",
+                vec![
+                    "Closed",
+                    "Cancelled",
+                    "Canceled",
+                    "Duplicate",
+                    "Done",
+                    "Human Review",
+                ],
+            )
+            .map_err(config_error)?
+            .set_default("polling.interval_ms", 30_000)
+            .map_err(config_error)?
+            .set_default(
+                "workspace.root",
+                env::temp_dir()
+                    .join("symphony_workspaces")
+                    .to_string_lossy()
+                    .to_string(),
+            )
+            .map_err(config_error)?
+            .set_default("workspace.checkout_kind", "directory")
+            .map_err(config_error)?
+            .set_default("hooks.timeout_ms", 60_000)
+            .map_err(config_error)?
+            .set_default("agent.max_concurrent_agents", 10)
+            .map_err(config_error)?
+            .set_default("agent.max_retry_backoff_ms", 300_000)
+            .map_err(config_error)?
+            .set_default("agent.max_turns", 20)
+            .map_err(config_error)?
+            .set_default("provider.kind", "mock")
+            .map_err(config_error)?
+            .set_default("provider.command", "codex app-server")
+            .map_err(config_error)?
+            .set_default("provider.turn_timeout_ms", 3_600_000)
+            .map_err(config_error)?
+            .set_default("provider.read_timeout_ms", 5_000)
+            .map_err(config_error)?
+            .set_default("provider.stall_timeout_ms", 300_000)
+            .map_err(config_error)?
+            .add_source(File::from_str(&front_matter, FileFormat::Yaml))
+            .add_source(
+                Environment::with_prefix("FACTORYRS")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()
+            .map_err(config_error)?;
+        let mut config = built
+            .try_deserialize::<ServiceConfig>()
+            .map_err(config_error)?;
+        config.resolve();
+        config.normalize();
         config.validate()?;
         Ok(config)
+    }
+
+    fn resolve(&mut self) {
+        self.tracker.api_key = resolve_env_token(
+            self.tracker
+                .api_key
+                .clone()
+                .or_else(|| env::var("LINEAR_API_KEY").ok()),
+        );
+        self.workspace.root = expand_path_like(&self.workspace.root);
+        self.workspace.source_repo_path = self
+            .workspace
+            .source_repo_path
+            .take()
+            .map(|path| expand_path_like(&path));
+    }
+
+    fn normalize(&mut self) {
+        self.agent.max_concurrent_agents_by_state = self
+            .agent
+            .max_concurrent_agents_by_state
+            .drain()
+            .filter_map(|(state, limit)| {
+                if limit == 0 {
+                    None
+                } else {
+                    Some((state.to_ascii_lowercase(), limit))
+                }
+            })
+            .collect();
+        if self.hooks.timeout_ms == 0 {
+            self.hooks.timeout_ms = 60_000;
+        }
     }
 
     pub fn validate(&self) -> Result<(), Error> {
@@ -230,6 +311,44 @@ impl ServiceConfig {
             ));
         }
         Ok(())
+    }
+
+    pub fn tracker_query(&self) -> TrackerQuery {
+        TrackerQuery {
+            project_slug: self.tracker.project_slug.clone(),
+            repository: self.tracker.repository.clone(),
+            active_states: self.tracker.active_states.clone(),
+            terminal_states: self.tracker.terminal_states.clone(),
+        }
+    }
+
+    pub fn is_active_state(&self, state: &str) -> bool {
+        self.tracker
+            .active_states
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(state))
+    }
+
+    pub fn is_terminal_state(&self, state: &str) -> bool {
+        self.tracker
+            .terminal_states
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(state))
+    }
+
+    pub fn workspace_checkout_kind(&self) -> CheckoutKind {
+        match self.workspace.checkout_kind.as_str() {
+            "linked_worktree" => CheckoutKind::LinkedWorktree,
+            "discrete_clone" => CheckoutKind::DiscreteClone,
+            _ => CheckoutKind::Directory,
+        }
+    }
+
+    pub fn state_concurrency_limit(&self, state: &str) -> Option<usize> {
+        self.agent
+            .max_concurrent_agents_by_state
+            .get(&state.to_ascii_lowercase())
+            .copied()
     }
 }
 
@@ -343,184 +462,8 @@ fn issue_to_liquid(issue: &Issue) -> Value {
     Value::Object(issue_obj)
 }
 
-fn parse_tracker(root: &Mapping) -> Result<TrackerConfig, Error> {
-    let section = mapping(root, "tracker");
-    let kind = string_field(section, "kind").unwrap_or_else(|| "mock".into());
-    let endpoint = string_field(section, "endpoint")
-        .unwrap_or_else(|| "https://api.linear.app/graphql".into());
-    let api_key = string_field(section, "api_key").and_then(resolve_env_token);
-    let project_slug = string_field(section, "project_slug");
-    Ok(TrackerConfig {
-        kind,
-        endpoint,
-        api_key,
-        project_slug,
-        repository: string_field(section, "repository"),
-        active_states: string_list(section, "active_states", &["Todo", "In Progress"]),
-        terminal_states: string_list(
-            section,
-            "terminal_states",
-            &[
-                "Closed",
-                "Cancelled",
-                "Canceled",
-                "Duplicate",
-                "Done",
-                "Human Review",
-            ],
-        ),
-    })
-}
-
-fn parse_polling(root: &Mapping) -> Result<PollingConfig, Error> {
-    let section = mapping(root, "polling");
-    Ok(PollingConfig {
-        interval_ms: u64_field(section, "interval_ms").unwrap_or(30_000),
-    })
-}
-
-fn parse_workspace(root: &Mapping) -> Result<WorkspaceConfig, Error> {
-    let section = mapping(root, "workspace");
-    let default_root = env::temp_dir().join("symphony_workspaces");
-    let root = string_field(section, "root")
-        .map(|value| expand_path_like(&value))
-        .unwrap_or(default_root);
-    Ok(WorkspaceConfig {
-        root,
-        checkout_kind: string_field(section, "checkout_kind").unwrap_or_else(|| "directory".into()),
-        source_repo_path: string_field(section, "source_repo_path")
-            .map(|value| expand_path_like(&value)),
-        clone_url: string_field(section, "clone_url"),
-        default_branch: string_field(section, "default_branch"),
-    })
-}
-
-fn parse_hooks(root: &Mapping) -> Result<HooksConfig, Error> {
-    let section = mapping(root, "hooks");
-    Ok(HooksConfig {
-        after_create: string_field(section, "after_create"),
-        before_run: string_field(section, "before_run"),
-        after_run: string_field(section, "after_run"),
-        before_remove: string_field(section, "before_remove"),
-        timeout_ms: u64_field(section, "timeout_ms")
-            .filter(|value| *value > 0)
-            .unwrap_or(60_000),
-    })
-}
-
-fn parse_agent(root: &Mapping) -> Result<AgentConfig, Error> {
-    let section = mapping(root, "agent");
-    let raw_map = section.and_then(|mapping| {
-        mapping
-            .get(YamlValue::String(
-                "max_concurrent_agents_by_state".to_string(),
-            ))
-            .and_then(YamlValue::as_mapping)
-    });
-    let mut by_state = std::collections::HashMap::new();
-    if let Some(raw_map) = raw_map {
-        for (key, value) in raw_map {
-            let state = key.as_str().unwrap_or_default().to_ascii_lowercase();
-            let Some(limit) = yaml_to_u64(value).filter(|value| *value > 0) else {
-                continue;
-            };
-            by_state.insert(state, limit as usize);
-        }
-    }
-    Ok(AgentConfig {
-        max_concurrent_agents: u64_field(section, "max_concurrent_agents").unwrap_or(10) as usize,
-        max_concurrent_agents_by_state: by_state,
-        max_retry_backoff_ms: u64_field(section, "max_retry_backoff_ms").unwrap_or(300_000),
-        max_turns: u64_field(section, "max_turns").unwrap_or(20) as u32,
-    })
-}
-
-fn parse_provider(root: &Mapping) -> Result<ProviderConfig, Error> {
-    let section = mapping(root, "provider").or_else(|| mapping(root, "codex"));
-    Ok(ProviderConfig {
-        kind: string_field(section, "kind").unwrap_or_else(|| "mock".into()),
-        command: string_field(section, "command").unwrap_or_else(|| "codex app-server".into()),
-        approval_policy: string_field(section, "approval_policy"),
-        thread_sandbox: string_field(section, "thread_sandbox"),
-        turn_sandbox_policy: string_field(section, "turn_sandbox_policy"),
-        turn_timeout_ms: u64_field(section, "turn_timeout_ms").unwrap_or(3_600_000),
-        read_timeout_ms: u64_field(section, "read_timeout_ms").unwrap_or(5_000),
-        stall_timeout_ms: i64_field(section, "stall_timeout_ms").unwrap_or(300_000),
-        credits_command: string_field(section, "credits_command"),
-        spending_command: string_field(section, "spending_command"),
-    })
-}
-
-fn parse_server(root: &Mapping) -> Result<ServerConfig, Error> {
-    let section = mapping(root, "server");
-    Ok(ServerConfig {
-        port: u64_field(section, "port").map(|value| value as u16),
-    })
-}
-
-fn mapping<'a>(root: &'a Mapping, key: &str) -> Option<&'a Mapping> {
-    root.get(YamlValue::String(key.to_string()))
-        .and_then(YamlValue::as_mapping)
-}
-
-fn string_field(section: Option<&Mapping>, key: &str) -> Option<String> {
-    section
-        .and_then(|mapping| mapping.get(YamlValue::String(key.to_string())))
-        .and_then(|value| match value {
-            YamlValue::String(text) => Some(text.clone()),
-            YamlValue::Number(number) => Some(number.to_string()),
-            _ => None,
-        })
-}
-
-fn string_list(section: Option<&Mapping>, key: &str, default: &[&str]) -> Vec<String> {
-    let values = section
-        .and_then(|mapping| mapping.get(YamlValue::String(key.to_string())))
-        .and_then(YamlValue::as_sequence)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(YamlValue::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if values.is_empty() {
-        default.iter().map(|value| value.to_string()).collect()
-    } else {
-        values
-    }
-}
-
-fn u64_field(section: Option<&Mapping>, key: &str) -> Option<u64> {
-    section
-        .and_then(|mapping| mapping.get(YamlValue::String(key.to_string())))
-        .and_then(yaml_to_u64)
-}
-
-fn i64_field(section: Option<&Mapping>, key: &str) -> Option<i64> {
-    section
-        .and_then(|mapping| mapping.get(YamlValue::String(key.to_string())))
-        .and_then(yaml_to_i64)
-}
-
-fn yaml_to_u64(value: &YamlValue) -> Option<u64> {
-    match value {
-        YamlValue::Number(number) => number.as_u64(),
-        YamlValue::String(text) => text.parse().ok(),
-        _ => None,
-    }
-}
-
-fn yaml_to_i64(value: &YamlValue) -> Option<i64> {
-    match value {
-        YamlValue::Number(number) => number.as_i64(),
-        YamlValue::String(text) => text.parse().ok(),
-        _ => None,
-    }
-}
-
-fn resolve_env_token(value: String) -> Option<String> {
+fn resolve_env_token(value: Option<String>) -> Option<String> {
+    let value = value?;
     if let Some(name) = value.strip_prefix('$') {
         let resolved = env::var(name).ok()?;
         if resolved.is_empty() {
@@ -535,15 +478,21 @@ fn resolve_env_token(value: String) -> Option<String> {
     }
 }
 
-fn expand_path_like(value: &str) -> PathBuf {
-    let mut expanded = value.to_string();
-    if let Some(name) = expanded.strip_prefix('$') {
-        expanded = env::var(name).unwrap_or_default();
-    }
+fn expand_path_like(path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    let expanded = if let Some(name) = value.strip_prefix('$') {
+        env::var(name).unwrap_or_default()
+    } else {
+        value.to_string()
+    };
     if expanded.starts_with('~') {
         if let Some(home) = dirs::home_dir() {
             return home.join(expanded.trim_start_matches("~/"));
         }
     }
     PathBuf::from(expanded)
+}
+
+fn config_error(error: config::ConfigError) -> Error {
+    Error::Config(error.to_string())
 }

@@ -10,7 +10,8 @@ workspace hooks, concurrency, and tracker selection.
 ## Configuration
 
 `factoryrs-workflow` parses YAML front matter plus the Markdown body into a typed `ServiceConfig` and
-`WorkflowDefinition`. The crate resolves defaults, `$VAR` indirection, path expansion, and prompt rendering.
+`WorkflowDefinition`. The crate now uses the `config` crate to apply defaults, `FACTORYRS__...` env overlays,
+typed deserialization, `$VAR` secret indirection, path expansion, and prompt rendering.
 
 ## Coordination
 
