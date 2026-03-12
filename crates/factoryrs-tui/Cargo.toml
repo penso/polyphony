@@ -1,0 +1,13 @@
+[package]
+name = "factoryrs-tui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+factoryrs-core = { path = "../factoryrs-core" }
+factoryrs-runtime = { path = "../factoryrs-runtime" }

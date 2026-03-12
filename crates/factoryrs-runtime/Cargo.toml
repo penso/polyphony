@@ -1,0 +1,15 @@
+[package]
+name = "factoryrs-runtime"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+notify.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+factoryrs-core = { path = "../factoryrs-core" }
+factoryrs-workflow = { path = "../factoryrs-workflow" }

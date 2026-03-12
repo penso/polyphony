@@ -1,0 +1,23 @@
+[package]
+name = "factoryrs-adapters"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = ["mock"]
+mock = []
+linear = ["dep:reqwest"]
+github = ["dep:reqwest"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+factoryrs-core = { path = "../factoryrs-core" }
+factoryrs-workflow = { path = "../factoryrs-workflow" }

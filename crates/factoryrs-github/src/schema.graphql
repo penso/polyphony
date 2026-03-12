@@ -1,0 +1,31 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+scalar ID
+
+type Query {
+  repository(owner: String!, name: String!): Repository
+}
+
+type Mutation {
+  addComment(input: AddCommentInput!): AddCommentPayload
+}
+
+type Repository {
+  pullRequest(number: Int!): PullRequest
+}
+
+type PullRequest {
+  id: ID!
+}
+
+input AddCommentInput {
+  subjectId: ID!
+  body: String!
+}
+
+type AddCommentPayload {
+  clientMutationId: String
+}

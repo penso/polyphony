@@ -1,0 +1,31 @@
+[package]
+name = "factoryrs-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "factoryrs"
+path = "src/main.rs"
+
+[features]
+default = ["mock"]
+mock = ["factoryrs-adapters/mock"]
+linear = ["factoryrs-adapters/linear"]
+github = []
+sqlite = ["factoryrs-sqlite/sqlite"]
+
+[dependencies]
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+factoryrs-adapters = { path = "../factoryrs-adapters", default-features = false }
+factoryrs-core = { path = "../factoryrs-core" }
+factoryrs-git = { path = "../factoryrs-git" }
+factoryrs-github = { path = "../factoryrs-github" }
+factoryrs-runtime = { path = "../factoryrs-runtime" }
+factoryrs-sqlite = { path = "../factoryrs-sqlite", default-features = false }
+factoryrs-tui = { path = "../factoryrs-tui" }
+factoryrs-workflow = { path = "../factoryrs-workflow" }

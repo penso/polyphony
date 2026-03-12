@@ -1,0 +1,13 @@
+query ResolvePullRequestId($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      id
+    }
+  }
+}
+
+mutation AddCommentToPullRequest($subjectId: ID!, $body: String!) {
+  addComment(input: {subjectId: $subjectId, body: $body}) {
+    clientMutationId
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "factoryrs-workflow"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+dirs.workspace = true
+liquid.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+factoryrs-core = { path = "../factoryrs-core" }
