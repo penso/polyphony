@@ -1,0 +1,27 @@
+[package]
+name = "polyphony-agents"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = ["codex", "claude", "copilot", "openai", "local"]
+codex = ["dep:polyphony-agent-codex"]
+claude = ["dep:polyphony-agent-claude"]
+copilot = ["dep:polyphony-agent-copilot"]
+openai = ["dep:polyphony-agent-openai"]
+local = ["dep:polyphony-agent-local"]
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+polyphony-core = { path = "../polyphony-core" }
+polyphony-agent-codex = { path = "../polyphony-agent-codex", optional = true }
+polyphony-agent-claude = { path = "../polyphony-agent-claude", optional = true }
+polyphony-agent-copilot = { path = "../polyphony-agent-copilot", optional = true }
+polyphony-agent-openai = { path = "../polyphony-agent-openai", optional = true }
+polyphony-agent-local = { path = "../polyphony-agent-local", optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

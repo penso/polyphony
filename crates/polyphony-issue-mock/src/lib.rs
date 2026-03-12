@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
-use chrono::Utc;
-use polyphony_core::{
-    AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus,
-    BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
-    IssueTracker, TokenUsage, TrackerQuery,
+use {
+    async_trait::async_trait,
+    chrono::Utc,
+    polyphony_core::{
+        AgentDefinition, AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime,
+        AttemptStatus, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
+        IssueStateUpdate, IssueTracker, TokenUsage, TrackerQuery,
+    },
+    thiserror::Error,
+    tokio::sync::{RwLock, mpsc},
 };
-use thiserror::Error;
-use tokio::sync::{RwLock, mpsc};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -168,6 +168,7 @@ impl AgentRuntime for MockAgentRuntime {
         let _ = event_tx.send(AgentEvent {
             issue_id: spec.issue.id.clone(),
             issue_identifier: spec.issue.identifier.clone(),
+            agent_name: spec.agent.name.clone(),
             session_id: Some(session_id.clone()),
             kind: AgentEventKind::SessionStarted,
             at: Utc::now(),
@@ -181,6 +182,7 @@ impl AgentRuntime for MockAgentRuntime {
             let _ = event_tx.send(AgentEvent {
                 issue_id: spec.issue.id.clone(),
                 issue_identifier: spec.issue.identifier.clone(),
+                agent_name: spec.agent.name.clone(),
                 session_id: Some(session_id.clone()),
                 kind: AgentEventKind::TurnStarted,
                 at: Utc::now(),
@@ -193,6 +195,7 @@ impl AgentRuntime for MockAgentRuntime {
             let _ = event_tx.send(AgentEvent {
                 issue_id: spec.issue.id.clone(),
                 issue_identifier: spec.issue.identifier.clone(),
+                agent_name: spec.agent.name.clone(),
                 session_id: Some(session_id.clone()),
                 kind: AgentEventKind::Notification,
                 at: Utc::now(),
@@ -210,6 +213,7 @@ impl AgentRuntime for MockAgentRuntime {
             let _ = event_tx.send(AgentEvent {
                 issue_id: spec.issue.id.clone(),
                 issue_identifier: spec.issue.identifier.clone(),
+                agent_name: spec.agent.name.clone(),
                 session_id: Some(session_id.clone()),
                 kind: AgentEventKind::UsageUpdated,
                 at: Utc::now(),
@@ -221,6 +225,7 @@ impl AgentRuntime for MockAgentRuntime {
             let _ = event_tx.send(AgentEvent {
                 issue_id: spec.issue.id.clone(),
                 issue_identifier: spec.issue.identifier.clone(),
+                agent_name: spec.agent.name.clone(),
                 session_id: Some(session_id.clone()),
                 kind: AgentEventKind::TurnCompleted,
                 at: Utc::now(),
@@ -240,18 +245,29 @@ impl AgentRuntime for MockAgentRuntime {
         })
     }
 
-    async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, CoreError> {
-        Ok(Some(BudgetSnapshot {
-            component: self.component_key(),
-            captured_at: Utc::now(),
-            credits_remaining: Some(100.0),
-            credits_total: Some(100.0),
-            spent_usd: Some(0.0),
-            soft_limit_usd: Some(10.0),
-            hard_limit_usd: Some(25.0),
-            reset_at: None,
-            raw: None,
-        }))
+    async fn fetch_budgets(
+        &self,
+        agents: &[AgentDefinition],
+    ) -> Result<Vec<BudgetSnapshot>, CoreError> {
+        let names = if agents.is_empty() {
+            vec!["mock".to_string()]
+        } else {
+            agents.iter().map(|agent| agent.name.clone()).collect()
+        };
+        Ok(names
+            .into_iter()
+            .map(|name| BudgetSnapshot {
+                component: format!("agent:{name}"),
+                captured_at: Utc::now(),
+                credits_remaining: Some(100.0),
+                credits_total: Some(100.0),
+                spent_usd: Some(0.0),
+                soft_limit_usd: Some(10.0),
+                hard_limit_usd: Some(25.0),
+                reset_at: None,
+                raw: None,
+            })
+            .collect())
     }
 }
 

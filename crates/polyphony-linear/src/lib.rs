@@ -1,11 +1,13 @@
-use async_trait::async_trait;
-use chrono::Utc;
-use polyphony_core::{
-    BlockerRef, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
-    IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
+use {
+    async_trait::async_trait,
+    chrono::Utc,
+    graphql_client::GraphQLQuery,
+    polyphony_core::{
+        BlockerRef, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
+        IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
+    },
+    thiserror::Error,
 };
-use graphql_client::GraphQLQuery;
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -66,11 +68,11 @@ impl LinearTracker {
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
         let status = response.status();
         if status.as_u16() == 429 {
-            return Err(CoreError::RateLimited(rate_limit_signal(
+            return Err(CoreError::RateLimited(Box::new(rate_limit_signal(
                 "tracker:linear",
                 "linear_api_status_429",
                 &response,
-            )));
+            ))));
         }
         let payload = response
             .json::<serde_json::Value>()

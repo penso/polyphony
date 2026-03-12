@@ -28,12 +28,47 @@ agent:
   max_concurrent_agents: 3
   max_turns: 4
   max_retry_backoff_ms: 60000
-provider:
-  kind: mock
-  command: codex app-server
-  stall_timeout_ms: 120000
-  credits_command: null
-  spending_command: null
+agents:
+  default: mock
+  by_state: {}
+  by_label: {}
+  profiles:
+    mock:
+      kind: mock
+      transport: mock
+      turn_timeout_ms: 120000
+      read_timeout_ms: 5000
+      stall_timeout_ms: 120000
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+      fetch_models: true
+      models_command: codex models --json
+      turn_timeout_ms: 3600000
+      read_timeout_ms: 5000
+      stall_timeout_ms: 300000
+      credits_command: null
+      spending_command: null
+    claude:
+      kind: claude
+      transport: local_cli
+      command: claude
+      use_tmux: true
+      interaction_mode: interactive
+      fetch_models: true
+      models_command: claude models --json
+      turn_timeout_ms: 3600000
+      read_timeout_ms: 5000
+      stall_timeout_ms: 300000
+    openai:
+      kind: openai
+      transport: openai_chat
+      fetch_models: true
+      model: gpt-4.1
+      turn_timeout_ms: 3600000
+      read_timeout_ms: 5000
+      stall_timeout_ms: 300000
 server:
   port: 0
 ---
@@ -68,3 +103,14 @@ GitHub Project parity example:
 
 When configured, `polyphony` will add dispatched GitHub issues to that Project and best-effort sync the
 project status field for workflow visibility.
+
+Multi-agent examples:
+
+- `agents.default: codex` for a generic app-server-backed Codex session
+- `agents.by_state.todo: claude` to route `Todo` work to a local Claude CLI profile
+- `agents.by_label.risky: claude` to override by label
+- `agents.profiles.<name>.transport: local_cli` with `use_tmux: true` to drive local membership-backed CLIs through tmux
+- `agents.profiles.<name>.interaction_mode: interactive` to inject prompts over stdin or tmux paste instead of requiring a one-shot wrapper command
+- `agents.profiles.<name>.transport: openai_chat` to call an OpenAI-compatible `/chat/completions` endpoint directly
+- `agents.profiles.<name>.fetch_models: true` to auto-discover model catalogs
+- `agents.profiles.<name>.models_command` for CLI/app-server wrappers that can print a JSON or line-based model list

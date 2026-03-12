@@ -9,11 +9,16 @@ name = "polyphony"
 path = "src/main.rs"
 
 [features]
-default = ["mock"]
+default = ["mock", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
 github = ["dep:polyphony-github"]
 sqlite = ["polyphony-sqlite/sqlite"]
+agent-codex = ["polyphony-agents/codex"]
+agent-claude = ["polyphony-agents/claude"]
+agent-copilot = ["polyphony-agents/copilot"]
+agent-openai = ["polyphony-agents/openai"]
+agent-local = ["polyphony-agents/local"]
 
 [dependencies]
 clap.workspace = true
@@ -22,6 +27,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 polyphony-core = { path = "../polyphony-core" }
+polyphony-agents = { path = "../polyphony-agents", default-features = false }
 polyphony-git = { path = "../polyphony-git" }
 polyphony-github = { path = "../polyphony-github", optional = true }
 polyphony-issue-mock = { path = "../polyphony-issue-mock", optional = true, default-features = false }

@@ -1,23 +1,30 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use chrono::{DateTime, Utc};
-use polyphony_core::{
-    AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus,
-    BudgetSnapshot, CodexTotals, Error as CoreError, Issue, IssueTracker, PersistedRunRecord,
-    RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot, SnapshotCounts,
-    StateStore, ThrottleWindow, TokenUsage, WorkspaceProvisioner, sanitize_workspace_key,
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use polyphony_workflow::{HooksConfig, LoadedWorkflow, load_workflow, render_prompt};
-use polyphony_workspace::WorkspaceManager;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde_json::Value;
-use thiserror::Error;
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+
+use {
+    chrono::{DateTime, Utc},
+    notify::{RecommendedWatcher, RecursiveMode, Watcher},
+    polyphony_core::{
+        AgentEvent, AgentEventKind, AgentModelCatalog, AgentRunResult, AgentRunSpec, AgentRuntime,
+        AttemptStatus, BudgetSnapshot, CodexTotals, Error as CoreError, Issue, IssueTracker,
+        PersistedRunRecord, RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot,
+        SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, WorkspaceProvisioner,
+        sanitize_workspace_key,
+    },
+    polyphony_workflow::{HooksConfig, LoadedWorkflow, load_workflow, render_prompt},
+    polyphony_workspace::WorkspaceManager,
+    serde_json::Value,
+    thiserror::Error,
+    tokio::{
+        sync::{mpsc, watch},
+        task::JoinHandle,
+    },
+    tracing::{error, info, warn},
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -74,8 +81,11 @@ enum OrchestratorMessage {
 #[derive(Debug)]
 struct RunningTask {
     issue: Issue,
+    agent_name: String,
+    model: Option<String>,
     attempt: Option<u32>,
     workspace_path: PathBuf,
+    stall_timeout_ms: i64,
     started_at: DateTime<Utc>,
     session_id: Option<String>,
     last_event: Option<String>,
@@ -114,11 +124,13 @@ struct RuntimeState {
     completed: HashSet<String>,
     throttles: HashMap<String, ActiveThrottle>,
     budgets: HashMap<String, BudgetSnapshot>,
+    agent_catalogs: HashMap<String, AgentModelCatalog>,
     recent_events: VecDeque<RuntimeEvent>,
     ended_runtime_seconds: f64,
     totals: CodexTotals,
     rate_limits: Option<Value>,
     last_budget_poll_at: Option<DateTime<Utc>>,
+    last_model_discovery_at: Option<DateTime<Utc>>,
 }
 
 impl RuntimeService {
@@ -150,11 +162,13 @@ impl RuntimeService {
                     completed: HashSet::new(),
                     throttles: HashMap::new(),
                     budgets: HashMap::new(),
+                    agent_catalogs: HashMap::new(),
                     recent_events: VecDeque::with_capacity(128),
                     ended_runtime_seconds: 0.0,
                     totals: CodexTotals::default(),
                     rate_limits: None,
                     last_budget_poll_at: None,
+                    last_model_discovery_at: None,
                 },
             },
             RuntimeHandle {
@@ -236,6 +250,7 @@ impl RuntimeService {
     async fn tick(&mut self) {
         self.reconcile_running().await;
         self.poll_budgets().await;
+        self.refresh_agent_catalogs().await;
         let workflow = self.workflow_rx.borrow().clone();
         if let Err(error) = workflow.config.validate() {
             self.push_event("workflow".into(), format!("validation failed: {error}"));
@@ -257,16 +272,16 @@ impl RuntimeService {
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(signal);
+                self.register_throttle(*signal);
                 let _ = self.emit_snapshot().await;
                 return;
-            }
+            },
             Err(error) => {
                 self.push_event("tracker".into(), format!("candidate fetch failed: {error}"));
                 error!(%error, "candidate fetch failed");
                 let _ = self.emit_snapshot().await;
                 return;
-            }
+            },
         };
 
         let mut issues = issues;
@@ -288,29 +303,29 @@ impl RuntimeService {
 
     async fn reconcile_running(&mut self) {
         let workflow = self.workflow_rx.borrow().clone();
-        let stall_timeout_ms = workflow.config.provider.stall_timeout_ms;
-        if stall_timeout_ms > 0 {
-            let stall_limit = Duration::from_millis(stall_timeout_ms as u64);
-            let stale_ids = self
-                .state
-                .running
-                .iter()
-                .filter_map(|(issue_id, running)| {
-                    let last = running.last_event_at.unwrap_or(running.started_at);
-                    let elapsed = Utc::now()
-                        .signed_duration_since(last)
-                        .to_std()
-                        .unwrap_or_default();
-                    if elapsed > stall_limit {
-                        Some(issue_id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            for issue_id in stale_ids {
-                self.fail_running(&issue_id, "stall timeout exceeded").await;
-            }
+        let stale_ids = self
+            .state
+            .running
+            .iter()
+            .filter_map(|(issue_id, running)| {
+                if running.stall_timeout_ms <= 0 {
+                    return None;
+                }
+                let stall_limit = Duration::from_millis(running.stall_timeout_ms as u64);
+                let last = running.last_event_at.unwrap_or(running.started_at);
+                let elapsed = Utc::now()
+                    .signed_duration_since(last)
+                    .to_std()
+                    .unwrap_or_default();
+                if elapsed > stall_limit {
+                    Some(issue_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for issue_id in stale_ids {
+            self.fail_running(&issue_id, "stall timeout exceeded").await;
         }
 
         let running_ids = self.state.running.keys().cloned().collect::<Vec<_>>();
@@ -323,13 +338,13 @@ impl RuntimeService {
         let issues = match self.tracker.fetch_issues_by_ids(&running_ids).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(signal);
+                self.register_throttle(*signal);
                 return;
-            }
+            },
             Err(error) => {
                 warn!(%error, "running state refresh failed");
                 return;
-            }
+            },
         };
         let refreshed_ids = issues
             .iter()
@@ -364,6 +379,13 @@ impl RuntimeService {
         issue: Issue,
         attempt: Option<u32>,
     ) -> Result<(), Error> {
+        let selected_agent = workflow.config.select_agent_for_issue(&issue)?;
+        if self.is_throttled(&format!("agent:{}", selected_agent.name)) {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "agent `{}` is throttled",
+                selected_agent.name
+            ))));
+        }
         let workspace_manager = self.build_workspace_manager(&workflow);
         let workspace = workspace_manager
             .ensure_workspace(
@@ -386,11 +408,11 @@ impl RuntimeService {
         let tracker = self.tracker.clone();
         let provisioner = self.provisioner.clone();
         let hooks = workflow.config.hooks.clone();
-        let runtime_command = workflow.config.provider.command.clone();
         let max_turns = workflow.config.agent.max_turns;
         let prompt = render_prompt(&workflow.definition, &issue, attempt)?;
         let workspace_path = workspace.path.clone();
         let started_at = Utc::now();
+        let selected_agent_for_task = selected_agent.clone();
         if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
             warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
         }
@@ -423,7 +445,7 @@ impl RuntimeService {
                 workspace_path.clone(),
                 prompt,
                 max_turns,
-                runtime_command,
+                selected_agent_for_task,
                 command_tx.clone(),
             )
             .await;
@@ -447,24 +469,33 @@ impl RuntimeService {
 
         self.claim_issue(issue.id.clone(), IssueClaimState::Running);
         self.state.retrying.remove(&issue.id);
-        self.state.running.insert(
-            issue.id.clone(),
-            RunningTask {
-                issue,
-                attempt,
-                workspace_path: workspace.path,
-                started_at,
-                session_id: None,
-                last_event: Some("dispatch_started".into()),
-                last_message: Some("worker launched".into()),
-                last_event_at: Some(Utc::now()),
-                tokens: TokenUsage::default(),
-                last_reported_tokens: TokenUsage::default(),
-                turn_count: 0,
-                rate_limits: None,
-                handle,
-            },
-        );
+        self.state.running.insert(issue.id.clone(), RunningTask {
+            issue,
+            agent_name: selected_agent.name.clone(),
+            model: selected_agent
+                .model
+                .clone()
+                .or_else(|| {
+                    self.state
+                        .agent_catalogs
+                        .get(&selected_agent.name)
+                        .and_then(|catalog| catalog.selected_model.clone())
+                })
+                .or_else(|| selected_agent.models.first().cloned()),
+            attempt,
+            workspace_path: workspace.path,
+            stall_timeout_ms: selected_agent.stall_timeout_ms,
+            started_at,
+            session_id: None,
+            last_event: Some("dispatch_started".into()),
+            last_message: Some("worker launched".into()),
+            last_event_at: Some(Utc::now()),
+            tokens: TokenUsage::default(),
+            last_reported_tokens: TokenUsage::default(),
+            turn_count: 0,
+            rate_limits: None,
+            handle,
+        });
         self.push_event("dispatch".into(), format!("dispatched {issue_identifier}"));
         Ok(())
     }
@@ -497,9 +528,9 @@ impl RuntimeService {
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(signal);
+                self.register_throttle(*signal);
                 return;
-            }
+            },
             Err(error) => {
                 self.schedule_retry(
                     issue_id,
@@ -510,7 +541,7 @@ impl RuntimeService {
                     workflow.config.agent.max_retry_backoff_ms,
                 );
                 return;
-            }
+            },
         };
         let Some(issue) = issues
             .into_iter()
@@ -576,11 +607,11 @@ impl RuntimeService {
                     ),
                 );
                 self.emit_snapshot().await?;
-            }
+            },
             OrchestratorMessage::RateLimited(signal) => {
                 self.register_throttle(signal);
                 self.emit_snapshot().await?;
-            }
+            },
             OrchestratorMessage::WorkerFinished {
                 issue_id,
                 issue_identifier,
@@ -590,7 +621,7 @@ impl RuntimeService {
             } => {
                 self.finish_running(issue_id, issue_identifier, attempt, started_at, outcome)
                     .await?;
-            }
+            },
         }
         Ok(())
     }
@@ -655,10 +686,10 @@ impl RuntimeService {
                     true,
                     workflow.config.agent.max_retry_backoff_ms,
                 );
-            }
+            },
             AttemptStatus::CancelledByReconciliation => {
                 self.release_issue(&issue_id);
-            }
+            },
             _ => {
                 self.schedule_retry(
                     issue_id.clone(),
@@ -668,7 +699,7 @@ impl RuntimeService {
                     false,
                     workflow.config.agent.max_retry_backoff_ms,
                 );
-            }
+            },
         }
         self.push_event(
             "worker".into(),
@@ -688,13 +719,13 @@ impl RuntimeService {
         {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(signal);
+                self.register_throttle(*signal);
                 return;
-            }
+            },
             Err(error) => {
                 warn!(%error, "startup terminal cleanup skipped");
                 return;
-            }
+            },
         };
         let manager = self.build_workspace_manager(&workflow);
         for issue in issues {
@@ -829,19 +860,16 @@ impl RuntimeService {
             delay.min(max_retry_backoff_ms)
         };
         self.claim_issue(issue_id.clone(), IssueClaimState::RetryQueued);
-        self.state.retrying.insert(
-            issue_id.clone(),
-            RetryEntry {
-                row: RetryRow {
-                    issue_id,
-                    issue_identifier: issue_identifier.clone(),
-                    attempt,
-                    due_at: Utc::now() + chrono::Duration::milliseconds(delay_ms as i64),
-                    error: error.clone(),
-                },
-                due_at: Instant::now() + Duration::from_millis(delay_ms),
+        self.state.retrying.insert(issue_id.clone(), RetryEntry {
+            row: RetryRow {
+                issue_id,
+                issue_identifier: issue_identifier.clone(),
+                attempt,
+                due_at: Utc::now() + chrono::Duration::milliseconds(delay_ms as i64),
+                error: error.clone(),
             },
-        );
+            due_at: Instant::now() + Duration::from_millis(delay_ms),
+        });
         self.push_event(
             "retry".into(),
             format!(
@@ -906,6 +934,8 @@ impl RuntimeService {
                 .map(|running| RunningRow {
                     issue_id: running.issue.id.clone(),
                     issue_identifier: running.issue.identifier.clone(),
+                    agent_name: running.agent_name.clone(),
+                    model: running.model.clone(),
                     state: running.issue.state.clone(),
                     session_id: running.session_id.clone(),
                     turn_count: running.turn_count,
@@ -933,6 +963,7 @@ impl RuntimeService {
                 .map(|entry| entry.window.clone())
                 .collect(),
             budgets: self.state.budgets.values().cloned().collect(),
+            agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
         }
     }
@@ -981,17 +1012,16 @@ impl RuntimeService {
             .to_std()
             .map(|delta| Instant::now() + delta)
             .unwrap_or_else(|_| Instant::now() + Duration::from_secs(1));
-        self.state.throttles.insert(
-            signal.component.clone(),
-            ActiveThrottle {
+        self.state
+            .throttles
+            .insert(signal.component.clone(), ActiveThrottle {
                 window: ThrottleWindow {
                     component: signal.component.clone(),
                     until,
                     reason: signal.reason.clone(),
                 },
                 due_at,
-            },
-        );
+            });
         self.push_event(
             "throttle".into(),
             format!(
@@ -1007,7 +1037,7 @@ impl RuntimeService {
             Some(_) => {
                 self.state.throttles.remove(component);
                 false
-            }
+            },
             None => false,
         }
     }
@@ -1025,16 +1055,61 @@ impl RuntimeService {
 
         match self.tracker.fetch_budget().await {
             Ok(Some(snapshot)) => self.record_budget(snapshot).await,
-            Ok(None) => {}
-            Err(CoreError::RateLimited(signal)) => self.register_throttle(signal),
+            Ok(None) => {},
+            Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
             Err(error) => warn!(%error, "tracker budget poll failed"),
         }
 
-        match self.agent.fetch_budget().await {
-            Ok(Some(snapshot)) => self.record_budget(snapshot).await,
-            Ok(None) => {}
-            Err(CoreError::RateLimited(signal)) => self.register_throttle(signal),
+        let workflow = self.workflow_rx.borrow().clone();
+        match self
+            .agent
+            .fetch_budgets(&workflow.config.all_agents())
+            .await
+        {
+            Ok(snapshots) => {
+                for snapshot in snapshots {
+                    self.record_budget(snapshot).await;
+                }
+            },
+            Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
             Err(error) => warn!(%error, "agent budget poll failed"),
+        }
+    }
+
+    async fn refresh_agent_catalogs(&mut self) {
+        let due = self
+            .state
+            .last_model_discovery_at
+            .map(|at| Utc::now().signed_duration_since(at).num_seconds() >= 300)
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.state.last_model_discovery_at = Some(Utc::now());
+        let workflow = self.workflow_rx.borrow().clone();
+        match self
+            .agent
+            .discover_models(&workflow.config.all_agents())
+            .await
+        {
+            Ok(catalogs) => {
+                self.state.agent_catalogs = catalogs
+                    .into_iter()
+                    .map(|catalog| (catalog.agent_name.clone(), catalog))
+                    .collect();
+                for running in self.state.running.values_mut() {
+                    if let Some(selected_model) = self
+                        .state
+                        .agent_catalogs
+                        .get(&running.agent_name)
+                        .and_then(|catalog| catalog.selected_model.clone())
+                    {
+                        running.model = Some(selected_model);
+                    }
+                }
+            },
+            Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
+            Err(error) => warn!(%error, "agent model discovery failed"),
         }
     }
 
@@ -1042,10 +1117,10 @@ impl RuntimeService {
         self.state
             .budgets
             .insert(snapshot.component.clone(), snapshot.clone());
-        if let Some(store) = &self.store {
-            if let Err(error) = store.record_budget(&snapshot).await {
-                warn!(%error, "persisting budget snapshot failed");
-            }
+        if let Some(store) = &self.store
+            && let Err(error) = store.record_budget(&snapshot).await
+        {
+            warn!(%error, "persisting budget snapshot failed");
         }
     }
 }
@@ -1068,10 +1143,10 @@ pub fn spawn_workflow_watcher(
                         let _ = workflow_tx.send(workflow);
                         let _ = runtime_command_tx.send(RuntimeCommand::Refresh);
                         info!("workflow reloaded");
-                    }
+                    },
                     Err(error) => {
                         warn!(%error, "workflow reload failed; keeping last good config");
-                    }
+                    },
                 },
                 Err(error) => warn!(%error, "workflow watch event failed"),
             }
@@ -1090,7 +1165,7 @@ async fn run_worker_attempt(
     workspace_path: PathBuf,
     prompt: String,
     max_turns: u32,
-    runtime_command: String,
+    selected_agent: polyphony_core::AgentDefinition,
     command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
 ) -> Result<AgentRunResult, Error> {
     workspace_manager
@@ -1112,7 +1187,7 @@ async fn run_worker_attempt(
                 workspace_path: workspace_path.clone(),
                 prompt,
                 max_turns,
-                runtime_command,
+                agent: selected_agent,
             },
             event_tx,
         )
@@ -1124,14 +1199,14 @@ async fn run_worker_attempt(
     match result {
         Ok(result) => Ok(result),
         Err(CoreError::RateLimited(signal)) => {
-            let _ = command_tx.send(OrchestratorMessage::RateLimited(signal.clone()));
+            let _ = command_tx.send(OrchestratorMessage::RateLimited(signal.as_ref().clone()));
             warn!(issue_id = %issue_id, "worker attempt hit provider rate limit");
             Err(Error::Core(CoreError::RateLimited(signal)))
-        }
+        },
         Err(error) => {
             warn!(issue_id = %issue_id, %error, "worker attempt failed");
             Err(Error::Core(error))
-        }
+        },
     }
 }
 
@@ -1170,19 +1245,26 @@ fn empty_snapshot() -> RuntimeSnapshot {
         rate_limits: None,
         throttles: Vec::new(),
         budgets: Vec::new(),
+        agent_catalogs: Vec::new(),
         recent_events: Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::Path;
-    use std::sync::{Arc, Mutex};
+    use {
+        super::*,
+        std::{
+            fs,
+            path::Path,
+            sync::{Arc, Mutex},
+        },
+    };
 
-    use async_trait::async_trait;
-    use polyphony_core::{IssueAuthor, IssueComment, Workspace, WorkspaceRequest};
+    use {
+        async_trait::async_trait,
+        polyphony_core::{IssueAuthor, IssueComment, Workspace, WorkspaceRequest},
+    };
 
     #[derive(Clone)]
     struct TestTracker {
@@ -1380,8 +1462,11 @@ mod tests {
     fn make_running_task(issue: Issue, workspace_path: PathBuf) -> RunningTask {
         RunningTask {
             issue,
+            agent_name: "mock".into(),
+            model: None,
             attempt: None,
             workspace_path,
+            stall_timeout_ms: 300_000,
             started_at: Utc::now(),
             session_id: None,
             last_event: None,
@@ -1445,10 +1530,9 @@ mod tests {
         service.reconcile_running().await;
 
         assert!(!service.state.running.contains_key(&running_issue.id));
-        assert_eq!(
-            provisioner.cleaned_issue_identifiers(),
-            vec![running_issue.identifier]
-        );
+        assert_eq!(provisioner.cleaned_issue_identifiers(), vec![
+            running_issue.identifier
+        ]);
     }
 
     #[tokio::test]

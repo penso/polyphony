@@ -14,6 +14,8 @@ This file provides instructions for Claude Code when working in this repository.
 - Format check: `just format-check`
 - Lint (clippy): `just lint`
 - Test: `just test`
+- Docs build: `just docs-build`
+- Docs serve: `just docs-serve`
 
 ## Before Committing / Pushing
 
@@ -27,10 +29,16 @@ If any check fails, fix the issue, then commit the fix.
 Never skip `just format` or `just lint` before a commit, even for small changes.
 New features are not complete without test coverage. Whenever you add a feature, add or update tests that exercise the new behavior.
 
+## Documentation
+
+- `README.md` and `docs/` must stay in sync with the codebase.
+- When code changes affect behavior, commands, configuration, crate layout, features, or architecture, update the relevant documentation in the same change.
+- Documentation drift is a bug. Do not defer README or mdBook updates for later follow-up.
+
 ## Git Workflow
 
 Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): description`
-**No `Co-Authored-By` trailers.** Update `README.md` features list with `feat` commits.
+**No `Co-Authored-By` trailers.** Update `README.md` features list with `feat` commits, and update `docs/` when the feature changes user-facing or architectural behavior.
 
 ## Rust Rules
 

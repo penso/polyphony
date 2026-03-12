@@ -1,19 +1,23 @@
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode};
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+use {
+    crossterm::{
+        event::{self, Event, KeyCode},
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    },
+    polyphony_core::RuntimeSnapshot,
+    polyphony_orchestrator::RuntimeCommand,
+    ratatui::{
+        Terminal,
+        backend::CrosstermBackend,
+        layout::{Constraint, Direction, Layout},
+        style::{Modifier, Style},
+        text::Line,
+        widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    },
+    thiserror::Error,
+    tokio::sync::{mpsc, watch},
 };
-use polyphony_core::RuntimeSnapshot;
-use polyphony_orchestrator::RuntimeCommand;
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
-use thiserror::Error;
-use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -35,15 +39,15 @@ pub async fn run(
         let snapshot = snapshot_rx.borrow().clone();
         terminal.draw(|frame| draw(frame, &snapshot))?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break Ok(()),
-                    KeyCode::Char('r') => {
-                        let _ = command_tx.send(RuntimeCommand::Refresh);
-                    }
-                    _ => {}
-                }
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                KeyCode::Char('q') => break Ok(()),
+                KeyCode::Char('r') => {
+                    let _ = command_tx.send(RuntimeCommand::Refresh);
+                },
+                _ => {},
             }
         }
 
@@ -71,6 +75,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
             Constraint::Length(5),
             Constraint::Length(10),
             Constraint::Length(8),
+            Constraint::Length(7),
             Constraint::Min(8),
         ])
         .split(frame.area());
@@ -127,16 +132,13 @@ fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
             Cell::from(running.last_message.clone().unwrap_or_default()),
         ])
     });
-    let running = Table::new(
-        running_rows,
-        [
-            Constraint::Length(14),
-            Constraint::Length(14),
-            Constraint::Length(8),
-            Constraint::Length(18),
-            Constraint::Min(20),
-        ],
-    )
+    let running = Table::new(running_rows, [
+        Constraint::Length(14),
+        Constraint::Length(14),
+        Constraint::Length(8),
+        Constraint::Length(18),
+        Constraint::Min(20),
+    ])
     .header(
         Row::new(["Issue", "State", "Turns", "Last Event", "Message"])
             .style(Style::default().add_modifier(Modifier::BOLD)),
@@ -152,21 +154,38 @@ fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
             Cell::from(retry.error.clone().unwrap_or_default()),
         ])
     });
-    let retrying = Table::new(
-        retry_rows,
-        [
-            Constraint::Length(14),
-            Constraint::Length(8),
-            Constraint::Length(12),
-            Constraint::Min(20),
-        ],
-    )
+    let retrying = Table::new(retry_rows, [
+        Constraint::Length(14),
+        Constraint::Length(8),
+        Constraint::Length(12),
+        Constraint::Min(20),
+    ])
     .header(
         Row::new(["Issue", "Attempt", "Due", "Error"])
             .style(Style::default().add_modifier(Modifier::BOLD)),
     )
     .block(Block::default().title("Retry Queue").borders(Borders::ALL));
     frame.render_widget(retrying, areas[3]);
+
+    let catalogs = snapshot
+        .agent_catalogs
+        .iter()
+        .take(4)
+        .map(|catalog| {
+            let selected = catalog
+                .selected_model
+                .clone()
+                .unwrap_or_else(|| "auto".into());
+            let discovered = catalog.models.len();
+            Line::from(format!(
+                "{} [{}] selected={} discovered={}",
+                catalog.agent_name, catalog.provider_kind, selected, discovered
+            ))
+        })
+        .collect::<Vec<_>>();
+    let agent_models = Paragraph::new(catalogs)
+        .block(Block::default().title("Agent Models").borders(Borders::ALL));
+    frame.render_widget(agent_models, areas[4]);
 
     let lines = snapshot
         .recent_events
@@ -186,5 +205,5 @@ fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
             .title("Recent Events")
             .borders(Borders::ALL),
     );
-    frame.render_widget(events, areas[4]);
+    frame.render_widget(events, areas[5]);
 }

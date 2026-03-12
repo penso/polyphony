@@ -1,0 +1,13 @@
+[book]
+title = "polyphony"
+description = "Project documentation for the polyphony Rust workspace"
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"

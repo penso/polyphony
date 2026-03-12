@@ -1,12 +1,13 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
-use clap::Parser;
-use polyphony_core::{AgentRuntime, IssueTracker, StateStore, WorkspaceProvisioner};
-use polyphony_orchestrator::{RuntimeCommand, RuntimeService, spawn_workflow_watcher};
-use polyphony_workflow::load_workflow;
-use thiserror::Error;
-use tracing_subscriber::EnvFilter;
+use {
+    clap::Parser,
+    polyphony_core::{AgentRuntime, IssueTracker, StateStore, WorkspaceProvisioner},
+    polyphony_orchestrator::{RuntimeCommand, RuntimeService, spawn_workflow_watcher},
+    polyphony_workflow::load_workflow,
+    thiserror::Error,
+    tracing_subscriber::EnvFilter,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "polyphony")]
@@ -84,7 +85,7 @@ fn build_runtime_components(
     workflow: &polyphony_workflow::LoadedWorkflow,
 ) -> Result<(Arc<dyn IssueTracker>, Arc<dyn AgentRuntime>), Error> {
     #[cfg(feature = "mock")]
-    if workflow.config.tracker.kind == "mock" && workflow.config.provider.kind == "mock" {
+    if is_mock_workflow(workflow) {
         let tracker = polyphony_issue_mock::MockTracker::seeded_demo();
         let agent = polyphony_issue_mock::MockAgentRuntime::new(tracker.clone());
         return Ok((Arc::new(tracker), Arc::new(agent)));
@@ -105,7 +106,7 @@ fn build_runtime_components(
                 workflow.config.tracker.endpoint.clone(),
                 api_key,
             ))
-        }
+        },
         #[cfg(feature = "github")]
         "github" => Arc::new(polyphony_github::GithubIssueTracker::new(
             workflow
@@ -123,22 +124,13 @@ fn build_runtime_components(
             return Err(Error::Config(format!(
                 "unsupported tracker.kind `{other}` for this build"
             )));
-        }
+        },
     };
 
-    match workflow.config.provider.kind.as_str() {
-        #[cfg(feature = "mock")]
-        "mock" => Err(Error::Config(
-            "provider.kind `mock` only supports tracker.kind `mock`".into(),
-        )),
-        "codex" | "copilot" | "claude" | "generic" => Err(Error::Config(format!(
-            "provider.kind `{}` is declared but no real app-server runtime is wired yet",
-            workflow.config.provider.kind
-        ))),
-        other => Err(Error::Config(format!(
-            "unsupported provider.kind `{other}` for this build"
-        ))),
-    }
+    Ok((
+        tracker,
+        Arc::new(polyphony_agents::AgentRegistryRuntime::new()),
+    ))
 }
 
 async fn build_store(sqlite_url: Option<&str>) -> Result<Option<Arc<dyn StateStore>>, Error> {
@@ -158,4 +150,21 @@ async fn build_store(sqlite_url: Option<&str>) -> Result<Option<Arc<dyn StateSto
     }
 
     Ok(None)
+}
+
+#[cfg(feature = "mock")]
+fn is_mock_workflow(workflow: &polyphony_workflow::LoadedWorkflow) -> bool {
+    workflow.config.tracker.kind == "mock"
+        && workflow
+            .config
+            .agents
+            .default
+            .as_ref()
+            .and_then(|name| workflow.config.agents.profiles.get(name))
+            .map(|profile| {
+                profile.kind == "mock"
+                    || matches!(profile.transport.as_deref(), Some("mock"))
+                    || profile.transport.is_none() && profile.kind.is_empty()
+            })
+            .unwrap_or(false)
 }

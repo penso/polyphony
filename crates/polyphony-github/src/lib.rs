@@ -1,21 +1,23 @@
 use std::collections::BTreeMap;
 
-use async_trait::async_trait;
-use chrono::Utc;
-use polyphony_core::{
-    BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
-    IssueTracker, PullRequestCommenter, PullRequestRef, TrackerQuery,
-};
-use graphql_client::GraphQLQuery;
-use octocrab::{
-    Octocrab,
-    models::{
-        Author, AuthorAssociation,
-        issues::{Comment as GithubComment, Issue as GithubIssue},
+use {
+    async_trait::async_trait,
+    chrono::Utc,
+    graphql_client::GraphQLQuery,
+    octocrab::{
+        Octocrab,
+        models::{
+            Author, AuthorAssociation,
+            issues::{Comment as GithubComment, Issue as GithubIssue},
+        },
     },
+    polyphony_core::{
+        BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
+        IssueTracker, PullRequestCommenter, PullRequestRef, TrackerQuery,
+    },
+    serde::de::DeserializeOwned,
+    thiserror::Error,
 };
-use serde::de::DeserializeOwned;
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -207,15 +209,17 @@ impl GithubIssueTracker {
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
         let status = response.status();
         if status.as_u16() == 403 || status.as_u16() == 429 {
-            return Err(CoreError::RateLimited(polyphony_core::RateLimitSignal {
-                component: "tracker:github".into(),
-                reason: format!("github graphql {}", status),
-                limited_at: Utc::now(),
-                retry_after_ms: None,
-                reset_at: None,
-                status_code: Some(status.as_u16()),
-                raw: None,
-            }));
+            return Err(CoreError::RateLimited(Box::new(
+                polyphony_core::RateLimitSignal {
+                    component: "tracker:github".into(),
+                    reason: format!("github graphql {}", status),
+                    limited_at: Utc::now(),
+                    retry_after_ms: None,
+                    reset_at: None,
+                    status_code: Some(status.as_u16()),
+                    raw: None,
+                },
+            )));
         }
         let payload = response
             .json::<graphql_client::Response<ResponseData>>()
@@ -484,7 +488,7 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
                 resolve_pull_request_id::Variables {
                     owner: owner.clone(),
                     name: name.clone(),
-                    number: number as i64,
+                    number,
                 },
             ))
             .send()
@@ -669,7 +673,7 @@ fn project_field_nodes(
     match data.node.as_ref()? {
         resolve_project_status_field::ResolveProjectStatusFieldNode::ProjectV2(project) => {
             Some(project.fields.nodes.as_slice())
-        }
+        },
         _ => None,
     }
 }
@@ -706,21 +710,18 @@ fn find_status_field_option(
 }
 
 fn map_github_error(error: octocrab::Error) -> CoreError {
-    match &error {
-        octocrab::Error::GitHub { source, .. } => {
-            if source.status_code.as_u16() == 403 || source.status_code.as_u16() == 429 {
-                return CoreError::RateLimited(polyphony_core::RateLimitSignal {
-                    component: "tracker:github".into(),
-                    reason: format!("github api {}", source.status_code),
-                    limited_at: Utc::now(),
-                    retry_after_ms: None,
-                    reset_at: None,
-                    status_code: Some(source.status_code.as_u16()),
-                    raw: None,
-                });
-            }
-        }
-        _ => {}
+    if let octocrab::Error::GitHub { source, .. } = &error
+        && (source.status_code.as_u16() == 403 || source.status_code.as_u16() == 429)
+    {
+        return CoreError::RateLimited(Box::new(polyphony_core::RateLimitSignal {
+            component: "tracker:github".into(),
+            reason: format!("github api {}", source.status_code),
+            limited_at: Utc::now(),
+            retry_after_ms: None,
+            reset_at: None,
+            status_code: Some(source.status_code.as_u16()),
+            raw: None,
+        }));
     }
     CoreError::Adapter(error.to_string())
 }

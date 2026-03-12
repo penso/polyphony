@@ -18,6 +18,12 @@ lint: lockfile-check
 test:
     cargo +{{nightly_toolchain}} test --workspace
 
+docs-build:
+    mdbook build docs
+
+docs-serve:
+    mdbook serve docs --open
+
 schema-github:
     ./scripts/refresh_github_schema.sh
 

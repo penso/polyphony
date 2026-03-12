@@ -1,11 +1,15 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use async_trait::async_trait;
-use polyphony_core::{
-    CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
-use thiserror::Error;
+
+use {
+    async_trait::async_trait,
+    polyphony_core::{
+        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+    },
+    thiserror::Error,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -78,7 +82,7 @@ fn cleanup_workspace_sync(request: WorkspaceRequest) -> Result<(), CoreError> {
             if request.workspace_path.exists() {
                 fs::remove_dir_all(&request.workspace_path).map_err(map_io)?;
             }
-        }
+        },
     }
     Ok(())
 }
@@ -101,7 +105,7 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
                 request.branch_name.as_deref(),
                 request.default_branch.as_deref(),
             )
-        }
+        },
         CheckoutKind::DiscreteClone => {
             let repo = git2::Repository::open(&request.workspace_path).map_err(|error| {
                 CoreError::Adapter(format!("open existing clone failed: {error}"))
@@ -112,7 +116,7 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
                 request.branch_name.as_deref(),
                 request.default_branch.as_deref(),
             )
-        }
+        },
     }
 }
 
@@ -299,8 +303,10 @@ where
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use polyphony_core::{CheckoutKind, WorkspaceProvisioner, WorkspaceRequest};
-    use tempfile::tempdir;
+    use {
+        polyphony_core::{CheckoutKind, WorkspaceProvisioner, WorkspaceRequest},
+        tempfile::tempdir,
+    };
 
     use super::GitWorkspaceProvisioner;
 

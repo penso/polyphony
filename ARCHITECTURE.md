@@ -23,8 +23,18 @@ and recent events live in one async orchestrator loop and are surfaced through a
 `polyphony-workspace` owns `WorkspaceManager`, which enforces workspace-root containment, sanitized
 directory names, hook execution, transient artifact cleanup, configurable reuse behavior, and
 rollback on failed initialization.
-`AgentRuntime` is a trait so the worker lifecycle can host different app-server integrations later
-without changing orchestrator logic.
+`polyphony-agents` now provides the registry runtime, and delegates to provider crates:
+- `polyphony-agent-codex`
+- `polyphony-agent-claude`
+- `polyphony-agent-copilot`
+- `polyphony-agent-openai`
+- `polyphony-agent-local` as the local CLI fallback
+Those runtimes cover app-server over stdio, local CLI/tmux automation, and OpenAI-compatible chat HTTP.
+Automatic model discovery now lives at the provider layer:
+- `/models` probing for OpenAI-compatible providers
+- `models_command` probing for CLI/app-server-backed agents
+`AgentRuntime` remains the orchestrator-facing trait boundary, while `AgentProviderRuntime`
+is the provider plug-in seam used by the registry.
 `WorkspaceProvisioner` is a separate trait so the scheduler can choose between plain directories,
 linked git worktrees, and discrete clones without entangling git lifecycle with orchestrator state.
 
@@ -52,7 +62,6 @@ operators can see 429 backoff and remaining credits/spend in one place.
 
 ## What remains
 
-- Codex app-server handshake and streaming protocol integration
 - richer Linear normalization for blockers, pagination, and state refresh details
 - restart recovery from SQLite
 - optional HTTP dashboard/API layer

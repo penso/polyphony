@@ -1,12 +1,16 @@
-use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use thiserror::Error;
-use tokio::sync::mpsc;
+use {
+    async_trait::async_trait,
+    chrono::{DateTime, Utc},
+    serde::{Deserialize, Serialize},
+    serde_json::Value,
+    thiserror::Error,
+    tokio::sync::mpsc,
+};
 
 pub type IssueId = String;
 
@@ -19,7 +23,7 @@ pub enum Error {
     #[error("state store error: {0}")]
     Store(String),
     #[error("rate limited: {0:?}")]
-    RateLimited(RateLimitSignal),
+    RateLimited(Box<RateLimitSignal>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,6 +113,22 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentModel {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentModelCatalog {
+    pub agent_name: String,
+    pub provider_kind: String,
+    pub fetched_at: DateTime<Utc>,
+    pub selected_model: Option<String>,
+    pub models: Vec<AgentModel>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentEventKind {
     SessionStarted,
@@ -127,6 +147,7 @@ pub enum AgentEventKind {
 pub struct AgentEvent {
     pub issue_id: String,
     pub issue_identifier: String,
+    pub agent_name: String,
     pub session_id: Option<String>,
     pub kind: AgentEventKind,
     pub at: DateTime<Utc>,
@@ -153,6 +174,62 @@ pub struct AgentRunResult {
     pub final_issue_state: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTransport {
+    #[default]
+    Mock,
+    AppServer,
+    LocalCli,
+    OpenAiChat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentInteractionMode {
+    #[default]
+    OneShot,
+    Interactive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPromptMode {
+    #[default]
+    Env,
+    Stdin,
+    TmuxPaste,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentDefinition {
+    pub name: String,
+    pub kind: String,
+    pub transport: AgentTransport,
+    pub command: Option<String>,
+    pub model: Option<String>,
+    pub models: Vec<String>,
+    pub models_command: Option<String>,
+    pub fetch_models: bool,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub approval_policy: Option<String>,
+    pub thread_sandbox: Option<String>,
+    pub turn_sandbox_policy: Option<String>,
+    pub turn_timeout_ms: u64,
+    pub read_timeout_ms: u64,
+    pub stall_timeout_ms: i64,
+    pub credits_command: Option<String>,
+    pub spending_command: Option<String>,
+    pub use_tmux: bool,
+    pub tmux_session_prefix: Option<String>,
+    pub interaction_mode: AgentInteractionMode,
+    pub prompt_mode: AgentPromptMode,
+    pub idle_timeout_ms: u64,
+    pub completion_sentinel: Option<String>,
+    pub env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentRunSpec {
     pub issue: Issue,
@@ -160,7 +237,7 @@ pub struct AgentRunSpec {
     pub workspace_path: PathBuf,
     pub prompt: String,
     pub max_turns: u32,
-    pub runtime_command: String,
+    pub agent: AgentDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -175,6 +252,8 @@ pub struct CodexTotals {
 pub struct RunningRow {
     pub issue_id: String,
     pub issue_identifier: String,
+    pub agent_name: String,
+    pub model: Option<String>,
     pub state: String,
     pub session_id: Option<String>,
     pub turn_count: u32,
@@ -213,6 +292,7 @@ pub struct RuntimeSnapshot {
     pub rate_limits: Option<Value>,
     pub throttles: Vec<ThrottleWindow>,
     pub budgets: Vec<BudgetSnapshot>,
+    pub agent_catalogs: Vec<AgentModelCatalog>,
     pub recent_events: Vec<RuntimeEvent>,
 }
 
@@ -340,7 +420,39 @@ pub trait AgentRuntime: Send + Sync {
         spec: AgentRunSpec,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<AgentRunResult, Error>;
-    async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, Error> {
+    async fn fetch_budgets(
+        &self,
+        _agents: &[AgentDefinition],
+    ) -> Result<Vec<BudgetSnapshot>, Error> {
+        Ok(Vec::new())
+    }
+    async fn discover_models(
+        &self,
+        _agents: &[AgentDefinition],
+    ) -> Result<Vec<AgentModelCatalog>, Error> {
+        Ok(Vec::new())
+    }
+}
+
+#[async_trait]
+pub trait AgentProviderRuntime: Send + Sync {
+    fn runtime_key(&self) -> String;
+    fn supports(&self, agent: &AgentDefinition) -> bool;
+    async fn run(
+        &self,
+        spec: AgentRunSpec,
+        event_tx: mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<AgentRunResult, Error>;
+    async fn fetch_budget(
+        &self,
+        _agent: &AgentDefinition,
+    ) -> Result<Option<BudgetSnapshot>, Error> {
+        Ok(None)
+    }
+    async fn discover_models(
+        &self,
+        _agent: &AgentDefinition,
+    ) -> Result<Option<AgentModelCatalog>, Error> {
         Ok(None)
     }
 }

@@ -1,15 +1,19 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-
-use polyphony_core::{
-    CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
-    sanitize_workspace_key,
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
 };
-use polyphony_workflow::HooksConfig;
-use thiserror::Error;
-use tokio::process::Command;
-use tracing::warn;
+
+use {
+    polyphony_core::{
+        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+        sanitize_workspace_key,
+    },
+    polyphony_workflow::HooksConfig,
+    thiserror::Error,
+    tokio::process::Command,
+    tracing::warn,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -72,8 +76,8 @@ impl WorkspaceManager {
         let request = self.workspace_request(issue_identifier, branch_name)?;
         let workspace = self.provisioner.ensure_workspace(request.clone()).await?;
         self.cleanup_transient_artifacts(&workspace.path).await?;
-        if workspace.created_now {
-            if let Err(error) = self
+        if workspace.created_now
+            && let Err(error) = self
                 .run_hook(
                     "after_create",
                     hooks.after_create.as_deref(),
@@ -81,12 +85,11 @@ impl WorkspaceManager {
                     hooks.timeout_ms,
                 )
                 .await
-            {
-                if let Err(cleanup_error) = self.provisioner.cleanup_workspace(request).await {
-                    warn!(%cleanup_error, path = %workspace.path.display(), "workspace rollback failed");
-                }
-                return Err(error);
+        {
+            if let Err(cleanup_error) = self.provisioner.cleanup_workspace(request).await {
+                warn!(%cleanup_error, path = %workspace.path.display(), "workspace rollback failed");
             }
+            return Err(error);
         }
         Ok(workspace)
     }
@@ -173,11 +176,11 @@ impl WorkspaceManager {
             match tokio::fs::symlink_metadata(&artifact_path).await {
                 Ok(metadata) if metadata.is_dir() => {
                     tokio::fs::remove_dir_all(&artifact_path).await?;
-                }
+                },
                 Ok(_) => {
                     tokio::fs::remove_file(&artifact_path).await?;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
                 Err(error) => return Err(Error::Io(error)),
             }
         }
@@ -233,15 +236,19 @@ fn absolute_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-
-    use async_trait::async_trait;
-    use polyphony_core::{
-        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
     };
-    use polyphony_workflow::HooksConfig;
-    use tempfile::tempdir;
+
+    use {
+        async_trait::async_trait,
+        polyphony_core::{
+            CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+        },
+        polyphony_workflow::HooksConfig,
+        tempfile::tempdir,
+    };
 
     use super::WorkspaceManager;
 
