@@ -849,6 +849,7 @@ dependencies = [
  "chrono",
  "factoryrs-core",
  "factoryrs-workflow",
+ "graphql_client",
  "reqwest",
  "serde",
  "serde_json",
