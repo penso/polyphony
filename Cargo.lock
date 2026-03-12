@@ -842,155 +842,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "factoryrs-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "factoryrs-core",
- "factoryrs-git",
- "factoryrs-github",
- "factoryrs-issue-mock",
- "factoryrs-linear",
- "factoryrs-orchestrator",
- "factoryrs-sqlite",
- "factoryrs-tui",
- "factoryrs-workflow",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "factoryrs-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "factoryrs-git"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "factoryrs-core",
- "git2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "factoryrs-github"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "factoryrs-core",
- "graphql_client",
- "octocrab",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "factoryrs-issue-mock"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "factoryrs-core",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "factoryrs-linear"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "factoryrs-core",
- "graphql_client",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "factoryrs-orchestrator"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "factoryrs-core",
- "factoryrs-workflow",
- "factoryrs-workspace",
- "notify",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "factoryrs-sqlite"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "factoryrs-core",
- "serde_json",
- "sqlx",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "factoryrs-tui"
-version = "0.1.0"
-dependencies = [
- "crossterm 0.29.0",
- "factoryrs-core",
- "factoryrs-orchestrator",
- "ratatui",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "factoryrs-workflow"
-version = "0.1.0"
-dependencies = [
- "config",
- "dirs",
- "factoryrs-core",
- "liquid",
- "serde",
- "serde_yaml",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "factoryrs-workspace"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "factoryrs-core",
- "factoryrs-workflow",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2391,6 +2242,155 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "polyphony-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "polyphony-core",
+ "polyphony-git",
+ "polyphony-github",
+ "polyphony-issue-mock",
+ "polyphony-linear",
+ "polyphony-orchestrator",
+ "polyphony-sqlite",
+ "polyphony-tui",
+ "polyphony-workflow",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "polyphony-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "polyphony-git"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "git2",
+ "polyphony-core",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "polyphony-github"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "graphql_client",
+ "octocrab",
+ "polyphony-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "polyphony-issue-mock"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "polyphony-core",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "polyphony-linear"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "graphql_client",
+ "polyphony-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "polyphony-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "notify",
+ "polyphony-core",
+ "polyphony-workflow",
+ "polyphony-workspace",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "polyphony-sqlite"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "polyphony-core",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "polyphony-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm 0.29.0",
+ "polyphony-core",
+ "polyphony-orchestrator",
+ "ratatui",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "polyphony-workflow"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "dirs",
+ "liquid",
+ "polyphony-core",
+ "serde",
+ "serde_yaml",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "polyphony-workspace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "polyphony-core",
+ "polyphony-workflow",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "potential_utf"

@@ -1,0 +1,17 @@
+[package]
+name = "polyphony-orchestrator"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+notify.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+polyphony-core = { path = "../polyphony-core" }
+polyphony-workspace = { path = "../polyphony-workspace" }
+polyphony-workflow = { path = "../polyphony-workflow" }

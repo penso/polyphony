@@ -1,0 +1,13 @@
+[package]
+name = "polyphony-tui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+polyphony-core = { path = "../polyphony-core" }
+polyphony-orchestrator = { path = "../polyphony-orchestrator" }

@@ -15,7 +15,7 @@ tracker:
 polling:
   interval_ms: 2000
 workspace:
-  root: .factoryrs/workspaces
+  root: .polyphony/workspaces
   checkout_kind: directory
   sync_on_reuse: true
   transient_paths:
@@ -66,5 +66,5 @@ GitHub Project parity example:
 - `tracker.project_number: 7`
 - `tracker.project_status_field: Status`
 
-When configured, `factoryrs` will add dispatched GitHub issues to that Project and best-effort sync the
+When configured, `polyphony` will add dispatched GitHub issues to that Project and best-effort sync the
 project status field for workflow visibility.

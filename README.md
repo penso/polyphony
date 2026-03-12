@@ -1,6 +1,6 @@
-# factoryrs
+# polyphony
 
-`factoryrs` is a Rust workspace that implements the skeleton of a Symphony-style orchestration service:
+`polyphony` is a Rust workspace that implements the skeleton of a Symphony-style orchestration service:
 it loads a repo-owned `WORKFLOW.md`, polls a tracker, assigns isolated workspaces, runs agent workers,
 and renders live runtime state in a `ratatui` dashboard.
 
@@ -9,22 +9,22 @@ from tracker, agent, persistence, and UI implementations.
 
 ## Workspace layout
 
-- `crates/factoryrs-core`: domain model and trait contracts.
-- `crates/factoryrs-workflow`: `WORKFLOW.md` loader, typed config, prompt rendering.
-- `crates/factoryrs-orchestrator`: async orchestrator, retry loop, reconciliation, workspace hooks.
-- `crates/factoryrs-workspace`: workspace manager for path safety, lifecycle hooks, rollback, and cleanup.
-- `crates/factoryrs-issue-mock`: feature-gated mock tracker and mock agent runtime for tests and local smoke runs.
-- `crates/factoryrs-linear`: Linear tracker adapter using typed GraphQL queries.
-- `crates/factoryrs-git`: git-backed workspace provisioning for linked worktrees and discrete clones.
-- `crates/factoryrs-github`: GitHub Issues + PR integration using `octocrab` and `graphql_client`.
-- `crates/factoryrs-sqlite`: optional SQLite-backed state store.
-- `crates/factoryrs-tui`: `ratatui` status surface.
-- `crates/factoryrs-cli`: thin binary that wires the build together.
+- `crates/polyphony-core`: domain model and trait contracts.
+- `crates/polyphony-workflow`: `WORKFLOW.md` loader, typed config, prompt rendering.
+- `crates/polyphony-orchestrator`: async orchestrator, retry loop, reconciliation, workspace hooks.
+- `crates/polyphony-workspace`: workspace manager for path safety, lifecycle hooks, rollback, and cleanup.
+- `crates/polyphony-issue-mock`: feature-gated mock tracker and mock agent runtime for tests and local smoke runs.
+- `crates/polyphony-linear`: Linear tracker adapter using typed GraphQL queries.
+- `crates/polyphony-git`: git-backed workspace provisioning for linked worktrees and discrete clones.
+- `crates/polyphony-github`: GitHub Issues + PR integration using `octocrab` and `graphql_client`.
+- `crates/polyphony-sqlite`: optional SQLite-backed state store.
+- `crates/polyphony-tui`: `ratatui` status surface.
+- `crates/polyphony-cli`: thin binary that wires the build together.
 
 ## Feature flags
 
 - `mock`: demo tracker and demo agent runtime. Enabled by default.
-- `linear`: Linear tracker adapter from `factoryrs-linear`.
+- `linear`: Linear tracker adapter from `polyphony-linear`.
 - `github`: GitHub Issues tracker adapter.
 - `sqlite`: SQLite-backed persistence adapter.
 
@@ -73,7 +73,7 @@ Branch names default to the issue branch metadata when present, otherwise `task/
 ## Run
 
 ```bash
-cargo run -p factoryrs-cli
+cargo run -p polyphony-cli
 ```
 
 The default `WORKFLOW.md` uses the mock tracker, so the TUI starts immediately and shows seeded demo issues.
@@ -81,13 +81,13 @@ The default `WORKFLOW.md` uses the mock tracker, so the TUI starts immediately a
 Run without the TUI:
 
 ```bash
-cargo run -p factoryrs-cli -- --no-tui
+cargo run -p polyphony-cli -- --no-tui
 ```
 
 Enable SQLite persistence:
 
 ```bash
-cargo run -p factoryrs-cli --features sqlite -- --sqlite-url sqlite://factoryrs.db
+cargo run -p polyphony-cli --features sqlite -- --sqlite-url sqlite://polyphony.db
 ```
 
 Build everything, including optional adapters:
@@ -104,7 +104,7 @@ just schema-linear
 ```
 
 `schema-linear` requires `LINEAR_API_KEY` in the environment and refreshes
-`crates/factoryrs-linear/src/linear_schema.json` from the live Linear endpoint.
+`crates/polyphony-linear/src/linear_schema.json` from the live Linear endpoint.
 
 ## Next steps
 

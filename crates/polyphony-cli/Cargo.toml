@@ -1,0 +1,32 @@
+[package]
+name = "polyphony-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "polyphony"
+path = "src/main.rs"
+
+[features]
+default = ["mock"]
+mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
+linear = ["dep:polyphony-linear"]
+github = ["dep:polyphony-github"]
+sqlite = ["polyphony-sqlite/sqlite"]
+
+[dependencies]
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+polyphony-core = { path = "../polyphony-core" }
+polyphony-git = { path = "../polyphony-git" }
+polyphony-github = { path = "../polyphony-github", optional = true }
+polyphony-issue-mock = { path = "../polyphony-issue-mock", optional = true, default-features = false }
+polyphony-linear = { path = "../polyphony-linear", optional = true }
+polyphony-orchestrator = { path = "../polyphony-orchestrator" }
+polyphony-sqlite = { path = "../polyphony-sqlite", default-features = false }
+polyphony-tui = { path = "../polyphony-tui" }
+polyphony-workflow = { path = "../polyphony-workflow" }

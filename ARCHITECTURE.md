@@ -9,18 +9,18 @@ workspace hooks, concurrency, and tracker selection.
 
 ## Configuration
 
-`factoryrs-workflow` parses YAML front matter plus the Markdown body into a typed `ServiceConfig` and
-`WorkflowDefinition`. The crate now uses the `config` crate to apply defaults, `FACTORYRS__...` env overlays,
+`polyphony-workflow` parses YAML front matter plus the Markdown body into a typed `ServiceConfig` and
+`WorkflowDefinition`. The crate now uses the `config` crate to apply defaults, `POLYPHONY__...` env overlays,
 typed deserialization, `$VAR` secret indirection, path expansion, and prompt rendering.
 
 ## Coordination
 
-`factoryrs-orchestrator` owns all mutable scheduling state. Running sessions, claims, retry timers, runtime totals,
+`polyphony-orchestrator` owns all mutable scheduling state. Running sessions, claims, retry timers, runtime totals,
 and recent events live in one async orchestrator loop and are surfaced through a snapshot channel.
 
 ## Execution
 
-`factoryrs-workspace` owns `WorkspaceManager`, which enforces workspace-root containment, sanitized
+`polyphony-workspace` owns `WorkspaceManager`, which enforces workspace-root containment, sanitized
 directory names, hook execution, transient artifact cleanup, configurable reuse behavior, and
 rollback on failed initialization.
 `AgentRuntime` is a trait so the worker lifecycle can host different app-server integrations later
@@ -30,10 +30,10 @@ linked git worktrees, and discrete clones without entangling git lifecycle with 
 
 ## Integration
 
-`IssueTracker` is the tracker seam. `factoryrs-issue-mock` currently ships the demo `MockTracker`.
-`factoryrs-linear` provides the feature-gated Linear implementation. `factoryrs-github` provides the GitHub Issues implementation.
+`IssueTracker` is the tracker seam. `polyphony-issue-mock` currently ships the demo `MockTracker`.
+`polyphony-linear` provides the feature-gated Linear implementation. `polyphony-github` provides the GitHub Issues implementation.
 The mock path is what makes the TUI runnable now.
-`factoryrs-github` owns GitHub-specific integrations built on `octocrab` and `graphql_client`,
+`polyphony-github` owns GitHub-specific integrations built on `octocrab` and `graphql_client`,
 including PR comment mutations and best-effort GitHub Project workflow syncing.
 Both the Linear and GitHub GraphQL integrations use checked-in schemas plus checked-in `.graphql`
 operation files so query shapes stay compile-checked.

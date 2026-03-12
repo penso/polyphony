@@ -1,16 +1,16 @@
 [workspace]
 members = [
-  "crates/factoryrs-core",
-  "crates/factoryrs-workflow",
-  "crates/factoryrs-orchestrator",
-  "crates/factoryrs-workspace",
-  "crates/factoryrs-issue-mock",
-  "crates/factoryrs-linear",
-  "crates/factoryrs-git",
-  "crates/factoryrs-github",
-  "crates/factoryrs-sqlite",
-  "crates/factoryrs-tui",
-  "crates/factoryrs-cli",
+  "crates/polyphony-core",
+  "crates/polyphony-workflow",
+  "crates/polyphony-orchestrator",
+  "crates/polyphony-workspace",
+  "crates/polyphony-issue-mock",
+  "crates/polyphony-linear",
+  "crates/polyphony-git",
+  "crates/polyphony-github",
+  "crates/polyphony-sqlite",
+  "crates/polyphony-tui",
+  "crates/polyphony-cli",
 ]
 resolver = "2"
 
