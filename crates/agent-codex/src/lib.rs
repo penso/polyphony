@@ -4,7 +4,7 @@ use {
     async_trait::async_trait,
     chrono::Utc,
     polyphony_agent_common::{
-        discover_models_from_command, emit, fetch_budget_for_agent, forward_reader_lines,
+        discover_models_from_command, emit_with_metadata, fetch_budget_for_agent,
         prepare_context_file, prepare_prompt_file, selected_model_hint, shell_command,
     },
     polyphony_core::{
@@ -19,7 +19,7 @@ use {
         sync::mpsc,
         task::JoinHandle,
     },
-    tracing::{debug, info},
+    tracing::{debug, info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -88,6 +88,10 @@ async fn run_codex_app_server(
     result
 }
 
+fn adapter_error(kind: &'static str) -> CoreError {
+    CoreError::Adapter(kind.into())
+}
+
 struct CodexAppServerSession {
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
@@ -96,8 +100,17 @@ struct CodexAppServerSession {
     lines: tokio::io::Lines<BufReader<ChildStdout>>,
     stderr_forward: Option<JoinHandle<()>>,
     thread_id: String,
+    codex_app_server_pid: Option<String>,
     next_request_id: u64,
     emitted_session_started: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CodexEventMetadata {
+    session_id: Option<String>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    codex_app_server_pid: Option<String>,
 }
 
 #[async_trait]
@@ -121,6 +134,7 @@ impl AgentSession for CodexAppServerSession {
             request_id,
             "starting codex app-server turn"
         );
+        let request_metadata = self.event_metadata(None);
         write_json_line(
             &mut self.stdin,
             &json!({
@@ -140,41 +154,43 @@ impl AgentSession for CodexAppServerSession {
         let turn_response = wait_for_response(
             &self.spec,
             &self.event_tx,
+            &mut self.child,
             &mut self.stdin,
             &mut self.lines,
             request_id,
+            &request_metadata,
         )
         .await?;
         let turn_id = turn_response["result"]["turn"]["id"]
             .as_str()
             .or_else(|| turn_response["result"]["id"].as_str())
-            .ok_or_else(|| CoreError::Adapter("turn id missing".into()))?
+            .ok_or_else(|| adapter_error("response_error"))?
             .to_string();
-        let session_id = format!("{}-{}", self.thread_id, turn_id);
+        let event_metadata = self.event_metadata(Some(turn_id.as_str()));
         if !self.emitted_session_started {
-            emit(
+            emit_codex(
                 &self.event_tx,
                 &self.spec,
                 AgentEventKind::SessionStarted,
                 Some("codex app-server session started".into()),
-                Some(session_id.clone()),
+                &event_metadata,
                 None,
                 None,
                 Some(turn_response.clone()),
             );
             self.emitted_session_started = true;
         }
-        emit(
+        emit_codex(
             &self.event_tx,
             &self.spec,
             AgentEventKind::TurnStarted,
             Some("turn started".into()),
-            Some(session_id.clone()),
+            &event_metadata,
             None,
             None,
             Some(turn_response),
         );
-        self.consume_turn_stream(session_id).await
+        self.consume_turn_stream(event_metadata).await
     }
 
     async fn stop(&mut self) -> Result<(), CoreError> {
@@ -192,29 +208,40 @@ impl AgentSession for CodexAppServerSession {
 }
 
 impl CodexAppServerSession {
+    fn event_metadata(&self, turn_id: Option<&str>) -> CodexEventMetadata {
+        let turn_id = turn_id.map(ToOwned::to_owned);
+        CodexEventMetadata {
+            session_id: turn_id
+                .as_ref()
+                .map(|turn_id| format!("{}-{turn_id}", self.thread_id)),
+            thread_id: Some(self.thread_id.clone()),
+            turn_id,
+            codex_app_server_pid: self.codex_app_server_pid.clone(),
+        }
+    }
+
     async fn consume_turn_stream(
         &mut self,
-        session_id: String,
+        event_metadata: CodexEventMetadata,
     ) -> Result<AgentRunResult, CoreError> {
         let deadline =
             tokio::time::Instant::now() + Duration::from_millis(self.spec.agent.turn_timeout_ms);
         loop {
             let next_line = tokio::time::timeout_at(deadline, self.lines.next_line())
                 .await
-                .map_err(|_| CoreError::Adapter("turn_timeout".into()))?;
-            let Some(line) = next_line.map_err(|error| CoreError::Adapter(error.to_string()))?
-            else {
-                return Err(CoreError::Adapter("app-server closed stdout".into()));
+                .map_err(|_| adapter_error("turn_timeout"))?;
+            let Some(line) = next_line.map_err(normalize_io_error)? else {
+                return Err(classify_child_exit(&mut self.child));
             };
             let value = match serde_json::from_str::<Value>(&line) {
                 Ok(value) => value,
                 Err(error) => {
-                    emit(
+                    emit_codex(
                         &self.event_tx,
                         &self.spec,
                         AgentEventKind::OtherMessage,
                         Some(format!("malformed stdout JSON: {error}")),
-                        Some(session_id.clone()),
+                        &event_metadata,
                         None,
                         None,
                         Some(json!({"line": line})),
@@ -229,23 +256,23 @@ impl CodexAppServerSession {
                 return Err(CoreError::RateLimited(Box::new(signal)));
             }
             if let Some(usage) = extract_usage(&value) {
-                emit(
+                emit_codex(
                     &self.event_tx,
                     &self.spec,
                     AgentEventKind::UsageUpdated,
                     Some("usage updated".into()),
-                    Some(session_id.clone()),
+                    &event_metadata,
                     Some(usage),
                     extract_rate_limits(&value),
                     Some(value.clone()),
                 );
             } else if let Some(message) = extract_message(&value) {
-                emit(
+                emit_codex(
                     &self.event_tx,
                     &self.spec,
                     AgentEventKind::Notification,
                     Some(message),
-                    Some(session_id.clone()),
+                    &event_metadata,
                     None,
                     extract_rate_limits(&value),
                     Some(value.clone()),
@@ -253,19 +280,19 @@ impl CodexAppServerSession {
             }
             match value["method"].as_str() {
                 Some("turn/completed") => {
-                    emit(
+                    emit_codex(
                         &self.event_tx,
                         &self.spec,
                         AgentEventKind::TurnCompleted,
                         Some("turn completed".into()),
-                        Some(session_id.clone()),
+                        &event_metadata,
                         None,
                         extract_rate_limits(&value),
                         Some(value),
                     );
                     debug!(
                         issue_identifier = %self.spec.issue.identifier,
-                        session_id = %session_id,
+                        session_id = event_metadata.session_id.as_deref().unwrap_or("unknown"),
                         "codex turn completed"
                     );
                     return Ok(AgentRunResult {
@@ -276,19 +303,19 @@ impl CodexAppServerSession {
                     });
                 },
                 Some("turn/failed") => {
-                    emit(
+                    emit_codex(
                         &self.event_tx,
                         &self.spec,
                         AgentEventKind::TurnFailed,
                         Some("turn failed".into()),
-                        Some(session_id.clone()),
+                        &event_metadata,
                         None,
                         extract_rate_limits(&value),
                         Some(value.clone()),
                     );
                     info!(
                         issue_identifier = %self.spec.issue.identifier,
-                        session_id = %session_id,
+                        session_id = event_metadata.session_id.as_deref().unwrap_or("unknown"),
                         "codex turn failed"
                     );
                     return Ok(AgentRunResult {
@@ -299,19 +326,19 @@ impl CodexAppServerSession {
                     });
                 },
                 Some("turn/cancelled") => {
-                    emit(
+                    emit_codex(
                         &self.event_tx,
                         &self.spec,
                         AgentEventKind::TurnCancelled,
                         Some("turn cancelled".into()),
-                        Some(session_id.clone()),
+                        &event_metadata,
                         None,
                         extract_rate_limits(&value),
                         Some(value.clone()),
                     );
                     info!(
                         issue_identifier = %self.spec.issue.identifier,
-                        session_id = %session_id,
+                        session_id = event_metadata.session_id.as_deref().unwrap_or("unknown"),
                         "codex turn cancelled"
                     );
                     return Ok(AgentRunResult {
@@ -324,7 +351,7 @@ impl CodexAppServerSession {
                 Some(method)
                     if method.contains("requestUserInput") || method.contains("input_required") =>
                 {
-                    return Err(CoreError::Adapter("turn_input_required".into()));
+                    return Err(adapter_error("turn_input_required"));
                 },
                 _ => {},
             }
@@ -336,6 +363,15 @@ async fn launch_codex_session(
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
 ) -> Result<CodexAppServerSession, CoreError> {
+    let workspace_is_dir = tokio::fs::metadata(&spec.workspace_path)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false);
+    if !workspace_is_dir {
+        let startup_metadata = CodexEventMetadata::default();
+        emit_startup_failed(&event_tx, &spec, &startup_metadata, "invalid_workspace_cwd");
+        return Err(adapter_error("invalid_workspace_cwd"));
+    }
     let command = spec
         .agent
         .command
@@ -357,7 +393,8 @@ async fn launch_codex_session(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .spawn()
-    .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    .map_err(|_| adapter_error("response_error"))?;
+    let codex_app_server_pid = child.id().map(|pid| pid.to_string());
     let mut stdin = child
         .stdin
         .take()
@@ -371,13 +408,16 @@ async fn launch_codex_session(
         .take()
         .ok_or_else(|| CoreError::Adapter("app-server stderr unavailable".into()))?;
     let mut lines = BufReader::new(stdout).lines();
-    let stderr_forward = tokio::spawn(forward_reader_lines(
+    let stderr_forward = tokio::spawn(forward_codex_stderr(
         BufReader::new(stderr),
         event_tx.clone(),
         spec.clone(),
-        String::new(),
-        "stderr",
+        codex_app_server_pid.clone(),
     ));
+    let startup_metadata = CodexEventMetadata {
+        codex_app_server_pid: codex_app_server_pid.clone(),
+        ..CodexEventMetadata::default()
+    };
 
     let handshake = async {
         write_json_line(
@@ -392,7 +432,16 @@ async fn launch_codex_session(
             }),
         )
         .await?;
-        wait_for_response(&spec, &event_tx, &mut stdin, &mut lines, 1).await?;
+        wait_for_response(
+            &spec,
+            &event_tx,
+            &mut child,
+            &mut stdin,
+            &mut lines,
+            1,
+            &startup_metadata,
+        )
+        .await?;
         write_json_line(&mut stdin, &json!({"method": "initialized", "params": {}})).await?;
 
         write_json_line(
@@ -408,12 +457,20 @@ async fn launch_codex_session(
             }),
         )
         .await?;
-        let thread_response =
-            wait_for_response(&spec, &event_tx, &mut stdin, &mut lines, 2).await?;
+        let thread_response = wait_for_response(
+            &spec,
+            &event_tx,
+            &mut child,
+            &mut stdin,
+            &mut lines,
+            2,
+            &startup_metadata,
+        )
+        .await?;
         let thread_id = thread_response["result"]["thread"]["id"]
             .as_str()
             .or_else(|| thread_response["result"]["id"].as_str())
-            .ok_or_else(|| CoreError::Adapter("thread id missing".into()))?
+            .ok_or_else(|| adapter_error("response_error"))?
             .to_string();
         Ok::<String, CoreError>(thread_id)
     }
@@ -422,6 +479,13 @@ async fn launch_codex_session(
     let thread_id = match handshake {
         Ok(thread_id) => thread_id,
         Err(error) => {
+            warn!(
+                issue_identifier = %spec.issue.identifier,
+                %error,
+                "codex app-server startup failed"
+            );
+            let message = normalized_error_message(&error);
+            emit_startup_failed(&event_tx, &spec, &startup_metadata, &message);
             best_effort_stop_child(&mut child).await;
             let _ = stderr_forward.await;
             return Err(error);
@@ -441,6 +505,7 @@ async fn launch_codex_session(
         lines,
         stderr_forward: Some(stderr_forward),
         thread_id,
+        codex_app_server_pid,
         next_request_id: 3,
         emitted_session_started: false,
     })
@@ -449,9 +514,11 @@ async fn launch_codex_session(
 async fn wait_for_response(
     spec: &AgentRunSpec,
     event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    child: &mut Child,
     stdin: &mut tokio::process::ChildStdin,
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     id: u64,
+    event_metadata: &CodexEventMetadata,
 ) -> Result<Value, CoreError> {
     loop {
         let next_line = tokio::time::timeout(
@@ -459,30 +526,129 @@ async fn wait_for_response(
             lines.next_line(),
         )
         .await
-        .map_err(|_| CoreError::Adapter("response_timeout".into()))?;
-        let Some(line) = next_line.map_err(|error| CoreError::Adapter(error.to_string()))? else {
-            return Err(CoreError::Adapter("app-server closed stdout".into()));
+        .map_err(|_| adapter_error("response_timeout"))?;
+        let Some(line) = next_line.map_err(normalize_io_error)? else {
+            return Err(classify_child_exit(child));
         };
         let value: Value =
-            serde_json::from_str(&line).map_err(|error| CoreError::Adapter(error.to_string()))?;
+            serde_json::from_str(&line).map_err(|_| adapter_error("response_error"))?;
         if maybe_auto_respond(stdin, &value).await? {
             continue;
         }
         if value["id"].as_u64() == Some(id) {
+            if value.get("error").is_some() {
+                return Err(adapter_error("response_error"));
+            }
             return Ok(value);
         }
         if let Some(message) = extract_message(&value) {
-            emit(
+            emit_codex(
                 event_tx,
                 spec,
                 AgentEventKind::Notification,
                 Some(message),
-                None,
+                event_metadata,
                 extract_usage(&value),
                 extract_rate_limits(&value),
                 Some(value),
             );
         }
+    }
+}
+
+fn emit_codex(
+    event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    spec: &AgentRunSpec,
+    kind: AgentEventKind,
+    message: Option<String>,
+    event_metadata: &CodexEventMetadata,
+    usage: Option<TokenUsage>,
+    rate_limits: Option<Value>,
+    raw: Option<Value>,
+) {
+    emit_with_metadata(
+        event_tx,
+        spec,
+        kind,
+        message,
+        event_metadata.session_id.clone(),
+        event_metadata.thread_id.clone(),
+        event_metadata.turn_id.clone(),
+        event_metadata.codex_app_server_pid.clone(),
+        usage,
+        rate_limits,
+        raw,
+    );
+}
+
+fn emit_startup_failed(
+    event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    spec: &AgentRunSpec,
+    event_metadata: &CodexEventMetadata,
+    message: &str,
+) {
+    emit_with_metadata(
+        event_tx,
+        spec,
+        AgentEventKind::StartupFailed,
+        Some(message.to_string()),
+        event_metadata.session_id.clone(),
+        event_metadata.thread_id.clone(),
+        event_metadata.turn_id.clone(),
+        event_metadata.codex_app_server_pid.clone(),
+        None,
+        None,
+        None,
+    );
+}
+
+fn normalize_io_error(error: std::io::Error) -> CoreError {
+    match error.kind() {
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => {
+            adapter_error("port_exit")
+        },
+        _ => adapter_error("response_error"),
+    }
+}
+
+fn classify_child_exit(child: &mut Child) -> CoreError {
+    match child.try_wait() {
+        Ok(Some(status)) if status.code() == Some(127) => adapter_error("codex_not_found"),
+        Ok(Some(_)) | Ok(None) | Err(_) => adapter_error("port_exit"),
+    }
+}
+
+fn normalized_error_message(error: &CoreError) -> String {
+    match error {
+        CoreError::Adapter(message) => message.clone(),
+        CoreError::RateLimited(_) => "rate_limited".into(),
+        _ => error.to_string(),
+    }
+}
+
+async fn forward_codex_stderr<R>(
+    reader: BufReader<R>,
+    event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    spec: AgentRunSpec,
+    codex_app_server_pid: Option<String>,
+) where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let mut lines = reader.lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        emit_with_metadata(
+            &event_tx,
+            &spec,
+            AgentEventKind::Notification,
+            Some(format!("stderr: {line}")),
+            None,
+            None,
+            None,
+            codex_app_server_pid.clone(),
+            None,
+            None,
+            None,
+        );
     }
 }
 
@@ -515,19 +681,10 @@ async fn write_json_line(
     stdin: &mut tokio::process::ChildStdin,
     value: &Value,
 ) -> Result<(), CoreError> {
-    let bytes = serde_json::to_vec(value).map_err(|error| CoreError::Adapter(error.to_string()))?;
-    stdin
-        .write_all(&bytes)
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    stdin
-        .write_all(b"\n")
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    let bytes = serde_json::to_vec(value).map_err(|_| adapter_error("response_error"))?;
+    stdin.write_all(&bytes).await.map_err(normalize_io_error)?;
+    stdin.write_all(b"\n").await.map_err(normalize_io_error)?;
+    stdin.flush().await.map_err(normalize_io_error)?;
     Ok(())
 }
 
@@ -543,26 +700,85 @@ async fn best_effort_stop_child(child: &mut Child) {
 }
 
 fn extract_usage(value: &Value) -> Option<TokenUsage> {
-    let usage = value
-        .pointer("/params/usage")
-        .or_else(|| value.pointer("/result/usage"))?;
+    let absolute_usage = value
+        .pointer("/params/token_counts/total_token_usage")
+        .or_else(|| value.pointer("/params/token_counts/totalTokenUsage"))
+        .or_else(|| value.pointer("/result/token_counts/total_token_usage"))
+        .or_else(|| value.pointer("/result/token_counts/totalTokenUsage"))
+        .or_else(|| value.pointer("/params/total_token_usage"))
+        .or_else(|| value.pointer("/params/totalTokenUsage"))
+        .or_else(|| value.pointer("/result/total_token_usage"))
+        .or_else(|| value.pointer("/result/totalTokenUsage"))
+        .or_else(|| value.pointer("/params/token_usage"))
+        .or_else(|| value.pointer("/params/tokenUsage"))
+        .or_else(|| value.pointer("/result/token_usage"))
+        .or_else(|| value.pointer("/result/tokenUsage"));
+    if let Some(usage) = absolute_usage {
+        return parse_token_usage(usage);
+    }
+
+    if has_delta_only_usage(value) {
+        return None;
+    }
+
+    if supports_generic_usage_totals(value) {
+        return value
+            .pointer("/params/usage")
+            .or_else(|| value.pointer("/result/usage"))
+            .and_then(parse_token_usage);
+    }
+
+    None
+}
+
+fn parse_token_usage(usage: &Value) -> Option<TokenUsage> {
+    let input_tokens = token_count_field(usage, &["input_tokens", "inputTokens"]);
+    let output_tokens = token_count_field(usage, &["output_tokens", "outputTokens"]);
+    let total_tokens = token_count_field(usage, &["total_tokens", "totalTokens"])
+        .or_else(|| Some(input_tokens.unwrap_or_default() + output_tokens.unwrap_or_default()));
+    if input_tokens.is_none() && output_tokens.is_none() && total_tokens.is_none() {
+        return None;
+    }
     Some(TokenUsage {
-        input_tokens: usage
-            .get("input_tokens")
-            .or_else(|| usage.get("inputTokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        output_tokens: usage
-            .get("output_tokens")
-            .or_else(|| usage.get("outputTokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        total_tokens: usage
-            .get("total_tokens")
-            .or_else(|| usage.get("totalTokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
+        input_tokens: input_tokens.unwrap_or_default(),
+        output_tokens: output_tokens.unwrap_or_default(),
+        total_tokens: total_tokens.unwrap_or_default(),
     })
+}
+
+fn token_count_field(usage: &Value, field_names: &[&str]) -> Option<u64> {
+    field_names
+        .iter()
+        .find_map(|field_name| usage.get(*field_name).and_then(Value::as_u64))
+}
+
+fn has_delta_only_usage(value: &Value) -> bool {
+    value
+        .pointer("/params/token_counts/last_token_usage")
+        .is_some()
+        || value
+            .pointer("/params/token_counts/lastTokenUsage")
+            .is_some()
+        || value
+            .pointer("/result/token_counts/last_token_usage")
+            .is_some()
+        || value
+            .pointer("/result/token_counts/lastTokenUsage")
+            .is_some()
+        || value.pointer("/params/last_token_usage").is_some()
+        || value.pointer("/params/lastTokenUsage").is_some()
+        || value.pointer("/result/last_token_usage").is_some()
+        || value.pointer("/result/lastTokenUsage").is_some()
+}
+
+fn supports_generic_usage_totals(value: &Value) -> bool {
+    matches!(
+        value["method"].as_str(),
+        Some("turn/completed" | "turn/failed" | "turn/cancelled")
+    ) || value
+        .pointer("/result/turn/id")
+        .and_then(Value::as_str)
+        .is_some()
 }
 
 fn extract_rate_limits(value: &Value) -> Option<Value> {
@@ -622,10 +838,12 @@ fn extract_message(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use {
-        super::CodexRuntime,
+        super::{CodexRuntime, extract_usage},
         polyphony_core::{
-            AgentDefinition, AgentProviderRuntime, AgentRunSpec, AgentTransport, Issue,
+            AgentDefinition, AgentEventKind, AgentProviderRuntime, AgentRunSpec, AgentTransport,
+            Error as CoreError, Issue,
         },
+        serde_json::json,
         tempfile::tempdir,
         tokio::sync::mpsc,
     };
@@ -765,7 +983,7 @@ done
             std::fs::set_permissions(&script, perms).unwrap();
         }
 
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::unbounded_channel();
         let spec = AgentRunSpec {
             issue: test_issue(),
             attempt: None,
@@ -801,5 +1019,231 @@ done
         ));
         assert_eq!(std::fs::read_to_string(thread_count).unwrap(), "1");
         assert_eq!(std::fs::read_to_string(turn_count).unwrap(), "2");
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        let session_started = events
+            .iter()
+            .filter(|event| matches!(event.kind, AgentEventKind::SessionStarted))
+            .collect::<Vec<_>>();
+        let turn_started = events
+            .iter()
+            .filter(|event| matches!(event.kind, AgentEventKind::TurnStarted))
+            .collect::<Vec<_>>();
+        assert_eq!(session_started.len(), 1);
+        assert_eq!(turn_started.len(), 2);
+        let pid = turn_started[0]
+            .codex_app_server_pid
+            .as_deref()
+            .expect("expected codex app-server pid");
+        assert_eq!(session_started[0].thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(session_started[0].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(
+            session_started[0].session_id.as_deref(),
+            Some("thread-1-turn-1")
+        );
+        assert_eq!(
+            session_started[0].codex_app_server_pid.as_deref(),
+            Some(pid)
+        );
+        assert_eq!(turn_started[0].thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(turn_started[1].thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(turn_started[0].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(turn_started[1].turn_id.as_deref(), Some("turn-2"));
+        assert_eq!(
+            turn_started[0].session_id.as_deref(),
+            Some("thread-1-turn-1")
+        );
+        assert_eq!(
+            turn_started[1].session_id.as_deref(),
+            Some("thread-1-turn-2")
+        );
+        assert_eq!(turn_started[0].codex_app_server_pid.as_deref(), Some(pid));
+        assert_eq!(turn_started[1].codex_app_server_pid.as_deref(), Some(pid));
+    }
+
+    #[tokio::test]
+    async fn app_server_runner_normalizes_missing_codex_binary() {
+        let runtime = CodexRuntime;
+        let dir = tempdir().unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: test_issue(),
+                    attempt: None,
+                    workspace_path: dir.path().to_path_buf(),
+                    prompt: "hello".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "codex".into(),
+                        kind: "codex".into(),
+                        transport: AgentTransport::AppServer,
+                        command: Some("command_that_definitely_does_not_exist_12345".into()),
+                        turn_timeout_ms: 2_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await;
+
+        match result {
+            Err(CoreError::Adapter(message)) => assert_eq!(message, "codex_not_found"),
+            other => panic!("expected codex_not_found, got {other:?}"),
+        }
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        let startup_failed = events
+            .iter()
+            .find(|event| matches!(event.kind, AgentEventKind::StartupFailed))
+            .expect("expected startup failed event");
+        assert_eq!(startup_failed.message.as_deref(), Some("codex_not_found"));
+    }
+
+    #[tokio::test]
+    async fn app_server_runner_normalizes_invalid_handshake_json() {
+        let runtime = CodexRuntime;
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("mock-app-server.sh");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env bash
+while IFS= read -r line; do
+  if [[ "$line" == *'"id":1'* ]]; then
+    echo 'not-json'
+    exit 0
+  fi
+done
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: test_issue(),
+                    attempt: None,
+                    workspace_path: dir.path().to_path_buf(),
+                    prompt: "hello".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "codex".into(),
+                        kind: "codex".into(),
+                        transport: AgentTransport::AppServer,
+                        command: Some(script.display().to_string()),
+                        turn_timeout_ms: 2_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await;
+
+        match result {
+            Err(CoreError::Adapter(message)) => assert_eq!(message, "response_error"),
+            other => panic!("expected response_error, got {other:?}"),
+        }
+
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        let startup_failed = events
+            .iter()
+            .find(|event| matches!(event.kind, AgentEventKind::StartupFailed))
+            .expect("expected startup failed event");
+        assert_eq!(startup_failed.message.as_deref(), Some("response_error"));
+    }
+
+    #[test]
+    fn extracts_usage_from_thread_token_usage_updates() {
+        let usage = extract_usage(&json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "tokenUsage": {
+                    "inputTokens": 21,
+                    "outputTokens": 13,
+                    "totalTokens": 34
+                }
+            }
+        }))
+        .expect("expected usage");
+
+        assert_eq!(usage.input_tokens, 21);
+        assert_eq!(usage.output_tokens, 13);
+        assert_eq!(usage.total_tokens, 34);
+    }
+
+    #[test]
+    fn extracts_total_token_usage_from_wrapper_payloads() {
+        let usage = extract_usage(&json!({
+            "method": "notification",
+            "params": {
+                "token_counts": {
+                    "total_token_usage": {
+                        "input_tokens": 55,
+                        "output_tokens": 34,
+                        "total_tokens": 89
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 2,
+                        "total_tokens": 5
+                    }
+                }
+            }
+        }))
+        .expect("expected usage");
+
+        assert_eq!(usage.input_tokens, 55);
+        assert_eq!(usage.output_tokens, 34);
+        assert_eq!(usage.total_tokens, 89);
+    }
+
+    #[test]
+    fn ignores_delta_only_last_token_usage_payloads() {
+        let usage = extract_usage(&json!({
+            "method": "notification",
+            "params": {
+                "token_counts": {
+                    "last_token_usage": {
+                        "input_tokens": 3,
+                        "output_tokens": 2,
+                        "total_tokens": 5
+                    }
+                }
+            }
+        }));
+
+        assert!(usage.is_none());
+    }
+
+    #[test]
+    fn ignores_generic_usage_on_non_terminal_events() {
+        let usage = extract_usage(&json!({
+            "method": "notification",
+            "params": {
+                "usage": {
+                    "input_tokens": 8,
+                    "output_tokens": 5,
+                    "total_tokens": 13
+                }
+            }
+        }));
+
+        assert!(usage.is_none());
     }
 }

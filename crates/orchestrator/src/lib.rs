@@ -117,6 +117,9 @@ struct RunningTask {
     stall_timeout_ms: i64,
     started_at: DateTime<Utc>,
     session_id: Option<String>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    codex_app_server_pid: Option<String>,
     last_event: Option<String>,
     last_message: Option<String>,
     last_event_at: Option<DateTime<Utc>>,
@@ -437,7 +440,8 @@ impl RuntimeService {
             })
             .collect::<Vec<_>>();
         for issue_id in stale_ids {
-            self.fail_running(&issue_id, "stall timeout exceeded").await;
+            self.fail_running(&issue_id, AttemptStatus::Stalled, "stall_timeout")
+                .await;
         }
 
         let running_ids = self.state.running.keys().cloned().collect::<Vec<_>>();
@@ -606,12 +610,7 @@ impl RuntimeService {
                 .await;
                 let outcome = match outcome {
                     Ok(result) => result,
-                    Err(error) => AgentRunResult {
-                        status: AttemptStatus::Failed,
-                        turns_completed: 0,
-                        error: Some(error.to_string()),
-                        final_issue_state: None,
-                    },
+                    Err(error) => agent_run_result_from_error(&error),
                 };
                 let _ = command_tx.send(OrchestratorMessage::WorkerFinished {
                     issue_id,
@@ -644,6 +643,9 @@ impl RuntimeService {
             stall_timeout_ms: selected_agent.stall_timeout_ms,
             started_at,
             session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
             last_event: Some("dispatch_started".into()),
             last_message: Some("worker launched".into()),
             last_event_at: Some(Utc::now()),
@@ -753,6 +755,15 @@ impl RuntimeService {
                         .session_id
                         .clone()
                         .or_else(|| running.session_id.clone());
+                    running.thread_id = event
+                        .thread_id
+                        .clone()
+                        .or_else(|| running.thread_id.clone());
+                    running.turn_id = event.turn_id.clone().or_else(|| running.turn_id.clone());
+                    running.codex_app_server_pid = event
+                        .codex_app_server_pid
+                        .clone()
+                        .or_else(|| running.codex_app_server_pid.clone());
                     running.last_event = Some(format!("{:?}", event.kind));
                     running.last_message = event.message.clone();
                     running.last_event_at = Some(event.at);
@@ -831,6 +842,9 @@ impl RuntimeService {
                     issue_id: issue_id.clone(),
                     issue_identifier: issue_identifier.clone(),
                     session_id: running.session_id.clone(),
+                    thread_id: running.thread_id.clone(),
+                    turn_id: running.turn_id.clone(),
+                    codex_app_server_pid: running.codex_app_server_pid.clone(),
                     status: format!("{:?}", outcome.status),
                     attempt,
                     started_at,
@@ -954,23 +968,34 @@ impl RuntimeService {
         }
     }
 
-    async fn fail_running(&mut self, issue_id: &str, reason: &str) {
-        if let Some(running) = self.state.running.remove(issue_id) {
-            running.handle.abort();
-            let max_retry_backoff_ms = self.workflow().config.agent.max_retry_backoff_ms;
-            self.schedule_retry(
+    async fn fail_running(&mut self, issue_id: &str, status: AttemptStatus, reason: &str) {
+        let Some((issue_identifier, attempt, started_at, turns_completed)) =
+            self.state.running.get(issue_id).map(|running| {
+                running.handle.abort();
+                (
+                    running.issue.identifier.clone(),
+                    running.attempt,
+                    running.started_at,
+                    running.turn_count,
+                )
+            })
+        else {
+            return;
+        };
+        let _ = self
+            .finish_running(
                 issue_id.to_string(),
-                running.issue.identifier.clone(),
-                running.attempt.unwrap_or(0) + 1,
-                Some(reason.to_string()),
-                false,
-                max_retry_backoff_ms,
-            );
-            self.push_event(
-                "retry".into(),
-                format!("{} {}", running.issue.identifier, reason),
-            );
-        }
+                issue_identifier,
+                attempt,
+                started_at,
+                AgentRunResult {
+                    status,
+                    turns_completed,
+                    error: Some(reason.to_string()),
+                    final_issue_state: None,
+                },
+            )
+            .await;
     }
 
     async fn abort_all(&mut self) {
@@ -1125,6 +1150,9 @@ impl RuntimeService {
                     model: running.model.clone(),
                     state: running.issue.state.clone(),
                     session_id: running.session_id.clone(),
+                    thread_id: running.thread_id.clone(),
+                    turn_id: running.turn_id.clone(),
+                    codex_app_server_pid: running.codex_app_server_pid.clone(),
                     turn_count: running.turn_count,
                     last_event: running.last_event.clone(),
                     last_message: running.last_message.clone(),
@@ -1495,6 +1523,9 @@ impl RuntimeService {
                 agent_name: event.agent_name.clone(),
                 model: model.clone(),
                 session_id: event.session_id.clone(),
+                thread_id: event.thread_id.clone(),
+                turn_id: event.turn_id.clone(),
+                codex_app_server_pid: event.codex_app_server_pid.clone(),
                 status: None,
                 error: None,
                 usage: event.usage.clone().unwrap_or_default(),
@@ -1507,6 +1538,15 @@ impl RuntimeService {
             .session_id
             .clone()
             .or_else(|| context.session_id.clone());
+        context.thread_id = event
+            .thread_id
+            .clone()
+            .or_else(|| context.thread_id.clone());
+        context.turn_id = event.turn_id.clone().or_else(|| context.turn_id.clone());
+        context.codex_app_server_pid = event
+            .codex_app_server_pid
+            .clone()
+            .or_else(|| context.codex_app_server_pid.clone());
         if let Some(usage) = &event.usage {
             context.usage = usage.clone();
         }
@@ -1544,6 +1584,9 @@ impl RuntimeService {
                 agent_name: running.agent_name.clone(),
                 model: running.model.clone(),
                 session_id: running.session_id.clone(),
+                thread_id: running.thread_id.clone(),
+                turn_id: running.turn_id.clone(),
+                codex_app_server_pid: running.codex_app_server_pid.clone(),
                 status: None,
                 error: None,
                 usage: running.tokens.clone(),
@@ -1554,6 +1597,9 @@ impl RuntimeService {
         context.agent_name = running.agent_name.clone();
         context.model = running.model.clone();
         context.session_id = running.session_id.clone();
+        context.thread_id = running.thread_id.clone();
+        context.turn_id = running.turn_id.clone();
+        context.codex_app_server_pid = running.codex_app_server_pid.clone();
         context.status = Some(format!("{:?}", outcome.status));
         context.error = outcome.error.clone();
         context.usage = running.tokens.clone();
@@ -2071,6 +2117,36 @@ This is continuation turn {} of {}.\n\
 If the work is complete or blocked, say so explicitly. Otherwise continue with the next concrete steps.",
         issue.identifier, issue.title, issue.state, turn_number, max_turns
     )
+}
+
+fn agent_run_result_from_error(error: &Error) -> AgentRunResult {
+    AgentRunResult {
+        status: attempt_status_from_error(error),
+        turns_completed: 0,
+        error: Some(normalized_worker_error_message(error)),
+        final_issue_state: None,
+    }
+}
+
+fn attempt_status_from_error(error: &Error) -> AttemptStatus {
+    match error {
+        Error::Core(CoreError::Adapter(message))
+            if matches!(message.as_str(), "response_timeout" | "turn_timeout") =>
+        {
+            AttemptStatus::TimedOut
+        },
+        _ => AttemptStatus::Failed,
+    }
+}
+
+fn normalized_worker_error_message(error: &Error) -> String {
+    match error {
+        Error::Core(CoreError::Adapter(message)) => message.clone(),
+        Error::Core(CoreError::RateLimited(signal)) => {
+            format!("rate_limited: {}", signal.reason)
+        },
+        _ => error.to_string(),
+    }
 }
 
 fn apply_usage_delta(totals: &mut CodexTotals, running: &mut RunningTask, usage: TokenUsage) {
@@ -2710,6 +2786,9 @@ mod tests {
             stall_timeout_ms: 300_000,
             started_at: Utc::now(),
             session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
             last_event: None,
             last_message: None,
             last_event_at: None,
@@ -2896,6 +2975,45 @@ mod tests {
         assert!(service.state.retrying.contains_key(&issue.id));
     }
 
+    #[test]
+    fn worker_timeout_errors_map_to_timed_out_attempts() {
+        let result =
+            agent_run_result_from_error(&Error::Core(CoreError::Adapter("turn_timeout".into())));
+        assert!(matches!(result.status, AttemptStatus::TimedOut));
+        assert_eq!(result.error.as_deref(), Some("turn_timeout"));
+
+        let startup_timeout = agent_run_result_from_error(&Error::Core(CoreError::Adapter(
+            "response_timeout".into(),
+        )));
+        assert!(matches!(startup_timeout.status, AttemptStatus::TimedOut));
+        assert_eq!(startup_timeout.error.as_deref(), Some("response_timeout"));
+    }
+
+    #[tokio::test]
+    async fn fail_running_preserves_stalled_status() {
+        let workspace_root = unique_workspace_root("finish-stalled");
+        let provisioner = RecordingProvisioner::default();
+        let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+        let issue = sample_issue("issue-4c", "FAC-4C", "Todo", "Stalled");
+        let workspace_path = workspace_root.join("FAC-4C");
+        service.state.running.insert(
+            issue.id.clone(),
+            make_running_task(issue.clone(), workspace_path),
+        );
+        service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+
+        service
+            .fail_running(&issue.id, AttemptStatus::Stalled, "stall_timeout")
+            .await;
+
+        assert!(!service.state.running.contains_key(&issue.id));
+        let retry = service.state.retrying.get(&issue.id).unwrap();
+        assert_eq!(retry.row.error.as_deref(), Some("stall_timeout"));
+        let context = service.state.saved_contexts.get(&issue.id).unwrap();
+        assert_eq!(context.status.as_deref(), Some("Stalled"));
+        assert_eq!(context.error.as_deref(), Some("stall_timeout"));
+    }
+
     #[tokio::test]
     async fn run_worker_attempt_reuses_live_session_and_continues_while_issue_active() {
         let workspace_root = unique_workspace_root("worker-turns");
@@ -2979,6 +3097,9 @@ mod tests {
                 issue_identifier: issue.identifier.clone(),
                 agent_name: "kimi".into(),
                 session_id: Some("sess-1".into()),
+                thread_id: Some("thread-1".into()),
+                turn_id: Some("turn-3".into()),
+                codex_app_server_pid: Some("4242".into()),
                 kind: AgentEventKind::Notification,
                 at: Utc::now(),
                 message: Some("Investigating failing test".into()),
@@ -2997,6 +3118,9 @@ mod tests {
         assert_eq!(context.agent_name, "kimi");
         assert_eq!(context.model.as_deref(), Some("kimi-2.5"));
         assert_eq!(context.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(context.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(context.turn_id.as_deref(), Some("turn-3"));
+        assert_eq!(context.codex_app_server_pid.as_deref(), Some("4242"));
         assert_eq!(context.usage.total_tokens, 20);
         assert_eq!(context.transcript.len(), 1);
         assert!(
@@ -3004,6 +3128,12 @@ mod tests {
                 .message
                 .contains("Investigating failing test")
         );
+        let snapshot = service.snapshot();
+        let running = &snapshot.running[0];
+        assert_eq!(running.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(running.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(running.turn_id.as_deref(), Some("turn-3"));
+        assert_eq!(running.codex_app_server_pid.as_deref(), Some("4242"));
     }
 
     #[tokio::test]
@@ -3039,6 +3169,9 @@ mod tests {
                 agent_name: "codex".into(),
                 model: Some("gpt-5-codex".into()),
                 session_id: Some("session-1".into()),
+                thread_id: None,
+                turn_id: None,
+                codex_app_server_pid: None,
                 status: Some("Failed".into()),
                 error: Some("rate limited".into()),
                 usage: TokenUsage::default(),
@@ -3161,6 +3294,9 @@ mod tests {
                 agent_name: "claude".into(),
                 model: Some("claude-sonnet".into()),
                 session_id: Some("session-2".into()),
+                thread_id: None,
+                turn_id: None,
+                codex_app_server_pid: None,
                 status: Some("Failed".into()),
                 error: Some("tool timeout".into()),
                 usage: TokenUsage::default(),

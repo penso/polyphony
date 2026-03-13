@@ -42,8 +42,8 @@ When an issue is dispatched:
 4. `polyphony-agents` selects the provider runtime and starts the agent
 5. Codex app-server sessions can stay alive across multiple `turn/start` calls on the same thread
 6. after each successful live turn, the orchestrator re-checks tracker state before deciding whether to continue
-7. agent events stream back into the orchestrator
-8. the orchestrator updates snapshots, retry state, and budgets
+7. agent events stream back into the orchestrator with live session metadata such as `session_id`, `thread_id`, `turn_id`, and the app-server PID when available
+8. the orchestrator updates snapshots, saved context, retry state, and budgets from those streamed events
 9. optional handoff automation can commit the branch, open a PR, run a review pass, and notify humans
 
 When `WORKFLOW.md` changes successfully, future dispatch, retry handling, model discovery, budget
@@ -55,6 +55,7 @@ sessions are not restarted automatically.
 After an attempt finishes, the orchestrator:
 
 - records run metadata when persistence is enabled
+- preserves distinct attempt outcomes such as `TimedOut` and `Stalled` instead of flattening them into generic failures
 - updates workflow status on the tracker when supported
 - schedules retries for non-terminal failures
 - cleans up workspaces for terminal issues during reconciliation or startup cleanup

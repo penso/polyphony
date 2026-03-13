@@ -42,11 +42,42 @@ pub fn emit(
     rate_limits: Option<Value>,
     raw: Option<Value>,
 ) {
+    emit_with_metadata(
+        event_tx,
+        spec,
+        kind,
+        message,
+        session_id,
+        None,
+        None,
+        None,
+        usage,
+        rate_limits,
+        raw,
+    );
+}
+
+pub fn emit_with_metadata(
+    event_tx: &mpsc::UnboundedSender<AgentEvent>,
+    spec: &AgentRunSpec,
+    kind: AgentEventKind,
+    message: Option<String>,
+    session_id: Option<String>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    codex_app_server_pid: Option<String>,
+    usage: Option<TokenUsage>,
+    rate_limits: Option<Value>,
+    raw: Option<Value>,
+) {
     let _ = event_tx.send(AgentEvent {
         issue_id: spec.issue.id.clone(),
         issue_identifier: spec.issue.identifier.clone(),
         agent_name: spec.agent.name.clone(),
         session_id,
+        thread_id,
+        turn_id,
+        codex_app_server_pid,
         kind,
         at: Utc::now(),
         message,
@@ -526,6 +557,9 @@ mod tests {
                 agent_name: "codex".into(),
                 model: Some("gpt-5-codex".into()),
                 session_id: Some("sess-1".into()),
+                thread_id: None,
+                turn_id: None,
+                codex_app_server_pid: None,
                 status: Some("Failed".into()),
                 error: Some("rate limited".into()),
                 usage: TokenUsage::default(),
