@@ -126,5 +126,7 @@ relevant.
 The Markdown body of `WORKFLOW.md` is treated as a template. At runtime, the workflow crate renders
 prompt text with issue and execution context before handing control to the selected agent.
 
-The template has access to issue data and the current attempt number. The parsed workflow is then
-normalized into `AgentDefinition` values that the rest of the runtime consumes.
+The template has access to issue data and the current attempt value. `attempt` is `nil` on the
+first run, and an integer on retry or continuation runs. Unknown variables and unknown filters fail
+rendering instead of silently producing empty output. The parsed workflow is then normalized into
+`AgentDefinition` values that the rest of the runtime consumes.

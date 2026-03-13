@@ -876,7 +876,7 @@ pub fn render_issue_template(
         .map_err(|err| Error::TemplateParse(err.to_string()))?;
     let mut globals = object!({
         "issue": issue_to_liquid(issue),
-        "attempt": attempt.unwrap_or_default(),
+        "attempt": attempt.map(Value::scalar).unwrap_or(Value::Nil),
     });
     for (key, value) in extra {
         globals.insert(key, value);
@@ -1316,10 +1316,29 @@ const fn default_true() -> bool {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use {
-        super::{ServiceConfig, WorkflowDefinition},
+        super::{ServiceConfig, WorkflowDefinition, render_issue_template},
         polyphony_core::{AgentInteractionMode, AgentPromptMode, AgentTransport, Issue},
         serde_yaml::Value as YamlValue,
     };
+
+    fn sample_issue() -> Issue {
+        Issue {
+            id: "1".into(),
+            identifier: "ISSUE-1".into(),
+            title: "Title".into(),
+            description: None,
+            priority: None,
+            state: "Todo".into(),
+            branch_name: None,
+            url: None,
+            author: None,
+            labels: Vec::new(),
+            comments: Vec::new(),
+            blocked_by: Vec::new(),
+            created_at: None,
+            updated_at: None,
+        }
+    }
 
     #[test]
     fn workspace_defaults_include_reuse_and_transient_paths() {
@@ -1357,6 +1376,60 @@ workspace:
 
         assert!(!config.workspace.sync_on_reuse);
         assert_eq!(config.workspace.transient_paths, vec!["target", ".cache"]);
+    }
+
+    #[test]
+    fn render_template_treats_first_attempt_as_nil() {
+        let rendered = render_issue_template(
+            "{{ attempt | default: \"first\" }}",
+            &sample_issue(),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "first");
+    }
+
+    #[test]
+    fn render_template_passes_retry_attempt_number() {
+        let rendered = render_issue_template(
+            "{{ attempt | default: \"first\" }}",
+            &sample_issue(),
+            Some(2),
+            Default::default(),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "2");
+    }
+
+    #[test]
+    fn render_template_rejects_unknown_variables() {
+        let error = render_issue_template(
+            "{{ missing_value }}",
+            &sample_issue(),
+            None,
+            Default::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, super::Error::TemplateRender(_)));
+        assert!(error.to_string().contains("Unknown variable"));
+    }
+
+    #[test]
+    fn render_template_rejects_unknown_filters() {
+        let error = render_issue_template(
+            "{{ issue.title | missing_filter }}",
+            &sample_issue(),
+            None,
+            Default::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, super::Error::TemplateParse(_)));
+        assert!(error.to_string().contains("Unknown filter"));
     }
 
     #[test]

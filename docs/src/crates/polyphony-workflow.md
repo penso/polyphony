@@ -12,7 +12,7 @@ This crate owns:
 - reading environment overlays such as `POLYPHONY__...`
 - normalizing agent profile settings into `AgentDefinition`
 - validating configuration before the orchestrator dispatches work
-- rendering prompts with `liquid`
+- rendering prompts with strict `liquid` semantics for unknown variables and filters
 
 ## Important behavior
 
@@ -23,6 +23,8 @@ The loader handles more than transport selection. It also resolves:
 - agent model discovery settings
 - local CLI interaction options such as `prompt_mode`, `interaction_mode`,
   `idle_timeout_ms`, and `completion_sentinel`
+- first-run prompt rendering with `attempt = nil`, and retry/continuation rendering with a numeric
+  `attempt`
 
 ## Runtime role
 
