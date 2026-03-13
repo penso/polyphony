@@ -214,6 +214,7 @@ Keep tracker identity and repo or project selection out of the global config.
 That includes:
 
 - `tracker.kind`
+- `tracker.profile`
 - `tracker.repository`
 - `tracker.project_slug`
 - `tracker.project_owner`
@@ -225,6 +226,10 @@ That includes:
 Prefer `.polyphony/config.toml` for those local repo settings when the checked-in `WORKFLOW.md` is
 shared policy or template text.
 
+Shared tracker credentials can live in `~/.config/polyphony/config.toml` under
+`trackers.profiles.<name>`. Repo-local config can then select one with
+`tracker.profile = "<name>"`.
+
 Provider setup belongs in `~/.config/polyphony/config.toml`. Supported profiles in the default
 CLI build are:
 
@@ -234,7 +239,7 @@ CLI build are:
 - OpenAI-compatible HTTP providers: `kind = "openai"`, `kind = "openai-compatible"`, or `kind = "openrouter"` with `transport = "openai_chat"`
 - Kimi / Moonshot: `kind = "kimi"` or `kind = "moonshotai"` with `transport = "openai_chat"`, defaulting to `https://api.moonshot.ai/v1`
 
-For a shared multi-provider user config, copy
+For a shared multi-provider, multi-tracker user config, copy
 [templates/examples/config.multi-provider.toml](templates/examples/config.multi-provider.toml)
 into `~/.config/polyphony/config.toml`.
 

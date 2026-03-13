@@ -8,13 +8,17 @@
 
 [tracker]
 kind = "none"
+# Optional shared tracker profile from ~/.config/polyphony/config.toml:
+# profile = "github_personal"
 # GitHub example:
 # kind = "github"
 # repository = "owner/repo"
+# Optional for public repository issue polling, but recommended.
 # api_key = "$GITHUB_TOKEN"
 #
 # Linear example:
 # kind = "linear"
+# profile = "linear_work"
 # project_slug = "ENG"
 # api_key = "$LINEAR_API_KEY"
 

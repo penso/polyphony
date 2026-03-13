@@ -14,6 +14,7 @@ This crate owns:
 - parsing YAML front matter and Markdown prompt bodies
 - applying defaults with the `config` crate
 - merging `~/.config/polyphony/config.toml`, `WORKFLOW.md`, and `.polyphony/config.toml`
+- resolving named tracker profiles from `trackers.profiles.<name>` into the active `tracker`
 - reading environment overlays such as `POLYPHONY__...`
 - normalizing agent profile settings into `AgentDefinition`
 - validating configuration before the orchestrator dispatches work

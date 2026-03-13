@@ -7,6 +7,17 @@ endpoint = "https://api.linear.app/graphql"
 active_states = ["Todo", "In Progress"]
 terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Human Review"]
 
+[trackers.profiles]
+
+[trackers.profiles.github_personal]
+kind = "github"
+api_key = "$GITHUB_TOKEN"
+
+[trackers.profiles.linear_work]
+kind = "linear"
+endpoint = "https://api.linear.app/graphql"
+api_key = "$LINEAR_API_KEY"
+
 [polling]
 interval_ms = 30000
 

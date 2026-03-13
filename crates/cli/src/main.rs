@@ -72,7 +72,14 @@ enum WorkflowBootstrap {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() {
+    if let Err(error) = try_main().await {
+        eprintln!("{}", format_fatal_error(&error));
+        std::process::exit(1);
+    }
+}
+
+async fn try_main() -> Result<(), Error> {
     let cli = Cli::parse();
     let tui_logs = LogBuffer::default();
     let tracing_output = if cli.no_tui {
@@ -157,6 +164,67 @@ async fn main() -> Result<(), Error> {
         .await
         .map_err(|error| Error::Config(error.to_string()))??;
     Ok(())
+}
+
+fn format_fatal_error(error: &Error) -> String {
+    match error {
+        Error::Workflow(polyphony_workflow::Error::InvalidConfig(message)) => {
+            format_invalid_config_error(message)
+        },
+        Error::Workflow(polyphony_workflow::Error::MissingWorkflowFile(path)) => format!(
+            "Workflow file not found: {}\nRun `polyphony` from the repository root, or pass an explicit workflow path.",
+            path.display()
+        ),
+        Error::Workflow(polyphony_workflow::Error::WorkflowParse(message)) => {
+            format!("Could not parse WORKFLOW.md front matter.\n{message}")
+        },
+        Error::Workflow(polyphony_workflow::Error::FrontMatterNotMap) => {
+            "WORKFLOW.md front matter must be a YAML mapping.".into()
+        },
+        Error::Workflow(polyphony_workflow::Error::TemplateParse(message)) => {
+            format!("Could not parse the WORKFLOW.md prompt template.\n{message}")
+        },
+        Error::Workflow(polyphony_workflow::Error::TemplateRender(message)) => {
+            format!("Could not render the WORKFLOW.md prompt template.\n{message}")
+        },
+        Error::Workflow(polyphony_workflow::Error::Config(message)) | Error::Config(message) => {
+            format_config_error(message)
+        },
+        Error::Core(error) => format!("Polyphony failed.\n{error}"),
+        Error::Runtime(error) => format!("Polyphony runtime failed.\n{error}"),
+        Error::Tui(error) => format!("Polyphony TUI failed.\n{error}"),
+        Error::Io(error) => format!("Polyphony failed to read or write a local file.\n{error}"),
+    }
+}
+
+fn format_invalid_config_error(message: &str) -> String {
+    match message {
+        "tracker.kind is required" => {
+            "Invalid workflow configuration: tracker.kind is missing.".into()
+        },
+        "tracker.repository is required for github" => "Invalid workflow configuration: the GitHub tracker is selected, but tracker.repository is missing.\nAdd `repository = \"owner/repo\"` to `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
+        "tracker.project_slug is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.project_slug is missing.\nAdd `project_slug = \"ENG\"` to `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
+        "tracker.api_key is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.api_key is missing.\nSet `api_key = \"$LINEAR_API_KEY\"` in config and export `LINEAR_API_KEY`.".into(),
+        "agents.default is required" => "Invalid workflow configuration: agent profiles are defined, but agents.default is missing.".into(),
+        message if message.starts_with("tracker.profile `") && message.ends_with("` is not defined") => {
+            format!("Invalid workflow configuration: {message}.\nDefine the named profile under `trackers.profiles.<name>` in `~/.config/polyphony/config.toml`, or remove `tracker.profile` from repo-local config.")
+        },
+        _ => format!("Invalid workflow configuration.\n{message}"),
+    }
+}
+
+fn format_config_error(message: &str) -> String {
+    match message {
+        "tracker.api_key is required for linear" => {
+            format_invalid_config_error(message)
+        },
+        "tracker.repository is required for github" => {
+            format_invalid_config_error(message)
+        },
+        "tracker.api_key is required for github automation" => "Invalid workflow configuration: GitHub automation is enabled, but tracker.api_key is missing.\nSet `api_key = \"$GITHUB_TOKEN\"` in `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
+        "tracker.repository is required for github automation" => "Invalid workflow configuration: GitHub automation is enabled, but tracker.repository is missing.".into(),
+        _ => message.to_string(),
+    }
 }
 
 fn ensure_bootstrapped_workflow<F>(
@@ -594,12 +662,10 @@ fn build_runtime_components(
         "none" => Arc::new(EmptyTracker),
         #[cfg(feature = "linear")]
         "linear" => {
-            let api_key = workflow
-                .config
-                .tracker
-                .api_key
-                .clone()
-                .ok_or_else(|| Error::Config("tracker.api_key is required".into()))?;
+            let api_key =
+                workflow.config.tracker.api_key.clone().ok_or_else(|| {
+                    Error::Config("tracker.api_key is required for linear".into())
+                })?;
             Arc::new(polyphony_linear::LinearTracker::new(
                 workflow.config.tracker.endpoint.clone(),
                 api_key,
@@ -636,18 +702,12 @@ fn build_runtime_components(
     #[cfg(feature = "github")]
     let (pull_request_manager, pull_request_commenter) =
         if workflow.config.automation.enabled && workflow.config.tracker.kind == "github" {
-            let repository = workflow
-                .config
-                .tracker
-                .repository
-                .clone()
-                .ok_or_else(|| Error::Config("tracker.repository is required".into()))?;
-            let token = workflow
-                .config
-                .tracker
-                .api_key
-                .clone()
-                .ok_or_else(|| Error::Config("tracker.api_key is required".into()))?;
+            let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
+                Error::Config("tracker.repository is required for github automation".into())
+            })?;
+            let token = workflow.config.tracker.api_key.clone().ok_or_else(|| {
+                Error::Config("tracker.api_key is required for github automation".into())
+            })?;
             (
                 Some(Arc::new(polyphony_github::GithubPullRequestManager::new(
                     repository.clone(),
@@ -814,6 +874,42 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, Error::Io(_)));
+    }
+
+    #[test]
+    fn fatal_error_formats_workflow_config_errors_for_humans() {
+        let error = Error::Workflow(polyphony_workflow::Error::InvalidConfig(
+            "tracker.project_slug is required for linear".into(),
+        ));
+
+        let rendered = crate::format_fatal_error(&error);
+
+        assert!(rendered.contains("Invalid workflow configuration"));
+        assert!(rendered.contains("Linear tracker"));
+        assert!(rendered.contains("project_slug"));
+    }
+
+    #[test]
+    fn fatal_error_drops_debug_style_enum_wrapping() {
+        let error = Error::Workflow(polyphony_workflow::Error::InvalidConfig(
+            "tracker.repository is required for github".into(),
+        ));
+
+        let rendered = crate::format_fatal_error(&error);
+
+        assert!(!rendered.contains("Workflow("));
+        assert!(!rendered.contains("InvalidConfig("));
+        assert!(rendered.contains(".polyphony/config.toml"));
+    }
+
+    #[test]
+    fn fatal_error_formats_runtime_config_messages_for_humans() {
+        let error = Error::Config("tracker.api_key is required for github automation".into());
+
+        let rendered = crate::format_fatal_error(&error);
+
+        assert!(rendered.contains("GitHub automation is enabled"));
+        assert!(rendered.contains("GITHUB_TOKEN"));
     }
 }
 

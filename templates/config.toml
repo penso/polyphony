@@ -5,15 +5,30 @@
 # .polyphony/config.toml, then POLYPHONY__... env vars.
 # Use "$ENV_VAR" to resolve secrets from the environment instead of writing them directly.
 # Keep reusable credentials and agent profiles here.
+# Keep shared tracker credentials in `[trackers.profiles.<name>]`.
 # Keep local repository/project selection and git-backed workspace settings in `.polyphony/config.toml`
 # when you do not want to edit the checked-in workflow.
 
 [tracker]
+# Keep the active tracker selection in repo-local config. This section is for generic defaults.
 kind = "none"
 endpoint = "https://api.linear.app/graphql"
 active_states = ["Todo", "In Progress"]
 terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Human Review"]
-# Example secret:
+
+# Shared tracker credential profiles. Select one with `tracker.profile = "profile_name"`
+# in `.polyphony/config.toml` or `WORKFLOW.md`.
+[trackers.profiles]
+
+# GitHub example.
+# [trackers.profiles.github_personal]
+# kind = "github"
+# api_key = "$GITHUB_TOKEN"
+
+# Linear example.
+# [trackers.profiles.linear_work]
+# kind = "linear"
+# endpoint = "https://api.linear.app/graphql"
 # api_key = "$LINEAR_API_KEY"
 
 [polling]

@@ -3,10 +3,13 @@
 
 [tracker]
 kind = "github"
+# Optional shared credentials from ~/.config/polyphony/config.toml.
+# profile = "github_personal"
 repository = "owner/repo"
 project_owner = "owner-or-org"
 project_number = 7
 project_status_field = "Status"
+# Optional for public repository issue polling, but recommended.
 # api_key = "$GITHUB_TOKEN"
 
 [workspace]

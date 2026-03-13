@@ -5,7 +5,7 @@ polling:
   interval_ms: 2000
 workspace:
   root: .polyphony/workspaces
-  checkout_kind: discrete_clone
+  checkout_kind: worktree
   clone_url: https://github.com/penso/polyphony.git
   default_branch: main
   sync_on_reuse: true
@@ -23,7 +23,6 @@ You are working on the Polyphony Rust workspace.
 
 Issue: {{ issue.identifier }} - {{ issue.title }}
 State: {{ issue.state }}
-Attempt: {{ attempt }}
 
 Execution rules:
 

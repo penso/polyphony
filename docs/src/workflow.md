@@ -22,9 +22,9 @@ Merge order is:
 ## Shape
 
 Treat `~/.config/polyphony/config.toml` as user-local shared state, for example credentials,
-reusable agent profiles, and personal defaults. Treat `WORKFLOW.md` as the shared repo-owned
+reusable agent profiles, shared tracker credential profiles, and personal defaults. Treat `WORKFLOW.md` as the shared repo-owned
 workflow policy and prompt. Use `.polyphony/config.toml` for local repository wiring such as
-`tracker.repository`, `tracker.project_slug`, `workspace.source_repo_path`, and `workspace.clone_url`
+`tracker.profile`, `tracker.repository`, `tracker.project_slug`, `workspace.source_repo_path`, and `workspace.clone_url`
 when you do not want to edit the checked-in workflow.
 
 The current workspace configuration covers:
@@ -79,6 +79,9 @@ Full copyable files for the config layers are:
 - [`templates/examples/config.multi-provider.toml`](../../templates/examples/config.multi-provider.toml)
 - [`templates/examples/repo-config.github.toml`](../../templates/examples/repo-config.github.toml)
 - [`templates/examples/repo-config.linear.toml`](../../templates/examples/repo-config.linear.toml)
+
+Shared tracker credentials can be defined in `~/.config/polyphony/config.toml` under
+`trackers.profiles.<name>`, then selected per repo with `tracker.profile = "<name>"`.
 
 Current transport styles in the codebase are:
 

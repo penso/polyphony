@@ -23,6 +23,8 @@ use {
 const DEFAULT_USER_CONFIG_TEMPLATE: &str = include_str!("../../../templates/config.toml");
 const DEFAULT_WORKFLOW_TEMPLATE: &str = include_str!("../../../templates/WORKFLOW.md");
 const DEFAULT_REPO_CONFIG_TEMPLATE: &str = include_str!("../../../templates/repo-config.toml");
+const DEFAULT_TRACKER_KIND: &str = "none";
+const DEFAULT_LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -51,6 +53,7 @@ pub struct WorkflowDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TrackerConfig {
     pub kind: String,
+    pub profile: Option<String>,
     pub endpoint: String,
     pub api_key: Option<String>,
     pub project_slug: Option<String>,
@@ -60,6 +63,27 @@ pub struct TrackerConfig {
     pub repository: Option<String>,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+struct TrackerProfileConfig {
+    pub kind: Option<String>,
+    pub endpoint: Option<String>,
+    pub api_key: Option<String>,
+    pub project_slug: Option<String>,
+    pub project_owner: Option<String>,
+    pub project_number: Option<u32>,
+    pub project_status_field: Option<String>,
+    pub repository: Option<String>,
+    pub active_states: Vec<String>,
+    pub terminal_states: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+struct TrackersConfig {
+    pub profiles: HashMap<String, TrackerProfileConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -222,6 +246,8 @@ pub struct ServiceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct RawServiceConfig {
     pub tracker: TrackerConfig,
+    #[serde(default)]
+    pub trackers: TrackersConfig,
     pub polling: PollingConfig,
     pub workspace: WorkspaceConfig,
     pub hooks: HooksConfig,
@@ -361,6 +387,83 @@ pub fn default_repo_config_toml(source_repo_path: &Path) -> String {
     )
 }
 
+fn default_active_states() -> Vec<String> {
+    vec!["Todo".to_string(), "In Progress".to_string()]
+}
+
+fn default_terminal_states() -> Vec<String> {
+    vec![
+        "Closed".to_string(),
+        "Cancelled".to_string(),
+        "Canceled".to_string(),
+        "Duplicate".to_string(),
+        "Done".to_string(),
+        "Human Review".to_string(),
+    ]
+}
+
+fn apply_tracker_profile(
+    mut tracker: TrackerConfig,
+    profiles: &HashMap<String, TrackerProfileConfig>,
+) -> Result<TrackerConfig, Error> {
+    let Some(profile_name) = resolve_env_token(tracker.profile.clone()) else {
+        return Ok(tracker);
+    };
+    tracker.profile = Some(profile_name.clone());
+    let profile = profiles.get(&profile_name).ok_or_else(|| {
+        Error::InvalidConfig(format!("tracker.profile `{profile_name}` is not defined"))
+    })?;
+
+    if is_default_tracker_kind(&tracker.kind)
+        && let Some(kind) = &profile.kind
+    {
+        tracker.kind = kind.clone();
+    }
+    if is_default_tracker_endpoint(&tracker.endpoint)
+        && let Some(endpoint) = &profile.endpoint
+    {
+        tracker.endpoint = endpoint.clone();
+    }
+    if tracker.api_key.is_none() {
+        tracker.api_key = profile.api_key.clone();
+    }
+    if tracker.project_slug.is_none() {
+        tracker.project_slug = profile.project_slug.clone();
+    }
+    if tracker.project_owner.is_none() {
+        tracker.project_owner = profile.project_owner.clone();
+    }
+    if tracker.project_number.is_none() {
+        tracker.project_number = profile.project_number;
+    }
+    if tracker.project_status_field.is_none() {
+        tracker.project_status_field = profile.project_status_field.clone();
+    }
+    if tracker.repository.is_none() {
+        tracker.repository = profile.repository.clone();
+    }
+    if (tracker.active_states.is_empty() || tracker.active_states == default_active_states())
+        && !profile.active_states.is_empty()
+    {
+        tracker.active_states = profile.active_states.clone();
+    }
+    if (tracker.terminal_states.is_empty()
+        || tracker.terminal_states == default_terminal_states())
+        && !profile.terminal_states.is_empty()
+    {
+        tracker.terminal_states = profile.terminal_states.clone();
+    }
+    Ok(tracker)
+}
+
+fn is_default_tracker_kind(kind: &str) -> bool {
+    kind.trim().is_empty() || kind == DEFAULT_TRACKER_KIND
+}
+
+fn is_default_tracker_endpoint(endpoint: &str) -> bool {
+    endpoint.trim().is_empty() || endpoint == DEFAULT_LINEAR_ENDPOINT
+}
+
 pub fn parse_workflow(raw: &str) -> Result<WorkflowDefinition, Error> {
     if !raw.starts_with("---") {
         return Ok(WorkflowDefinition {
@@ -402,20 +505,13 @@ impl ServiceConfig {
         let front_matter = serde_yaml::to_string(&workflow.config)
             .map_err(|err| Error::WorkflowParse(err.to_string()))?;
         let mut builder = Config::builder()
-            .set_default("tracker.kind", "none")
+            .set_default("tracker.kind", DEFAULT_TRACKER_KIND)
             .map_err(config_error)?
-            .set_default("tracker.endpoint", "https://api.linear.app/graphql")
+            .set_default("tracker.endpoint", DEFAULT_LINEAR_ENDPOINT)
             .map_err(config_error)?
-            .set_default("tracker.active_states", vec!["Todo", "In Progress"])
+            .set_default("tracker.active_states", default_active_states())
             .map_err(config_error)?
-            .set_default("tracker.terminal_states", vec![
-                "Closed",
-                "Cancelled",
-                "Canceled",
-                "Duplicate",
-                "Done",
-                "Human Review",
-            ])
+            .set_default("tracker.terminal_states", default_terminal_states())
             .map_err(config_error)?
             .set_default("polling.interval_ms", 30_000)
             .map_err(config_error)?
@@ -481,8 +577,9 @@ impl ServiceConfig {
         let raw = built
             .try_deserialize::<RawServiceConfig>()
             .map_err(config_error)?;
+        let tracker = apply_tracker_profile(raw.tracker, &raw.trackers.profiles)?;
         let mut config = ServiceConfig {
-            tracker: raw.tracker,
+            tracker,
             polling: raw.polling,
             workspace: raw.workspace,
             hooks: raw.hooks,
@@ -692,29 +789,17 @@ impl ServiceConfig {
                 ));
             }
         }
-        if self.tracker.kind == "github" {
-            if self
+        if self.tracker.kind == "github"
+            && self
                 .tracker
                 .repository
                 .as_deref()
                 .unwrap_or_default()
                 .is_empty()
-            {
-                return Err(Error::InvalidConfig(
-                    "tracker.repository is required for github".into(),
-                ));
-            }
-            if self
-                .tracker
-                .api_key
-                .as_deref()
-                .unwrap_or_default()
-                .is_empty()
-            {
-                return Err(Error::InvalidConfig(
-                    "tracker.api_key is required for github".into(),
-                ));
-            }
+        {
+            return Err(Error::InvalidConfig(
+                "tracker.repository is required for github".into(),
+            ));
         }
         if self.agents.profiles.is_empty() {
             if let Some(default_agent) = self.agents.default.as_deref() {
@@ -2076,6 +2161,87 @@ tracker:
     }
 
     #[test]
+    fn github_tracker_without_api_key_is_valid() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: owner/repo
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert_eq!(config.tracker.kind, "github");
+        assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(config.tracker.api_key, None);
+    }
+
+    #[test]
+    fn tracker_profile_can_supply_global_tracker_credentials() {
+        let user_config_path = unique_temp_path("tracker-profile", "toml");
+        fs::write(
+            &user_config_path,
+            r#"
+[trackers.profiles.github_personal]
+kind = "github"
+api_key = "test-token"
+"#,
+        )
+        .unwrap();
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  profile: github_personal
+  repository: owner/repo
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config =
+            ServiceConfig::from_workflow_with_configs(&workflow, Some(&user_config_path), None)
+                .unwrap();
+        let _ = fs::remove_file(&user_config_path);
+
+        assert_eq!(config.tracker.profile.as_deref(), Some("github_personal"));
+        assert_eq!(config.tracker.kind, "github");
+        assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(config.tracker.api_key.as_deref(), Some("test-token"));
+    }
+
+    #[test]
+    fn unknown_tracker_profile_is_rejected() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  profile: missing
+  repository: owner/repo
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+
+        let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
+
+        assert!(matches!(error, super::Error::InvalidConfig(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("tracker.profile `missing` is not defined")
+        );
+    }
+
+    #[test]
     fn user_config_can_supply_tracker_and_agents() {
         let user_config_path = unique_temp_path("user-config", "toml");
         fs::write(
@@ -2154,6 +2320,7 @@ polling:
         assert!(created);
         assert!(!created_again);
         assert!(contents.contains("[tracker]"));
+        assert!(contents.contains("[trackers.profiles]"));
         assert!(contents.contains("[agents.profiles]"));
         assert!(contents.contains("Polyphony user config."));
     }

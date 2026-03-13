@@ -3,6 +3,8 @@
 
 [tracker]
 kind = "linear"
+# Optional shared credentials from ~/.config/polyphony/config.toml.
+# profile = "linear_work"
 project_slug = "ENG"
 # api_key = "$LINEAR_API_KEY"
 

@@ -49,7 +49,6 @@ You are operating inside an isolated per-issue workspace.
 
 Issue: {{ issue.identifier }} - {{ issue.title }}
 State: {{ issue.state }}
-Attempt: {{ attempt }}
 
 Execution rules:
 

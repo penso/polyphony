@@ -31,6 +31,13 @@ Configure GitHub or Linear in `.polyphony/config.toml` when you want the dashboa
 issues for the current repo. Leave `agents.profiles` empty in `~/.config/polyphony/config.toml`
 for tracker-only mode.
 
+If you work across multiple repos with different trackers, keep shared tracker credentials in
+`~/.config/polyphony/config.toml` under `trackers.profiles.<name>`, then select one in
+`.polyphony/config.toml` with `tracker.profile = "<name>"`.
+
+For public GitHub repositories, issue polling can work without `GITHUB_TOKEN`, but authenticated
+requests are still recommended to avoid low anonymous rate limits.
+
 Starter references for the generated files live in `templates/WORKFLOW.md`,
 `templates/config.toml`, and `templates/repo-config.toml`. Copyable full-file examples live under
 `templates/examples/`.
