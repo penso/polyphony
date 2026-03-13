@@ -68,7 +68,7 @@ This repository already provides:
 - saved per-issue agent context snapshots, built from streamed runtime events and reused on retries/handoffs
 - runtime throttling when adapters surface `429`-style rate limits
 - budget and spend snapshots that can be persisted and shown in the TUI
-- a `ratatui` dashboard for running work, retry queue, token totals, throttles, budgets, and recent events
+- a `ratatui` dashboard for running work, retry queue, token totals, throttles, budgets, recent events, and live tracing logs
 - an implementation-owned `tracker.kind: mock` extension so the system can be run locally without Linear
 - optional post-run GitHub handoff automation that can commit, push, open a draft PR, and post a review summary
 - generic outbound feedback sinks for human handoff notifications, with Telegram and webhook implementations today
@@ -109,7 +109,8 @@ Branch names default to the issue branch metadata when present, otherwise `task/
 cargo run -p polyphony-cli
 ```
 
-The default `WORKFLOW.md` uses the mock tracker, so the TUI starts immediately and shows seeded demo issues.
+The default `WORKFLOW.md` uses the mock tracker, so the TUI starts immediately and shows seeded demo issues,
+even if optional OpenAI-compatible agent profiles do not have API keys configured yet.
 
 Run without the TUI:
 
@@ -127,11 +128,12 @@ cargo run -p polyphony-cli -- --no-tui
 ```
 
 When `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set, the CLI
-installs an OTLP trace exporter over tonic, keeps normal `tracing` logs enabled, and flushes the
-tracer provider on shutdown. The service name defaults to `polyphony` and can be overridden with
-`OTEL_SERVICE_NAME`. If OTLP exporter setup fails, Polyphony prints a warning and continues with
-local logs only. If the TUI fails to start or crashes, the service falls back to headless mode and
-keeps running until `Ctrl-C`.
+installs an OTLP trace exporter over tonic, flushes the tracer provider on shutdown, and routes
+local tracing output into the TUI `Logs` pane while the dashboard is active. The service name
+defaults to `polyphony` and can be overridden with `OTEL_SERVICE_NAME`. If OTLP exporter setup
+fails, Polyphony prints a warning and continues with local logs only. If the TUI fails to start or
+crashes, the service falls back to headless mode, flushes buffered logs back to stderr, and keeps
+running until `Ctrl-C`.
 
 Enable SQLite persistence:
 
@@ -238,6 +240,7 @@ feedback:
 When `fetch_models` is enabled:
 
 - `openai_chat` agents query the provider’s `/models` endpoint automatically
+- `openai_chat` agents without an `api_key` skip `/models` discovery until credentials are configured, so optional profiles do not block startup
 - `local_cli` and `app_server` agents can run `models_command` and parse either JSON model lists or newline-delimited model IDs
 - interactive `local_cli` agents default to `stdin` prompt injection, or `tmux_paste` when `use_tmux: true`
 - `kimi` / `moonshotai` profiles default to `https://api.moonshot.ai/v1` and resolve `KIMI_API_KEY` or `MOONSHOT_API_KEY`

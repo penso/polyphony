@@ -636,18 +636,6 @@ impl ServiceConfig {
                     "agents.profiles.{agent_name}.model is required for openai_chat agents when automatic model discovery is disabled"
                 )));
             }
-            if matches!(infer_agent_transport(profile), AgentTransport::OpenAiChat)
-                && profile
-                    .api_key
-                    .as_deref()
-                    .unwrap_or_default()
-                    .trim()
-                    .is_empty()
-            {
-                return Err(Error::InvalidConfig(format!(
-                    "agents.profiles.{agent_name}.api_key is required for openai_chat agents"
-                )));
-            }
             for fallback in &profile.fallbacks {
                 if fallback == agent_name {
                     return Err(Error::InvalidConfig(format!(
@@ -1875,6 +1863,49 @@ agents:
         assert!(matches!(kimi.transport, AgentTransport::OpenAiChat));
         assert_eq!(kimi.base_url.as_deref(), Some("https://api.moonshot.ai/v1"));
         assert_eq!(kimi.model.as_deref(), Some("kimi-2.5"));
+    }
+
+    #[test]
+    fn openai_chat_fallbacks_without_api_keys_do_not_block_workflow_load() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+      fallbacks:
+        - kimi_fast
+        - openai
+    kimi_fast:
+      kind: kimi
+      model: kimi-2.5
+      fetch_models: true
+    openai:
+      kind: openai
+      transport: openai_chat
+      model: gpt-4.1
+      fetch_models: true
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        let candidates = config.candidate_agents_for_issue(&sample_issue()).unwrap();
+        let names = candidates
+            .iter()
+            .map(|agent| agent.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["codex", "kimi_fast", "openai"]);
+        assert_eq!(candidates[1].api_key, None);
+        assert_eq!(candidates[2].api_key, None);
     }
 
     #[test]

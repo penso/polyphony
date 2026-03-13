@@ -13,6 +13,7 @@ It consumes `RuntimeSnapshot` values and displays:
 - retry queue entries
 - discovered agent models
 - recent events
+- buffered tracing logs forwarded from `polyphony-cli`
 
 ## Interaction model
 

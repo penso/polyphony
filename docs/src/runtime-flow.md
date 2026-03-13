@@ -8,7 +8,7 @@ components.
 At startup the CLI:
 
 1. loads `WORKFLOW.md`
-2. initializes tracing, falling back to local logs if OTLP exporter setup fails
+2. initializes tracing, routing local logs into the TUI when active and falling back to local stderr logs if OTLP exporter setup fails
 3. builds the selected tracker and agent registry runtime
 4. creates the git-backed workspace provisioner
 5. optionally connects the SQLite state store

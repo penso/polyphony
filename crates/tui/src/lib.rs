@@ -1,4 +1,8 @@
-use std::time::Duration;
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
+};
 
 use {
     crossterm::{
@@ -10,7 +14,7 @@ use {
     ratatui::{
         Terminal,
         backend::CrosstermBackend,
-        layout::{Constraint, Direction, Layout},
+        layout::{Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
         text::Line,
         widgets::{Block, Borders, Cell, Paragraph, Row, Table},
@@ -25,9 +29,57 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Clone, Debug)]
+pub struct LogBuffer {
+    lines: Arc<Mutex<VecDeque<String>>>,
+    max_lines: usize,
+}
+
+impl Default for LogBuffer {
+    fn default() -> Self {
+        Self::with_capacity(128)
+    }
+}
+
+impl LogBuffer {
+    pub fn with_capacity(max_lines: usize) -> Self {
+        Self {
+            lines: Arc::new(Mutex::new(VecDeque::with_capacity(max_lines))),
+            max_lines,
+        }
+    }
+
+    pub fn push_line(&self, line: impl Into<String>) {
+        let line = line.into();
+        if line.trim().is_empty() {
+            return;
+        }
+        let mut lines = lock_or_recover(&self.lines);
+        lines.push_front(line);
+        while lines.len() > self.max_lines {
+            lines.pop_back();
+        }
+    }
+
+    pub fn recent_lines(&self, limit: usize) -> Vec<String> {
+        lock_or_recover(&self.lines)
+            .iter()
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn drain_oldest_first(&self) -> Vec<String> {
+        let mut lines = lock_or_recover(&self.lines);
+        let drained = lines.drain(..).collect::<Vec<_>>();
+        drained.into_iter().rev().collect()
+    }
+}
+
 pub async fn run(
     mut snapshot_rx: watch::Receiver<RuntimeSnapshot>,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+    log_buffer: LogBuffer,
 ) -> Result<(), Error> {
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -37,7 +89,7 @@ pub async fn run(
 
     let result = loop {
         let snapshot = snapshot_rx.borrow().clone();
-        terminal.draw(|frame| draw(frame, &snapshot))?;
+        terminal.draw(|frame| draw(frame, &snapshot, &log_buffer))?;
 
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
@@ -67,7 +119,7 @@ pub async fn run(
     result
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
+fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, log_buffer: &LogBuffer) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -187,6 +239,15 @@ fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
         .block(Block::default().title("Agent Models").borders(Borders::ALL));
     frame.render_widget(agent_models, areas[4]);
 
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(areas[5]);
+    draw_recent_events(frame, bottom[0], snapshot);
+    draw_logs(frame, bottom[1], log_buffer);
+}
+
+fn draw_recent_events(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &RuntimeSnapshot) {
     let lines = snapshot
         .recent_events
         .iter()
@@ -205,5 +266,47 @@ fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot) {
             .title("Recent Events")
             .borders(Borders::ALL),
     );
-    frame.render_widget(events, areas[5]);
+    frame.render_widget(events, area);
+}
+
+fn draw_logs(frame: &mut ratatui::Frame<'_>, area: Rect, log_buffer: &LogBuffer) {
+    let lines = log_buffer
+        .recent_lines(12)
+        .into_iter()
+        .map(Line::from)
+        .collect::<Vec<_>>();
+    let logs = Paragraph::new(lines).block(Block::default().title("Logs").borders(Borders::ALL));
+    frame.render_widget(logs, area);
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogBuffer;
+
+    #[test]
+    fn log_buffer_keeps_newest_entries_within_capacity() {
+        let buffer = LogBuffer::with_capacity(2);
+
+        buffer.push_line("one");
+        buffer.push_line("two");
+        buffer.push_line("three");
+
+        assert_eq!(buffer.recent_lines(3), vec!["three", "two"]);
+    }
+
+    #[test]
+    fn log_buffer_drains_in_oldest_first_order() {
+        let buffer = LogBuffer::with_capacity(3);
+
+        buffer.push_line("one");
+        buffer.push_line("two");
+        buffer.push_line("three");
+
+        assert_eq!(buffer.drain_oldest_first(), vec!["one", "two", "three"]);
+        assert!(buffer.recent_lines(1).is_empty());
+    }
 }

@@ -6,7 +6,8 @@
 
 It parses command-line flags, loads the workflow, assembles the runtime components, and starts the
 service plus optional TUI. It also owns fail-soft operator-surface behavior, such as falling back
-to local logs when OTLP setup fails and continuing headless when the TUI cannot stay up.
+to local logs when OTLP setup fails, routing tracing output into the TUI when it is active, and
+continuing headless when the TUI cannot stay up.
 
 ## Current command-line surface
 

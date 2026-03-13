@@ -94,6 +94,13 @@ async fn discover_models_for_agent(
         polyphony_agent_common::parse_model_list(
             &run_shell_capture(command, None, &agent.env).await?,
         )?
+    } else if agent.fetch_models && agent.api_key.is_none() {
+        debug!(
+            agent_name = %agent.name,
+            provider_kind = %agent.kind,
+            "skipping OpenAI-compatible model discovery because api_key is not configured"
+        );
+        Vec::new()
     } else if agent.fetch_models {
         discover_openai_models(client, agent).await?
     } else {
@@ -591,6 +598,27 @@ mod tests {
 
         assert_eq!(catalogs.models.len(), 2);
         assert_eq!(catalogs.models[0].id, "gpt-4.1");
+    }
+
+    #[tokio::test]
+    async fn missing_api_key_skips_http_model_discovery_when_model_is_configured() {
+        let runtime = OpenAiRuntime::new();
+        let catalog = runtime
+            .discover_models(&AgentDefinition {
+                name: "kimi_fast".into(),
+                kind: "kimi".into(),
+                transport: AgentTransport::OpenAiChat,
+                model: Some("kimi-2.5".into()),
+                fetch_models: true,
+                ..AgentDefinition::default()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(catalog.agent_name, "kimi_fast");
+        assert_eq!(catalog.selected_model.as_deref(), Some("kimi-2.5"));
+        assert!(catalog.models.is_empty());
     }
 
     #[tokio::test]

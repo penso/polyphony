@@ -1,4 +1,11 @@
-use std::{env, future::Future, path::PathBuf, pin::Pin, sync::Arc};
+use std::{
+    env,
+    future::Future,
+    io::{self, Write as _},
+    path::PathBuf,
+    pin::Pin,
+    sync::{Arc, Mutex, MutexGuard},
+};
 
 use {
     clap::Parser,
@@ -12,11 +19,14 @@ use {
         RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
         spawn_workflow_watcher,
     },
+    polyphony_tui::LogBuffer,
     polyphony_workflow::load_workflow,
     thiserror::Error,
     tokio::sync::{mpsc, watch},
     tracing::warn,
-    tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt},
+    tracing_subscriber::{
+        EnvFilter, fmt::writer::MakeWriter, layer::SubscriberExt, util::SubscriberInitExt,
+    },
 };
 
 type TuiRunFuture = Pin<Box<dyn Future<Output = Result<(), polyphony_tui::Error>> + Send>>;
@@ -54,7 +64,13 @@ enum Error {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
-    let _telemetry = init_tracing(cli.log_json);
+    let tui_logs = LogBuffer::default();
+    let tracing_output = if cli.no_tui {
+        TracingOutput::stderr()
+    } else {
+        TracingOutput::tui(tui_logs.clone())
+    };
+    let _telemetry = init_tracing(cli.log_json, !cli.no_tui, tracing_output.clone());
     tracing::info!(
         workflow_path = %cli.workflow_path.display(),
         no_tui = cli.no_tui,
@@ -94,7 +110,11 @@ async fn main() -> Result<(), Error> {
         cli.no_tui,
         handle.snapshot_rx.clone(),
         handle.command_tx.clone(),
-        |snapshot_rx, command_tx| Box::pin(polyphony_tui::run(snapshot_rx, command_tx)),
+        tui_logs,
+        tracing_output,
+        |snapshot_rx, command_tx, tui_logs| {
+            Box::pin(polyphony_tui::run(snapshot_rx, command_tx, tui_logs))
+        },
         Box::pin(tokio::signal::ctrl_c()),
     )
     .await?;
@@ -109,6 +129,101 @@ struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
 }
 
+#[derive(Clone)]
+struct TracingOutput {
+    mode: Arc<Mutex<TracingOutputMode>>,
+}
+
+#[derive(Clone)]
+enum TracingOutputMode {
+    Stderr,
+    Tui(LogBuffer),
+}
+
+impl TracingOutput {
+    fn stderr() -> Self {
+        Self {
+            mode: Arc::new(Mutex::new(TracingOutputMode::Stderr)),
+        }
+    }
+
+    fn tui(log_buffer: LogBuffer) -> Self {
+        Self {
+            mode: Arc::new(Mutex::new(TracingOutputMode::Tui(log_buffer))),
+        }
+    }
+
+    fn switch_to_stderr(&self) {
+        let buffered = {
+            let mut mode = lock_or_recover(&self.mode);
+            let TracingOutputMode::Tui(log_buffer) = &*mode else {
+                return;
+            };
+            let log_buffer = log_buffer.clone();
+            *mode = TracingOutputMode::Stderr;
+            log_buffer.drain_oldest_first()
+        };
+
+        for line in buffered {
+            let _ = writeln!(io::stderr().lock(), "{line}");
+        }
+    }
+
+    fn record_bytes(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        for line in String::from_utf8_lossy(bytes).lines() {
+            self.record_line(line);
+        }
+    }
+
+    fn record_line(&self, line: &str) {
+        if line.trim().is_empty() {
+            return;
+        }
+        match lock_or_recover(&self.mode).clone() {
+            TracingOutputMode::Stderr => {
+                let _ = writeln!(io::stderr().lock(), "{line}");
+            },
+            TracingOutputMode::Tui(log_buffer) => log_buffer.push_line(line.to_string()),
+        }
+    }
+}
+
+struct TracingOutputWriter {
+    output: TracingOutput,
+    buffer: Vec<u8>,
+}
+
+impl io::Write for TracingOutputWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for TracingOutputWriter {
+    fn drop(&mut self) {
+        self.output.record_bytes(&self.buffer);
+    }
+}
+
+impl<'a> MakeWriter<'a> for TracingOutput {
+    type Writer = TracingOutputWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TracingOutputWriter {
+            output: self.clone(),
+            buffer: Vec::new(),
+        }
+    }
+}
+
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
         if let Some(tracer_provider) = self.tracer_provider.take() {
@@ -117,7 +232,7 @@ impl Drop for TelemetryGuard {
     }
 }
 
-fn init_tracing(log_json: bool) -> TelemetryGuard {
+fn init_tracing(log_json: bool, tui_mode: bool, tracing_output: TracingOutput) -> TelemetryGuard {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let tracer_provider = match build_tracer_provider() {
         Ok(provider) => provider,
@@ -126,7 +241,13 @@ fn init_tracing(log_json: bool) -> TelemetryGuard {
             None
         },
     };
-    if let Err(error) = install_tracing_subscriber(filter, tracer_provider.clone(), log_json) {
+    if let Err(error) = install_tracing_subscriber(
+        filter,
+        tracer_provider.clone(),
+        log_json,
+        tui_mode,
+        tracing_output,
+    ) {
         eprintln!("polyphony: tracing subscriber setup failed: {error}");
     }
     tracing::info!(
@@ -141,9 +262,36 @@ fn install_tracing_subscriber(
     filter: EnvFilter,
     tracer_provider: Option<SdkTracerProvider>,
     log_json: bool,
+    tui_mode: bool,
+    tracing_output: TracingOutput,
 ) -> Result<(), Error> {
     if log_json {
-        if let Some(provider) = tracer_provider {
+        if tui_mode {
+            if let Some(provider) = tracer_provider {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .json()
+                            .with_writer(tracing_output)
+                            .with_ansi(false),
+                    )
+                    .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
+                    .try_init()
+                    .map_err(|error| Error::Config(error.to_string()))?;
+            } else {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .json()
+                            .with_writer(tracing_output)
+                            .with_ansi(false),
+                    )
+                    .try_init()
+                    .map_err(|error| Error::Config(error.to_string()))?;
+            }
+        } else if let Some(provider) = tracer_provider {
             tracing_subscriber::registry()
                 .with(filter)
                 .with(tracing_subscriber::fmt::layer().json())
@@ -158,10 +306,35 @@ fn install_tracing_subscriber(
                 .map_err(|error| Error::Config(error.to_string()))?;
         }
     } else if let Some(provider) = tracer_provider {
+        if tui_mode {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .compact()
+                        .with_writer(tracing_output)
+                        .with_ansi(false),
+                )
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
+                .try_init()
+                .map_err(|error| Error::Config(error.to_string()))?;
+        } else {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().compact())
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
+                .try_init()
+                .map_err(|error| Error::Config(error.to_string()))?;
+        }
+    } else if tui_mode {
         tracing_subscriber::registry()
             .with(filter)
-            .with(tracing_subscriber::fmt::layer().compact())
-            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_writer(tracing_output)
+                    .with_ansi(false),
+            )
             .try_init()
             .map_err(|error| Error::Config(error.to_string()))?;
     } else {
@@ -209,6 +382,8 @@ async fn run_operator_surface<F>(
     no_tui: bool,
     snapshot_rx: watch::Receiver<RuntimeSnapshot>,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+    tui_logs: LogBuffer,
+    tracing_output: TracingOutput,
     run_tui: F,
     shutdown_signal: ShutdownFuture,
 ) -> Result<(), Error>
@@ -216,6 +391,7 @@ where
     F: FnOnce(
         watch::Receiver<RuntimeSnapshot>,
         mpsc::UnboundedSender<RuntimeCommand>,
+        LogBuffer,
     ) -> TuiRunFuture,
 {
     if no_tui {
@@ -224,12 +400,13 @@ where
         return Ok(());
     }
 
-    match run_tui(snapshot_rx, command_tx.clone()).await {
+    match run_tui(snapshot_rx, command_tx.clone(), tui_logs).await {
         Ok(()) => {
             let _ = command_tx.send(RuntimeCommand::Shutdown);
             Ok(())
         },
         Err(error) => {
+            tracing_output.switch_to_stderr();
             warn!(%error, "tui failed; continuing headless");
             eprintln!(
                 "polyphony: TUI failed: {error}. Continuing headless mode. Press Ctrl-C to stop."
@@ -239,6 +416,10 @@ where
             Ok(())
         },
     }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 #[allow(unused_variables)]
@@ -398,7 +579,7 @@ mod tests {
         tokio::sync::{mpsc, watch},
     };
 
-    use crate::{Error, run_operator_surface};
+    use crate::{Error, LogBuffer, TracingOutput, run_operator_surface};
 
     fn snapshot_rx() -> watch::Receiver<polyphony_core::RuntimeSnapshot> {
         let workflow_path = std::env::temp_dir().join(format!(
@@ -444,7 +625,9 @@ mod tests {
             false,
             snapshot_rx,
             command_tx,
-            |_snapshot_rx, _command_tx| {
+            LogBuffer::default(),
+            TracingOutput::stderr(),
+            |_snapshot_rx, _command_tx, _tui_logs| {
                 Box::pin(async { Err(polyphony_tui::Error::Io(io::Error::other("boom"))) })
             },
             Box::pin(async { Ok(()) }),
@@ -467,7 +650,9 @@ mod tests {
             true,
             snapshot_rx,
             command_tx,
-            |_snapshot_rx, _command_tx| Box::pin(async { Ok(()) }),
+            LogBuffer::default(),
+            TracingOutput::stderr(),
+            |_snapshot_rx, _command_tx, _tui_logs| Box::pin(async { Ok(()) }),
             Box::pin(async { Ok(()) }),
         )
         .await
@@ -488,7 +673,9 @@ mod tests {
             true,
             snapshot_rx,
             command_tx,
-            |_snapshot_rx, _command_tx| Box::pin(async { Ok(()) }),
+            LogBuffer::default(),
+            TracingOutput::stderr(),
+            |_snapshot_rx, _command_tx, _tui_logs| Box::pin(async { Ok(()) }),
             Box::pin(async { Err(io::Error::other("ctrl-c failed")) }),
         )
         .await
