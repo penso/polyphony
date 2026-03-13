@@ -1,14 +1,19 @@
 # polyphony-workflow
 
-`polyphony-workflow` turns `WORKFLOW.md` into validated runtime configuration plus a renderable
-prompt template.
+`polyphony-workflow` turns layered config sources into validated runtime configuration plus a
+renderable prompt template.
 
 ## Responsibility
 
 This crate owns:
 
+- the default `~/.config/polyphony/config.toml` template and path helpers used by the CLI
+- the default `.polyphony/config.toml` repo-local override template
+- the default repo-local `WORKFLOW.md` bootstrap template
+- the checked-in sources for those generated files under `templates/`
 - parsing YAML front matter and Markdown prompt bodies
 - applying defaults with the `config` crate
+- merging `~/.config/polyphony/config.toml`, `WORKFLOW.md`, and `.polyphony/config.toml`
 - reading environment overlays such as `POLYPHONY__...`
 - normalizing agent profile settings into `AgentDefinition`
 - validating configuration before the orchestrator dispatches work
@@ -30,5 +35,6 @@ The loader handles more than transport selection. It also resolves:
 
 ## Runtime role
 
-The orchestrator treats this crate as the policy source. When `WORKFLOW.md` changes on disk, the
-watcher reloads it and the runtime starts using the latest valid configuration.
+The orchestrator treats this crate as the policy source. When `WORKFLOW.md` or the repo-local
+config changes on disk, the watcher reloads them, merges them with the user config file again, and
+the runtime starts using the latest valid configuration.

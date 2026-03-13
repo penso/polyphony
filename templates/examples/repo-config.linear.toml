@@ -1,0 +1,13 @@
+# Destination: copy to .polyphony/config.toml in the repository root.
+# Values here override the checked-in WORKFLOW.md for this machine only.
+
+[tracker]
+kind = "linear"
+project_slug = "ENG"
+# api_key = "$LINEAR_API_KEY"
+
+[workspace]
+checkout_kind = "linked_worktree"
+source_repo_path = "/abs/path/to/repo"
+sync_on_reuse = true
+# default_branch = "main"

@@ -1,6 +1,6 @@
 # polyphony-issue-mock
 
-`polyphony-issue-mock` provides the local development path.
+`polyphony-issue-mock` provides test-only mock implementations.
 
 ## Responsibility
 
@@ -11,6 +11,5 @@ This crate ships:
 
 ## Why it matters
 
-The default repository `WORKFLOW.md` uses this crate so the application can start immediately
-without external credentials, trackers, or provider APIs. It is also used heavily by tests and
-local smoke runs.
+It is used heavily by tests and internal smoke coverage, without forcing the normal CLI startup
+path to render demo data.

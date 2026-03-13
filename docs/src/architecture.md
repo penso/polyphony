@@ -4,7 +4,15 @@ The workspace is organized around a small set of stable boundaries.
 
 ## Policy and Configuration
 
-`WORKFLOW.md` is the repository-owned source of truth. `polyphony-workflow` parses the file into:
+Runtime configuration is layered. `polyphony-workflow` merges:
+
+- built-in defaults
+- `~/.config/polyphony/config.toml`
+- repository-owned `WORKFLOW.md` front matter
+- repo-local `.polyphony/config.toml`
+- `POLYPHONY__...` environment overrides
+
+That merged config becomes:
 
 - typed runtime configuration
 - workflow prompt text

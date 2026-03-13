@@ -18,11 +18,11 @@ It owns:
 
 - `RuntimeService::new` assembles the service and exposes a `RuntimeHandle`
 - `RuntimeService::run` drives the main loop
-- `spawn_workflow_watcher` watches `WORKFLOW.md` and nudges the runtime to reload
+- `spawn_workflow_watcher` watches `WORKFLOW.md` plus the repo-local `.polyphony/config.toml` when present and nudges the runtime to reload
 
-The orchestrator owns the authoritative reload path. It re-reads `WORKFLOW.md` on watcher nudges
-and also re-checks it defensively on poll ticks, then rebuilds hot-reloadable runtime components
-for future dispatch without restarting in-flight agent sessions.
+The orchestrator owns the authoritative reload path. It re-reads the workflow and repo-local config
+on watcher nudges and also re-checks them defensively on poll ticks, then rebuilds hot-reloadable
+runtime components for future dispatch without restarting in-flight agent sessions.
 
 ## Why it is separate
 

@@ -1,0 +1,16 @@
+# Destination: copy to .polyphony/config.toml in the repository root.
+# Values here override the checked-in WORKFLOW.md for this machine only.
+
+[tracker]
+kind = "github"
+repository = "owner/repo"
+project_owner = "owner-or-org"
+project_number = 7
+project_status_field = "Status"
+# api_key = "$GITHUB_TOKEN"
+
+[workspace]
+checkout_kind = "linked_worktree"
+source_repo_path = "/abs/path/to/repo"
+sync_on_reuse = true
+# default_branch = "main"

@@ -15,12 +15,25 @@ just docs-build
 
 ## Running polyphony
 
-The default `WORKFLOW.md` uses the mock tracker and mock agent, so the CLI can start without
-external services:
+On first start, the CLI creates `~/.config/polyphony/config.toml` if it does not exist. The
+generated default config keeps `tracker.kind = "none"` and no dispatch agents, so the real CLI can
+start without external services or mock data:
 
 ```bash
 cargo run -p polyphony-cli
 ```
+
+If the repo already ships a generic shared `WORKFLOW.md`, the CLI also seeds
+`.polyphony/config.toml` so you can point workspaces back at the current repository without
+editing the checked-in workflow.
+
+Configure GitHub or Linear in `.polyphony/config.toml` when you want the dashboard to show real
+issues for the current repo. Leave `agents.profiles` empty in `~/.config/polyphony/config.toml`
+for tracker-only mode.
+
+Starter references for the generated files live in `templates/WORKFLOW.md`,
+`templates/config.toml`, and `templates/repo-config.toml`. Copyable full-file examples live under
+`templates/examples/`.
 
 Run without the TUI:
 

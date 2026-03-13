@@ -269,6 +269,7 @@ pub struct RunningRow {
     pub agent_name: String,
     pub model: Option<String>,
     pub state: String,
+    pub max_turns: u32,
     pub session_id: Option<String>,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
@@ -299,10 +300,34 @@ pub struct RuntimeEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeCadence {
+    pub tracker_poll_interval_ms: u64,
+    pub budget_poll_interval_ms: u64,
+    pub model_discovery_interval_ms: u64,
+    pub last_tracker_poll_at: Option<DateTime<Utc>>,
+    pub last_budget_poll_at: Option<DateTime<Utc>>,
+    pub last_model_discovery_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleIssueRow {
+    pub issue_id: String,
+    pub issue_identifier: String,
+    pub title: String,
+    pub state: String,
+    pub priority: Option<i32>,
+    pub labels: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeSnapshot {
     pub generated_at: DateTime<Utc>,
     pub counts: SnapshotCounts,
+    #[serde(default)]
+    pub cadence: RuntimeCadence,
+    #[serde(default)]
+    pub visible_issues: Vec<VisibleIssueRow>,
     pub running: Vec<RunningRow>,
     pub retrying: Vec<RetryRow>,
     pub codex_totals: CodexTotals,

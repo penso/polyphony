@@ -14,14 +14,14 @@ use {
         AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CodexTotals,
         Error as CoreError, FeedbackAction, FeedbackLink, FeedbackNotification, Issue,
         IssueTracker, PersistedRunRecord, PullRequestCommenter, PullRequestManager,
-        PullRequestRequest, RateLimitSignal, RetryRow, RunningRow, RuntimeEvent, RuntimeSnapshot,
-        SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, WorkspaceCommitRequest,
-        WorkspaceCommitter, WorkspaceProvisioner, sanitize_workspace_key,
+        PullRequestRequest, RateLimitSignal, RetryRow, RunningRow, RuntimeCadence, RuntimeEvent,
+        RuntimeSnapshot, SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, VisibleIssueRow,
+        WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner, sanitize_workspace_key,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
-        HooksConfig, LoadedWorkflow, load_workflow, render_issue_template_with_strings,
-        render_turn_prompt, render_turn_template,
+        HooksConfig, LoadedWorkflow, load_workflow_with_user_config,
+        render_issue_template_with_strings, render_turn_prompt, render_turn_template,
     },
     polyphony_workspace::WorkspaceManager,
     serde_json::Value,
@@ -115,6 +115,7 @@ struct RunningTask {
     attempt: Option<u32>,
     workspace_path: PathBuf,
     stall_timeout_ms: i64,
+    max_turns: u32,
     started_at: DateTime<Utc>,
     session_id: Option<String>,
     thread_id: Option<String>,
@@ -157,11 +158,13 @@ struct RuntimeState {
     throttles: HashMap<String, ActiveThrottle>,
     budgets: HashMap<String, BudgetSnapshot>,
     agent_catalogs: HashMap<String, AgentModelCatalog>,
+    visible_issues: Vec<VisibleIssueRow>,
     saved_contexts: HashMap<String, AgentContextSnapshot>,
     recent_events: VecDeque<RuntimeEvent>,
     ended_runtime_seconds: f64,
     totals: CodexTotals,
     rate_limits: Option<Value>,
+    last_tracker_poll_at: Option<DateTime<Utc>>,
     last_budget_poll_at: Option<DateTime<Utc>>,
     last_model_discovery_at: Option<DateTime<Utc>>,
 }
@@ -177,6 +180,7 @@ enum WorkflowFileFingerprint {
 
 struct WorkflowReloadSupport {
     workflow_path: PathBuf,
+    user_config_path: Option<PathBuf>,
     workflow_tx: watch::Sender<LoadedWorkflow>,
     component_factory: Arc<RuntimeComponentFactory>,
     last_seen_fingerprint: Option<WorkflowFileFingerprint>,
@@ -222,11 +226,13 @@ impl RuntimeService {
                     throttles: HashMap::new(),
                     budgets: HashMap::new(),
                     agent_catalogs: HashMap::new(),
+                    visible_issues: Vec::new(),
                     saved_contexts: HashMap::new(),
                     recent_events: VecDeque::with_capacity(128),
                     ended_runtime_seconds: 0.0,
                     totals: CodexTotals::default(),
                     rate_limits: None,
+                    last_tracker_poll_at: None,
                     last_budget_poll_at: None,
                     last_model_discovery_at: None,
                 },
@@ -241,12 +247,14 @@ impl RuntimeService {
     pub fn with_workflow_reload(
         mut self,
         workflow_path: PathBuf,
+        user_config_path: Option<PathBuf>,
         workflow_tx: watch::Sender<LoadedWorkflow>,
         component_factory: Arc<RuntimeComponentFactory>,
     ) -> Self {
         self.reload_support = Some(WorkflowReloadSupport {
             last_seen_fingerprint: workflow_file_fingerprint(&workflow_path).ok(),
             workflow_path,
+            user_config_path,
             workflow_tx,
             component_factory,
             reload_error: None,
@@ -381,6 +389,7 @@ impl RuntimeService {
             return;
         }
         let query = workflow.config.tracker_query();
+        self.state.last_tracker_poll_at = Some(Utc::now());
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
@@ -398,6 +407,11 @@ impl RuntimeService {
 
         let mut issues = issues;
         issues.sort_by(dispatch_order);
+        self.state.visible_issues = issues.iter().map(summarize_issue).collect();
+        if !workflow.config.has_dispatch_agents() {
+            let _ = self.emit_snapshot().await;
+            return;
+        }
         for issue in issues {
             if !self.should_dispatch(&workflow, &issue) {
                 continue;
@@ -642,6 +656,7 @@ impl RuntimeService {
             attempt,
             workspace_path: workspace.path,
             stall_timeout_ms: selected_agent.stall_timeout_ms,
+            max_turns,
             started_at,
             session_id: None,
             thread_id: None,
@@ -690,6 +705,9 @@ impl RuntimeService {
             return;
         };
         let workflow = self.workflow();
+        if !workflow.config.has_dispatch_agents() {
+            return;
+        }
         let query = workflow.config.tracker_query();
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
@@ -1140,6 +1158,15 @@ impl RuntimeService {
                 running: self.state.running.len(),
                 retrying: self.state.retrying.len(),
             },
+            cadence: RuntimeCadence {
+                tracker_poll_interval_ms: self.workflow_rx.borrow().config.polling.interval_ms,
+                budget_poll_interval_ms: 60_000,
+                model_discovery_interval_ms: 300_000,
+                last_tracker_poll_at: self.state.last_tracker_poll_at,
+                last_budget_poll_at: self.state.last_budget_poll_at,
+                last_model_discovery_at: self.state.last_model_discovery_at,
+            },
+            visible_issues: self.state.visible_issues.clone(),
             running: self
                 .state
                 .running
@@ -1150,6 +1177,7 @@ impl RuntimeService {
                     agent_name: running.agent_name.clone(),
                     model: running.model.clone(),
                     state: running.issue.state.clone(),
+                    max_turns: running.max_turns,
                     session_id: running.session_id.clone(),
                     thread_id: running.thread_id.clone(),
                     turn_id: running.turn_id.clone(),
@@ -1357,6 +1385,7 @@ impl RuntimeService {
             return;
         };
         let workflow_path = reload_support.workflow_path.clone();
+        let user_config_path = reload_support.user_config_path.clone();
         let workflow_tx = reload_support.workflow_tx.clone();
         let component_factory = reload_support.component_factory.clone();
         let last_seen_fingerprint = reload_support.last_seen_fingerprint;
@@ -1376,11 +1405,13 @@ impl RuntimeService {
             return;
         }
 
-        match load_workflow(&workflow_path) {
+        match load_workflow_with_user_config(&workflow_path, user_config_path.as_deref()) {
             Ok(workflow) => {
                 let current_workflow = self.workflow();
                 let recovered = self.clear_workflow_reload_error(fingerprint);
-                if workflow.definition == current_workflow.definition {
+                if workflow.definition == current_workflow.definition
+                    && workflow.config == current_workflow.config
+                {
                     if recovered {
                         self.push_event(
                             "workflow".into(),
@@ -1508,6 +1539,7 @@ impl RuntimeService {
             .budgets
             .retain(|component, _| !affected_agent_budgets.contains(component));
         self.state.agent_catalogs.clear();
+        self.state.last_tracker_poll_at = None;
         self.state.last_budget_poll_at = None;
         self.state.last_model_discovery_at = None;
     }
@@ -1916,6 +1948,7 @@ impl RuntimeService {
 
 pub fn spawn_workflow_watcher(
     workflow_path: PathBuf,
+    repo_config_path: Option<PathBuf>,
     runtime_command_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<JoinHandle<Result<(), Error>>, Error> {
     Ok(tokio::spawn(async move {
@@ -1924,6 +1957,11 @@ pub fn spawn_workflow_watcher(
             let _ = notify_tx.send(event);
         })?;
         watcher.watch(&workflow_path, RecursiveMode::NonRecursive)?;
+        if let Some(repo_config_path) = repo_config_path.as_ref()
+            && repo_config_path.exists()
+        {
+            watcher.watch(repo_config_path, RecursiveMode::NonRecursive)?;
+        }
         while let Some(event) = notify_rx.recv().await {
             match event {
                 Ok(_) => {
@@ -2193,6 +2231,8 @@ fn empty_snapshot() -> RuntimeSnapshot {
     RuntimeSnapshot {
         generated_at: Utc::now(),
         counts: SnapshotCounts::default(),
+        cadence: RuntimeCadence::default(),
+        visible_issues: Vec::new(),
         running: Vec::new(),
         retrying: Vec::new(),
         codex_totals: CodexTotals::default(),
@@ -2202,6 +2242,17 @@ fn empty_snapshot() -> RuntimeSnapshot {
         agent_catalogs: Vec::new(),
         saved_contexts: Vec::new(),
         recent_events: Vec::new(),
+    }
+}
+
+fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
+    VisibleIssueRow {
+        issue_id: issue.id.clone(),
+        issue_identifier: issue.identifier.clone(),
+        title: issue.title.clone(),
+        state: issue.state.clone(),
+        priority: issue.priority,
+        labels: issue.labels.clone(),
     }
 }
 
@@ -2290,6 +2341,7 @@ mod tests {
         polyphony_core::{
             AgentSession, IssueAuthor, IssueComment, IssueStateUpdate, Workspace, WorkspaceRequest,
         },
+        polyphony_workflow::load_workflow,
         tokio::sync::watch,
     };
 
@@ -2769,7 +2821,7 @@ mod tests {
             rx,
         )
         .0
-        .with_workflow_reload(workflow.path.clone(), tx, component_factory)
+        .with_workflow_reload(workflow.path.clone(), None, tx, component_factory)
     }
 
     fn sample_issue(issue_id: &str, identifier: &str, state: &str, title: &str) -> Issue {
@@ -2799,6 +2851,7 @@ mod tests {
             attempt: None,
             workspace_path,
             stall_timeout_ms: 300_000,
+            max_turns: 5,
             started_at: Utc::now(),
             session_id: None,
             thread_id: None,
@@ -2841,6 +2894,45 @@ mod tests {
 
         assert!(!service.state.running.contains_key(&issue.id));
         assert!(!service.is_claimed(&issue.id));
+    }
+
+    #[tokio::test]
+    async fn tick_tracks_visible_issues_when_no_agents_are_configured() {
+        let workspace_root = unique_workspace_root("visible-issues");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: none\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  by_state: {}\n  by_label: {}\n  profiles: {}\n---\nTest prompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let tracker = TestTracker::new(vec![
+            sample_issue("issue-1", "FAC-1", "Todo", "First"),
+            sample_issue("issue-2", "FAC-2", "In Progress", "Second"),
+        ]);
+        let provisioner = RecordingProvisioner::default();
+        let mut service = RuntimeService::new(
+            Arc::new(tracker),
+            Arc::new(NoopAgent),
+            Arc::new(provisioner),
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+
+        service.tick().await;
+
+        let snapshot = service.snapshot();
+        let visible = snapshot
+            .visible_issues
+            .iter()
+            .map(|issue| issue.issue_identifier.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(visible, vec!["FAC-1", "FAC-2"]);
+        assert!(snapshot.running.is_empty());
     }
 
     #[tokio::test]

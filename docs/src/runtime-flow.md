@@ -7,17 +7,24 @@ components.
 
 At startup the CLI:
 
-1. loads `WORKFLOW.md`
-2. initializes tracing, routing local logs into the TUI when active and falling back to local stderr logs if OTLP exporter setup fails
-3. builds the selected tracker and agent registry runtime
-4. creates the git-backed workspace provisioner
-5. optionally connects the SQLite state store
-6. starts `RuntimeService`
-7. starts the workflow file watcher
-8. launches the TUI unless `--no-tui` is set, and falls back to headless mode if the TUI fails
+1. initializes tracing, routing local logs into the TUI when active and falling back to local stderr logs if OTLP exporter setup fails
+2. creates `~/.config/polyphony/config.toml` if it is missing
+3. creates `WORKFLOW.md` when it is missing, via a startup modal in TUI mode or automatically in `--no-tui` mode
+4. seeds `.polyphony/config.toml` in git repos when the checked-in workflow is still generic and local repo wiring is unset
+5. loads the merged runtime config from built-in defaults, `~/.config/polyphony/config.toml`, `WORKFLOW.md`, and `.polyphony/config.toml`
+6. builds the selected tracker and agent registry runtime
+7. creates the git-backed workspace provisioner
+8. optionally connects the SQLite state store
+9. starts `RuntimeService`
+10. starts the workflow file watcher
+11. launches the TUI unless `--no-tui` is set, and falls back to headless mode if the TUI fails
+
+If no agent profiles are configured yet, the orchestrator still polls the tracker and publishes
+visible issues into the snapshot, but it skips dispatch until an agent is added.
 
 The file watcher is only a nudge. The orchestrator still re-reads `WORKFLOW.md` defensively on poll
-ticks so missed filesystem events do not leave the runtime on stale config.
+ticks, merges it with the same user config and repo-local config files, and rebuilds hot-reloadable
+components so missed filesystem events do not leave the runtime on stale config.
 
 ## Scheduling loop
 

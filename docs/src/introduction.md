@@ -4,8 +4,9 @@
 
 At a high level, the system:
 
-- loads a repository-owned `WORKFLOW.md`
-- polls an issue tracker such as GitHub, Linear, or the built-in mock tracker
+- loads user-local config from `~/.config/polyphony/config.toml`, shared workflow policy from
+  `WORKFLOW.md`, and optional repo-local overrides from `.polyphony/config.toml`
+- polls an issue tracker such as GitHub or Linear, or starts in a trackerless `none` mode while you wire it up
 - provisions an isolated workspace for each issue
 - selects an agent profile based on workflow rules
 - runs the agent and tracks retries, budgets, and runtime state

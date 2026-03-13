@@ -20,6 +20,10 @@ use {
     thiserror::Error,
 };
 
+const DEFAULT_USER_CONFIG_TEMPLATE: &str = include_str!("../../../templates/config.toml");
+const DEFAULT_WORKFLOW_TEMPLATE: &str = include_str!("../../../templates/WORKFLOW.md");
+const DEFAULT_REPO_CONFIG_TEMPLATE: &str = include_str!("../../../templates/repo-config.toml");
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("missing_workflow_file: {0}")]
@@ -44,7 +48,7 @@ pub struct WorkflowDefinition {
     pub prompt_template: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TrackerConfig {
     pub kind: String,
     pub endpoint: String,
@@ -58,12 +62,12 @@ pub struct TrackerConfig {
     pub terminal_states: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PollingConfig {
     pub interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceConfig {
     pub root: PathBuf,
     pub checkout_kind: String,
@@ -74,7 +78,7 @@ pub struct WorkspaceConfig {
     pub default_branch: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HooksConfig {
     pub after_create: Option<String>,
     pub before_run: Option<String>,
@@ -83,7 +87,7 @@ pub struct HooksConfig {
     pub timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentConfig {
     pub max_concurrent_agents: usize,
     pub max_concurrent_agents_by_state: HashMap<String, usize>,
@@ -92,7 +96,7 @@ pub struct AgentConfig {
     pub continuation_prompt: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct CodexConfig {
     pub kind: Option<String>,
@@ -107,7 +111,7 @@ pub struct CodexConfig {
     pub spending_command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AgentProfileConfig {
     pub kind: String,
@@ -138,7 +142,7 @@ pub struct AgentProfileConfig {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AgentsConfig {
     pub default: Option<String>,
@@ -147,26 +151,26 @@ pub struct AgentsConfig {
     pub profiles: HashMap<String, AgentProfileConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServerConfig {
     pub port: Option<u16>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AutomationGitAuthorConfig {
     pub name: Option<String>,
     pub email: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AutomationGitConfig {
     pub remote_name: String,
     pub author: AutomationGitAuthorConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AutomationConfig {
     pub enabled: bool,
@@ -179,21 +183,21 @@ pub struct AutomationConfig {
     pub git: AutomationGitConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct TelegramFeedbackConfig {
     pub bot_token: Option<String>,
     pub chat_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct WebhookFeedbackConfig {
     pub url: Option<String>,
     pub bearer_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct FeedbackConfig {
     pub offered: Vec<String>,
@@ -202,7 +206,7 @@ pub struct FeedbackConfig {
     pub webhook: HashMap<String, WebhookFeedbackConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceConfig {
     pub tracker: TrackerConfig,
     pub polling: PollingConfig,
@@ -215,7 +219,7 @@ pub struct ServiceConfig {
     pub server: ServerConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct RawServiceConfig {
     pub tracker: TrackerConfig,
     pub polling: PollingConfig,
@@ -238,15 +242,123 @@ pub struct LoadedWorkflow {
 }
 
 pub fn load_workflow(path: impl AsRef<Path>) -> Result<LoadedWorkflow, Error> {
+    load_workflow_with_user_config(path, None)
+}
+
+pub fn load_workflow_with_user_config(
+    path: impl AsRef<Path>,
+    user_config_path: Option<&Path>,
+) -> Result<LoadedWorkflow, Error> {
     let path = path.as_ref().to_path_buf();
     let raw = fs::read_to_string(&path).map_err(|_| Error::MissingWorkflowFile(path.clone()))?;
     let definition = parse_workflow(&raw)?;
-    let config = ServiceConfig::from_workflow(&definition)?;
+    let repo_config_path = repo_config_path(&path)?;
+    let config = ServiceConfig::from_workflow_with_configs(
+        &definition,
+        user_config_path,
+        Some(&repo_config_path),
+    )?;
     Ok(LoadedWorkflow {
         definition,
         config,
         path,
     })
+}
+
+pub fn user_config_path() -> Result<PathBuf, Error> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| Error::Config("could not resolve ~/.config/polyphony/config.toml".into()))?;
+    Ok(home.join(".config").join("polyphony").join("config.toml"))
+}
+
+pub fn repo_config_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
+    Ok(workflow_root_dir(path.as_ref())?
+        .join(".polyphony")
+        .join("config.toml"))
+}
+
+pub fn ensure_user_config_file(path: impl AsRef<Path>) -> Result<bool, Error> {
+    let path = path.as_ref();
+    if path.exists() {
+        if path.is_file() {
+            return Ok(false);
+        }
+        return Err(Error::Config(format!(
+            "config path `{}` exists but is not a file",
+            path.display()
+        )));
+    }
+    ensure_parent_dir(path, "config path")?;
+    fs::write(path, default_user_config_toml())
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    Ok(true)
+}
+
+pub fn ensure_workflow_file(path: impl AsRef<Path>) -> Result<bool, Error> {
+    let path = path.as_ref();
+    if path.exists() {
+        if path.is_file() {
+            return Ok(false);
+        }
+        return Err(Error::Config(format!(
+            "workflow path `{}` exists but is not a file",
+            path.display()
+        )));
+    }
+    ensure_parent_dir(path, "workflow path")?;
+    fs::write(path, default_workflow_md())
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    Ok(true)
+}
+
+pub fn ensure_repo_config_file(
+    path: impl AsRef<Path>,
+    source_repo_path: &Path,
+) -> Result<bool, Error> {
+    let path = path.as_ref();
+    if path.exists() {
+        if path.is_file() {
+            return Ok(false);
+        }
+        return Err(Error::Config(format!(
+            "repo config path `{}` exists but is not a file",
+            path.display()
+        )));
+    }
+    ensure_parent_dir(path, "repo config path")?;
+    fs::write(path, default_repo_config_toml(source_repo_path))
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    Ok(true)
+}
+
+fn ensure_parent_dir(path: &Path, label: &str) -> Result<(), Error> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    fs::create_dir_all(parent).map_err(|error| {
+        Error::Config(format!(
+            "creating `{}` for {label} failed: {error}",
+            parent.display()
+        ))
+    })
+}
+
+pub fn default_user_config_toml() -> &'static str {
+    DEFAULT_USER_CONFIG_TEMPLATE
+}
+
+pub fn default_workflow_md() -> &'static str {
+    DEFAULT_WORKFLOW_TEMPLATE
+}
+
+pub fn default_repo_config_toml(source_repo_path: &Path) -> String {
+    DEFAULT_REPO_CONFIG_TEMPLATE.replace(
+        "{{SOURCE_REPO_PATH}}",
+        &source_repo_path.display().to_string(),
+    )
 }
 
 pub fn parse_workflow(raw: &str) -> Result<WorkflowDefinition, Error> {
@@ -279,10 +391,18 @@ pub fn parse_workflow(raw: &str) -> Result<WorkflowDefinition, Error> {
 
 impl ServiceConfig {
     pub fn from_workflow(workflow: &WorkflowDefinition) -> Result<Self, Error> {
+        Self::from_workflow_with_configs(workflow, None, None)
+    }
+
+    fn from_workflow_with_configs(
+        workflow: &WorkflowDefinition,
+        user_config_path: Option<&Path>,
+        repo_config_path: Option<&Path>,
+    ) -> Result<Self, Error> {
         let front_matter = serde_yaml::to_string(&workflow.config)
             .map_err(|err| Error::WorkflowParse(err.to_string()))?;
-        let built = Config::builder()
-            .set_default("tracker.kind", "mock")
+        let mut builder = Config::builder()
+            .set_default("tracker.kind", "none")
             .map_err(config_error)?
             .set_default("tracker.endpoint", "https://api.linear.app/graphql")
             .map_err(config_error)?
@@ -340,8 +460,17 @@ impl ServiceConfig {
             .set_default("feedback", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .set_default("server", HashMap::<String, i64>::new())
-            .map_err(config_error)?
-            .add_source(File::from_str(&front_matter, FileFormat::Yaml))
+            .map_err(config_error)?;
+        if let Some(path) = user_config_path {
+            let path = path.to_string_lossy().to_string();
+            builder = builder.add_source(File::new(&path, FileFormat::Toml).required(false));
+        }
+        builder = builder.add_source(File::from_str(&front_matter, FileFormat::Yaml));
+        if let Some(path) = repo_config_path {
+            let path = path.to_string_lossy().to_string();
+            builder = builder.add_source(File::new(&path, FileFormat::Toml).required(false));
+        }
+        let built = builder
             .add_source(
                 Environment::with_prefix("POLYPHONY")
                     .separator("__")
@@ -395,11 +524,6 @@ impl ServiceConfig {
             let (default_name, profile) = shorthand_agent_profile(shorthand);
             self.agents.default = Some(default_name.clone());
             self.agents.profiles.insert(default_name, profile);
-        } else if self.agents.profiles.is_empty() {
-            self.agents.default = Some("mock".into());
-            self.agents
-                .profiles
-                .insert("mock".into(), default_mock_agent_profile());
         }
 
         if self.agents.default.is_none() && self.agents.profiles.len() == 1 {
@@ -593,19 +717,27 @@ impl ServiceConfig {
             }
         }
         if self.agents.profiles.is_empty() {
-            return Err(Error::InvalidConfig(
-                "agents.profiles must contain at least one configured agent".into(),
-            ));
-        }
-        let default_agent = self
-            .agents
-            .default
-            .as_deref()
-            .ok_or_else(|| Error::InvalidConfig("agents.default is required".into()))?;
-        if !self.agents.profiles.contains_key(default_agent) {
-            return Err(Error::InvalidConfig(format!(
-                "agents.default `{default_agent}` is not defined"
-            )));
+            if let Some(default_agent) = self.agents.default.as_deref() {
+                return Err(Error::InvalidConfig(format!(
+                    "agents.default `{default_agent}` is not defined"
+                )));
+            }
+            if !self.agents.by_state.is_empty() || !self.agents.by_label.is_empty() {
+                return Err(Error::InvalidConfig(
+                    "agent selectors require at least one configured agent profile".into(),
+                ));
+            }
+        } else {
+            let default_agent = self
+                .agents
+                .default
+                .as_deref()
+                .ok_or_else(|| Error::InvalidConfig("agents.default is required".into()))?;
+            if !self.agents.profiles.contains_key(default_agent) {
+                return Err(Error::InvalidConfig(format!(
+                    "agents.default `{default_agent}` is not defined"
+                )));
+            }
         }
         for (agent_name, profile) in &self.agents.profiles {
             if matches!(
@@ -772,7 +904,14 @@ impl ServiceConfig {
             .collect()
     }
 
+    pub fn has_dispatch_agents(&self) -> bool {
+        !self.agents.profiles.is_empty()
+    }
+
     pub fn candidate_agents_for_issue(&self, issue: &Issue) -> Result<Vec<AgentDefinition>, Error> {
+        if self.agents.profiles.is_empty() {
+            return Ok(Vec::new());
+        }
         let selected_name =
             if let Some(agent_name) = self.agents.by_state.get(&issue.state.to_ascii_lowercase()) {
                 agent_name.clone()
@@ -1168,36 +1307,6 @@ fn shorthand_agent_profile(config: CodexConfig) -> (String, AgentProfileConfig) 
     })
 }
 
-fn default_mock_agent_profile() -> AgentProfileConfig {
-    AgentProfileConfig {
-        kind: "mock".into(),
-        transport: None,
-        command: Some("mock".into()),
-        fallbacks: Vec::new(),
-        model: None,
-        models: Vec::new(),
-        models_command: None,
-        fetch_models: true,
-        base_url: None,
-        api_key: None,
-        approval_policy: None,
-        thread_sandbox: None,
-        turn_sandbox_policy: None,
-        turn_timeout_ms: 0,
-        read_timeout_ms: 0,
-        stall_timeout_ms: None,
-        credits_command: None,
-        spending_command: None,
-        use_tmux: false,
-        tmux_session_prefix: Some("mock".into()),
-        interaction_mode: None,
-        prompt_mode: None,
-        idle_timeout_ms: 5_000,
-        completion_sentinel: None,
-        env: BTreeMap::new(),
-    }
-}
-
 fn default_single_agent_command(kind: &str) -> Option<&'static str> {
     match kind {
         "codex" => Some("codex app-server"),
@@ -1317,6 +1426,18 @@ fn expand_path_like(path: &Path) -> PathBuf {
     PathBuf::from(expanded)
 }
 
+fn workflow_root_dir(path: &Path) -> Result<PathBuf, Error> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    match parent {
+        Some(parent) => Ok(parent.to_path_buf()),
+        None => env::current_dir().map_err(|error| {
+            Error::Config(format!("resolving workflow directory failed: {error}"))
+        }),
+    }
+}
+
 fn config_error(error: config::ConfigError) -> Error {
     Error::Config(error.to_string())
 }
@@ -1328,8 +1449,16 @@ const fn default_true() -> bool {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use {
-        super::{ServiceConfig, WorkflowDefinition, render_issue_template, render_turn_template},
+        super::{
+            ServiceConfig, WorkflowDefinition, load_workflow_with_user_config,
+            render_issue_template, render_turn_template, repo_config_path,
+        },
         polyphony_core::{AgentInteractionMode, AgentPromptMode, AgentTransport, Issue},
         serde_yaml::Value as YamlValue,
     };
@@ -1353,6 +1482,17 @@ mod tests {
         }
     }
 
+    fn unique_temp_path(name: &str, extension: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "polyphony-workflow-{name}-{}.{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ))
+    }
+
     #[test]
     fn workspace_defaults_include_reuse_and_transient_paths() {
         let workflow = WorkflowDefinition {
@@ -1364,8 +1504,9 @@ mod tests {
 
         assert!(config.workspace.sync_on_reuse);
         assert_eq!(config.workspace.transient_paths, vec!["tmp", ".elixir_ls"]);
-        assert_eq!(config.agents.default.as_deref(), Some("mock"));
-        assert!(config.agents.profiles.contains_key("mock"));
+        assert_eq!(config.tracker.kind, "none");
+        assert!(config.agents.default.is_none());
+        assert!(config.agents.profiles.is_empty());
     }
 
     #[test]
@@ -1906,6 +2047,221 @@ agents:
         assert_eq!(names, vec!["codex", "kimi_fast", "openai"]);
         assert_eq!(candidates[1].api_key, None);
         assert_eq!(candidates[2].api_key, None);
+    }
+
+    #[test]
+    fn tracker_only_workflow_without_agents_is_valid() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: owner/repo
+  api_key: test-token
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert!(!config.has_dispatch_agents());
+        assert!(
+            config
+                .candidate_agents_for_issue(&sample_issue())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn user_config_can_supply_tracker_and_agents() {
+        let user_config_path = unique_temp_path("user-config", "toml");
+        fs::write(
+            &user_config_path,
+            r#"
+[tracker]
+kind = "github"
+repository = "owner/repo"
+api_key = "test-token"
+
+[agents]
+default = "codex"
+
+[agents.profiles.codex]
+kind = "codex"
+transport = "app_server"
+command = "codex app-server"
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config: YamlValue::Mapping(Default::default()),
+            prompt_template: String::new(),
+        };
+
+        let config =
+            ServiceConfig::from_workflow_with_configs(&workflow, Some(&user_config_path), None)
+                .unwrap();
+        let _ = fs::remove_file(&user_config_path);
+
+        assert_eq!(config.tracker.kind, "github");
+        assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(config.agents.default.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn workflow_front_matter_overrides_user_config() {
+        let user_config_path = unique_temp_path("user-config-override", "toml");
+        fs::write(
+            &user_config_path,
+            r#"
+[polling]
+interval_ms = 30000
+"#,
+        )
+        .unwrap();
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+polling:
+  interval_ms: 2000
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+
+        let config =
+            ServiceConfig::from_workflow_with_configs(&workflow, Some(&user_config_path), None)
+                .unwrap();
+        let _ = fs::remove_file(&user_config_path);
+
+        assert_eq!(config.polling.interval_ms, 2000);
+    }
+
+    #[test]
+    fn ensure_user_config_file_writes_template_once() {
+        let user_config_path = unique_temp_path("bootstrap-config", "toml");
+
+        let created = super::ensure_user_config_file(&user_config_path).unwrap();
+        let contents = fs::read_to_string(&user_config_path).unwrap();
+        let created_again = super::ensure_user_config_file(&user_config_path).unwrap();
+        let _ = fs::remove_file(&user_config_path);
+
+        assert!(created);
+        assert!(!created_again);
+        assert!(contents.contains("[tracker]"));
+        assert!(contents.contains("[agents.profiles]"));
+        assert!(contents.contains("Polyphony user config."));
+    }
+
+    #[test]
+    fn ensure_workflow_file_writes_template_once() {
+        let workflow_path = unique_temp_path("bootstrap-workflow", "md");
+
+        let created = super::ensure_workflow_file(&workflow_path).unwrap();
+        let contents = fs::read_to_string(&workflow_path).unwrap();
+        let created_again = super::ensure_workflow_file(&workflow_path).unwrap();
+        let _ = fs::remove_file(&workflow_path);
+
+        assert!(created);
+        assert!(!created_again);
+        assert!(contents.contains("# Polyphony Workflow"));
+        assert!(contents.contains("tracker:"));
+        assert!(contents.contains("Shared credentials and reusable agent profiles"));
+    }
+
+    #[test]
+    fn ensure_workflow_file_supports_repo_root_relative_path() {
+        let workflow_name = format!(
+            "polyphony-workflow-relative-{}.md",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let workflow_path = std::path::PathBuf::from(&workflow_name);
+
+        let created = super::ensure_workflow_file(&workflow_path).unwrap();
+        let contents = fs::read_to_string(&workflow_path).unwrap();
+        let created_again = super::ensure_workflow_file(&workflow_path).unwrap();
+        let _ = fs::remove_file(&workflow_path);
+
+        assert!(created);
+        assert!(!created_again);
+        assert!(contents.contains("# Polyphony Workflow"));
+        assert!(contents.contains("Local tracker identity and repo wiring can live"));
+    }
+
+    #[test]
+    fn ensure_repo_config_file_writes_template_once() {
+        let root = unique_temp_path("repo-config-root", "d");
+        fs::create_dir_all(&root).unwrap();
+        let repo_config_path = root.join(".polyphony").join("config.toml");
+
+        let created = super::ensure_repo_config_file(&repo_config_path, &root).unwrap();
+        let contents = fs::read_to_string(&repo_config_path).unwrap();
+        let created_again = super::ensure_repo_config_file(&repo_config_path, &root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(created);
+        assert!(!created_again);
+        assert!(contents.contains("Polyphony repo-local config."));
+        assert!(contents.contains("checkout_kind = \"linked_worktree\""));
+        assert!(contents.contains(&format!("source_repo_path = \"{}\"", root.display())));
+    }
+
+    #[test]
+    fn repo_local_config_overrides_workflow_front_matter() {
+        let root = unique_temp_path("repo-overlay-root", "d");
+        fs::create_dir_all(&root).unwrap();
+        let workflow_path = root.join("WORKFLOW.md");
+        fs::write(
+            &workflow_path,
+            r#"---
+tracker:
+  kind: none
+workspace:
+  checkout_kind: directory
+---
+# Prompt
+"#,
+        )
+        .unwrap();
+
+        let repo_config_path = repo_config_path(&workflow_path).unwrap();
+        fs::create_dir_all(repo_config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &repo_config_path,
+            r#"
+[tracker]
+kind = "github"
+repository = "penso/polyphony"
+api_key = "test-token"
+
+[workspace]
+checkout_kind = "linked_worktree"
+source_repo_path = "/tmp/polyphony"
+"#,
+        )
+        .unwrap();
+
+        let workflow = load_workflow_with_user_config(&workflow_path, None).unwrap();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(workflow.config.tracker.kind, "github");
+        assert_eq!(
+            workflow.config.tracker.repository.as_deref(),
+            Some("penso/polyphony")
+        );
+        assert_eq!(workflow.config.workspace.checkout_kind, "linked_worktree");
+        assert_eq!(
+            workflow.config.workspace.source_repo_path.as_deref(),
+            Some(std::path::Path::new("/tmp/polyphony"))
+        );
     }
 
     #[test]

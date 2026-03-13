@@ -2,12 +2,13 @@ use std::{
     env,
     future::Future,
     io::{self, Write as _},
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use {
+    async_trait::async_trait,
     clap::Parser,
     opentelemetry::{KeyValue, global, trace::TracerProvider as _},
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
@@ -19,8 +20,11 @@ use {
         RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
         spawn_workflow_watcher,
     },
-    polyphony_tui::LogBuffer,
-    polyphony_workflow::load_workflow,
+    polyphony_tui::{LogBuffer, prompt_workflow_initialization},
+    polyphony_workflow::{
+        ServiceConfig, ensure_repo_config_file, ensure_user_config_file, ensure_workflow_file,
+        load_workflow_with_user_config, repo_config_path, user_config_path,
+    },
     thiserror::Error,
     tokio::sync::{mpsc, watch},
     tracing::warn,
@@ -61,6 +65,12 @@ enum Error {
     Config(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowBootstrap {
+    Ready,
+    Canceled,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
@@ -77,7 +87,26 @@ async fn main() -> Result<(), Error> {
         sqlite_enabled = cli.sqlite_url.is_some(),
         "starting polyphony"
     );
-    let workflow = load_workflow(&cli.workflow_path)?;
+    let user_config_path = user_config_path()?;
+    if ensure_user_config_file(&user_config_path)? {
+        tracing::info!(
+            config_path = %user_config_path.display(),
+            "created default user config file"
+        );
+    }
+    if ensure_bootstrapped_workflow(&cli.workflow_path, cli.no_tui, |workflow_path| {
+        Ok(prompt_workflow_initialization(workflow_path)?)
+    })? == WorkflowBootstrap::Canceled
+    {
+        tracing::info!(
+            workflow_path = %cli.workflow_path.display(),
+            "workflow initialization canceled"
+        );
+        return Ok(());
+    }
+    let repo_config_path =
+        maybe_seed_repo_config_file(&cli.workflow_path, Some(&user_config_path))?;
+    let workflow = load_workflow_with_user_config(&cli.workflow_path, Some(&user_config_path))?;
     let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
         build_runtime_components(workflow)
             .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))
@@ -100,10 +129,15 @@ async fn main() -> Result<(), Error> {
     );
     let service = service.with_workflow_reload(
         cli.workflow_path.clone(),
+        Some(user_config_path),
         workflow_tx.clone(),
         component_factory,
     );
-    let _watcher = spawn_workflow_watcher(cli.workflow_path.clone(), handle.command_tx.clone())?;
+    let _watcher = spawn_workflow_watcher(
+        cli.workflow_path.clone(),
+        repo_config_path,
+        handle.command_tx.clone(),
+    )?;
     let service_task = tokio::spawn(service.run());
 
     run_operator_surface(
@@ -123,6 +157,94 @@ async fn main() -> Result<(), Error> {
         .await
         .map_err(|error| Error::Config(error.to_string()))??;
     Ok(())
+}
+
+fn ensure_bootstrapped_workflow<F>(
+    workflow_path: &Path,
+    no_tui: bool,
+    prompt_create_workflow: F,
+) -> Result<WorkflowBootstrap, Error>
+where
+    F: FnOnce(&Path) -> Result<bool, Error>,
+{
+    if workflow_path.exists() {
+        if workflow_path.is_file() {
+            return Ok(WorkflowBootstrap::Ready);
+        }
+        return Err(Error::Config(format!(
+            "workflow path `{}` exists but is not a file",
+            workflow_path.display()
+        )));
+    }
+
+    let should_create = if no_tui {
+        true
+    } else {
+        prompt_create_workflow(workflow_path)?
+    };
+    if !should_create {
+        return Ok(WorkflowBootstrap::Canceled);
+    }
+
+    if ensure_workflow_file(workflow_path)? {
+        tracing::info!(
+            workflow_path = %workflow_path.display(),
+            "created default workflow file"
+        );
+    }
+    Ok(WorkflowBootstrap::Ready)
+}
+
+fn maybe_seed_repo_config_file(
+    workflow_path: &Path,
+    user_config_path: Option<&Path>,
+) -> Result<Option<PathBuf>, Error> {
+    let repo_config_path = repo_config_path(workflow_path)?;
+    if repo_config_path.exists() {
+        if repo_config_path.is_file() {
+            return Ok(Some(repo_config_path));
+        }
+        return Err(Error::Config(format!(
+            "repo config path `{}` exists but is not a file",
+            repo_config_path.display()
+        )));
+    }
+
+    let workflow = load_workflow_with_user_config(workflow_path, user_config_path)?;
+    let workflow_root = workflow_root_dir(workflow_path)?;
+    if !should_seed_repo_config(&workflow.config, &workflow_root) {
+        return Ok(None);
+    }
+
+    let source_repo_path = workflow_root
+        .canonicalize()
+        .unwrap_or_else(|_| workflow_root.clone());
+    if ensure_repo_config_file(&repo_config_path, &source_repo_path)? {
+        tracing::info!(
+            workflow_path = %workflow_path.display(),
+            repo_config_path = %repo_config_path.display(),
+            "created default repo-local config file"
+        );
+    }
+    Ok(Some(repo_config_path))
+}
+
+fn should_seed_repo_config(config: &ServiceConfig, workflow_root: &Path) -> bool {
+    workflow_root.join(".git").exists()
+        && (config.tracker.kind == "none"
+            || (config.workspace.checkout_kind == "directory"
+                && config.workspace.source_repo_path.is_none()
+                && config.workspace.clone_url.is_none()))
+}
+
+fn workflow_root_dir(workflow_path: &Path) -> Result<PathBuf, Error> {
+    let parent = workflow_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    match parent {
+        Some(parent) => Ok(parent.to_path_buf()),
+        None => std::env::current_dir().map_err(Error::Io),
+    }
 }
 
 struct TelemetryGuard {
@@ -203,13 +325,17 @@ impl io::Write for TracingOutputWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        if !self.buffer.is_empty() {
+            self.output.record_bytes(&self.buffer);
+            self.buffer.clear();
+        }
         Ok(())
     }
 }
 
 impl Drop for TracingOutputWriter {
     fn drop(&mut self) {
-        self.output.record_bytes(&self.buffer);
+        let _ = self.flush();
     }
 }
 
@@ -422,27 +548,50 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
+struct EmptyTracker;
+
+#[async_trait]
+impl IssueTracker for EmptyTracker {
+    fn component_key(&self) -> String {
+        "tracker:none".into()
+    }
+
+    async fn fetch_candidate_issues(
+        &self,
+        _query: &polyphony_core::TrackerQuery,
+    ) -> Result<Vec<polyphony_core::Issue>, polyphony_core::Error> {
+        Ok(Vec::new())
+    }
+
+    async fn fetch_issues_by_states(
+        &self,
+        _project_slug: Option<&str>,
+        _states: &[String],
+    ) -> Result<Vec<polyphony_core::Issue>, polyphony_core::Error> {
+        Ok(Vec::new())
+    }
+
+    async fn fetch_issues_by_ids(
+        &self,
+        _issue_ids: &[String],
+    ) -> Result<Vec<polyphony_core::Issue>, polyphony_core::Error> {
+        Ok(Vec::new())
+    }
+
+    async fn fetch_issue_states_by_ids(
+        &self,
+        _issue_ids: &[String],
+    ) -> Result<Vec<polyphony_core::IssueStateUpdate>, polyphony_core::Error> {
+        Ok(Vec::new())
+    }
+}
+
 #[allow(unused_variables)]
 fn build_runtime_components(
     workflow: &polyphony_workflow::LoadedWorkflow,
 ) -> Result<RuntimeComponents, Error> {
-    #[cfg(feature = "mock")]
-    if is_mock_workflow(workflow) {
-        let tracker = polyphony_issue_mock::MockTracker::seeded_demo();
-        let agent = polyphony_issue_mock::MockAgentRuntime::new(tracker.clone());
-        return Ok(RuntimeComponents {
-            tracker: Arc::new(tracker),
-            agent: Arc::new(agent),
-            committer: None,
-            pull_request_manager: None,
-            pull_request_commenter: None,
-            feedback: None,
-        });
-    }
-
     let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind.as_str() {
-        #[cfg(feature = "mock")]
-        "mock" => Arc::new(polyphony_issue_mock::MockTracker::seeded_demo()),
+        "none" => Arc::new(EmptyTracker),
         #[cfg(feature = "linear")]
         "linear" => {
             let api_key = workflow
@@ -545,23 +694,6 @@ async fn build_store(sqlite_url: Option<&str>) -> Result<Option<Arc<dyn StateSto
     }
 
     Ok(None)
-}
-
-#[cfg(feature = "mock")]
-fn is_mock_workflow(workflow: &polyphony_workflow::LoadedWorkflow) -> bool {
-    workflow.config.tracker.kind == "mock"
-        && workflow
-            .config
-            .agents
-            .default
-            .as_ref()
-            .and_then(|name| workflow.config.agents.profiles.get(name))
-            .map(|profile| {
-                profile.kind == "mock"
-                    || matches!(profile.transport.as_deref(), Some("mock"))
-                    || profile.transport.is_none() && profile.kind.is_empty()
-            })
-            .unwrap_or(false)
 }
 
 #[cfg(all(test, feature = "mock"))]
@@ -682,5 +814,184 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, Error::Io(_)));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod bootstrap_tests {
+    use std::{fs, io};
+
+    use {
+        crate::{WorkflowBootstrap, ensure_bootstrapped_workflow, maybe_seed_repo_config_file},
+        polyphony_workflow::repo_config_path,
+    };
+
+    fn unique_temp_path(name: &str, extension: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "polyphony-cli-{name}-{}.{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ))
+    }
+
+    #[test]
+    fn headless_bootstrap_creates_missing_workflow() {
+        let workflow_path = unique_temp_path("bootstrap-headless", "md");
+
+        let outcome =
+            ensure_bootstrapped_workflow(&workflow_path, true, |_path| Ok(false)).unwrap();
+        let contents = fs::read_to_string(&workflow_path).unwrap();
+        let _ = fs::remove_file(&workflow_path);
+
+        assert_eq!(outcome, WorkflowBootstrap::Ready);
+        assert!(contents.contains("# Polyphony Workflow"));
+    }
+
+    #[test]
+    fn interactive_bootstrap_can_cancel() {
+        let workflow_path = unique_temp_path("bootstrap-cancel", "md");
+
+        let outcome =
+            ensure_bootstrapped_workflow(&workflow_path, false, |_path| Ok(false)).unwrap();
+
+        assert_eq!(outcome, WorkflowBootstrap::Canceled);
+        assert!(!workflow_path.exists());
+    }
+
+    #[test]
+    fn interactive_bootstrap_can_create_workflow() {
+        let workflow_path = unique_temp_path("bootstrap-create", "md");
+
+        let outcome =
+            ensure_bootstrapped_workflow(&workflow_path, false, |_path| Ok(true)).unwrap();
+        let contents = fs::read_to_string(&workflow_path).unwrap();
+        let _ = fs::remove_file(&workflow_path);
+
+        assert_eq!(outcome, WorkflowBootstrap::Ready);
+        assert!(contents.contains("# Polyphony Workflow"));
+    }
+
+    #[test]
+    fn interactive_bootstrap_propagates_prompt_errors() {
+        let workflow_path = unique_temp_path("bootstrap-error", "md");
+
+        let error = ensure_bootstrapped_workflow(&workflow_path, false, |_path| {
+            Err(crate::Error::Io(io::Error::other("prompt failed")))
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, crate::Error::Io(_)));
+    }
+
+    #[test]
+    fn bootstrap_rejects_directory_paths() {
+        let workflow_path = unique_temp_path("bootstrap-dir", "d");
+        fs::create_dir_all(&workflow_path).unwrap();
+
+        let error =
+            ensure_bootstrapped_workflow(&workflow_path, true, |_path| Ok(true)).unwrap_err();
+        let _ = fs::remove_dir_all(&workflow_path);
+
+        assert!(matches!(error, crate::Error::Config(_)));
+    }
+
+    #[test]
+    fn seeds_repo_config_for_generic_git_repo() {
+        let repo_root = unique_temp_path("repo-config-seed", "d");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        let workflow_path = repo_root.join("WORKFLOW.md");
+        polyphony_workflow::ensure_workflow_file(&workflow_path).unwrap();
+
+        let repo_config = maybe_seed_repo_config_file(&workflow_path, None).unwrap();
+        let repo_config_path = repo_config_path(&workflow_path).unwrap();
+        let contents = fs::read_to_string(&repo_config_path).unwrap();
+        let _ = fs::remove_dir_all(&repo_root);
+
+        assert_eq!(repo_config.as_deref(), Some(repo_config_path.as_path()));
+        assert!(contents.contains("Polyphony repo-local config."));
+        assert!(contents.contains("checkout_kind = \"linked_worktree\""));
+    }
+
+    #[test]
+    fn skips_repo_config_seed_when_tracker_and_workspace_are_already_configured() {
+        let repo_root = unique_temp_path("repo-config-skip", "d");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        let workflow_path = repo_root.join("WORKFLOW.md");
+        fs::write(
+            &workflow_path,
+            r#"---
+tracker:
+  kind: github
+  repository: penso/polyphony
+  api_key: test-token
+workspace:
+  checkout_kind: linked_worktree
+  source_repo_path: /tmp/polyphony
+---
+# Prompt
+"#,
+        )
+        .unwrap();
+
+        let repo_config = maybe_seed_repo_config_file(&workflow_path, None).unwrap();
+        let _ = fs::remove_dir_all(&repo_root);
+
+        assert!(repo_config.is_none());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tracing_tests {
+    use std::io::Write as _;
+
+    use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
+
+    use crate::{LogBuffer, TracingOutput, TracingOutputWriter};
+
+    #[test]
+    fn tracing_writer_flushes_into_tui_buffer() {
+        let buffer = LogBuffer::default();
+        let output = TracingOutput::tui(buffer.clone());
+        let mut writer = TracingOutputWriter {
+            output,
+            buffer: Vec::new(),
+        };
+
+        writer.write_all(b"first line\nsecond line\n").unwrap();
+        writer.flush().unwrap();
+
+        assert_eq!(buffer.drain_oldest_first(), vec![
+            "first line".to_string(),
+            "second line".to_string()
+        ]);
+    }
+
+    #[test]
+    fn tracing_subscriber_routes_events_into_tui_buffer() {
+        let buffer = LogBuffer::default();
+        let output = TracingOutput::tui(buffer.clone());
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new("info"))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .compact()
+                    .with_writer(output)
+                    .with_ansi(false),
+            );
+        let dispatch = tracing::Dispatch::new(subscriber);
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!(component = "test", "subscriber log path works");
+        });
+
+        let lines = buffer.drain_oldest_first();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("subscriber log path works"));
+        assert!(lines[0].contains("INFO"));
     }
 }

@@ -1,0 +1,78 @@
+# Destination: copy to ~/.config/polyphony/config.toml.
+# Shared user-local credentials and reusable provider profiles belong here.
+
+[tracker]
+kind = "none"
+endpoint = "https://api.linear.app/graphql"
+active_states = ["Todo", "In Progress"]
+terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Human Review"]
+
+[polling]
+interval_ms = 30000
+
+[workspace]
+root = ".polyphony/workspaces"
+checkout_kind = "directory"
+sync_on_reuse = true
+transient_paths = ["tmp", ".elixir_ls"]
+
+[hooks]
+timeout_ms = 60000
+
+[agent]
+max_concurrent_agents = 10
+max_retry_backoff_ms = 300000
+max_turns = 20
+
+[agents]
+default = "codex"
+
+[agents.by_state]
+todo = "claude"
+
+[agents.by_label]
+risky = "claude"
+
+[agents.profiles.codex]
+kind = "codex"
+transport = "app_server"
+command = "codex app-server"
+fallbacks = ["kimi_fast"]
+fetch_models = true
+models_command = "codex models --json"
+approval_policy = "auto"
+thread_sandbox = "workspace-write"
+turn_sandbox_policy = "workspace-write"
+
+[agents.profiles.kimi_fast]
+kind = "kimi"
+transport = "openai_chat"
+model = "kimi-2.5"
+api_key = "$KIMI_API_KEY"
+fetch_models = true
+
+[agents.profiles.claude]
+kind = "claude"
+transport = "local_cli"
+command = "claude"
+use_tmux = true
+interaction_mode = "interactive"
+fetch_models = true
+models_command = "claude models --json"
+
+[agents.profiles.openai]
+kind = "openai"
+transport = "openai_chat"
+model = "gpt-5.1"
+api_key = "$OPENAI_API_KEY"
+fetch_models = true
+
+[automation]
+enabled = false
+draft_pull_requests = true
+
+[automation.git]
+remote_name = "origin"
+
+[feedback]
+offered = []

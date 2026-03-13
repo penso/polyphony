@@ -18,7 +18,7 @@ boundaries.
 
 ## Feature-gated crates
 
-- `polyphony-issue-mock`: seeded mock tracker and mock runtime for local runs and tests
+- `polyphony-issue-mock`: seeded mock tracker and mock runtime for tests and internal smoke coverage
 - `polyphony-linear`: Linear tracker integration
 - `polyphony-github`: GitHub Issues, pull request comments, and GitHub Project syncing
 - `polyphony-sqlite`: optional SQLite-backed persistence

@@ -2485,6 +2485,7 @@ dependencies = [
 name = "polyphony-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -2619,6 +2620,7 @@ dependencies = [
 name = "polyphony-tui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "crossterm 0.29.0",
  "polyphony-core",
  "polyphony-orchestrator",

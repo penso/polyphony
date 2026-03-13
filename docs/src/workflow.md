@@ -1,9 +1,31 @@
 # Workflow Configuration
 
-`polyphony` starts from a repository-owned `WORKFLOW.md` file. The file contains YAML front matter
+`polyphony` starts from a repository-owned `WORKFLOW.md` file, but the CLI first loads
+`~/.config/polyphony/config.toml`, then merges the repo workflow, then applies optional
+repo-local overrides from `.polyphony/config.toml`. `WORKFLOW.md` contains YAML front matter
 followed by the worker prompt template.
 
+If `WORKFLOW.md` is missing, the CLI offers to create a starter file in TUI mode and writes it
+automatically in `--no-tui` mode.
+
+Copyable full-file references live under [`templates/`](../../templates) and
+[`templates/examples/`](../../templates/examples).
+
+Merge order is:
+
+1. built-in defaults
+2. `~/.config/polyphony/config.toml`
+3. `WORKFLOW.md` front matter
+4. `.polyphony/config.toml`
+5. `POLYPHONY__...` environment variables
+
 ## Shape
+
+Treat `~/.config/polyphony/config.toml` as user-local shared state, for example credentials,
+reusable agent profiles, and personal defaults. Treat `WORKFLOW.md` as the shared repo-owned
+workflow policy and prompt. Use `.polyphony/config.toml` for local repository wiring such as
+`tracker.repository`, `tracker.project_slug`, `workspace.source_repo_path`, and `workspace.clone_url`
+when you do not want to edit the checked-in workflow.
 
 The current workspace configuration covers:
 
@@ -20,45 +42,19 @@ The current workspace configuration covers:
 
 ## Example
 
-```yaml
----
-tracker:
-  kind: mock
-polling:
-  interval_ms: 2000
-workspace:
-  root: .polyphony/workspaces
-  checkout_kind: directory
-automation:
-  enabled: false
-feedback:
-  offered: []
-agent:
-  max_concurrent_agents: 3
-agents:
-  default: mock
-  profiles:
-    mock:
-      kind: mock
-      transport: mock
----
-# Worker Prompt
-```
+- Start from [`templates/WORKFLOW.md`](../../templates/WORKFLOW.md) for the default generated
+  `WORKFLOW.md`.
+- Use
+  [`templates/examples/WORKFLOW.multi-agent.md`](../../templates/examples/WORKFLOW.multi-agent.md)
+  for a full multi-agent workflow example.
 
 ## Single-Agent Shorthand
 
 For a simple single-agent workflow, `codex` can stand in for a one-profile `agents` section:
 
-```yaml
----
-tracker:
-  kind: mock
-codex:
-  command: codex app-server
-  approval_policy: auto
----
-# Worker Prompt
-```
+- Use
+  [`templates/examples/WORKFLOW.codex-shorthand.md`](../../templates/examples/WORKFLOW.codex-shorthand.md)
+  as a full-file example.
 
 That shorthand is normalized into a default `codex` agent internally. The legacy top-level
 `provider` block is still accepted as a deprecated alias for the same single-agent mode.
@@ -72,9 +68,20 @@ The `agents` section supports:
 - `by_label`: profile overrides keyed by issue label
 - `profiles`: named transport definitions
 
+When `profiles` is empty, Polyphony stays in tracker-only mode: it polls and displays issues, but
+does not dispatch work to an agent yet. That is useful when the repo-local workflow is configured
+to read GitHub or Linear issues before any agent profile is wired in.
+
+Full copyable files for the config layers are:
+
+- [`templates/config.toml`](../../templates/config.toml)
+- [`templates/repo-config.toml`](../../templates/repo-config.toml)
+- [`templates/examples/config.multi-provider.toml`](../../templates/examples/config.multi-provider.toml)
+- [`templates/examples/repo-config.github.toml`](../../templates/examples/repo-config.github.toml)
+- [`templates/examples/repo-config.linear.toml`](../../templates/examples/repo-config.linear.toml)
+
 Current transport styles in the codebase are:
 
-- `mock`
 - `app_server`
 - `local_cli`
 - `openai_chat`
@@ -124,6 +131,10 @@ That separation matters because workspace lifecycle is independent from tracker 
 Template fields include the normal `issue.*` fields plus handoff values such as
 `base_branch`, `head_branch`, `commit_sha`, and `pull_request_url` where
 relevant.
+
+Use
+[`templates/examples/WORKFLOW.automation-feedback.md`](../../templates/examples/WORKFLOW.automation-feedback.md)
+as a full-file example that wires automation and feedback together.
 
 ## Prompt Rendering
 

@@ -1,0 +1,172 @@
+# Polyphony user config.
+# Destination: copy to ~/.config/polyphony/config.toml.
+# This file is created automatically on first start.
+# Merge order is: built-in defaults, this file, WORKFLOW.md front matter,
+# .polyphony/config.toml, then POLYPHONY__... env vars.
+# Use "$ENV_VAR" to resolve secrets from the environment instead of writing them directly.
+# Keep reusable credentials and agent profiles here.
+# Keep local repository/project selection and git-backed workspace settings in `.polyphony/config.toml`
+# when you do not want to edit the checked-in workflow.
+
+[tracker]
+kind = "none"
+endpoint = "https://api.linear.app/graphql"
+active_states = ["Todo", "In Progress"]
+terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Human Review"]
+# Example secret:
+# api_key = "$LINEAR_API_KEY"
+
+[polling]
+interval_ms = 30000
+
+[workspace]
+root = ".polyphony/workspaces"
+checkout_kind = "directory"
+sync_on_reuse = true
+transient_paths = ["tmp", ".elixir_ls"]
+
+[hooks]
+timeout_ms = 60000
+# after_create = "just bootstrap"
+# before_run = "just test"
+# after_run = "just lint"
+# before_remove = "rm -rf node_modules/.cache"
+
+[agent]
+max_concurrent_agents = 10
+max_retry_backoff_ms = 300000
+max_turns = 20
+# continuation_prompt = '''
+# Continue {{ issue.identifier }} turn {{ turn_number }} of {{ max_turns }}.
+# '''
+
+[agent.max_concurrent_agents_by_state]
+# todo = 2
+# "in progress" = 4
+
+[agents]
+# default = "codex"
+
+[agents.by_state]
+# todo = "claude"
+
+[agents.by_label]
+# risky = "claude"
+
+# Leave [agents.profiles] empty for tracker-only mode. Polyphony will still poll and display issues.
+[agents.profiles]
+
+# Generic agent profile reference. Every supported field is shown here.
+# [agents.profiles.example]
+# kind = "openai"
+# transport = "openai_chat"
+# command = "custom-agent"
+# fallbacks = ["backup"]
+# model = "gpt-5.1"
+# models = ["gpt-5.1", "gpt-5-mini"]
+# models_command = "custom-agent models --json"
+# fetch_models = true
+# base_url = "https://api.openai.com/v1"
+# api_key = "$OPENAI_API_KEY"
+# approval_policy = "auto"
+# thread_sandbox = "workspace-write"
+# turn_sandbox_policy = "workspace-write"
+# turn_timeout_ms = 3600000
+# read_timeout_ms = 5000
+# stall_timeout_ms = 300000
+# credits_command = "custom-agent credits --json"
+# spending_command = "custom-agent spending --json"
+# use_tmux = false
+# tmux_session_prefix = "example"
+# interaction_mode = "one_shot"
+# prompt_mode = "env"
+# idle_timeout_ms = 5000
+# completion_sentinel = "DONE"
+# [agents.profiles.example.env]
+# OPENAI_ORG = "org_123"
+
+# Codex app-server example.
+# [agents.profiles.codex]
+# kind = "codex"
+# transport = "app_server"
+# command = "codex app-server"
+# fetch_models = true
+# models_command = "codex models --json"
+# approval_policy = "auto"
+# thread_sandbox = "workspace-write"
+# turn_sandbox_policy = "workspace-write"
+
+# Claude CLI example.
+# [agents.profiles.claude]
+# kind = "claude"
+# transport = "local_cli"
+# command = "claude"
+# use_tmux = true
+# interaction_mode = "interactive"
+# fetch_models = true
+# models_command = "claude models --json"
+
+# GitHub Copilot CLI example.
+# [agents.profiles.copilot]
+# kind = "github-copilot"
+# transport = "local_cli"
+# command = "copilot"
+# fetch_models = false
+
+# OpenAI-compatible HTTP example.
+# [agents.profiles.openai]
+# kind = "openai"
+# transport = "openai_chat"
+# model = "gpt-5.1"
+# api_key = "$OPENAI_API_KEY"
+# fetch_models = true
+
+# OpenRouter example.
+# [agents.profiles.openrouter]
+# kind = "openrouter"
+# transport = "openai_chat"
+# base_url = "https://openrouter.ai/api/v1"
+# model = "openai/gpt-5-mini"
+# api_key = "$OPENROUTER_API_KEY"
+# fetch_models = true
+
+# Kimi / Moonshot example.
+# [agents.profiles.kimi_fast]
+# kind = "kimi"
+# transport = "openai_chat"
+# model = "kimi-2.5"
+# api_key = "$KIMI_API_KEY"
+# fetch_models = true
+
+[automation]
+enabled = false
+draft_pull_requests = true
+# review_agent = "codex"
+# commit_message = "fix({{ issue.identifier }}): {{ issue.title }}"
+# pr_title = "fix: {{ issue.title }}"
+# pr_body = "Automated handoff for {{ issue.identifier }}"
+# review_prompt = "Review {{ issue.identifier }} before merge."
+
+[automation.git]
+remote_name = "origin"
+
+[automation.git.author]
+# name = "Polyphony"
+# email = "polyphony@example.com"
+
+[feedback]
+offered = []
+# action_base_url = "https://example.com/polyphony"
+
+[feedback.telegram]
+# [feedback.telegram.ops]
+# bot_token = "$TELEGRAM_BOT_TOKEN"
+# chat_id = "123456789"
+
+[feedback.webhook]
+# [feedback.webhook.audit]
+# url = "https://example.com/polyphony/handoff"
+# bearer_token = "$HANDOFF_WEBHOOK_TOKEN"
+
+[server]
+# port = 8080

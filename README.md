@@ -32,16 +32,16 @@ from tracker, agent, persistence, and UI implementations.
 | [`polyphony-feedback`](crates/feedback) | Generic outbound feedback sinks such as Telegram and webhooks. | Always |
 | [`polyphony-tui`](crates/tui) | `ratatui` status surface for live runtime snapshots. | Always |
 | [`polyphony-cli`](crates/cli) | Thin binary that wires the build together. | Always |
-| [`polyphony-issue-mock`](crates/issue-mock) | Mock tracker and mock agent runtime for tests and local smoke runs. | `mock` |
+| [`polyphony-issue-mock`](crates/issue-mock) | Mock tracker and mock agent runtime for tests and internal smoke coverage. | `mock` |
 | [`polyphony-linear`](crates/linear) | Linear tracker adapter using typed GraphQL queries. | `linear` |
 | [`polyphony-github`](crates/github) | GitHub Issues, PR, and Project integrations via `octocrab` and `graphql_client`. | `github` |
 | [`polyphony-sqlite`](crates/sqlite) | Optional SQLite-backed state store. | `sqlite` |
 
 ## Feature flags
 
-- `mock`: demo tracker and demo agent runtime. Enabled by default.
-- `linear`: Linear tracker adapter from `polyphony-linear`.
-- `github`: GitHub Issues tracker adapter.
+- `mock`: mock tracker and mock agent runtime support used by tests and internal smoke coverage. Not enabled by default.
+- `linear`: Linear tracker adapter from `polyphony-linear`. Enabled by default in `polyphony-cli`.
+- `github`: GitHub Issues tracker adapter. Enabled by default in `polyphony-cli`.
 - `sqlite`: SQLite-backed persistence adapter.
 - `agent-codex`: Codex provider runtime.
 - `agent-claude`: Claude provider runtime.
@@ -57,7 +57,7 @@ This repository already provides:
 - trait seams for trackers, app-server runtimes, and persistence
 - a dedicated workspace provisioner seam, with `git2`-backed linked worktree and clone support
 - a separate workspace manager crate that handles sanitized path mapping, containment checks, hook execution, transient artifact cleanup, and rollback on failed initialization
-- a real config layer based on the `config` crate, with defaults, env overlays, and typed deserialization from `WORKFLOW.md`
+- a real config layer based on the `config` crate, with built-in defaults, `~/.config/polyphony/config.toml`, repo-owned `WORKFLOW.md`, repo-local `.polyphony/config.toml`, and `POLYPHONY__...` env overlays
 - a long-running async orchestrator with retries, reconciliation, workspace hooks, restart bootstrap, and live snapshots
 - a top-level `codex:` workflow shorthand for simple single-agent Codex runs, with legacy `provider:` compatibility
 - named agent profiles with state/label-based selection in `WORKFLOW.md`
@@ -68,8 +68,8 @@ This repository already provides:
 - saved per-issue agent context snapshots, built from streamed runtime events and reused on retries/handoffs
 - runtime throttling when adapters surface `429`-style rate limits
 - budget and spend snapshots that can be persisted and shown in the TUI
-- a `ratatui` dashboard for running work, retry queue, token totals, throttles, budgets, recent events, and live tracing logs
-- an implementation-owned `tracker.kind: mock` extension so the system can be run locally without Linear
+- a multi-tab `ratatui` dashboard for overview, activity, logs, and agent catalogs, with sparklines, progress gauges, scrollable panes, and live tracing logs
+- a `tracker.kind: none` startup mode so the real runtime can boot before any tracker or agent is configured
 - optional post-run GitHub handoff automation that can commit, push, open a draft PR, and post a review summary
 - generic outbound feedback sinks for human handoff notifications, with Telegram and webhook implementations today
 
@@ -109,8 +109,29 @@ Branch names default to the issue branch metadata when present, otherwise `task/
 cargo run -p polyphony-cli
 ```
 
-The default `WORKFLOW.md` uses the mock tracker, so the TUI starts immediately and shows seeded demo issues,
-even if optional OpenAI-compatible agent profiles do not have API keys configured yet.
+On first start, Polyphony creates `~/.config/polyphony/config.toml` if it does not exist. The
+default config keeps `tracker.kind = "none"` and no agent profiles, so the real TUI starts
+without mock data. In git repos with a generic shared workflow, Polyphony also seeds
+`.polyphony/config.toml` so you can point workspaces back at the current repository without editing
+the checked-in workflow. Once you configure GitHub or Linear in the repo-local config, Polyphony
+can poll and display real issues even before any LLM provider is set up.
+
+If `WORKFLOW.md` is missing in the current directory, Polyphony offers to create a repo-local
+starter workflow in the TUI. In `--no-tui` mode it writes that starter file automatically.
+
+In this repository, the tracked [WORKFLOW.md](WORKFLOW.md) is the real workflow policy for running
+Polyphony on Polyphony. Generic starter references now live under [templates/WORKFLOW.md](templates/WORKFLOW.md),
+[templates/config.toml](templates/config.toml), and
+[templates/repo-config.toml](templates/repo-config.toml). Copyable full-file examples live under
+[templates/examples/](templates/examples).
+
+TUI controls:
+
+- `1-4` or `Tab` / `Shift-Tab` switch tabs
+- `j` / `k` or arrow keys move selections
+- `PgUp` / `PgDn` and `g` / `G` scroll logs and event history
+- `r` refreshes the runtime snapshot
+- `q` quits
 
 Run without the TUI:
 
@@ -133,7 +154,8 @@ local tracing output into the TUI `Logs` pane while the dashboard is active. The
 defaults to `polyphony` and can be overridden with `OTEL_SERVICE_NAME`. If OTLP exporter setup
 fails, Polyphony prints a warning and continues with local logs only. If the TUI fails to start or
 crashes, the service falls back to headless mode, flushes buffered logs back to stderr, and keeps
-running until `Ctrl-C`.
+running until `Ctrl-C`. The `Logs` tab follows the active `RUST_LOG` filter, so a quiet setting
+such as `RUST_LOG=warn` will intentionally hide the normal startup `info` lines.
 
 Enable SQLite persistence:
 
@@ -169,73 +191,78 @@ just schema-linear
 `schema-linear` requires `LINEAR_API_KEY` in the environment and refreshes
 `crates/linear/src/linear_schema.json` from the live Linear endpoint.
 
-The repo-owned workflow can now declare multiple named agents:
+## Configuration
 
-```yaml
-agents:
-  default: codex
-  by_state:
-    todo: claude
-  profiles:
-    codex:
-      kind: codex
-      transport: app_server
-      command: codex app-server
-      fallbacks:
-        - kimi_fast
-      fetch_models: true
-      models_command: codex models --json
-    kimi_fast:
-      kind: kimi
-      api_key: $KIMI_API_KEY
-      model: kimi-2.5
-      fetch_models: true
-    claude:
-      kind: claude
-      transport: local_cli
-      command: claude
-      use_tmux: true
-      interaction_mode: interactive
-      fetch_models: true
-      models_command: claude models --json
-    openai:
-      kind: openai
-      transport: openai_chat
-      fetch_models: true
-```
+Polyphony uses three config layers:
 
-For a simple single-agent Codex workflow, a top-level shorthand is also accepted:
+- `~/.config/polyphony/config.toml`: user-local credentials, reusable agent profiles, and optional personal defaults. The CLI creates this file on first start.
+- `WORKFLOW.md`: repo-owned prompt text plus shared workflow policy.
+- `.polyphony/config.toml`: repo-local untracked tracker identity and workspace wiring overrides. The CLI creates this automatically in git repos when the checked-in workflow is still generic.
 
-```yaml
-codex:
-  command: codex app-server
-  approval_policy: auto
-```
+Merge order is:
+
+1. built-in defaults
+2. `~/.config/polyphony/config.toml`
+3. `WORKFLOW.md` front matter
+4. `.polyphony/config.toml`
+5. `POLYPHONY__...` environment variables
+
+Any string value that starts with `$` is resolved from the environment, so values such as
+`api_key = "$OPENAI_API_KEY"` or `api_key = "$GITHUB_TOKEN"` keep secrets out of the file.
+
+Keep tracker identity and repo or project selection out of the global config.
+That includes:
+
+- `tracker.kind`
+- `tracker.repository`
+- `tracker.project_slug`
+- `tracker.project_owner`
+- `tracker.project_number`
+- `tracker.project_status_field`
+- `workspace.source_repo_path`
+- `workspace.clone_url`
+
+Prefer `.polyphony/config.toml` for those local repo settings when the checked-in `WORKFLOW.md` is
+shared policy or template text.
+
+Provider setup belongs in `~/.config/polyphony/config.toml`. Supported profiles in the default
+CLI build are:
+
+- Codex app-server: `kind = "codex"`, `transport = "app_server"`, `command = "codex app-server"`
+- Claude CLI: `kind = "claude"` or `kind = "anthropic"`, usually `transport = "local_cli"` and `command = "claude"`
+- GitHub Copilot CLI: `kind = "copilot"` or `kind = "github-copilot"`, usually `transport = "local_cli"` and `command = "copilot"`
+- OpenAI-compatible HTTP providers: `kind = "openai"`, `kind = "openai-compatible"`, or `kind = "openrouter"` with `transport = "openai_chat"`
+- Kimi / Moonshot: `kind = "kimi"` or `kind = "moonshotai"` with `transport = "openai_chat"`, defaulting to `https://api.moonshot.ai/v1`
+
+For a shared multi-provider user config, copy
+[templates/examples/config.multi-provider.toml](templates/examples/config.multi-provider.toml)
+into `~/.config/polyphony/config.toml`.
+
+The generated `~/.config/polyphony/config.toml` template includes every supported top-level option
+plus commented provider examples for Codex, Claude, Copilot, OpenAI-compatible providers,
+OpenRouter, and Kimi. The checked-in reference copies live in [templates/config.toml](templates/config.toml)
+and [templates/repo-config.toml](templates/repo-config.toml).
+
+For repo-local GitHub setup in `.polyphony/config.toml`, with no LLM providers yet, copy
+[templates/examples/repo-config.github.toml](templates/examples/repo-config.github.toml).
+
+For repo-local Linear setup, copy
+[templates/examples/repo-config.linear.toml](templates/examples/repo-config.linear.toml).
+
+For a repo-owned workflow with multiple named agents and shared policy, copy
+[templates/examples/WORKFLOW.multi-agent.md](templates/examples/WORKFLOW.multi-agent.md)
+into `WORKFLOW.md`.
+
+For a simple single-agent Codex workflow, copy
+[templates/examples/WORKFLOW.codex-shorthand.md](templates/examples/WORKFLOW.codex-shorthand.md)
+into `WORKFLOW.md`.
 
 The legacy top-level `provider:` block remains accepted as a deprecated alias for the same
 single-agent shorthand.
 
-The workflow can also declare automated PR handoff and feedback sinks:
-
-```yaml
-automation:
-  enabled: true
-  draft_pull_requests: true
-  review_agent: codex
-  commit_message: "fix({{ issue.identifier }}): {{ issue.title }}"
-feedback:
-  offered:
-    - telegram
-    - webhook
-  telegram:
-    ops:
-      bot_token: $TELEGRAM_BOT_TOKEN
-      chat_id: "123456789"
-  webhook:
-    audit:
-      url: https://example.com/polyphony/handoff
-      bearer_token: $HANDOFF_WEBHOOK_TOKEN
-```
+For automated PR handoff and feedback sinks, copy
+[templates/examples/WORKFLOW.automation-feedback.md](templates/examples/WORKFLOW.automation-feedback.md)
+into `WORKFLOW.md`.
 
 When `fetch_models` is enabled:
 

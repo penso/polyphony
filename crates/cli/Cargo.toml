@@ -9,7 +9,7 @@ name = "polyphony"
 path = "src/main.rs"
 
 [features]
-default = ["mock", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
+default = ["linear", "github", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
 github = ["dep:polyphony-github"]
@@ -21,6 +21,7 @@ agent-openai = ["polyphony-agents/openai"]
 agent-local = ["polyphony-agents/local"]
 
 [dependencies]
+async-trait.workspace = true
 clap.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
