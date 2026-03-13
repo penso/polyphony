@@ -8,7 +8,7 @@ use {
     },
     std::time::Duration,
     thiserror::Error,
-    tracing::{debug, info},
+    tracing::debug,
 };
 
 const LINEAR_HTTP_TIMEOUT: Duration = Duration::from_millis(30_000);
@@ -167,7 +167,7 @@ impl IssueTracker for LinearTracker {
             .project_slug
             .clone()
             .ok_or_else(|| CoreError::Adapter("missing_tracker_project_slug".into()))?;
-        info!(
+        debug!(
             project_slug,
             state_count = query.active_states.len(),
             "fetching Linear candidate issues"

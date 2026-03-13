@@ -11,10 +11,12 @@ It consumes `RuntimeSnapshot` values and displays:
 
 - an `Overview` tab with metric cards, issue queues, and inspector panels
 - an `Activity` tab with recent events, network cadence gauges, and budgets or throttles
-- a full-height `Logs` tab with scrolling and scrollbar state
+- a full-height `Logs` tab with sticky tail-follow, chronological scrolling, and a live scrollbar
 - an `Agents` tab with discovered model catalogs and budget gauges
 - sparkline histories for visible issues, running work, retries, token deltas, and event bursts
 - cadence and budget progress bars backed by live runtime state
+- a best-effort terminal palette probe so Ghostty and other OSC-aware terminals can tint the UI to
+  match the active foreground and background colors
 
 ## Interaction model
 

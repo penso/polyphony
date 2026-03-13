@@ -1,8 +1,9 @@
 use std::{
     collections::VecDeque,
+    io::{IsTerminal as _, Read as _, Write as _},
     path::Path,
     sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use {
@@ -29,9 +30,11 @@ use {
     tokio::sync::{mpsc, watch},
 };
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd as _;
+
 const HISTORY_LEN: usize = 48;
 const LOG_BUFFER_CAPACITY: usize = 2_000;
-const BLOCK_SYMBOL: &str = " ";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -114,17 +117,21 @@ impl LogBuffer {
             return;
         }
         let mut lines = lock_or_recover(&self.lines);
-        lines.push_front(line);
+        lines.push_back(line);
         while lines.len() > self.max_lines {
-            lines.pop_back();
+            lines.pop_front();
         }
     }
 
     pub fn recent_lines(&self, limit: usize) -> Vec<String> {
         lock_or_recover(&self.lines)
             .iter()
+            .rev()
             .take(limit)
             .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
             .collect()
     }
 
@@ -134,8 +141,7 @@ impl LogBuffer {
 
     pub fn drain_oldest_first(&self) -> Vec<String> {
         let mut lines = lock_or_recover(&self.lines);
-        let drained = lines.drain(..).collect::<Vec<_>>();
-        drained.into_iter().rev().collect()
+        lines.drain(..).collect()
     }
 }
 
@@ -219,12 +225,15 @@ impl MetricHistory {
 
 #[derive(Debug)]
 struct AppState {
+    theme: Theme,
     active_tab: ActiveTab,
     history: MetricHistory,
     running_state: TableState,
     visible_state: TableState,
     models_state: TableState,
     logs_scroll: usize,
+    logs_max_scroll: usize,
+    logs_follow_tail: bool,
     events_scroll: usize,
     last_total_tokens: u64,
     last_event_marker: Option<EventMarker>,
@@ -233,12 +242,15 @@ struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
+            theme: default_theme(),
             active_tab: ActiveTab::Overview,
             history: MetricHistory::default(),
             running_state: TableState::default(),
             visible_state: TableState::default(),
             models_state: TableState::default(),
             logs_scroll: 0,
+            logs_max_scroll: 0,
+            logs_follow_tail: true,
             events_scroll: 0,
             last_total_tokens: 0,
             last_event_marker: None,
@@ -247,6 +259,13 @@ impl Default for AppState {
 }
 
 impl AppState {
+    fn with_theme(theme: Theme) -> Self {
+        Self {
+            theme,
+            ..Self::default()
+        }
+    }
+
     fn on_snapshot(&mut self, snapshot: &RuntimeSnapshot) {
         let token_delta = snapshot
             .codex_totals
@@ -326,7 +345,15 @@ impl AppState {
                 self.events_scroll = self.events_scroll.saturating_add(amount);
             },
             ActiveTab::Logs => {
-                self.logs_scroll = self.logs_scroll.saturating_add(amount);
+                if self.logs_follow_tail {
+                    self.logs_scroll = self.logs_max_scroll;
+                } else {
+                    self.logs_scroll = self.logs_scroll.saturating_add(amount);
+                    if self.logs_scroll >= self.logs_max_scroll {
+                        self.logs_scroll = self.logs_max_scroll;
+                        self.logs_follow_tail = true;
+                    }
+                }
             },
             ActiveTab::Agents => {
                 move_selection(
@@ -355,7 +382,13 @@ impl AppState {
                 self.events_scroll = self.events_scroll.saturating_sub(amount);
             },
             ActiveTab::Logs => {
-                self.logs_scroll = self.logs_scroll.saturating_sub(amount);
+                let current = if self.logs_follow_tail {
+                    self.logs_max_scroll
+                } else {
+                    self.logs_scroll
+                };
+                self.logs_follow_tail = false;
+                self.logs_scroll = current.saturating_sub(amount);
             },
             ActiveTab::Agents => {
                 move_selection_back(
@@ -370,7 +403,10 @@ impl AppState {
     fn jump_to_top(&mut self) {
         match self.active_tab {
             ActiveTab::Activity => self.events_scroll = 0,
-            ActiveTab::Logs => self.logs_scroll = 0,
+            ActiveTab::Logs => {
+                self.logs_follow_tail = false;
+                self.logs_scroll = 0;
+            },
             _ => {},
         }
     }
@@ -378,8 +414,20 @@ impl AppState {
     fn jump_to_bottom(&mut self) {
         match self.active_tab {
             ActiveTab::Activity => self.events_scroll = usize::MAX,
-            ActiveTab::Logs => self.logs_scroll = usize::MAX,
+            ActiveTab::Logs => {
+                self.logs_follow_tail = true;
+                self.logs_scroll = self.logs_max_scroll;
+            },
             _ => {},
+        }
+    }
+
+    fn sync_logs(&mut self, line_count: usize, area_height: u16) {
+        self.logs_max_scroll = max_scroll(line_count, area_height);
+        if self.logs_follow_tail {
+            self.logs_scroll = self.logs_max_scroll;
+        } else {
+            self.logs_scroll = self.logs_scroll.min(self.logs_max_scroll);
         }
     }
 
@@ -398,6 +446,7 @@ impl AppState {
 
 pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Error> {
     enable_raw_mode()?;
+    let theme = detect_terminal_theme().unwrap_or_else(default_theme);
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -405,7 +454,7 @@ pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Erro
     let mut state = BootstrapState::default();
 
     let result = loop {
-        terminal.draw(|frame| draw_workflow_bootstrap(frame, workflow_path, &state))?;
+        terminal.draw(|frame| draw_workflow_bootstrap(frame, workflow_path, &state, theme))?;
 
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
@@ -427,12 +476,13 @@ pub async fn run(
     log_buffer: LogBuffer,
 ) -> Result<(), Error> {
     enable_raw_mode()?;
+    let theme = detect_terminal_theme().unwrap_or_else(default_theme);
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = AppState::default();
+    let mut app = AppState::with_theme(theme);
     let mut snapshot = snapshot_rx.borrow().clone();
     app.on_snapshot(&snapshot);
 
@@ -472,9 +522,10 @@ fn draw_workflow_bootstrap(
     frame: &mut ratatui::Frame<'_>,
     workflow_path: &Path,
     state: &BootstrapState,
+    theme: Theme,
 ) {
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme().background)),
+        Block::default().style(Style::default().bg(theme.background)),
         frame.area(),
     );
 
@@ -489,25 +540,22 @@ fn draw_workflow_bootstrap(
             Line::from(Span::styled(
                 "Initialize",
                 Style::default()
-                    .fg(theme().highlight)
+                    .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(Span::styled("Workflow", Style::default().fg(theme().muted))),
-            Line::from(Span::styled(
-                "Repo Local",
-                Style::default().fg(theme().muted),
-            )),
+            Line::from(Span::styled("Workflow", Style::default().fg(theme.muted))),
+            Line::from(Span::styled("Repo Local", Style::default().fg(theme.muted))),
         ])
         .divider(Span::raw("  "))
         .select(0)
-        .block(panel_block("Polyphony")),
+        .block(panel_block("Polyphony", theme)),
         top[0],
     );
 
     let modal = centered_rect(top[1], 88, 18);
     frame.render_widget(Clear, modal);
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme().panel_alt)),
+        Block::default().style(Style::default().bg(theme.panel_alt)),
         modal,
     );
     frame.render_widget(
@@ -515,13 +563,13 @@ fn draw_workflow_bootstrap(
             .title(Line::from(Span::styled(
                 " Initialize Polyphony ",
                 Style::default()
-                    .fg(theme().highlight)
+                    .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme().highlight))
-            .style(Style::default().bg(theme().panel_alt)),
+            .border_style(Style::default().fg(theme.highlight))
+            .style(Style::default().bg(theme.panel_alt)),
         modal,
     );
 
@@ -544,12 +592,12 @@ fn draw_workflow_bootstrap(
             Line::from(Span::styled(
                 "This folder has not been initialized yet.",
                 Style::default()
-                    .fg(theme().foreground)
+                    .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 "Create a repo-local WORKFLOW.md so Polyphony can start with sane defaults.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             )),
         ]),
         rows[0],
@@ -562,18 +610,18 @@ fn draw_workflow_bootstrap(
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("path ", Style::default().fg(theme().muted)),
+                Span::styled("path ", Style::default().fg(theme.muted)),
                 Span::styled(
                     workflow_label,
-                    Style::default().fg(theme().foreground),
+                    Style::default().fg(theme.foreground),
                 ),
             ]),
             Line::from(Span::styled(
                 "Shared credentials and reusable agent profiles stay in ~/.config/polyphony/config.toml.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             )),
         ])
-        .block(card_block("Workflow File", theme().info)),
+        .block(card_block("Workflow File", theme.info, theme)),
         rows[1],
     );
 
@@ -600,14 +648,12 @@ fn draw_workflow_bootstrap(
         Paragraph::new(vec![
             Line::from(Span::styled(
                 "Repo Local",
-                Style::default()
-                    .fg(theme().info)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
             )),
             Line::from("tracker kind and project or repo"),
             Line::from("workspace checkout and hooks"),
         ])
-        .block(card_block("WORKFLOW.md", theme().info)),
+        .block(card_block("WORKFLOW.md", theme.info, theme)),
         cards[0],
     );
     frame.render_widget(
@@ -615,13 +661,13 @@ fn draw_workflow_bootstrap(
             Line::from(Span::styled(
                 "Shared",
                 Style::default()
-                    .fg(theme().success)
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from("API keys and provider auth"),
             Line::from("reusable agent profiles"),
         ])
-        .block(card_block("User Config", theme().success)),
+        .block(card_block("User Config", theme.success, theme)),
         cards[1],
     );
     frame.render_widget(
@@ -629,13 +675,13 @@ fn draw_workflow_bootstrap(
             Line::from(Span::styled(
                 "Controls",
                 Style::default()
-                    .fg(theme().highlight)
+                    .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from("Enter or y to create"),
             Line::from("Esc, n, or q to cancel"),
         ])
-        .block(card_block("Next Step", theme().highlight)),
+        .block(card_block("Next Step", theme.highlight, theme)),
         cards[2],
     );
 
@@ -654,14 +700,16 @@ fn draw_workflow_bootstrap(
         buttons[1],
         "Create WORKFLOW.md",
         state.choice == BootstrapChoice::Create,
-        theme().highlight,
+        theme.highlight,
+        theme,
     );
     draw_bootstrap_button(
         frame,
         buttons[3],
         "Cancel",
         state.choice == BootstrapChoice::Cancel,
-        theme().muted,
+        theme.muted,
+        theme,
     );
 }
 
@@ -671,8 +719,9 @@ fn draw(
     log_buffer: &LogBuffer,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme().background)),
+        Block::default().style(Style::default().bg(theme.background)),
         frame.area(),
     );
 
@@ -703,6 +752,7 @@ fn draw_header(
     snapshot: &RuntimeSnapshot,
     app: &AppState,
 ) {
+    let theme = app.theme;
     let sections = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -711,60 +761,55 @@ fn draw_header(
     let tabs = Tabs::new(
         ActiveTab::ALL
             .into_iter()
-            .map(|tab| {
-                Line::from(Span::styled(
-                    tab.title(),
-                    Style::default().fg(theme().muted),
-                ))
-            })
+            .map(|tab| Line::from(Span::styled(tab.title(), Style::default().fg(theme.muted))))
             .collect::<Vec<_>>(),
     )
     .select(app.active_tab.index())
     .divider(Span::raw("  "))
     .highlight_style(
         Style::default()
-            .fg(theme().highlight)
+            .fg(theme.highlight)
             .add_modifier(Modifier::BOLD),
     )
-    .block(panel_block("Polyphony"));
+    .block(panel_block("Polyphony", theme));
     frame.render_widget(tabs, sections[0]);
 
     let summary = vec![
         Line::from(vec![
-            Span::styled("visible ", Style::default().fg(theme().muted)),
+            Span::styled("visible ", Style::default().fg(theme.muted)),
             Span::styled(
                 snapshot.visible_issues.len().to_string(),
                 Style::default()
-                    .fg(theme().foreground)
+                    .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled("running ", Style::default().fg(theme().muted)),
+            Span::styled("running ", Style::default().fg(theme.muted)),
             Span::styled(
                 snapshot.counts.running.to_string(),
                 Style::default()
-                    .fg(theme().success)
+                    .fg(theme.success)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled("retry ", Style::default().fg(theme().muted)),
+            Span::styled("retry ", Style::default().fg(theme.muted)),
             Span::styled(
                 snapshot.counts.retrying.to_string(),
                 Style::default()
-                    .fg(theme().warning)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("updated ", Style::default().fg(theme().muted)),
+            Span::styled("updated ", Style::default().fg(theme.muted)),
             Span::styled(
                 snapshot.generated_at.format("%H:%M:%S").to_string(),
-                Style::default().fg(theme().foreground),
+                Style::default().fg(theme.foreground),
             ),
         ]),
     ];
     frame.render_widget(
-        Paragraph::new(summary).block(panel_block("Live")),
+        Paragraph::new(summary).block(panel_block("Live", theme)),
         sections[1],
     );
 }
@@ -775,6 +820,7 @@ fn draw_summary_strip(
     snapshot: &RuntimeSnapshot,
     app: &AppState,
 ) {
+    let theme = app.theme;
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(4)])
@@ -805,7 +851,8 @@ fn draw_summary_strip(
         snapshot.visible_issues.len().to_string(),
         "tracker backlog",
         &app.history.visible,
-        theme().info,
+        theme.info,
+        theme,
     );
     draw_metric_card(
         frame,
@@ -814,7 +861,8 @@ fn draw_summary_strip(
         snapshot.counts.running.to_string(),
         "active workers",
         &app.history.running,
-        theme().success,
+        theme.success,
+        theme,
     );
     draw_metric_card(
         frame,
@@ -823,7 +871,8 @@ fn draw_summary_strip(
         snapshot.counts.retrying.to_string(),
         "pending retries",
         &app.history.retrying,
-        theme().warning,
+        theme.warning,
+        theme,
     );
     draw_metric_card(
         frame,
@@ -832,7 +881,8 @@ fn draw_summary_strip(
         human_count(snapshot.codex_totals.total_tokens),
         "lifetime usage",
         &app.history.token_delta,
-        theme().highlight,
+        theme.highlight,
+        theme,
     );
 
     draw_cadence_card(
@@ -842,7 +892,8 @@ fn draw_summary_strip(
         snapshot.generated_at,
         snapshot.cadence.last_tracker_poll_at,
         snapshot.cadence.tracker_poll_interval_ms,
-        theme().info,
+        theme.info,
+        theme,
     );
     draw_cadence_card(
         frame,
@@ -851,7 +902,8 @@ fn draw_summary_strip(
         snapshot.generated_at,
         snapshot.cadence.last_budget_poll_at,
         snapshot.cadence.budget_poll_interval_ms,
-        theme().success,
+        theme.success,
+        theme,
     );
     draw_cadence_card(
         frame,
@@ -860,7 +912,8 @@ fn draw_summary_strip(
         snapshot.generated_at,
         snapshot.cadence.last_model_discovery_at,
         snapshot.cadence.model_discovery_interval_ms,
-        theme().highlight,
+        theme.highlight,
+        theme,
     );
     draw_metric_card(
         frame,
@@ -874,7 +927,8 @@ fn draw_summary_strip(
             .to_string(),
         "new events",
         &app.history.event_burst,
-        theme().danger,
+        theme.danger,
+        theme,
     );
 }
 
@@ -884,6 +938,7 @@ fn draw_overview_tab(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let columns = if area.width >= 120 {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -910,9 +965,9 @@ fn draw_overview_tab(
     } else {
         draw_running_table(frame, left[0], snapshot, app);
     }
-    draw_retry_panel(frame, left[1], snapshot);
+    draw_retry_panel(frame, left[1], snapshot, theme);
     draw_issue_detail(frame, right[0], snapshot, app);
-    draw_budget_throttle_panel(frame, right[1], snapshot);
+    draw_budget_throttle_panel(frame, right[1], snapshot, theme);
 }
 
 fn draw_activity_tab(
@@ -921,6 +976,7 @@ fn draw_activity_tab(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let columns = if area.width >= 120 {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -938,8 +994,8 @@ fn draw_activity_tab(
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(10), Constraint::Min(8)])
         .split(columns[1]);
-    draw_network_panel(frame, side[0], snapshot);
-    draw_budget_throttle_panel(frame, side[1], snapshot);
+    draw_network_panel(frame, side[0], snapshot, theme);
+    draw_budget_throttle_panel(frame, side[1], snapshot, theme);
 }
 
 fn draw_logs_tab(
@@ -948,8 +1004,10 @@ fn draw_logs_tab(
     log_buffer: &LogBuffer,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let captured_lines = log_buffer.all_lines();
     let line_count = captured_lines.len();
+    app.sync_logs(line_count, area.height);
     let mut lines = captured_lines
         .into_iter()
         .map(|line| Line::from(Span::raw(line)))
@@ -959,21 +1017,26 @@ fn draw_logs_tab(
             Line::from(Span::styled(
                 "No tracing lines captured yet.",
                 Style::default()
-                    .fg(theme().muted)
+                    .fg(theme.muted)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 "If this stays empty, raise RUST_LOG (for example RUST_LOG=info).",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             )),
             Line::from(Span::styled(
                 "Use PgUp/PgDn or g/G when the log view fills up.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             )),
         ];
-        "latest first | waiting for tracing output"
+        "0 of 0".to_string()
     } else {
-        "latest first | PgUp PgDn g G scroll"
+        log_indicator(
+            line_count,
+            app.logs_scroll,
+            area.height,
+            app.logs_follow_tail,
+        )
     };
     draw_scrollable_lines(
         frame,
@@ -981,7 +1044,8 @@ fn draw_logs_tab(
         &format!("Logs  {line_count} lines"),
         &lines,
         &mut app.logs_scroll,
-        subtitle,
+        &subtitle,
+        theme,
     );
 }
 
@@ -991,6 +1055,7 @@ fn draw_agents_tab(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let columns = if area.width >= 120 {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -1009,30 +1074,31 @@ fn draw_agents_tab(
         .constraints([Constraint::Length(10), Constraint::Min(8)])
         .split(columns[1]);
     draw_agent_detail(frame, side[0], snapshot, app);
-    draw_budget_gauges(frame, side[1], snapshot);
+    draw_budget_gauges(frame, side[1], snapshot, theme);
 }
 
 fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
+    let theme = app.theme;
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(
             format!("{} ", app.active_tab.title()),
             Style::default()
-                .fg(theme().highlight)
+                .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("1-4 tabs", Style::default().fg(theme().muted)),
+        Span::styled("1-4 tabs", Style::default().fg(theme.muted)),
         Span::raw("  "),
-        Span::styled("tab / shift-tab switch", Style::default().fg(theme().muted)),
+        Span::styled("tab / shift-tab switch", Style::default().fg(theme.muted)),
         Span::raw("  "),
-        Span::styled("j k / arrows move", Style::default().fg(theme().muted)),
+        Span::styled("j k / arrows move", Style::default().fg(theme.muted)),
         Span::raw("  "),
-        Span::styled("pgup pgdn g G scroll", Style::default().fg(theme().muted)),
+        Span::styled("pgup pgdn g G scroll", Style::default().fg(theme.muted)),
         Span::raw("  "),
-        Span::styled("r refresh", Style::default().fg(theme().muted)),
+        Span::styled("r refresh", Style::default().fg(theme.muted)),
         Span::raw("  "),
-        Span::styled("q quit", Style::default().fg(theme().muted)),
+        Span::styled("q quit", Style::default().fg(theme.muted)),
     ]))
-    .block(panel_block("Controls"));
+    .block(panel_block("Controls", theme));
     frame.render_widget(footer, area);
 }
 
@@ -1044,8 +1110,9 @@ fn draw_metric_card(
     subtitle: &str,
     history: &VecDeque<u64>,
     accent: Color,
+    theme: Theme,
 ) {
-    frame.render_widget(card_block(title, accent), area);
+    frame.render_widget(card_block(title, accent, theme), area);
     let inner = area.inner(Margin {
         vertical: 1,
         horizontal: 1,
@@ -1062,7 +1129,7 @@ fn draw_metric_card(
         Paragraph::new(Line::from(Span::styled(
             value,
             Style::default()
-                .fg(theme().foreground)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         ))),
         rows[0],
@@ -1070,7 +1137,7 @@ fn draw_metric_card(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             subtitle,
-            Style::default().fg(theme().muted),
+            Style::default().fg(theme.muted),
         ))),
         rows[1],
     );
@@ -1092,13 +1159,14 @@ fn draw_cadence_card(
     last_at: Option<DateTime<Utc>>,
     interval_ms: u64,
     accent: Color,
+    theme: Theme,
 ) {
     let (ratio, label) = cadence_progress(now, last_at, interval_ms);
     frame.render_widget(
         LineGauge::default()
-            .block(card_block(title, accent))
+            .block(card_block(title, accent, theme))
             .filled_style(Style::default().fg(accent))
-            .unfilled_style(Style::default().fg(theme().border))
+            .unfilled_style(Style::default().fg(theme.border))
             .line_set(symbols::line::THICK)
             .label(label)
             .ratio(ratio),
@@ -1112,6 +1180,7 @@ fn draw_running_table(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let rows = snapshot.running.iter().map(|running| {
         let progress = format!("{}/{}", running.turn_count, running.max_turns);
         Row::new([
@@ -1139,20 +1208,24 @@ fn draw_running_table(
     .header(
         Row::new(["Issue", "State", "Agent", "Turns", "Tokens", "Last Event"]).style(
             Style::default()
-                .fg(theme().foreground)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         ),
     )
-    .row_highlight_style(selected_row_style())
-    .highlight_symbol(">> ")
+    .row_highlight_style(selected_row_style(theme))
+    .highlight_symbol("▶ ")
     .highlight_spacing(HighlightSpacing::Always)
-    .block(panel_block("Running"));
+    .block(panel_block("Running", theme).title_bottom(panel_footer(
+        &selection_indicator(app.running_state.selected(), snapshot.running.len()),
+        theme,
+    )));
     frame.render_stateful_widget(table, area, &mut app.running_state);
     draw_table_scrollbar(
         frame,
         area,
         snapshot.running.len(),
         app.running_state.selected(),
+        theme,
     );
 }
 
@@ -1162,6 +1235,7 @@ fn draw_visible_issues_table(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let rows = snapshot.visible_issues.iter().map(|issue| {
         Row::new([
             Cell::from(issue.issue_identifier.clone()),
@@ -1186,31 +1260,42 @@ fn draw_visible_issues_table(
     .header(
         Row::new(["Issue", "State", "Pri", "Labels", "Title"]).style(
             Style::default()
-                .fg(theme().foreground)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         ),
     )
-    .row_highlight_style(selected_row_style())
-    .highlight_symbol(">> ")
+    .row_highlight_style(selected_row_style(theme))
+    .highlight_symbol("▶ ")
     .highlight_spacing(HighlightSpacing::Always)
-    .block(panel_block("Visible Issues"));
+    .block(
+        panel_block("Visible Issues", theme).title_bottom(panel_footer(
+            &selection_indicator(app.visible_state.selected(), snapshot.visible_issues.len()),
+            theme,
+        )),
+    );
     frame.render_stateful_widget(table, area, &mut app.visible_state);
     draw_table_scrollbar(
         frame,
         area,
         snapshot.visible_issues.len(),
         app.visible_state.selected(),
+        theme,
     );
 }
 
-fn draw_retry_panel(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &RuntimeSnapshot) {
+fn draw_retry_panel(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &RuntimeSnapshot,
+    theme: Theme,
+) {
     if snapshot.retrying.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "No queued retries.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             )))
-            .block(panel_block("Retry Queue")),
+            .block(panel_block("Retry Queue", theme)),
             area,
         );
         return;
@@ -1233,11 +1318,11 @@ fn draw_retry_panel(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Runti
     .header(
         Row::new(["Issue", "Attempt", "Due", "Error"]).style(
             Style::default()
-                .fg(theme().foreground)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         ),
     )
-    .block(panel_block("Retry Queue"));
+    .block(panel_block("Retry Queue", theme));
     frame.render_widget(table, area);
 }
 
@@ -1247,7 +1332,8 @@ fn draw_issue_detail(
     snapshot: &RuntimeSnapshot,
     app: &AppState,
 ) {
-    frame.render_widget(panel_block("Inspector"), area);
+    let theme = app.theme;
+    frame.render_widget(panel_block("Inspector", theme), area);
     let inner = area.inner(Margin {
         vertical: 1,
         horizontal: 1,
@@ -1266,11 +1352,11 @@ fn draw_issue_detail(
                 Span::styled(
                     running.issue_identifier.clone(),
                     Style::default()
-                        .fg(theme().foreground)
+                        .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(running.state.clone(), Style::default().fg(theme().info)),
+                Span::styled(running.state.clone(), Style::default().fg(theme.info)),
             ]),
             Line::from(format!(
                 "agent={}  model={}  attempt={}",
@@ -1295,8 +1381,8 @@ fn draw_issue_detail(
         };
         frame.render_widget(
             Gauge::default()
-                .block(card_block("Turn Progress", theme().highlight))
-                .gauge_style(Style::default().fg(theme().highlight).bg(theme().panel_alt))
+                .block(card_block("Turn Progress", theme.highlight, theme))
+                .gauge_style(Style::default().fg(theme.highlight).bg(theme.panel_alt))
                 .label(format!(
                     "{}/{} turns",
                     running.turn_count, running.max_turns
@@ -1367,11 +1453,11 @@ fn draw_issue_detail(
                 Span::styled(
                     issue.issue_identifier.clone(),
                     Style::default()
-                        .fg(theme().foreground)
+                        .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(issue.state.clone(), Style::default().fg(theme().info)),
+                Span::styled(issue.state.clone(), Style::default().fg(theme.info)),
             ]),
             Line::from(format!(
                 "priority={}  labels={}",
@@ -1393,8 +1479,8 @@ fn draw_issue_detail(
         );
         frame.render_widget(
             Gauge::default()
-                .block(card_block("Dispatch Coverage", theme().info))
-                .gauge_style(Style::default().fg(theme().info).bg(theme().panel_alt))
+                .block(card_block("Dispatch Coverage", theme.info, theme))
+                .gauge_style(Style::default().fg(theme.info).bg(theme.panel_alt))
                 .label(format!(
                     "{} of {} active",
                     snapshot.counts.running + snapshot.counts.retrying,
@@ -1407,7 +1493,7 @@ fn draw_issue_detail(
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "Configure agents in ~/.config/polyphony/config.toml to turn visible issues into active runs.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             )))
             .wrap(ratatui::widgets::Wrap { trim: false }),
             chunks[2],
@@ -1418,7 +1504,7 @@ fn draw_issue_detail(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "Nothing selected yet.",
-            Style::default().fg(theme().muted),
+            Style::default().fg(theme.muted),
         ))),
         inner,
     );
@@ -1428,6 +1514,7 @@ fn draw_budget_throttle_panel(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
+    theme: Theme,
 ) {
     let mut lines = snapshot
         .budgets
@@ -1448,11 +1535,11 @@ fn draw_budget_throttle_panel(
                 Span::styled(
                     budget.component.clone(),
                     Style::default()
-                        .fg(theme().foreground)
+                        .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(value, Style::default().fg(theme().muted)),
+                Span::styled(value, Style::default().fg(theme.muted)),
             ])
         })
         .collect::<Vec<_>>();
@@ -1462,7 +1549,7 @@ fn draw_budget_throttle_panel(
             Span::styled(
                 "throttle",
                 Style::default()
-                    .fg(theme().warning)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -1473,7 +1560,7 @@ fn draw_budget_throttle_panel(
                     throttle.until.format("%H:%M:%S"),
                     throttle.reason
                 ),
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             ),
         ])
     }));
@@ -1481,13 +1568,13 @@ fn draw_budget_throttle_panel(
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "No budget probes or active throttles.",
-            Style::default().fg(theme().muted),
+            Style::default().fg(theme.muted),
         )));
     }
 
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block("Budgets & Throttles"))
+            .block(panel_block("Budgets & Throttles", theme))
             .wrap(ratatui::widgets::Wrap { trim: false }),
         area,
     );
@@ -1499,6 +1586,7 @@ fn draw_events_panel(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let lines = snapshot
         .recent_events
         .iter()
@@ -1506,33 +1594,37 @@ fn draw_events_panel(
             Line::from(vec![
                 Span::styled(
                     event.at.format("%H:%M:%S").to_string(),
-                    Style::default().fg(theme().muted),
+                    Style::default().fg(theme.muted),
                 ),
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}]", event.scope),
-                    Style::default().fg(scope_color(&event.scope)),
+                    Style::default().fg(scope_color(&event.scope, theme)),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    event.message.clone(),
-                    Style::default().fg(theme().foreground),
-                ),
+                Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
             ])
         })
         .collect::<Vec<_>>();
+    let footer = viewport_indicator(lines.len(), app.events_scroll, area.height);
     draw_scrollable_lines(
         frame,
         area,
         &format!("Recent Events  {} items", lines.len()),
         &lines,
         &mut app.events_scroll,
-        "latest first",
+        &footer,
+        theme,
     );
 }
 
-fn draw_network_panel(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &RuntimeSnapshot) {
-    frame.render_widget(panel_block("Network Cadence"), area);
+fn draw_network_panel(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &RuntimeSnapshot,
+    theme: Theme,
+) {
+    frame.render_widget(panel_block("Network Cadence", theme), area);
     let inner = area.inner(Margin {
         vertical: 1,
         horizontal: 1,
@@ -1551,19 +1643,19 @@ fn draw_network_panel(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Run
             "tracker",
             snapshot.cadence.last_tracker_poll_at,
             snapshot.cadence.tracker_poll_interval_ms,
-            theme().info,
+            theme.info,
         ),
         (
             "budgets",
             snapshot.cadence.last_budget_poll_at,
             snapshot.cadence.budget_poll_interval_ms,
-            theme().success,
+            theme.success,
         ),
         (
             "models",
             snapshot.cadence.last_model_discovery_at,
             snapshot.cadence.model_discovery_interval_ms,
-            theme().highlight,
+            theme.highlight,
         ),
     ];
 
@@ -1574,7 +1666,7 @@ fn draw_network_panel(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Run
                 .ratio(ratio)
                 .label(format!("{label}  {status}"))
                 .filled_style(Style::default().fg(accent))
-                .unfilled_style(Style::default().fg(theme().border))
+                .unfilled_style(Style::default().fg(theme.border))
                 .line_set(symbols::line::THICK),
             chunks[index],
         );
@@ -1587,6 +1679,7 @@ fn draw_agent_catalogs(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    let theme = app.theme;
     let mut catalogs = snapshot.agent_catalogs.clone();
     catalogs.sort_by(|left, right| left.agent_name.cmp(&right.agent_name));
 
@@ -1612,16 +1705,27 @@ fn draw_agent_catalogs(
     .header(
         Row::new(["Agent", "Provider", "Selected", "Catalog"]).style(
             Style::default()
-                .fg(theme().foreground)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         ),
     )
-    .row_highlight_style(selected_row_style())
-    .highlight_symbol(">> ")
+    .row_highlight_style(selected_row_style(theme))
+    .highlight_symbol("▶ ")
     .highlight_spacing(HighlightSpacing::Always)
-    .block(panel_block("Agent Catalogs"));
+    .block(
+        panel_block("Agent Catalogs", theme).title_bottom(panel_footer(
+            &selection_indicator(app.models_state.selected(), catalogs.len()),
+            theme,
+        )),
+    );
     frame.render_stateful_widget(table, area, &mut app.models_state);
-    draw_table_scrollbar(frame, area, catalogs.len(), app.models_state.selected());
+    draw_table_scrollbar(
+        frame,
+        area,
+        catalogs.len(),
+        app.models_state.selected(),
+        theme,
+    );
 }
 
 fn draw_agent_detail(
@@ -1630,7 +1734,8 @@ fn draw_agent_detail(
     snapshot: &RuntimeSnapshot,
     app: &AppState,
 ) {
-    frame.render_widget(panel_block("Selected Agent"), area);
+    let theme = app.theme;
+    frame.render_widget(panel_block("Selected Agent", theme), area);
     let inner = area.inner(Margin {
         vertical: 1,
         horizontal: 1,
@@ -1646,7 +1751,7 @@ fn draw_agent_detail(
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "No discovered agent catalogs yet.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             ))),
             inner,
         );
@@ -1658,13 +1763,13 @@ fn draw_agent_detail(
             Span::styled(
                 catalog.agent_name.clone(),
                 Style::default()
-                    .fg(theme().foreground)
+                    .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
             Span::styled(
                 catalog.provider_kind.clone(),
-                Style::default().fg(theme().info),
+                Style::default().fg(theme.info),
             ),
         ]),
         Line::from(format!(
@@ -1697,8 +1802,13 @@ fn draw_agent_detail(
     );
 }
 
-fn draw_budget_gauges(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &RuntimeSnapshot) {
-    frame.render_widget(panel_block("Budget Gauges"), area);
+fn draw_budget_gauges(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &RuntimeSnapshot,
+    theme: Theme,
+) {
+    frame.render_widget(panel_block("Budget Gauges", theme), area);
     let inner = area.inner(Margin {
         vertical: 1,
         horizontal: 1,
@@ -1707,7 +1817,7 @@ fn draw_budget_gauges(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Run
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "No budget probes configured.",
-                Style::default().fg(theme().muted),
+                Style::default().fg(theme.muted),
             ))),
             inner,
         );
@@ -1723,14 +1833,14 @@ fn draw_budget_gauges(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Run
         .split(inner);
 
     for (index, budget) in budgets.into_iter().take(visible).enumerate() {
-        let (ratio, label, accent) = budget_ratio_label(&budget);
+        let (ratio, label, accent) = budget_ratio_label(&budget, theme);
         if let Some(ratio) = ratio {
             frame.render_widget(
                 LineGauge::default()
                     .ratio(ratio)
                     .label(label)
                     .filled_style(Style::default().fg(accent))
-                    .unfilled_style(Style::default().fg(theme().border))
+                    .unfilled_style(Style::default().fg(theme.border))
                     .line_set(symbols::line::THICK),
                 chunks[index],
             );
@@ -1738,7 +1848,7 @@ fn draw_budget_gauges(frame: &mut ratatui::Frame<'_>, area: Rect, snapshot: &Run
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     label,
-                    Style::default().fg(theme().muted),
+                    Style::default().fg(theme.muted),
                 ))),
                 chunks[index],
             );
@@ -1753,27 +1863,30 @@ fn draw_scrollable_lines(
     lines: &[Line<'static>],
     scroll: &mut usize,
     subtitle: &str,
+    theme: Theme,
 ) {
     let max_scroll = max_scroll(lines.len(), area.height);
     *scroll = (*scroll).min(max_scroll);
-    let block = panel_block(title).title_bottom(Line::from(Span::styled(
-        subtitle,
-        Style::default().fg(theme().muted),
-    )));
+    let block = panel_block(title, theme).title_bottom(panel_footer(subtitle, theme));
     frame.render_widget(
         Paragraph::new(lines.to_vec())
             .block(block)
             .scroll((to_u16(*scroll), 0)),
         area,
     );
+    let viewport = area.height.saturating_sub(2) as usize;
+    if lines.len() <= viewport {
+        return;
+    }
     let mut state = ScrollbarState::default()
         .content_length(lines.len())
         .position(*scroll);
     frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .track_symbol(Some(BLOCK_SYMBOL))
-            .end_symbol(None),
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .style(Style::default().fg(theme.border)),
         area.inner(Margin {
             vertical: 1,
             horizontal: 0,
@@ -1787,6 +1900,7 @@ fn draw_table_scrollbar(
     area: Rect,
     rows_len: usize,
     selected: Option<usize>,
+    theme: Theme,
 ) {
     if rows_len <= 1 {
         return;
@@ -1795,10 +1909,11 @@ fn draw_table_scrollbar(
         .content_length(rows_len)
         .position(selected.unwrap_or_default());
     frame.render_stateful_widget(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .track_symbol(Some(BLOCK_SYMBOL))
-            .end_symbol(None),
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .style(Style::default().fg(theme.border)),
         area.inner(Margin {
             vertical: 1,
             horizontal: 0,
@@ -1813,11 +1928,12 @@ fn draw_bootstrap_button(
     label: &str,
     active: bool,
     accent: Color,
+    theme: Theme,
 ) {
     let (background, foreground, border) = if active {
-        (accent, theme().background, accent)
+        (accent, theme.background, accent)
     } else {
-        (theme().panel, theme().foreground, theme().border)
+        (theme.panel, theme.foreground, theme.border)
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -1836,21 +1952,21 @@ fn draw_bootstrap_button(
     );
 }
 
-fn panel_block(title: &str) -> Block<'_> {
+fn panel_block(title: &str, theme: Theme) -> Block<'_> {
     Block::default()
         .title(Line::from(Span::styled(
             format!(" {title} "),
             Style::default()
-                .fg(theme().foreground)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         )))
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme().border))
-        .style(Style::default().bg(theme().panel))
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.panel))
 }
 
-fn card_block(title: &str, accent: Color) -> Block<'static> {
+fn card_block(title: &str, accent: Color, theme: Theme) -> Block<'static> {
     Block::default()
         .title(Line::from(Span::styled(
             format!(" {title} "),
@@ -1858,14 +1974,14 @@ fn card_block(title: &str, accent: Color) -> Block<'static> {
         )))
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme().border))
-        .style(Style::default().bg(theme().panel_alt))
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.panel_alt))
 }
 
-fn selected_row_style() -> Style {
+fn selected_row_style(theme: Theme) -> Style {
     Style::default()
-        .bg(theme().selection)
-        .fg(theme().foreground)
+        .bg(theme.selection)
+        .fg(theme.foreground)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -1895,17 +2011,20 @@ fn cadence_progress(
     )
 }
 
-fn budget_ratio_label(budget: &polyphony_core::BudgetSnapshot) -> (Option<f64>, String, Color) {
+fn budget_ratio_label(
+    budget: &polyphony_core::BudgetSnapshot,
+    theme: Theme,
+) -> (Option<f64>, String, Color) {
     if let (Some(remaining), Some(total)) = (budget.credits_remaining, budget.credits_total)
         && total > 0.0
     {
         let ratio = (remaining / total).clamp(0.0, 1.0);
         let accent = if ratio > 0.5 {
-            theme().success
+            theme.success
         } else if ratio > 0.2 {
-            theme().warning
+            theme.warning
         } else {
-            theme().danger
+            theme.danger
         };
         return (
             Some(ratio),
@@ -1924,11 +2043,11 @@ fn budget_ratio_label(budget: &polyphony_core::BudgetSnapshot) -> (Option<f64>, 
     {
         let ratio = (spent / limit).clamp(0.0, 1.0);
         let accent = if ratio < 0.6 {
-            theme().success
+            theme.success
         } else if ratio < 0.85 {
-            theme().warning
+            theme.warning
         } else {
-            theme().danger
+            theme.danger
         };
         return (
             Some(ratio),
@@ -1940,17 +2059,17 @@ fn budget_ratio_label(budget: &polyphony_core::BudgetSnapshot) -> (Option<f64>, 
     (
         None,
         format!("{}  budget details unavailable", budget.component),
-        theme().muted,
+        theme.muted,
     )
 }
 
-fn scope_color(scope: &str) -> Color {
+fn scope_color(scope: &str, theme: Theme) -> Color {
     match scope {
-        "dispatch" | "workflow" => theme().info,
-        "retry" => theme().warning,
-        "handoff" => theme().highlight,
-        "throttle" => theme().danger,
-        _ => theme().muted,
+        "dispatch" | "workflow" => theme.info,
+        "retry" => theme.warning,
+        "handoff" => theme.highlight,
+        "throttle" => theme.danger,
+        _ => theme.muted,
     }
 }
 
@@ -1972,6 +2091,49 @@ fn relative_due(due_at: DateTime<Utc>) -> String {
         format!("{delta}s")
     } else {
         format!("{}m", delta / 60)
+    }
+}
+
+fn panel_footer(label: &str, theme: Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{label}─"),
+        Style::default().fg(theme.muted),
+    ))
+    .right_aligned()
+}
+
+fn selection_indicator(selected: Option<usize>, total: usize) -> String {
+    if total == 0 {
+        return "0 of 0".into();
+    }
+    format!("{} of {}", selected.unwrap_or_default() + 1, total)
+}
+
+fn viewport_indicator(total: usize, scroll: usize, area_height: u16) -> String {
+    if total == 0 {
+        return "0 of 0".into();
+    }
+    let viewport = area_height.saturating_sub(2) as usize;
+    if viewport == 0 {
+        return format!("0 of {total}");
+    }
+    let start = scroll.min(total.saturating_sub(1)) + 1;
+    let end = (scroll + viewport).min(total);
+    if start == end {
+        format!("{start} of {total}")
+    } else {
+        format!("{start}-{end} of {total}")
+    }
+}
+
+fn log_indicator(total: usize, scroll: usize, area_height: u16, follow_tail: bool) -> String {
+    let viewport = viewport_indicator(total, scroll, area_height);
+    if total == 0 {
+        viewport
+    } else if follow_tail {
+        format!("tail ↓ {viewport}")
+    } else {
+        format!("scroll ↑ {viewport}")
     }
 }
 
@@ -2053,7 +2215,7 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Theme {
     background: Color,
     panel: Color,
@@ -2069,7 +2231,55 @@ struct Theme {
     danger: Color,
 }
 
-const fn theme() -> Theme {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RgbColor {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+impl RgbColor {
+    const fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+
+    const fn to_color(self) -> Color {
+        Color::Rgb(self.red, self.green, self.blue)
+    }
+
+    fn mix(self, other: Self, ratio: f32) -> Self {
+        let ratio = ratio.clamp(0.0, 1.0);
+        let inverse = 1.0 - ratio;
+        Self {
+            red: ((self.red as f32 * inverse) + (other.red as f32 * ratio)).round() as u8,
+            green: ((self.green as f32 * inverse) + (other.green as f32 * ratio)).round() as u8,
+            blue: ((self.blue as f32 * inverse) + (other.blue as f32 * ratio)).round() as u8,
+        }
+    }
+
+    fn luminance(self) -> f32 {
+        fn channel(value: u8) -> f32 {
+            let value = value as f32 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        }
+
+        (0.2126 * channel(self.red))
+            + (0.7152 * channel(self.green))
+            + (0.0722 * channel(self.blue))
+    }
+
+    fn contrast_ratio(self, other: Self) -> f32 {
+        let lighter = self.luminance().max(other.luminance());
+        let darker = self.luminance().min(other.luminance());
+        (lighter + 0.05) / (darker + 0.05)
+    }
+}
+
+const fn default_theme() -> Theme {
     Theme {
         background: Color::Rgb(11, 15, 20),
         panel: Color::Rgb(18, 24, 31),
@@ -2086,10 +2296,285 @@ const fn theme() -> Theme {
     }
 }
 
+const HIGHLIGHT_ACCENT: RgbColor = RgbColor::new(245, 158, 11);
+const INFO_ACCENT: RgbColor = RgbColor::new(56, 189, 248);
+const SUCCESS_ACCENT: RgbColor = RgbColor::new(52, 211, 153);
+const WARNING_ACCENT: RgbColor = RgbColor::new(250, 204, 21);
+const DANGER_ACCENT: RgbColor = RgbColor::new(248, 113, 113);
+
+fn detect_terminal_theme() -> Option<Theme> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return None;
+    }
+    let (foreground, background) = query_terminal_colors()?;
+    derive_terminal_theme(foreground, background)
+}
+
+fn derive_terminal_theme(foreground: RgbColor, background: RgbColor) -> Option<Theme> {
+    if foreground.contrast_ratio(background) < 2.5 {
+        return None;
+    }
+
+    let dark_background = background.luminance() <= foreground.luminance();
+    let panel = background.mix(
+        foreground,
+        if dark_background {
+            0.06
+        } else {
+            0.03
+        },
+    );
+    let panel_alt = background.mix(
+        foreground,
+        if dark_background {
+            0.10
+        } else {
+            0.06
+        },
+    );
+    let selection = background.mix(
+        foreground,
+        if dark_background {
+            0.18
+        } else {
+            0.12
+        },
+    );
+    let border = background.mix(
+        foreground,
+        if dark_background {
+            0.30
+        } else {
+            0.22
+        },
+    );
+    let muted = background.mix(
+        foreground,
+        if dark_background {
+            0.60
+        } else {
+            0.45
+        },
+    );
+
+    Some(Theme {
+        background: background.to_color(),
+        panel: panel.to_color(),
+        panel_alt: panel_alt.to_color(),
+        selection: selection.to_color(),
+        border: border.to_color(),
+        foreground: foreground.to_color(),
+        muted: muted.to_color(),
+        highlight: tune_accent(HIGHLIGHT_ACCENT, foreground, background, dark_background)
+            .to_color(),
+        info: tune_accent(INFO_ACCENT, foreground, background, dark_background).to_color(),
+        success: tune_accent(SUCCESS_ACCENT, foreground, background, dark_background).to_color(),
+        warning: tune_accent(WARNING_ACCENT, foreground, background, dark_background).to_color(),
+        danger: tune_accent(DANGER_ACCENT, foreground, background, dark_background).to_color(),
+    })
+}
+
+fn tune_accent(
+    accent: RgbColor,
+    foreground: RgbColor,
+    background: RgbColor,
+    dark_background: bool,
+) -> RgbColor {
+    let toned = if dark_background {
+        accent.mix(background, 0.14).mix(foreground, 0.06)
+    } else {
+        accent.mix(background, 0.26).mix(foreground, 0.08)
+    };
+    ensure_contrast(
+        toned,
+        foreground,
+        background,
+        if dark_background {
+            2.6
+        } else {
+            2.1
+        },
+    )
+}
+
+fn ensure_contrast(
+    color: RgbColor,
+    foreground: RgbColor,
+    background: RgbColor,
+    minimum: f32,
+) -> RgbColor {
+    let mut candidate = color;
+    let mut ratio = 0.14;
+    while candidate.contrast_ratio(background) < minimum && ratio <= 0.70 {
+        candidate = candidate.mix(foreground, ratio);
+        ratio += 0.08;
+    }
+    candidate
+}
+
+fn query_terminal_colors() -> Option<(RgbColor, RgbColor)> {
+    #[cfg(unix)]
+    {
+        query_unix_terminal_colors()
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn query_unix_terminal_colors() -> Option<(RgbColor, RgbColor)> {
+    let mut tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
+    tty.write_all(b"\x1b]10;?\x07\x1b]11;?\x07").ok()?;
+    tty.flush().ok()?;
+
+    let deadline = Instant::now() + Duration::from_millis(150);
+    let mut buffer = Vec::with_capacity(128);
+    let mut scratch = [0u8; 256];
+    while Instant::now() < deadline && buffer.len() < 1024 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !poll_tty_readable(tty.as_raw_fd(), remaining).ok()? {
+            break;
+        }
+
+        let read = match tty.read(&mut scratch) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        buffer.extend_from_slice(&scratch[..read]);
+        if let Some(colors) = parse_osc_color_responses(&buffer) {
+            return Some(colors);
+        }
+    }
+
+    parse_osc_color_responses(&buffer)
+}
+
+fn parse_osc_color_responses(buffer: &[u8]) -> Option<(RgbColor, RgbColor)> {
+    let text = String::from_utf8_lossy(buffer);
+    let mut foreground = None;
+    let mut background = None;
+    let mut offset = 0usize;
+    while let Some(start) = text[offset..].find("\u{1b}]") {
+        let sequence_start = offset + start + 2;
+        let Some(separator) = text[sequence_start..].find(';') else {
+            break;
+        };
+        let code_end = sequence_start + separator;
+        let Some((payload, consumed)) = osc_payload(&text[code_end + 1..]) else {
+            break;
+        };
+        match &text[sequence_start..code_end] {
+            "10" => foreground = parse_terminal_color(payload).or(foreground),
+            "11" => background = parse_terminal_color(payload).or(background),
+            _ => {},
+        }
+        offset = code_end + 1 + consumed;
+    }
+
+    Some((foreground?, background?))
+}
+
+fn osc_payload(text: &str) -> Option<(&str, usize)> {
+    let bel = text.find('\u{7}');
+    let st = text.find("\u{1b}\\");
+    let (end, terminator_len) = match (bel, st) {
+        (Some(bel), Some(st)) if bel < st => (bel, 1),
+        (_, Some(st)) => (st, 2),
+        (Some(bel), None) => (bel, 1),
+        (None, None) => return None,
+    };
+    Some((&text[..end], end + terminator_len))
+}
+
+fn parse_terminal_color(value: &str) -> Option<RgbColor> {
+    let value = value.trim();
+    if let Some(rgb) = value.strip_prefix("rgb:") {
+        let mut parts = rgb.split('/');
+        return Some(RgbColor::new(
+            parse_hex_component(parts.next()?)?,
+            parse_hex_component(parts.next()?)?,
+            parse_hex_component(parts.next()?)?,
+        ));
+    }
+
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() == 6 {
+        return Some(RgbColor::new(
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+        ));
+    }
+
+    None
+}
+
+fn parse_hex_component(component: &str) -> Option<u8> {
+    if component.is_empty() || component.len() > 4 {
+        return None;
+    }
+    let value = u32::from_str_radix(component, 16).ok()?;
+    let max = (1u32 << (component.len() as u32 * 4)) - 1;
+    Some(((value * 255) / max.max(1)) as u8)
+}
+
+#[cfg(unix)]
+fn poll_tty_readable(fd: std::os::fd::RawFd, timeout: Duration) -> std::io::Result<bool> {
+    use std::os::raw::{c_int, c_short};
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    type PollCount = std::os::raw::c_ulong;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    type PollCount = std::os::raw::c_uint;
+
+    #[repr(C)]
+    struct PollFd {
+        fd: c_int,
+        events: c_short,
+        revents: c_short,
+    }
+
+    unsafe extern "C" {
+        fn poll(fds: *mut PollFd, nfds: PollCount, timeout: c_int) -> c_int;
+    }
+
+    const POLLIN: c_short = 0x0001;
+    let timeout_ms = timeout.as_millis().min(c_int::MAX as u128) as c_int;
+    let mut descriptor = PollFd {
+        fd,
+        events: POLLIN,
+        revents: 0,
+    };
+
+    loop {
+        let result = unsafe { poll(&mut descriptor, 1, timeout_ms) };
+        if result >= 0 {
+            return Ok(result > 0 && descriptor.revents & POLLIN != 0);
+        }
+
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(error);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use {
-        super::{AppState, BootstrapChoice, BootstrapState, LogBuffer},
+        super::{
+            AppState, BootstrapChoice, BootstrapState, LogBuffer, RgbColor, default_theme,
+            derive_terminal_theme, parse_osc_color_responses,
+        },
         chrono::Utc,
         polyphony_core::{
             CodexTotals, RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts,
@@ -2146,7 +2631,7 @@ mod tests {
         buffer.push_line("two");
         buffer.push_line("three");
 
-        assert_eq!(buffer.recent_lines(3), vec!["three", "two"]);
+        assert_eq!(buffer.recent_lines(3), vec!["two", "three"]);
     }
 
     #[test]
@@ -2174,6 +2659,26 @@ mod tests {
         assert_eq!(app.history.running.back().copied(), Some(2));
         assert_eq!(app.history.retrying.back().copied(), Some(1));
         assert_eq!(app.history.token_delta.back().copied(), Some(60));
+    }
+
+    #[test]
+    fn log_view_follows_tail_until_user_scrolls_away() {
+        let mut app = AppState {
+            active_tab: super::ActiveTab::Logs,
+            ..AppState::default()
+        };
+        app.sync_logs(20, 10);
+
+        assert!(app.logs_follow_tail);
+        assert_eq!(app.logs_scroll, 12);
+
+        app.rewind(&snapshot_with(0, 0, 0, 0), 4);
+        assert!(!app.logs_follow_tail);
+        assert_eq!(app.logs_scroll, 8);
+
+        app.advance(&snapshot_with(0, 0, 0, 0), 4);
+        assert!(app.logs_follow_tail);
+        assert_eq!(app.logs_scroll, 12);
     }
 
     #[test]
@@ -2206,5 +2711,42 @@ mod tests {
             state.handle_key(crossterm::event::KeyCode::Esc),
             Some(false)
         );
+    }
+
+    #[test]
+    fn parses_osc_color_queries_with_mixed_terminators() {
+        let response = b"\x1b]10;rgb:e5/e7/eb\x07\x1b]11;rgb:0b0f/1414/2020\x1b\\";
+
+        let colors = parse_osc_color_responses(response);
+
+        assert_eq!(
+            colors,
+            Some((RgbColor::new(229, 231, 235), RgbColor::new(11, 20, 32),))
+        );
+    }
+
+    #[test]
+    fn derived_theme_uses_terminal_background_and_foreground() {
+        let foreground = RgbColor::new(229, 231, 235);
+        let background = RgbColor::new(21, 24, 28);
+
+        let theme = match derive_terminal_theme(foreground, background) {
+            Some(theme) => theme,
+            None => panic!("theme should derive"),
+        };
+
+        assert_eq!(theme.background, background.to_color());
+        assert_eq!(theme.foreground, foreground.to_color());
+        assert_ne!(theme.panel, default_theme().panel);
+    }
+
+    #[test]
+    fn low_contrast_terminal_colors_fall_back_to_default_theme() {
+        let foreground = RgbColor::new(120, 120, 120);
+        let background = RgbColor::new(118, 118, 118);
+
+        let theme = derive_terminal_theme(foreground, background);
+
+        assert!(theme.is_none());
     }
 }

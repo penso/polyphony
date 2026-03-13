@@ -68,7 +68,7 @@ This repository already provides:
 - saved per-issue agent context snapshots, built from streamed runtime events and reused on retries/handoffs
 - runtime throttling when adapters surface `429`-style rate limits
 - budget and spend snapshots that can be persisted and shown in the TUI
-- a multi-tab `ratatui` dashboard for overview, activity, logs, and agent catalogs, with sparklines, progress gauges, scrollable panes, and live tracing logs
+- a multi-tab `ratatui` dashboard for overview, activity, logs, and agent catalogs, with sparklines, progress gauges, scrollable panes, live tracing logs, and best-effort terminal theme matching
 - a `tracker.kind: none` startup mode so the real runtime can boot before any tracker or agent is configured
 - optional post-run GitHub handoff automation that can commit, push, open a draft PR, and post a review summary
 - generic outbound feedback sinks for human handoff notifications, with Telegram and webhook implementations today
@@ -154,8 +154,12 @@ local tracing output into the TUI `Logs` pane while the dashboard is active. The
 defaults to `polyphony` and can be overridden with `OTEL_SERVICE_NAME`. If OTLP exporter setup
 fails, Polyphony prints a warning and continues with local logs only. If the TUI fails to start or
 crashes, the service falls back to headless mode, flushes buffered logs back to stderr, and keeps
-running until `Ctrl-C`. The `Logs` tab follows the active `RUST_LOG` filter, so a quiet setting
-such as `RUST_LOG=warn` will intentionally hide the normal startup `info` lines.
+running until `Ctrl-C`. The `Logs` tab follows the active `RUST_LOG` filter, keeps the newest
+lines pinned at the bottom by default, and shows a live scrollbar when you scroll back through
+older output. A quiet setting such as `RUST_LOG=warn` will intentionally hide the normal startup
+`info` lines. When the terminal replies to OSC color queries, Polyphony also derives the dashboard
+palette from the active terminal foreground and background colors instead of forcing the built-in
+blue slate theme.
 
 Enable SQLite persistence:
 
@@ -209,6 +213,10 @@ Merge order is:
 
 Any string value that starts with `$` is resolved from the environment, so values such as
 `api_key = "$OPENAI_API_KEY"` or `api_key = "$GITHUB_TOKEN"` keep secrets out of the file.
+
+Tracker polling defaults to once per minute. Override `polling.interval_ms` in `WORKFLOW.md` only
+when you actually need a faster loop, otherwise you are mostly just paying extra API tax for the
+same issue list.
 
 Keep tracker identity and repo or project selection out of the global config.
 That includes:

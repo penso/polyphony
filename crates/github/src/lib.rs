@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use {
     async_trait::async_trait,
-    chrono::Utc,
+    chrono::{DateTime, Utc},
     graphql_client::GraphQLQuery,
     octocrab::{
         Octocrab,
@@ -14,7 +14,11 @@ use {
     polyphony_core::{
         BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
         IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestRef, PullRequestRequest,
-        TrackerQuery,
+        RateLimitSignal, TrackerQuery,
+    },
+    reqwest::{
+        Response, StatusCode,
+        header::{HeaderMap, RETRY_AFTER},
     },
     serde::{Deserialize, Serialize, de::DeserializeOwned},
     thiserror::Error,
@@ -209,20 +213,10 @@ impl GithubIssueTracker {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
-        let status = response.status();
-        if status.as_u16() == 403 || status.as_u16() == 429 {
-            return Err(CoreError::RateLimited(Box::new(
-                polyphony_core::RateLimitSignal {
-                    component: "tracker:github".into(),
-                    reason: format!("github graphql {}", status),
-                    limited_at: Utc::now(),
-                    retry_after_ms: None,
-                    reset_at: None,
-                    status_code: Some(status.as_u16()),
-                    raw: None,
-                },
-            )));
+        if let Some(signal) = github_rate_limit_signal_from_response("tracker:github", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
         }
+        let status = response.status();
         let payload = response
             .json::<graphql_client::Response<ResponseData>>()
             .await
@@ -344,7 +338,7 @@ impl IssueTracker for GithubIssueTracker {
         if !wants_open_states(&query.active_states) {
             return Ok(Vec::new());
         }
-        info!(
+        debug!(
             repository = %format!("{}/{}", self.owner, self.repo),
             "fetching GitHub candidate issues"
         );
@@ -533,6 +527,9 @@ impl GithubPullRequestManager {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:pulls", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
         let status = response.status();
         if !status.is_success() {
             return Err(CoreError::Adapter(format!(
@@ -587,6 +584,9 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:graphql", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
         let payload: graphql_client::Response<resolve_pull_request_id::ResponseData> = response
             .json()
             .await
@@ -612,6 +612,9 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:graphql", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
         let payload: graphql_client::Response<add_comment_to_pull_request::ResponseData> = response
             .json()
             .await
@@ -678,6 +681,9 @@ impl PullRequestManager for GithubPullRequestManager {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:pulls", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
         let status = response.status();
         if !status.is_success() {
             return Err(CoreError::Adapter(format!(
@@ -720,6 +726,9 @@ impl PullRequestManager for GithubPullRequestManager {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:pulls", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
         let status = response.status();
         if !status.is_success() {
             return Err(CoreError::Adapter(format!(
@@ -926,11 +935,15 @@ fn map_github_error(error: octocrab::Error) -> CoreError {
     if let octocrab::Error::GitHub { source, .. } = &error
         && (source.status_code.as_u16() == 403 || source.status_code.as_u16() == 429)
     {
-        return CoreError::RateLimited(Box::new(polyphony_core::RateLimitSignal {
+        return CoreError::RateLimited(Box::new(RateLimitSignal {
             component: "tracker:github".into(),
-            reason: format!("github api {}", source.status_code),
+            reason: github_rate_limit_reason(source.status_code, Some(source.message.as_str())),
             limited_at: Utc::now(),
-            retry_after_ms: None,
+            retry_after_ms: source
+                .message
+                .to_ascii_lowercase()
+                .contains("secondary rate limit")
+                .then_some(60_000),
             reset_at: None,
             status_code: Some(source.status_code.as_u16()),
             raw: None,
@@ -939,11 +952,81 @@ fn map_github_error(error: octocrab::Error) -> CoreError {
     CoreError::Adapter(error.to_string())
 }
 
+fn github_rate_limit_signal_from_response(
+    component: &str,
+    response: &Response,
+) -> Option<RateLimitSignal> {
+    github_rate_limit_signal(component, response.status(), response.headers(), None)
+}
+
+fn github_rate_limit_signal(
+    component: &str,
+    status: StatusCode,
+    headers: &HeaderMap,
+    message: Option<&str>,
+) -> Option<RateLimitSignal> {
+    if status.as_u16() != 403 && status.as_u16() != 429 {
+        return None;
+    }
+
+    let retry_after_ms = parse_retry_after_ms(headers)
+        .or_else(|| (!is_primary_rate_limit(headers)).then_some(60_000));
+    Some(RateLimitSignal {
+        component: component.into(),
+        reason: github_rate_limit_reason(status, message),
+        limited_at: Utc::now(),
+        retry_after_ms,
+        reset_at: parse_rate_limit_reset(headers),
+        status_code: Some(status.as_u16()),
+        raw: None,
+    })
+}
+
+fn github_rate_limit_reason(status: StatusCode, message: Option<&str>) -> String {
+    match message.map(str::trim).filter(|message| !message.is_empty()) {
+        Some(message) => format!("github api {status}: {message}"),
+        None => format!("github api {status}"),
+    }
+}
+
+fn parse_retry_after_ms(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
+        .map(|seconds| seconds.saturating_mul(1_000))
+}
+
+fn parse_rate_limit_reset(headers: &HeaderMap) -> Option<DateTime<Utc>> {
+    let reset_epoch = headers
+        .get("x-ratelimit-reset")?
+        .to_str()
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
+    DateTime::from_timestamp(reset_epoch, 0)
+}
+
+fn is_primary_rate_limit(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value == "0")
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        find_status_field_option, project_id_from_context, resolve_project_issue_context,
-        resolve_project_status_field,
+    use {
+        super::{
+            StatusCode, find_status_field_option, github_rate_limit_signal, parse_rate_limit_reset,
+            parse_retry_after_ms, project_id_from_context, resolve_project_issue_context,
+            resolve_project_status_field,
+        },
+        chrono::{TimeZone, Utc},
+        reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER},
     };
 
     #[test]
@@ -995,6 +1078,56 @@ mod tests {
         assert_eq!(
             find_status_field_option(&nodes, "status", "human review"),
             Some(("field-1".into(), "opt-3".into()))
+        );
+    }
+
+    #[test]
+    fn retry_after_header_is_converted_to_milliseconds() {
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("12"));
+
+        assert_eq!(parse_retry_after_ms(&headers), Some(12_000));
+    }
+
+    #[test]
+    fn reset_header_is_converted_to_utc_timestamp() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1710000000"));
+
+        assert_eq!(
+            parse_rate_limit_reset(&headers),
+            Utc.timestamp_opt(1_710_000_000, 0).single()
+        );
+    }
+
+    #[test]
+    fn secondary_rate_limit_without_headers_falls_back_to_one_minute() {
+        let signal = github_rate_limit_signal(
+            "tracker:github",
+            StatusCode::TOO_MANY_REQUESTS,
+            &HeaderMap::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(signal.retry_after_ms, Some(60_000));
+        assert!(signal.reset_at.is_none());
+    }
+
+    #[test]
+    fn primary_rate_limit_uses_reset_header_instead_of_guessing_retry_after() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1710000000"));
+
+        let signal =
+            github_rate_limit_signal("tracker:github", StatusCode::FORBIDDEN, &headers, None)
+                .unwrap();
+
+        assert_eq!(signal.retry_after_ms, None);
+        assert_eq!(
+            signal.reset_at,
+            Utc.timestamp_opt(1_710_000_000, 0).single()
         );
     }
 }

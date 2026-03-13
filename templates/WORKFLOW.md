@@ -15,7 +15,7 @@ tracker:
   # kind: linear
   # project_slug: ENG
 polling:
-  interval_ms: 2000
+  interval_ms: 60000
 workspace:
   root: .polyphony/workspaces
   checkout_kind: directory

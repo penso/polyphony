@@ -2,7 +2,7 @@
 tracker:
   kind: none
 polling:
-  interval_ms: 2000
+  interval_ms: 60000
 workspace:
   root: .polyphony/workspaces
   checkout_kind: worktree

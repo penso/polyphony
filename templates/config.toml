@@ -32,7 +32,7 @@ terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Huma
 # api_key = "$LINEAR_API_KEY"
 
 [polling]
-interval_ms = 30000
+interval_ms = 60000
 
 [workspace]
 root = ".polyphony/workspaces"

@@ -447,8 +447,7 @@ fn apply_tracker_profile(
     {
         tracker.active_states = profile.active_states.clone();
     }
-    if (tracker.terminal_states.is_empty()
-        || tracker.terminal_states == default_terminal_states())
+    if (tracker.terminal_states.is_empty() || tracker.terminal_states == default_terminal_states())
         && !profile.terminal_states.is_empty()
     {
         tracker.terminal_states = profile.terminal_states.clone();
@@ -513,7 +512,7 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("tracker.terminal_states", default_terminal_states())
             .map_err(config_error)?
-            .set_default("polling.interval_ms", 30_000)
+            .set_default("polling.interval_ms", 60_000)
             .map_err(config_error)?
             .set_default(
                 "workspace.root",
