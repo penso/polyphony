@@ -1,12 +1,12 @@
-use std::{env, path::PathBuf, sync::Arc};
+use std::{env, future::Future, path::PathBuf, pin::Pin, sync::Arc};
 
 use {
     clap::Parser,
     opentelemetry::{KeyValue, global, trace::TracerProvider as _},
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
     polyphony_core::{
-        IssueTracker, PullRequestCommenter, PullRequestManager, StateStore, WorkspaceCommitter,
-        WorkspaceProvisioner,
+        IssueTracker, PullRequestCommenter, PullRequestManager, RuntimeSnapshot, StateStore,
+        WorkspaceCommitter, WorkspaceProvisioner,
     },
     polyphony_orchestrator::{
         RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
@@ -14,8 +14,13 @@ use {
     },
     polyphony_workflow::load_workflow,
     thiserror::Error,
+    tokio::sync::{mpsc, watch},
+    tracing::warn,
     tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt},
 };
+
+type TuiRunFuture = Pin<Box<dyn Future<Output = Result<(), polyphony_tui::Error>> + Send>>;
+type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send>>;
 
 #[derive(Debug, Parser)]
 #[command(name = "polyphony")]
@@ -49,7 +54,7 @@ enum Error {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
-    let _telemetry = init_tracing(cli.log_json)?;
+    let _telemetry = init_tracing(cli.log_json);
     tracing::info!(
         workflow_path = %cli.workflow_path.display(),
         no_tui = cli.no_tui,
@@ -85,13 +90,14 @@ async fn main() -> Result<(), Error> {
     let _watcher = spawn_workflow_watcher(cli.workflow_path.clone(), handle.command_tx.clone())?;
     let service_task = tokio::spawn(service.run());
 
-    if cli.no_tui {
-        tokio::signal::ctrl_c().await?;
-        let _ = handle.command_tx.send(RuntimeCommand::Shutdown);
-    } else {
-        polyphony_tui::run(handle.snapshot_rx.clone(), handle.command_tx.clone()).await?;
-        let _ = handle.command_tx.send(RuntimeCommand::Shutdown);
-    }
+    run_operator_surface(
+        cli.no_tui,
+        handle.snapshot_rx.clone(),
+        handle.command_tx.clone(),
+        |snapshot_rx, command_tx| Box::pin(polyphony_tui::run(snapshot_rx, command_tx)),
+        Box::pin(tokio::signal::ctrl_c()),
+    )
+    .await?;
 
     service_task
         .await
@@ -111,11 +117,33 @@ impl Drop for TelemetryGuard {
     }
 }
 
-fn init_tracing(log_json: bool) -> Result<TelemetryGuard, Error> {
+fn init_tracing(log_json: bool) -> TelemetryGuard {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let tracer_provider = build_tracer_provider()?;
+    let tracer_provider = match build_tracer_provider() {
+        Ok(provider) => provider,
+        Err(error) => {
+            eprintln!("polyphony: tracing exporter setup failed: {error}");
+            None
+        },
+    };
+    if let Err(error) = install_tracing_subscriber(filter, tracer_provider.clone(), log_json) {
+        eprintln!("polyphony: tracing subscriber setup failed: {error}");
+    }
+    tracing::info!(
+        otel_enabled = tracer_provider.is_some(),
+        log_json,
+        "tracing initialized"
+    );
+    TelemetryGuard { tracer_provider }
+}
+
+fn install_tracing_subscriber(
+    filter: EnvFilter,
+    tracer_provider: Option<SdkTracerProvider>,
+    log_json: bool,
+) -> Result<(), Error> {
     if log_json {
-        if let Some(provider) = tracer_provider.clone() {
+        if let Some(provider) = tracer_provider {
             tracing_subscriber::registry()
                 .with(filter)
                 .with(tracing_subscriber::fmt::layer().json())
@@ -129,7 +157,7 @@ fn init_tracing(log_json: bool) -> Result<TelemetryGuard, Error> {
                 .try_init()
                 .map_err(|error| Error::Config(error.to_string()))?;
         }
-    } else if let Some(provider) = tracer_provider.clone() {
+    } else if let Some(provider) = tracer_provider {
         tracing_subscriber::registry()
             .with(filter)
             .with(tracing_subscriber::fmt::layer().compact())
@@ -143,12 +171,7 @@ fn init_tracing(log_json: bool) -> Result<TelemetryGuard, Error> {
             .try_init()
             .map_err(|error| Error::Config(error.to_string()))?;
     }
-    tracing::info!(
-        otel_enabled = tracer_provider.is_some(),
-        log_json,
-        "tracing initialized"
-    );
-    Ok(TelemetryGuard { tracer_provider })
+    Ok(())
 }
 
 fn build_tracer_provider() -> Result<Option<SdkTracerProvider>, Error> {
@@ -180,6 +203,42 @@ fn build_tracer_provider() -> Result<Option<SdkTracerProvider>, Error> {
 fn otel_configured() -> bool {
     env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_some()
         || env::var_os("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").is_some()
+}
+
+async fn run_operator_surface<F>(
+    no_tui: bool,
+    snapshot_rx: watch::Receiver<RuntimeSnapshot>,
+    command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+    run_tui: F,
+    shutdown_signal: ShutdownFuture,
+) -> Result<(), Error>
+where
+    F: FnOnce(
+        watch::Receiver<RuntimeSnapshot>,
+        mpsc::UnboundedSender<RuntimeCommand>,
+    ) -> TuiRunFuture,
+{
+    if no_tui {
+        shutdown_signal.await?;
+        let _ = command_tx.send(RuntimeCommand::Shutdown);
+        return Ok(());
+    }
+
+    match run_tui(snapshot_rx, command_tx.clone()).await {
+        Ok(()) => {
+            let _ = command_tx.send(RuntimeCommand::Shutdown);
+            Ok(())
+        },
+        Err(error) => {
+            warn!(%error, "tui failed; continuing headless");
+            eprintln!(
+                "polyphony: TUI failed: {error}. Continuing headless mode. Press Ctrl-C to stop."
+            );
+            shutdown_signal.await?;
+            let _ = command_tx.send(RuntimeCommand::Shutdown);
+            Ok(())
+        },
+    }
 }
 
 #[allow(unused_variables)]
@@ -322,4 +381,119 @@ fn is_mock_workflow(workflow: &polyphony_workflow::LoadedWorkflow) -> bool {
                     || profile.transport.is_none() && profile.kind.is_empty()
             })
             .unwrap_or(false)
+}
+
+#[cfg(all(test, feature = "mock"))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::{
+        fs, io,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use {
+        polyphony_orchestrator::{RuntimeCommand, RuntimeService},
+        polyphony_workflow::load_workflow,
+        tokio::sync::{mpsc, watch},
+    };
+
+    use crate::{Error, run_operator_surface};
+
+    fn snapshot_rx() -> watch::Receiver<polyphony_core::RuntimeSnapshot> {
+        let workflow_path = std::env::temp_dir().join(format!(
+            "polyphony-cli-test-{}.md",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(
+            &workflow_path,
+            format!(
+                "---\ntracker:\n  kind: mock\nworkspace:\n  root: {}\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nMock prompt\n",
+                std::env::temp_dir().display()
+            ),
+        )
+        .unwrap();
+        let workflow = load_workflow(&workflow_path).unwrap();
+        let _ = fs::remove_file(&workflow_path);
+        let tracker = polyphony_issue_mock::MockTracker::seeded_demo();
+        let agent = polyphony_issue_mock::MockAgentRuntime::new(tracker.clone());
+        let (_tx, workflow_rx) = watch::channel(workflow);
+        let (_service, handle) = RuntimeService::new(
+            Arc::new(tracker),
+            Arc::new(agent),
+            Arc::new(polyphony_git::GitWorkspaceProvisioner),
+            None,
+            None,
+            None,
+            None,
+            None,
+            workflow_rx,
+        );
+        handle.snapshot_rx
+    }
+
+    #[tokio::test]
+    async fn operator_surface_falls_back_to_headless_when_tui_fails() {
+        let snapshot_rx = snapshot_rx();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        run_operator_surface(
+            false,
+            snapshot_rx,
+            command_tx,
+            |_snapshot_rx, _command_tx| {
+                Box::pin(async { Err(polyphony_tui::Error::Io(io::Error::other("boom"))) })
+            },
+            Box::pin(async { Ok(()) }),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            command_rx.recv().await,
+            Some(RuntimeCommand::Shutdown)
+        ));
+    }
+
+    #[tokio::test]
+    async fn operator_surface_waits_for_shutdown_in_headless_mode() {
+        let snapshot_rx = snapshot_rx();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        run_operator_surface(
+            true,
+            snapshot_rx,
+            command_tx,
+            |_snapshot_rx, _command_tx| Box::pin(async { Ok(()) }),
+            Box::pin(async { Ok(()) }),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            command_rx.recv().await,
+            Some(RuntimeCommand::Shutdown)
+        ));
+    }
+
+    #[tokio::test]
+    async fn operator_surface_propagates_shutdown_wait_errors() {
+        let snapshot_rx = snapshot_rx();
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+
+        let error = run_operator_surface(
+            true,
+            snapshot_rx,
+            command_tx,
+            |_snapshot_rx, _command_tx| Box::pin(async { Ok(()) }),
+            Box::pin(async { Err(io::Error::other("ctrl-c failed")) }),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, Error::Io(_)));
+    }
 }

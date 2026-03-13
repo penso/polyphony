@@ -8,13 +8,13 @@ components.
 At startup the CLI:
 
 1. loads `WORKFLOW.md`
-2. initializes tracing
+2. initializes tracing, falling back to local logs if OTLP exporter setup fails
 3. builds the selected tracker and agent registry runtime
 4. creates the git-backed workspace provisioner
 5. optionally connects the SQLite state store
 6. starts `RuntimeService`
 7. starts the workflow file watcher
-8. launches the TUI unless `--no-tui` is set
+8. launches the TUI unless `--no-tui` is set, and falls back to headless mode if the TUI fails
 
 The file watcher is only a nudge. The orchestrator still re-reads `WORKFLOW.md` defensively on poll
 ticks so missed filesystem events do not leave the runtime on stale config.

@@ -129,7 +129,9 @@ cargo run -p polyphony-cli -- --no-tui
 When `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set, the CLI
 installs an OTLP trace exporter over tonic, keeps normal `tracing` logs enabled, and flushes the
 tracer provider on shutdown. The service name defaults to `polyphony` and can be overridden with
-`OTEL_SERVICE_NAME`.
+`OTEL_SERVICE_NAME`. If OTLP exporter setup fails, Polyphony prints a warning and continues with
+local logs only. If the TUI fails to start or crashes, the service falls back to headless mode and
+keeps running until `Ctrl-C`.
 
 Enable SQLite persistence:
 
