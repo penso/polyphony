@@ -10,7 +10,7 @@ The current workspace configuration covers:
 - `tracker`: tracker kind, repository or project identifiers, API settings, and state mapping
 - `polling`: tracker polling interval
 - `workspace`: root path, checkout strategy, reuse behavior, and transient cleanup paths
-- `hooks`: optional shell hooks around workspace lifecycle events
+- `hooks`: optional shell hooks around workspace lifecycle events, with captured stdout/stderr logged in truncated form
 - `agent`: global concurrency, turn, and retry limits
 - `codex`: optional single-agent shorthand for one Codex app-server profile
 - `agents`: named agent profiles and routing rules

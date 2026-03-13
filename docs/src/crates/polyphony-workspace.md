@@ -9,6 +9,7 @@
 - sanitized workspace path mapping
 - containment checks so workspaces cannot escape the configured root
 - `after_create`, `before_run`, `after_run`, and `before_remove` hooks
+- structured hook lifecycle logging, with stdout and stderr captured separately and truncated for safety
 - transient artifact cleanup before runs
 - rollback when workspace initialization fails
 

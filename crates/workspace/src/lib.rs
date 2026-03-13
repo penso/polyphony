@@ -11,9 +11,11 @@ use {
     },
     polyphony_workflow::HooksConfig,
     thiserror::Error,
-    tokio::process::Command,
+    tokio::{io::AsyncReadExt, process::Command},
     tracing::{info, warn},
 };
+
+const HOOK_OUTPUT_LOG_LIMIT: usize = 2_000;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -23,6 +25,20 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("hook failure: {0}")]
     Hook(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HookLogOutput {
+    text: Option<String>,
+    truncated: bool,
+    bytes: usize,
+}
+
+#[derive(Debug)]
+struct HookCommandOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 pub struct WorkspaceManager {
@@ -210,17 +226,159 @@ impl WorkspaceManager {
             return Ok(());
         };
         ensure_contained(&self.root, cwd)?;
+        info!(
+            hook = hook_name,
+            workspace_path = %cwd.display(),
+            timeout_ms,
+            "starting workspace hook"
+        );
         let mut command = Command::new("bash");
-        command.arg("-lc").arg(script).current_dir(cwd);
-        let status = tokio::time::timeout(Duration::from_millis(timeout_ms), command.status())
-            .await
-            .map_err(|_| Error::Hook(format!("{hook_name} timed out")))??;
-        if !status.success() {
+        command
+            .arg("-lc")
+            .arg(script)
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Hook(format!("{hook_name} stdout unavailable")))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::Hook(format!("{hook_name} stderr unavailable")))?;
+        let stdout_handle = tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stdout);
+            let mut output = Vec::new();
+            reader.read_to_end(&mut output).await?;
+            Ok::<Vec<u8>, std::io::Error>(output)
+        });
+        let stderr_handle = tokio::spawn(async move {
+            let mut reader = tokio::io::BufReader::new(stderr);
+            let mut output = Vec::new();
+            reader.read_to_end(&mut output).await?;
+            Ok::<Vec<u8>, std::io::Error>(output)
+        });
+
+        let (status, timed_out) =
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait()).await {
+                Ok(status) => (status?, false),
+                Err(_) => {
+                    let _ = child.kill().await;
+                    (child.wait().await?, true)
+                },
+            };
+        let output = HookCommandOutput {
+            status,
+            stdout: join_hook_output(stdout_handle).await?,
+            stderr: join_hook_output(stderr_handle).await?,
+        };
+        log_hook_output(hook_name, cwd, timeout_ms, &output, timed_out);
+        if timed_out {
+            return Err(Error::Hook(format!("{hook_name} timed out")));
+        }
+        if !output.status.success() {
             return Err(Error::Hook(format!(
-                "{hook_name} exited with status {status}"
+                "{hook_name} exited with status {}",
+                output.status
             )));
         }
         Ok(())
+    }
+}
+
+async fn join_hook_output(
+    handle: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) -> Result<Vec<u8>, Error> {
+    handle
+        .await
+        .map_err(|error| Error::Hook(format!("hook output task failed: {error}")))?
+        .map_err(Error::Io)
+}
+
+fn log_hook_output(
+    hook_name: &str,
+    cwd: &Path,
+    timeout_ms: u64,
+    output: &HookCommandOutput,
+    timed_out: bool,
+) {
+    let stdout = summarize_hook_output(&output.stdout);
+    let stderr = summarize_hook_output(&output.stderr);
+    if timed_out {
+        warn!(
+            hook = hook_name,
+            workspace_path = %cwd.display(),
+            timeout_ms,
+            status = %output.status,
+            stdout = %stdout.text.as_deref().unwrap_or(""),
+            stdout_bytes = stdout.bytes,
+            stdout_truncated = stdout.truncated,
+            stderr = %stderr.text.as_deref().unwrap_or(""),
+            stderr_bytes = stderr.bytes,
+            stderr_truncated = stderr.truncated,
+            "workspace hook timed out"
+        );
+        return;
+    }
+    if output.status.success() {
+        info!(
+            hook = hook_name,
+            workspace_path = %cwd.display(),
+            status = %output.status,
+            stdout = %stdout.text.as_deref().unwrap_or(""),
+            stdout_bytes = stdout.bytes,
+            stdout_truncated = stdout.truncated,
+            stderr = %stderr.text.as_deref().unwrap_or(""),
+            stderr_bytes = stderr.bytes,
+            stderr_truncated = stderr.truncated,
+            "workspace hook completed"
+        );
+    } else {
+        warn!(
+            hook = hook_name,
+            workspace_path = %cwd.display(),
+            status = %output.status,
+            stdout = %stdout.text.as_deref().unwrap_or(""),
+            stdout_bytes = stdout.bytes,
+            stdout_truncated = stdout.truncated,
+            stderr = %stderr.text.as_deref().unwrap_or(""),
+            stderr_bytes = stderr.bytes,
+            stderr_truncated = stderr.truncated,
+            "workspace hook failed"
+        );
+    }
+}
+
+fn summarize_hook_output(bytes: &[u8]) -> HookLogOutput {
+    let mut text = String::from_utf8_lossy(bytes).into_owned();
+    while text.ends_with('\n') || text.ends_with('\r') {
+        text.pop();
+    }
+    let bytes_len = text.len();
+    if text.is_empty() {
+        return HookLogOutput {
+            text: None,
+            truncated: false,
+            bytes: bytes_len,
+        };
+    }
+    let char_count = text.chars().count();
+    if char_count <= HOOK_OUTPUT_LOG_LIMIT {
+        return HookLogOutput {
+            text: Some(text),
+            truncated: false,
+            bytes: bytes_len,
+        };
+    }
+    let mut truncated = text.chars().take(HOOK_OUTPUT_LOG_LIMIT).collect::<String>();
+    truncated.push_str("...");
+    HookLogOutput {
+        text: Some(truncated),
+        truncated: true,
+        bytes: bytes_len,
     }
 }
 
@@ -409,5 +567,24 @@ mod tests {
 
         assert!(root.join("before_remove_ran").exists());
         assert!(!workspace.path.exists());
+    }
+
+    #[test]
+    fn summarize_hook_output_truncates_large_output() {
+        let output = super::summarize_hook_output("x".repeat(2_100).as_bytes());
+
+        assert_eq!(output.bytes, 2_100);
+        assert!(output.truncated);
+        assert_eq!(output.text.as_ref().unwrap().chars().count(), 2_003);
+        assert!(output.text.as_ref().unwrap().ends_with("..."));
+    }
+
+    #[test]
+    fn summarize_hook_output_trims_trailing_newlines() {
+        let output = super::summarize_hook_output(b"hello\n");
+
+        assert_eq!(output.bytes, 5);
+        assert!(!output.truncated);
+        assert_eq!(output.text.as_deref(), Some("hello"));
     }
 }
