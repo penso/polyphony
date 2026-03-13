@@ -23,6 +23,12 @@ start without external services or mock data:
 cargo run -p polyphony-cli
 ```
 
+Or install a release build into `~/.local/bin`:
+
+```bash
+just install
+```
+
 If the repo already ships a generic shared `WORKFLOW.md`, the CLI also seeds
 `.polyphony/config.toml` so you can point workspaces back at the current repository without
 editing the checked-in workflow.

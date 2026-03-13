@@ -23,7 +23,8 @@ use {
     polyphony_tui::{LogBuffer, prompt_workflow_initialization},
     polyphony_workflow::{
         ServiceConfig, ensure_repo_config_file, ensure_user_config_file, ensure_workflow_file,
-        load_workflow_with_user_config, repo_config_path, user_config_path,
+        load_workflow_with_user_config, repo_config_path, seed_repo_config_with_github,
+        user_config_path,
     },
     thiserror::Error,
     tokio::sync::{mpsc, watch},
@@ -111,8 +112,17 @@ async fn try_main() -> Result<(), Error> {
         );
         return Ok(());
     }
-    let repo_config_path =
-        maybe_seed_repo_config_file(&cli.workflow_path, Some(&user_config_path))?;
+    let (repo_config_path, first_run_no_github) =
+        maybe_seed_repo_config_with_github_detection(
+            &cli.workflow_path,
+            Some(&user_config_path),
+        )?;
+    if first_run_no_github {
+        eprintln!(
+            "Edit .polyphony/config.toml to configure your tracker, then restart polyphony."
+        );
+        return Ok(());
+    }
     let workflow = load_workflow_with_user_config(&cli.workflow_path, Some(&user_config_path))?;
     let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
         build_runtime_components(workflow)
@@ -263,6 +273,7 @@ where
     Ok(WorkflowBootstrap::Ready)
 }
 
+#[cfg(test)]
 fn maybe_seed_repo_config_file(
     workflow_path: &Path,
     user_config_path: Option<&Path>,
@@ -295,6 +306,63 @@ fn maybe_seed_repo_config_file(
         );
     }
     Ok(Some(repo_config_path))
+}
+
+/// Seed the repo config file, auto-detecting GitHub remotes.
+///
+/// Returns `(repo_config_path, first_run_no_github)`. When `first_run_no_github`
+/// is `true`, no GitHub remote was found and a default config with `kind = "none"`
+/// was written — the caller should exit with instructions.
+fn maybe_seed_repo_config_with_github_detection(
+    workflow_path: &Path,
+    user_config_path: Option<&Path>,
+) -> Result<(Option<PathBuf>, bool), Error> {
+    let rcp = repo_config_path(workflow_path)?;
+    if rcp.exists() {
+        if rcp.is_file() {
+            return Ok((Some(rcp), false));
+        }
+        return Err(Error::Config(format!(
+            "repo config path `{}` exists but is not a file",
+            rcp.display()
+        )));
+    }
+
+    let workflow = load_workflow_with_user_config(workflow_path, user_config_path)?;
+    let workflow_root = workflow_root_dir(workflow_path)?;
+    if !should_seed_repo_config(&workflow.config, &workflow_root) {
+        return Ok((None, false));
+    }
+
+    let source_repo_path = workflow_root
+        .canonicalize()
+        .unwrap_or_else(|_| workflow_root.clone());
+
+    // Try to detect a GitHub remote and pre-configure the tracker.
+    if let Some(github_repo) = polyphony_git::detect_github_remote(&workflow_root) {
+        if seed_repo_config_with_github(&rcp, &source_repo_path, &github_repo)? {
+            eprintln!(
+                "Detected GitHub repository: {github_repo} — tracker configured automatically."
+            );
+            tracing::info!(
+                workflow_path = %workflow_path.display(),
+                repo_config_path = %rcp.display(),
+                github_repo = %github_repo,
+                "created repo-local config with GitHub tracker"
+            );
+        }
+        return Ok((Some(rcp), false));
+    }
+
+    // Fallback: seed with kind = "none" and signal that the user should configure manually.
+    if ensure_repo_config_file(&rcp, &source_repo_path)? {
+        tracing::info!(
+            workflow_path = %workflow_path.display(),
+            repo_config_path = %rcp.display(),
+            "created default repo-local config file (no GitHub remote detected)"
+        );
+    }
+    Ok((Some(rcp), true))
 }
 
 fn should_seed_repo_config(config: &ServiceConfig, workflow_root: &Path) -> bool {

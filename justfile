@@ -18,6 +18,11 @@ lint: lockfile-check
 test:
     cargo +{{nightly_toolchain}} test --workspace
 
+install:
+    mkdir -p "$HOME/.local/bin"
+    cargo +{{nightly_toolchain}} build --release -p polyphony-cli
+    install -m 755 target/release/polyphony "$HOME/.local/bin/polyphony"
+
 docs-build:
     mdbook build docs
 

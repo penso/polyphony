@@ -17,7 +17,7 @@ use {
     ratatui::{
         Terminal,
         backend::CrosstermBackend,
-        layout::{Constraint, Direction, Layout, Margin, Rect},
+        layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
         style::{Color, Modifier, Style},
         symbols,
         text::{Line, Span},
@@ -35,6 +35,12 @@ use std::os::fd::AsRawFd as _;
 
 const HISTORY_LEN: usize = 48;
 const LOG_BUFFER_CAPACITY: usize = 2_000;
+
+#[derive(Clone, Copy)]
+struct ShortcutHint {
+    keys: &'static str,
+    label: &'static str,
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -73,7 +79,8 @@ impl Default for BootstrapState {
 impl BootstrapState {
     fn handle_key(&mut self, key: KeyCode) -> Option<bool> {
         match key {
-            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
+            KeyCode::Enter => Some(self.choice == BootstrapChoice::Create),
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(true),
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') => {
                 Some(false)
             },
@@ -445,8 +452,9 @@ impl AppState {
 }
 
 pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Error> {
-    enable_raw_mode()?;
     let theme = detect_terminal_theme().unwrap_or_else(default_theme);
+    enable_raw_mode()?;
+    drain_pending_input();
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -475,8 +483,11 @@ pub async fn run(
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     log_buffer: LogBuffer,
 ) -> Result<(), Error> {
-    enable_raw_mode()?;
+    // Detect terminal colors before raw mode to avoid leftover OSC responses
+    // being misinterpreted as key events (e.g. spurious Tab → Activity tab).
     let theme = detect_terminal_theme().unwrap_or_else(default_theme);
+    enable_raw_mode()?;
+    drain_pending_input();
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
@@ -520,7 +531,7 @@ pub async fn run(
 
 fn draw_workflow_bootstrap(
     frame: &mut ratatui::Frame<'_>,
-    workflow_path: &Path,
+    _workflow_path: &Path,
     state: &BootstrapState,
     theme: Theme,
 ) {
@@ -529,35 +540,18 @@ fn draw_workflow_bootstrap(
         frame.area(),
     );
 
-    let outer = centered_rect(frame.area(), 94, 21);
-    let top = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1)])
-        .split(outer);
-
-    frame.render_widget(
-        Tabs::new(vec![
-            Line::from(Span::styled(
-                "Initialize",
-                Style::default()
-                    .fg(theme.highlight)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled("Workflow", Style::default().fg(theme.muted))),
-            Line::from(Span::styled("Repo Local", Style::default().fg(theme.muted))),
-        ])
-        .divider(Span::raw("  "))
-        .select(0)
-        .block(panel_block("Polyphony", theme)),
-        top[0],
+    let shell = centered_rect(frame.area(), 62, 11);
+    let shadow = Rect::new(
+        shell.x.saturating_add(1),
+        shell.y.saturating_add(1),
+        shell.width.saturating_sub(1),
+        shell.height.saturating_sub(1),
     );
-
-    let modal = centered_rect(top[1], 88, 18);
-    frame.render_widget(Clear, modal);
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme.panel_alt)),
-        modal,
+        Block::default().style(Style::default().bg(theme.panel)),
+        shadow,
     );
+    frame.render_widget(Clear, shell);
     frame.render_widget(
         Block::default()
             .title(Line::from(Span::styled(
@@ -570,146 +564,63 @@ fn draw_workflow_bootstrap(
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.highlight))
             .style(Style::default().bg(theme.panel_alt)),
-        modal,
+        shell,
     );
 
-    let inner = modal.inner(Margin {
+    let inner = shell.inner(Margin {
         vertical: 1,
-        horizontal: 2,
+        horizontal: 3,
     });
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(6),
-            Constraint::Length(3),
+            Constraint::Fill(1),   // top spacer
+            Constraint::Length(2),  // body text
+            Constraint::Fill(1),   // bottom spacer
+            Constraint::Length(1),  // buttons (pinned to bottom)
         ])
         .split(inner);
 
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
-                "This folder has not been initialized yet.",
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
+                "Creates a WORKFLOW.md file for this repository.",
+                Style::default().fg(theme.foreground),
             )),
             Line::from(Span::styled(
-                "Create a repo-local WORKFLOW.md so Polyphony can start with sane defaults.",
-                Style::default().fg(theme.muted),
-            )),
-        ]),
-        rows[0],
-    );
-
-    let workflow_label = truncate_middle(
-        &workflow_path.display().to_string(),
-        rows[1].width.saturating_sub(6) as usize,
-    );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("path ", Style::default().fg(theme.muted)),
-                Span::styled(
-                    workflow_label,
-                    Style::default().fg(theme.foreground),
-                ),
-            ]),
-            Line::from(Span::styled(
-                "Shared credentials and reusable agent profiles stay in ~/.config/polyphony/config.toml.",
-                Style::default().fg(theme.muted),
+                "No existing files will be modified.",
+                Style::default().fg(theme.foreground),
             )),
         ])
-        .block(card_block("Workflow File", theme.info, theme)),
+        .wrap(ratatui::widgets::Wrap { trim: false }),
         rows[1],
     );
 
-    let cards = if rows[2].width >= 84 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-            ])
-            .split(rows[2])
+    let cancel_style = if state.choice == BootstrapChoice::Cancel {
+        Style::default()
+            .fg(theme.background)
+            .bg(theme.muted)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-            ])
-            .split(rows[2])
+        Style::default().fg(theme.muted)
+    };
+    let create_style = if state.choice == BootstrapChoice::Create {
+        Style::default()
+            .fg(theme.background)
+            .bg(theme.highlight)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.foreground)
     };
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Repo Local",
-                Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
-            )),
-            Line::from("tracker kind and project or repo"),
-            Line::from("workspace checkout and hooks"),
-        ])
-        .block(card_block("WORKFLOW.md", theme.info, theme)),
-        cards[0],
-    );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Shared",
-                Style::default()
-                    .fg(theme.success)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from("API keys and provider auth"),
-            Line::from("reusable agent profiles"),
-        ])
-        .block(card_block("User Config", theme.success, theme)),
-        cards[1],
-    );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Controls",
-                Style::default()
-                    .fg(theme.highlight)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from("Enter or y to create"),
-            Line::from("Esc, n, or q to cancel"),
-        ])
-        .block(card_block("Next Step", theme.highlight, theme)),
-        cards[2],
-    );
-
-    let buttons = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(18),
-            Constraint::Length(3),
-            Constraint::Length(18),
-            Constraint::Fill(1),
-        ])
-        .split(rows[3]);
-    draw_bootstrap_button(
-        frame,
-        buttons[1],
-        "Create WORKFLOW.md",
-        state.choice == BootstrapChoice::Create,
-        theme.highlight,
-        theme,
-    );
-    draw_bootstrap_button(
-        frame,
-        buttons[3],
-        "Cancel",
-        state.choice == BootstrapChoice::Cancel,
-        theme.muted,
-        theme,
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Cancel ", cancel_style),
+            Span::raw("   "),
+            Span::styled(" Initialize ", create_style),
+        ]))
+        .alignment(Alignment::Right),
+        rows[3],
     );
 }
 
@@ -731,7 +642,7 @@ fn draw(
             Constraint::Length(3),
             Constraint::Length(8),
             Constraint::Min(12),
-            Constraint::Length(2),
+            Constraint::Length(3),
         ])
         .split(frame.area());
 
@@ -1079,27 +990,111 @@ fn draw_agents_tab(
 
 fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
     let theme = app.theme;
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled(
-            format!("{} ", app.active_tab.title()),
+    let footer = Paragraph::new(shortcut_line(
+        app.active_tab,
+        area.width.saturating_sub(2) as usize,
+        theme,
+    ))
+    .block(panel_block("Controls", theme));
+    frame.render_widget(footer, area);
+}
+
+fn shortcut_line(active_tab: ActiveTab, width: usize, theme: Theme) -> Line<'static> {
+    let shortcuts = shortcuts_for(active_tab, width);
+    let mut spans = Vec::with_capacity(shortcuts.len().saturating_mul(3));
+    for (index, shortcut) in shortcuts.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" | ", Style::default().fg(theme.border)));
+        }
+        spans.push(Span::styled(
+            shortcut.keys,
             Style::default()
                 .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("1-4 tabs", Style::default().fg(theme.muted)),
-        Span::raw("  "),
-        Span::styled("tab / shift-tab switch", Style::default().fg(theme.muted)),
-        Span::raw("  "),
-        Span::styled("j k / arrows move", Style::default().fg(theme.muted)),
-        Span::raw("  "),
-        Span::styled("pgup pgdn g G scroll", Style::default().fg(theme.muted)),
-        Span::raw("  "),
-        Span::styled("r refresh", Style::default().fg(theme.muted)),
-        Span::raw("  "),
-        Span::styled("q quit", Style::default().fg(theme.muted)),
-    ]))
-    .block(panel_block("Controls", theme));
-    frame.render_widget(footer, area);
+        ));
+        spans.push(Span::styled(
+            format!(" {}", shortcut.label),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn shortcuts_for(active_tab: ActiveTab, width: usize) -> Vec<ShortcutHint> {
+    let tab_hint = ShortcutHint {
+        keys: "1-4/TAB",
+        label: "switch tabs",
+    };
+    let refresh_hint = ShortcutHint {
+        keys: "r",
+        label: "refresh",
+    };
+    let quit_hint = ShortcutHint {
+        keys: "q",
+        label: "quit",
+    };
+
+    if width < 44 {
+        return vec![tab_hint, quit_hint];
+    }
+
+    let mut shortcuts = vec![tab_hint];
+    match active_tab {
+        ActiveTab::Overview => {
+            shortcuts.push(ShortcutHint {
+                keys: "j/k",
+                label: "select issue",
+            });
+        },
+        ActiveTab::Activity => {
+            shortcuts.push(ShortcutHint {
+                keys: "j/k",
+                label: "scroll events",
+            });
+            if width >= 76 {
+                shortcuts.push(ShortcutHint {
+                    keys: "PgUp/PgDn",
+                    label: "jump faster",
+                });
+            }
+            if width >= 96 {
+                shortcuts.push(ShortcutHint {
+                    keys: "g/G",
+                    label: "top/bottom",
+                });
+            }
+        },
+        ActiveTab::Logs => {
+            shortcuts.push(ShortcutHint {
+                keys: "j/k",
+                label: "tail or scroll",
+            });
+            if width >= 76 {
+                shortcuts.push(ShortcutHint {
+                    keys: "PgUp/PgDn",
+                    label: "page logs",
+                });
+            }
+            if width >= 96 {
+                shortcuts.push(ShortcutHint {
+                    keys: "g/G",
+                    label: "top/bottom",
+                });
+            }
+        },
+        ActiveTab::Agents => {
+            shortcuts.push(ShortcutHint {
+                keys: "j/k",
+                label: "select agent",
+            });
+        },
+    }
+
+    if width >= 58 {
+        shortcuts.push(refresh_hint);
+    }
+    shortcuts.push(quit_hint);
+    shortcuts
 }
 
 fn draw_metric_card(
@@ -1922,36 +1917,6 @@ fn draw_table_scrollbar(
     );
 }
 
-fn draw_bootstrap_button(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    label: &str,
-    active: bool,
-    accent: Color,
-    theme: Theme,
-) {
-    let (background, foreground, border) = if active {
-        (accent, theme.background, accent)
-    } else {
-        (theme.panel, theme.foreground, theme.border)
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            label,
-            Style::default().fg(foreground).add_modifier(Modifier::BOLD),
-        )))
-        .centered()
-        .block(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(border))
-                .style(Style::default().bg(background)),
-        ),
-        area,
-    );
-}
-
 fn panel_block(title: &str, theme: Theme) -> Block<'_> {
     Block::default()
         .title(Line::from(Span::styled(
@@ -2302,6 +2267,14 @@ const SUCCESS_ACCENT: RgbColor = RgbColor::new(52, 211, 153);
 const WARNING_ACCENT: RgbColor = RgbColor::new(250, 204, 21);
 const DANGER_ACCENT: RgbColor = RgbColor::new(248, 113, 113);
 
+/// Drain any pending crossterm input events so that leftover bytes
+/// (e.g. from OSC color query responses) are not misinterpreted as key presses.
+fn drain_pending_input() {
+    while event::poll(Duration::from_millis(10)).unwrap_or(false) {
+        let _ = event::read();
+    }
+}
+
 fn detect_terminal_theme() -> Option<Theme> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return None;
@@ -2572,14 +2545,17 @@ fn poll_tty_readable(fd: std::os::fd::RawFd, timeout: Duration) -> std::io::Resu
 mod tests {
     use {
         super::{
-            AppState, BootstrapChoice, BootstrapState, LogBuffer, RgbColor, default_theme,
-            derive_terminal_theme, parse_osc_color_responses,
+            ActiveTab, AppState, BootstrapChoice, BootstrapState, LogBuffer, RgbColor,
+            default_theme, derive_terminal_theme, draw_footer, draw_workflow_bootstrap,
+            parse_osc_color_responses, shortcut_line,
         },
         chrono::Utc,
         polyphony_core::{
             CodexTotals, RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts,
             VisibleIssueRow,
         },
+        ratatui::{Terminal, backend::TestBackend},
+        std::path::Path,
     };
 
     fn snapshot_with(
@@ -2748,5 +2724,91 @@ mod tests {
         let theme = derive_terminal_theme(foreground, background);
 
         assert!(theme.is_none());
+    }
+
+    #[test]
+    fn footer_shortcuts_show_quit_and_refresh_when_space_allows() {
+        let footer = shortcut_line(ActiveTab::Overview, 84, default_theme()).to_string();
+
+        assert!(footer.contains("1-4/TAB switch tabs"));
+        assert!(footer.contains("j/k select issue"));
+        assert!(footer.contains("r refresh"));
+        assert!(footer.contains("q quit"));
+    }
+
+    #[test]
+    fn footer_panel_renders_shortcuts_into_visible_content_row() {
+        let backend = TestBackend::new(84, 3);
+        let mut terminal = match Terminal::new(backend) {
+            Ok(terminal) => terminal,
+            Err(error) => panic!("test terminal should initialize: {error}"),
+        };
+        let app = AppState::default();
+
+        if let Err(error) = terminal.draw(|frame| {
+            draw_footer(frame, frame.area(), &app);
+        }) {
+            panic!("footer should render: {error}");
+        }
+
+        let row = (0..84)
+            .map(|x| {
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((x, 1))
+                    .map(|cell| cell.symbol())
+                    .unwrap_or(" ")
+                    .to_string()
+            })
+            .collect::<String>();
+
+        assert!(row.contains("switch tabs"));
+        assert!(row.contains("refresh"));
+        assert!(row.contains("quit"));
+    }
+
+    #[test]
+    fn bootstrap_modal_uses_one_consistent_shell_width() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = match Terminal::new(backend) {
+            Ok(terminal) => terminal,
+            Err(error) => panic!("test terminal should initialize: {error}"),
+        };
+        let state = BootstrapState::default();
+
+        if let Err(error) = terminal.draw(|frame| {
+            draw_workflow_bootstrap(frame, Path::new("WORKFLOW.md"), &state, default_theme());
+        }) {
+            panic!("bootstrap modal should render: {error}");
+        }
+
+        let top_row = (0..120)
+            .map(|x| {
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((x, 9))
+                    .map(|cell| cell.symbol())
+                    .unwrap_or(" ")
+                    .to_string()
+            })
+            .collect::<String>();
+        let bottom_row = (0..120)
+            .map(|x| {
+                terminal
+                    .backend()
+                    .buffer()
+                    .cell((x, 19))
+                    .map(|cell| cell.symbol())
+                    .unwrap_or(" ")
+                    .to_string()
+            })
+            .collect::<String>();
+
+        assert_eq!(top_row.chars().position(|ch| ch == '╭'), Some(29));
+        assert_eq!(top_row.chars().position(|ch| ch == '╮'), Some(90));
+        assert_eq!(bottom_row.chars().position(|ch| ch == '╰'), Some(29));
+        assert_eq!(bottom_row.chars().position(|ch| ch == '╯'), Some(90));
     }
 }

@@ -109,6 +109,12 @@ Branch names default to the issue branch metadata when present, otherwise `task/
 cargo run -p polyphony-cli
 ```
 
+Install a release build into `~/.local/bin`:
+
+```bash
+just install
+```
+
 On first start, Polyphony creates `~/.config/polyphony/config.toml` if it does not exist. The
 default config keeps `tracker.kind = "none"` and no agent profiles, so the real TUI starts
 without mock data. In git repos with a generic shared workflow, Polyphony also seeds

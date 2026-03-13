@@ -491,6 +491,38 @@ fn canonicalize_if_possible(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Detect a GitHub remote from the `origin` remote of a repository.
+///
+/// Returns `Some("owner/repo")` when `origin` points to GitHub
+/// (SSH or HTTPS format). Returns `None` otherwise.
+pub fn detect_github_remote(repo_root: &Path) -> Option<String> {
+    let repo = git2::Repository::open(repo_root).ok()?;
+    let remote = repo.find_remote("origin").ok()?;
+    let url = remote.url()?;
+    parse_github_owner_repo(url)
+}
+
+fn parse_github_owner_repo(url: &str) -> Option<String> {
+    // SSH: git@github.com:owner/repo.git
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let slug = rest.trim_end_matches(".git");
+        if slug.contains('/') && !slug.is_empty() {
+            return Some(slug.to_string());
+        }
+    }
+    // HTTPS: https://github.com/owner/repo or https://github.com/owner/repo.git
+    if let Some(rest) = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))
+    {
+        let slug = rest.trim_end_matches(".git").trim_end_matches('/');
+        if slug.contains('/') && !slug.is_empty() {
+            return Some(slug.to_string());
+        }
+    }
+    None
+}
+
 fn map_io(error: std::io::Error) -> CoreError {
     CoreError::Adapter(error.to_string())
 }
@@ -518,7 +550,7 @@ mod tests {
         tempfile::tempdir,
     };
 
-    use super::{GitWorkspaceCommitter, GitWorkspaceProvisioner};
+    use super::{GitWorkspaceCommitter, GitWorkspaceProvisioner, detect_github_remote, parse_github_owner_repo};
 
     fn make_request(
         root: &Path,
@@ -713,5 +745,87 @@ mod tests {
             .unwrap()
             .to_string();
         assert_eq!(remote_head, result.head_sha);
+    }
+
+    #[test]
+    fn parse_github_ssh_url() {
+        assert_eq!(
+            parse_github_owner_repo("git@github.com:openai/symphony.git"),
+            Some("openai/symphony".into())
+        );
+    }
+
+    #[test]
+    fn parse_github_ssh_url_without_dot_git() {
+        assert_eq!(
+            parse_github_owner_repo("git@github.com:openai/symphony"),
+            Some("openai/symphony".into())
+        );
+    }
+
+    #[test]
+    fn parse_github_https_url() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/penso/polyphony.git"),
+            Some("penso/polyphony".into())
+        );
+    }
+
+    #[test]
+    fn parse_github_https_url_without_dot_git() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/penso/polyphony"),
+            Some("penso/polyphony".into())
+        );
+    }
+
+    #[test]
+    fn parse_github_https_with_trailing_slash() {
+        assert_eq!(
+            parse_github_owner_repo("https://github.com/penso/polyphony/"),
+            Some("penso/polyphony".into())
+        );
+    }
+
+    #[test]
+    fn parse_non_github_url_returns_none() {
+        assert_eq!(
+            parse_github_owner_repo("git@gitlab.com:owner/repo.git"),
+            None
+        );
+    }
+
+    #[test]
+    fn detect_github_remote_from_repo_with_github_origin() {
+        let temp = tempdir().unwrap();
+        let repo_path = temp.path().join("gh-repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", "git@github.com:penso/polyphony.git")
+            .unwrap();
+
+        assert_eq!(
+            detect_github_remote(&repo_path),
+            Some("penso/polyphony".into())
+        );
+    }
+
+    #[test]
+    fn detect_github_remote_returns_none_for_non_github() {
+        let temp = tempdir().unwrap();
+        let repo_path = temp.path().join("gl-repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", "git@gitlab.com:owner/repo.git")
+            .unwrap();
+
+        assert_eq!(detect_github_remote(&repo_path), None);
+    }
+
+    #[test]
+    fn detect_github_remote_returns_none_without_origin() {
+        let temp = tempdir().unwrap();
+        let repo_path = temp.path().join("no-origin");
+        init_repo(&repo_path);
+
+        assert_eq!(detect_github_remote(&repo_path), None);
     }
 }
