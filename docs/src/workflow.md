@@ -84,6 +84,8 @@ Each agent profile can also control:
 - `model`, `models`, and `models_command` for single-model or discovered-model setups
 - `fetch_models` to enable automatic model discovery
 - `approval_policy`, `thread_sandbox`, and `turn_sandbox_policy` for app-server-backed agents
+- `turn_timeout_ms`, `read_timeout_ms`, and `stall_timeout_ms` for agent timing controls
+- `stall_timeout_ms <= 0` to disable orchestrator stall detection
 - `interaction_mode` with `one_shot` or `interactive`
 - `prompt_mode` with `env`, `stdin`, or `tmux_paste`
 - `idle_timeout_ms` for interactive local CLI polling

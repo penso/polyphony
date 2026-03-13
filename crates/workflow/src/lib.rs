@@ -101,7 +101,7 @@ pub struct CodexConfig {
     pub turn_sandbox_policy: Option<String>,
     pub turn_timeout_ms: u64,
     pub read_timeout_ms: u64,
-    pub stall_timeout_ms: i64,
+    pub stall_timeout_ms: Option<i64>,
     pub credits_command: Option<String>,
     pub spending_command: Option<String>,
 }
@@ -125,7 +125,7 @@ pub struct AgentProfileConfig {
     pub turn_sandbox_policy: Option<String>,
     pub turn_timeout_ms: u64,
     pub read_timeout_ms: u64,
-    pub stall_timeout_ms: i64,
+    pub stall_timeout_ms: Option<i64>,
     pub credits_command: Option<String>,
     pub spending_command: Option<String>,
     pub use_tmux: bool,
@@ -509,8 +509,8 @@ impl ServiceConfig {
             if profile.read_timeout_ms == 0 {
                 profile.read_timeout_ms = 5_000;
             }
-            if profile.stall_timeout_ms == 0 {
-                profile.stall_timeout_ms = 300_000;
+            if profile.stall_timeout_ms.is_none() {
+                profile.stall_timeout_ms = Some(300_000);
             }
             if profile.tmux_session_prefix.is_none() {
                 profile.tmux_session_prefix = Some(name.clone());
@@ -1172,7 +1172,7 @@ fn default_mock_agent_profile() -> AgentProfileConfig {
         turn_sandbox_policy: None,
         turn_timeout_ms: 0,
         read_timeout_ms: 0,
-        stall_timeout_ms: 0,
+        stall_timeout_ms: None,
         credits_command: None,
         spending_command: None,
         use_tmux: false,
@@ -1241,7 +1241,7 @@ fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition
         turn_sandbox_policy: profile.turn_sandbox_policy.clone(),
         turn_timeout_ms: profile.turn_timeout_ms,
         read_timeout_ms: profile.read_timeout_ms,
-        stall_timeout_ms: profile.stall_timeout_ms,
+        stall_timeout_ms: profile.stall_timeout_ms.unwrap_or(300_000),
         credits_command: profile.credits_command.clone(),
         spending_command: profile.spending_command.clone(),
         use_tmux: profile.use_tmux,
@@ -1430,6 +1430,55 @@ workspace:
 
         assert!(matches!(error, super::Error::TemplateParse(_)));
         assert!(error.to_string().contains("Unknown filter"));
+    }
+
+    #[test]
+    fn missing_stall_timeout_defaults_to_five_minutes() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+        assert_eq!(selected.stall_timeout_ms, 300_000);
+    }
+
+    #[test]
+    fn zero_stall_timeout_disables_detection() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+      stall_timeout_ms: 0
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+        assert_eq!(selected.stall_timeout_ms, 0);
     }
 
     #[test]
