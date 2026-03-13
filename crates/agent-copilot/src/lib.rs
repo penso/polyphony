@@ -5,15 +5,8 @@ use {
         AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
         BudgetSnapshot, Error as CoreError,
     },
-    thiserror::Error,
     tokio::sync::mpsc,
 };
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("copilot agent error: {0}")]
-    Copilot(String),
-}
 
 #[derive(Debug, Clone)]
 pub struct CopilotRuntime {

@@ -7,17 +7,10 @@ use {
         IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
     },
     std::time::Duration,
-    thiserror::Error,
     tracing::debug,
 };
 
 const LINEAR_HTTP_TIMEOUT: Duration = Duration::from_millis(30_000);
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("linear adapter error: {0}")]
-    Linear(String),
-}
 
 type DateTime = String;
 
@@ -513,7 +506,10 @@ fn linear_trust_level(owner: bool, admin: bool, guest: bool) -> String {
 }
 
 fn parse_linear_priority(priority: f64) -> Option<i32> {
-    if priority.fract() == 0.0 {
+    if priority.fract() != 0.0 {
+        return None;
+    }
+    if priority >= i32::MIN as f64 && priority <= i32::MAX as f64 {
         Some(priority as i32)
     } else {
         None

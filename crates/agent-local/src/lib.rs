@@ -11,17 +11,10 @@ use {
         AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
         AgentRunResult, AgentRunSpec, BudgetSnapshot, Error as CoreError,
     },
-    thiserror::Error,
     tokio::{fs, io::AsyncWriteExt, process::Command, sync::mpsc, time::Instant},
     tracing::{debug, info, warn},
     uuid::Uuid,
 };
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("local agent error: {0}")]
-    Local(String),
-}
 
 #[derive(Debug, Clone)]
 pub struct LocalCliRuntime {
@@ -183,20 +176,20 @@ async fn run_stdio(
         .take()
         .ok_or_else(|| CoreError::Adapter("local cli stderr unavailable".into()))?;
 
-    let stdout_forward = forward_reader_lines(
+    let stdout_handle = tokio::spawn(forward_reader_lines(
         tokio::io::BufReader::new(stdout),
         event_tx.clone(),
         spec.clone(),
         session_id.clone(),
-        "stdout",
-    );
-    let stderr_forward = forward_reader_lines(
+        "stdout".into(),
+    ));
+    let stderr_handle = tokio::spawn(forward_reader_lines(
         tokio::io::BufReader::new(stderr),
         event_tx.clone(),
         spec.clone(),
         session_id.clone(),
-        "stderr",
-    );
+        "stderr".into(),
+    ));
 
     let status = match tokio::time::timeout(
         Duration::from_millis(spec.agent.turn_timeout_ms),
@@ -217,8 +210,8 @@ async fn run_stdio(
         },
     };
 
-    let _ = stdout_forward.await;
-    let _ = stderr_forward.await;
+    let _ = stdout_handle.await;
+    let _ = stderr_handle.await;
     debug!(
         issue_identifier = %spec.issue.identifier,
         agent_name = %spec.agent.name,

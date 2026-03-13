@@ -524,71 +524,28 @@ fn install_tracing_subscriber(
     filter: EnvFilter,
     tracer_provider: Option<SdkTracerProvider>,
     log_json: bool,
-    tui_mode: bool,
+    _tui_mode: bool,
     tracing_output: TracingOutput,
 ) -> Result<(), Error> {
     if log_json {
-        if tui_mode {
-            if let Some(provider) = tracer_provider {
-                tracing_subscriber::registry()
-                    .with(filter)
-                    .with(
-                        tracing_subscriber::fmt::layer()
-                            .json()
-                            .with_writer(tracing_output)
-                            .with_ansi(false),
-                    )
-                    .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
-                    .try_init()
-                    .map_err(|error| Error::Config(error.to_string()))?;
-            } else {
-                tracing_subscriber::registry()
-                    .with(filter)
-                    .with(
-                        tracing_subscriber::fmt::layer()
-                            .json()
-                            .with_writer(tracing_output)
-                            .with_ansi(false),
-                    )
-                    .try_init()
-                    .map_err(|error| Error::Config(error.to_string()))?;
-            }
-        } else if let Some(provider) = tracer_provider {
-            tracing_subscriber::registry()
-                .with(filter)
-                .with(tracing_subscriber::fmt::layer().json())
-                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
-                .try_init()
-                .map_err(|error| Error::Config(error.to_string()))?;
-        } else {
-            tracing_subscriber::registry()
-                .with(filter)
-                .with(tracing_subscriber::fmt::layer().json())
-                .try_init()
-                .map_err(|error| Error::Config(error.to_string()))?;
-        }
-    } else if let Some(provider) = tracer_provider {
-        if tui_mode {
-            tracing_subscriber::registry()
-                .with(filter)
-                .with(
-                    tracing_subscriber::fmt::layer()
-                        .compact()
-                        .with_writer(tracing_output)
-                        .with_ansi(false),
-                )
-                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
-                .try_init()
-                .map_err(|error| Error::Config(error.to_string()))?;
-        } else {
-            tracing_subscriber::registry()
-                .with(filter)
-                .with(tracing_subscriber::fmt::layer().compact())
-                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony")))
-                .try_init()
-                .map_err(|error| Error::Config(error.to_string()))?;
-        }
-    } else if tui_mode {
+        let otel_layer = tracer_provider.map(|provider| {
+            tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony"))
+        });
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_writer(tracing_output)
+                    .with_ansi(false),
+            )
+            .with(otel_layer)
+            .try_init()
+            .map_err(|error| Error::Config(error.to_string()))?;
+    } else {
+        let otel_layer = tracer_provider.map(|provider| {
+            tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony"))
+        });
         tracing_subscriber::registry()
             .with(filter)
             .with(
@@ -597,12 +554,7 @@ fn install_tracing_subscriber(
                     .with_writer(tracing_output)
                     .with_ansi(false),
             )
-            .try_init()
-            .map_err(|error| Error::Config(error.to_string()))?;
-    } else {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(tracing_subscriber::fmt::layer().compact())
+            .with(otel_layer)
             .try_init()
             .map_err(|error| Error::Config(error.to_string()))?;
     }
@@ -629,8 +581,6 @@ fn build_tracer_provider() -> Result<Option<SdkTracerProvider>, Error> {
                 .build(),
         )
         .build();
-    let tracer = tracer_provider.tracer("polyphony");
-    drop(tracer);
     global::set_tracer_provider(tracer_provider.clone());
     Ok(Some(tracer_provider))
 }

@@ -12,7 +12,6 @@ use {
         BudgetSnapshot, Error as CoreError, RateLimitSignal, TokenUsage,
     },
     serde_json::{Value, json},
-    thiserror::Error,
     tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         process::{Child, ChildStdin, ChildStdout},
@@ -21,12 +20,6 @@ use {
     },
     tracing::{debug, info, warn},
 };
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("codex agent error: {0}")]
-    Codex(String),
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct CodexRuntime;

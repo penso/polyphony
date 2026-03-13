@@ -6,15 +6,8 @@ use {
         AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
         AgentRuntime, AgentSession, BudgetSnapshot, Error as CoreError,
     },
-    thiserror::Error,
     tokio::sync::mpsc,
 };
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("agent registry error: {0}")]
-    Registry(String),
-}
 
 #[derive(Default)]
 pub struct AgentRegistryRuntime {

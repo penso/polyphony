@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
-    process::Stdio,
 };
 
 use {
@@ -11,7 +10,6 @@ use {
         AgentRunSpec, AttemptStatus, BudgetSnapshot, Error as CoreError, TokenUsage,
     },
     serde_json::Value,
-    thiserror::Error,
     tokio::{
         fs,
         io::{AsyncBufReadExt, BufReader},
@@ -19,12 +17,6 @@ use {
         sync::mpsc,
     },
 };
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("agent common error: {0}")]
-    Common(String),
-}
 
 #[derive(Clone, Copy)]
 pub enum BudgetField {
@@ -208,7 +200,7 @@ pub async fn forward_reader_lines<R>(
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     spec: AgentRunSpec,
     session_id: String,
-    stream_name: &str,
+    stream_name: String,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -472,14 +464,6 @@ pub fn selected_model_hint(agent: &AgentDefinition) -> Option<String> {
         .model
         .clone()
         .or_else(|| agent.models.first().cloned())
-}
-
-pub fn command_with_pipes(mut command: Command) -> Command {
-    command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::piped());
-    command
 }
 
 #[cfg(test)]
