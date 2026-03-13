@@ -1,7 +1,6 @@
 # polyphony-agent-local
 
-`polyphony-agent-local` is a repository-local provider runtime crate and is not currently in the
-root Cargo workspace.
+`polyphony-agent-local` is a root workspace member and the base runtime for local CLI providers.
 
 ## Responsibility
 
@@ -14,5 +13,5 @@ It implements `AgentProviderRuntime` for local CLI tools and supports:
 
 ## Architectural meaning
 
-This crate shows the provider-specific direction of the codebase: use one runtime per provider or
-provider family instead of keeping all transport logic in a single generic crate.
+This crate handles the shared local-process transport for `transport: local_cli`. Provider wrappers
+such as Claude and Copilot build on top of it instead of reimplementing shell and tmux behavior.

@@ -1,7 +1,6 @@
 # polyphony-agent-codex
 
-`polyphony-agent-codex` is a repository-local provider runtime crate and is not currently a member
-of the root Cargo workspace.
+`polyphony-agent-codex` is a root workspace member and the dedicated Codex app-server runtime.
 
 ## Responsibility
 
@@ -10,11 +9,18 @@ including:
 
 - initialization
 - thread creation
-- turn creation
+- live session startup
+- repeated turn creation on the same thread
+- approval and unsupported-tool auto-responses
 - event forwarding
+- usage and rate-limit extraction
 - budget and model discovery helpers
+
+When the orchestrator chooses to continue work after a successful turn, the Codex runtime keeps the
+same app-server process and `threadId` alive and issues another `turn/start` instead of starting a
+fresh session.
 
 ## Relationship to the main runtime
 
-Today the shipping CLI still uses `polyphony-agents` for app-server transport. This crate is the
-more specialized version of that same direction.
+`polyphony-agents` registers this runtime behind the `codex` feature, and `polyphony-cli` reaches
+it through `AgentRegistryRuntime`.

@@ -1,7 +1,7 @@
 # polyphony-agent-common
 
-`polyphony-agent-common` is a repository-local helper crate and is not currently a member of the
-root Cargo workspace.
+`polyphony-agent-common` is a root workspace member and the shared helper crate for provider
+runtimes.
 
 ## Responsibility
 
@@ -15,5 +15,5 @@ It provides shared utilities for provider-specific runtimes, including:
 
 ## Intended role
 
-This crate is the common layer for provider-specific runtimes such as the local CLI and Codex
-providers found elsewhere in this repository.
+This crate is the common layer for provider-specific runtimes such as the local CLI, Codex, and
+OpenAI-compatible providers found elsewhere in this repository.

@@ -1,0 +1,18 @@
+[package]
+name = "polyphony-agent-codex"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+polyphony-core = { path = "../core" }
+polyphony-agent-common = { path = "../agent-common" }
+
+[dev-dependencies]
+tempfile.workspace = true

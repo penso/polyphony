@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out="${repo_root}/crates/polyphony-github/src/schema.graphql"
+out="${repo_root}/crates/github/src/schema.graphql"
 
 curl --fail --silent --show-error --location \
   "https://docs.github.com/public/ghec/schema.docs.graphql" \

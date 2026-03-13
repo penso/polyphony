@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 query_file="${repo_root}/scripts/graphql/linear_introspection_query.json"
-out="${repo_root}/crates/polyphony-linear/src/linear_schema.json"
+out="${repo_root}/crates/linear/src/linear_schema.json"
 
 api_key="${LINEAR_API_KEY:-}"
 if [[ -z "${api_key}" ]]; then

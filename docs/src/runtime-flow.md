@@ -35,10 +35,12 @@ When an issue is dispatched:
 1. `polyphony-workspace` creates or reuses the workspace
 2. `polyphony-workspace` runs `after_create` or `before_run` hooks when configured
 3. `polyphony-workflow` chooses the agent profile and renders the prompt
-4. `polyphony-agents` selects the provider runtime and runs the agent
-5. agent events stream back into the orchestrator
-6. the orchestrator updates snapshots, retry state, and budgets
-7. optional handoff automation can commit the branch, open a PR, run a review pass, and notify humans
+4. `polyphony-agents` selects the provider runtime and starts the agent
+5. Codex app-server sessions can stay alive across multiple `turn/start` calls on the same thread
+6. after each successful live turn, the orchestrator re-checks tracker state before deciding whether to continue
+7. agent events stream back into the orchestrator
+8. the orchestrator updates snapshots, retry state, and budgets
+9. optional handoff automation can commit the branch, open a PR, run a review pass, and notify humans
 
 ## Completion and recovery
 

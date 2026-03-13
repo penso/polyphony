@@ -12,6 +12,7 @@ The current workspace configuration covers:
 - `workspace`: root path, checkout strategy, reuse behavior, and transient cleanup paths
 - `hooks`: optional shell hooks around workspace lifecycle events
 - `agent`: global concurrency, turn, and retry limits
+- `codex`: optional single-agent shorthand for one Codex app-server profile
 - `agents`: named agent profiles and routing rules
 - `automation`: optional post-run git and PR handoff settings
 - `feedback`: outbound notification sink configuration
@@ -43,6 +44,24 @@ agents:
 ---
 # Worker Prompt
 ```
+
+## Single-Agent Shorthand
+
+For a simple single-agent workflow, `codex` can stand in for a one-profile `agents` section:
+
+```yaml
+---
+tracker:
+  kind: mock
+codex:
+  command: codex app-server
+  approval_policy: auto
+---
+# Worker Prompt
+```
+
+That shorthand is normalized into a default `codex` agent internally. The legacy top-level
+`provider` block is still accepted as a deprecated alias for the same single-agent mode.
 
 ## Agent Routing
 

@@ -42,3 +42,5 @@ reviews it, then sends me a Telegram with buttons to review or merge
 
 - Add https
 
+- add setup tear down per worktree.
+- Look at features in moltis and arbor and see what to take

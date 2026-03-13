@@ -1,0 +1,16 @@
+[package]
+name = "polyphony-issue-mock"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = ["mock"]
+mock = []
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+polyphony-core = { path = "../core" }

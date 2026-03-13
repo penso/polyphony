@@ -1,18 +1,18 @@
 # Provider Crates
 
-This repository contains a second group of crate directories that are not currently members of the
-root Cargo workspace.
-
-## Why they exist
-
-These directories implement or reserve a more provider-specific architecture built around
-`polyphony_core::AgentProviderRuntime`. They are not root workspace members, but some of them are
-still compiled through path dependencies from `polyphony-agents`.
+These crates are root workspace members that implement provider-specific runtimes or shared helpers
+for them.
 
 ## Current state
 
-- `polyphony-agent-common`, `polyphony-agent-local`, and `polyphony-agent-codex` contain real code
-- `polyphony-agent-claude`, `polyphony-agent-copilot`, `polyphony-agent-openai`, and
-  `factoryrs-runtime` currently exist only as empty directories
+- `polyphony-agent-common` provides shared prompt, environment, budget, and model helpers
+- `polyphony-agent-local` implements local CLI and tmux-backed execution
+- `polyphony-agent-codex` implements the Codex app-server transport over stdio
+- `polyphony-agent-openai` implements OpenAI-compatible HTTP chat and model discovery
+- `polyphony-agent-claude` wraps `polyphony-agent-local` for Claude-family CLIs
+- `polyphony-agent-copilot` wraps `polyphony-agent-local` for Copilot-family CLIs
 
-The nested chapters describe what is implemented today and what is only reserved for future work.
+## Relationship to the shipping runtime
+
+`polyphony-agents` is the registry crate used by `polyphony-cli`. It conditionally includes these
+provider runtimes behind feature flags and selects a matching runtime for each `AgentDefinition`.

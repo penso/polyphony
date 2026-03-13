@@ -2,6 +2,7 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
+  "dolt_server_port": 14209,
   "dolt_database": "polyphony",
   "project_id": "a2c23f26-f4a6-49ca-821c-c2a6a47a05f2"
 }

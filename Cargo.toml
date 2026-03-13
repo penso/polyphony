@@ -1,24 +1,24 @@
 [workspace]
 members = [
-  "crates/polyphony-core",
-  "crates/polyphony-workflow",
-  "crates/polyphony-agent-common",
-  "crates/polyphony-agent-local",
-  "crates/polyphony-agent-codex",
-  "crates/polyphony-agent-openai",
-  "crates/polyphony-agent-claude",
-  "crates/polyphony-agent-copilot",
-  "crates/polyphony-agents",
-  "crates/polyphony-orchestrator",
-  "crates/polyphony-workspace",
-  "crates/polyphony-issue-mock",
-  "crates/polyphony-linear",
-  "crates/polyphony-git",
-  "crates/polyphony-github",
-  "crates/polyphony-feedback",
-  "crates/polyphony-sqlite",
-  "crates/polyphony-tui",
-  "crates/polyphony-cli",
+  "crates/core",
+  "crates/workflow",
+  "crates/agent-common",
+  "crates/agent-local",
+  "crates/agent-codex",
+  "crates/agent-openai",
+  "crates/agent-claude",
+  "crates/agent-copilot",
+  "crates/agents",
+  "crates/orchestrator",
+  "crates/workspace",
+  "crates/issue-mock",
+  "crates/linear",
+  "crates/git",
+  "crates/github",
+  "crates/feedback",
+  "crates/sqlite",
+  "crates/tui",
+  "crates/cli",
 ]
 resolver = "2"
 
@@ -40,6 +40,9 @@ graphql_client = "0.16"
 liquid = "0.26"
 notify = "8.2"
 octocrab = "0.49.5"
+opentelemetry = "0.31"
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "trace"] }
 ratatui = "0.29"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -51,4 +54,5 @@ sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runti
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["full"] }
 tracing = "0.1"
+tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }

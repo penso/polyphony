@@ -52,3 +52,5 @@
 # - linear.api-key
 # - github.org
 # - github.repo
+
+dolt.port: 14209

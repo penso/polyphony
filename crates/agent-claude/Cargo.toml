@@ -1,0 +1,15 @@
+[package]
+name = "polyphony-agent-claude"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+polyphony-core = { path = "../core" }
+polyphony-agent-local = { path = "../agent-local" }
+
+[dev-dependencies]
+tempfile.workspace = true

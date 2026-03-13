@@ -23,4 +23,6 @@
   - [polyphony-agent-common](./providers/polyphony-agent-common.md)
   - [polyphony-agent-local](./providers/polyphony-agent-local.md)
   - [polyphony-agent-codex](./providers/polyphony-agent-codex.md)
-  - [Placeholders And Empty Dirs](./providers/placeholders.md)
+  - [polyphony-agent-openai](./providers/polyphony-agent-openai.md)
+  - [polyphony-agent-claude](./providers/polyphony-agent-claude.md)
+  - [polyphony-agent-copilot](./providers/polyphony-agent-copilot.md)

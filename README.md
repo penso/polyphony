@@ -17,25 +17,25 @@ from tracker, agent, persistence, and UI implementations.
 
 | Crate | Role | Enabled by |
 | --- | --- | --- |
-| [`polyphony-core`](crates/polyphony-core) | Domain model and trait contracts used across the workspace. | Always |
-| [`polyphony-workflow`](crates/polyphony-workflow) | `WORKFLOW.md` loader, typed config, and prompt rendering. | Always |
-| [`polyphony-agent-common`](crates/polyphony-agent-common) | Shared shell/model/budget helpers used by provider runtimes. | Always |
-| [`polyphony-agent-local`](crates/polyphony-agent-local) | Local CLI and tmux execution engine for membership-backed providers. | `agent-local` |
-| [`polyphony-agent-codex`](crates/polyphony-agent-codex) | Codex app-server runtime. | `agent-codex` |
-| [`polyphony-agent-openai`](crates/polyphony-agent-openai) | OpenAI-compatible HTTP runtime with streaming/tool-loop handling. | `agent-openai` |
-| [`polyphony-agent-claude`](crates/polyphony-agent-claude) | Claude provider wrapper on top of the local CLI runtime. | `agent-claude` |
-| [`polyphony-agent-copilot`](crates/polyphony-agent-copilot) | Copilot provider wrapper on top of the local CLI runtime. | `agent-copilot` |
-| [`polyphony-agents`](crates/polyphony-agents) | Agent registry that wires provider-specific runtimes into the workspace build. | Always |
-| [`polyphony-orchestrator`](crates/polyphony-orchestrator) | Async orchestrator loop, retries, reconciliation, and workspace hooks. | Always |
-| [`polyphony-workspace`](crates/polyphony-workspace) | Workspace manager for path safety, lifecycle hooks, rollback, and cleanup. | Always |
-| [`polyphony-git`](crates/polyphony-git) | Git-backed workspace provisioning for linked worktrees and discrete clones. | Always |
-| [`polyphony-feedback`](crates/polyphony-feedback) | Generic outbound feedback sinks such as Telegram and webhooks. | Always |
-| [`polyphony-tui`](crates/polyphony-tui) | `ratatui` status surface for live runtime snapshots. | Always |
-| [`polyphony-cli`](crates/polyphony-cli) | Thin binary that wires the build together. | Always |
-| [`polyphony-issue-mock`](crates/polyphony-issue-mock) | Mock tracker and mock agent runtime for tests and local smoke runs. | `mock` |
-| [`polyphony-linear`](crates/polyphony-linear) | Linear tracker adapter using typed GraphQL queries. | `linear` |
-| [`polyphony-github`](crates/polyphony-github) | GitHub Issues, PR, and Project integrations via `octocrab` and `graphql_client`. | `github` |
-| [`polyphony-sqlite`](crates/polyphony-sqlite) | Optional SQLite-backed state store. | `sqlite` |
+| [`polyphony-core`](crates/core) | Domain model and trait contracts used across the workspace. | Always |
+| [`polyphony-workflow`](crates/workflow) | `WORKFLOW.md` loader, typed config, and prompt rendering. | Always |
+| [`polyphony-agent-common`](crates/agent-common) | Shared shell/model/budget helpers used by provider runtimes. | Always |
+| [`polyphony-agent-local`](crates/agent-local) | Local CLI and tmux execution engine for membership-backed providers. | `agent-local` |
+| [`polyphony-agent-codex`](crates/agent-codex) | Codex app-server runtime. | `agent-codex` |
+| [`polyphony-agent-openai`](crates/agent-openai) | OpenAI-compatible HTTP runtime with streaming/tool-loop handling. | `agent-openai` |
+| [`polyphony-agent-claude`](crates/agent-claude) | Claude provider wrapper on top of the local CLI runtime. | `agent-claude` |
+| [`polyphony-agent-copilot`](crates/agent-copilot) | Copilot provider wrapper on top of the local CLI runtime. | `agent-copilot` |
+| [`polyphony-agents`](crates/agents) | Agent registry that wires provider-specific runtimes into the workspace build. | Always |
+| [`polyphony-orchestrator`](crates/orchestrator) | Async orchestrator loop, retries, reconciliation, and workspace hooks. | Always |
+| [`polyphony-workspace`](crates/workspace) | Workspace manager for path safety, lifecycle hooks, rollback, and cleanup. | Always |
+| [`polyphony-git`](crates/git) | Git-backed workspace provisioning for linked worktrees and discrete clones. | Always |
+| [`polyphony-feedback`](crates/feedback) | Generic outbound feedback sinks such as Telegram and webhooks. | Always |
+| [`polyphony-tui`](crates/tui) | `ratatui` status surface for live runtime snapshots. | Always |
+| [`polyphony-cli`](crates/cli) | Thin binary that wires the build together. | Always |
+| [`polyphony-issue-mock`](crates/issue-mock) | Mock tracker and mock agent runtime for tests and local smoke runs. | `mock` |
+| [`polyphony-linear`](crates/linear) | Linear tracker adapter using typed GraphQL queries. | `linear` |
+| [`polyphony-github`](crates/github) | GitHub Issues, PR, and Project integrations via `octocrab` and `graphql_client`. | `github` |
+| [`polyphony-sqlite`](crates/sqlite) | Optional SQLite-backed state store. | `sqlite` |
 
 ## Feature flags
 
@@ -59,6 +59,7 @@ This repository already provides:
 - a separate workspace manager crate that handles sanitized path mapping, containment checks, hook execution, transient artifact cleanup, and rollback on failed initialization
 - a real config layer based on the `config` crate, with defaults, env overlays, and typed deserialization from `WORKFLOW.md`
 - a long-running async orchestrator with retries, reconciliation, workspace hooks, restart bootstrap, and live snapshots
+- a top-level `codex:` workflow shorthand for simple single-agent Codex runs, with legacy `provider:` compatibility
 - named agent profiles with state/label-based selection in `WORKFLOW.md`
 - fallback agent chains so retries or throttled runs can hand off to another provider profile
 - an agent registry runtime that delegates to provider-specific runtimes
@@ -115,6 +116,20 @@ Run without the TUI:
 cargo run -p polyphony-cli -- --no-tui
 ```
 
+Structured logging and OTLP telemetry:
+
+```bash
+RUST_LOG=polyphony=debug cargo run -p polyphony-cli -- --log-json
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+RUST_LOG=info \
+cargo run -p polyphony-cli -- --no-tui
+```
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set, the CLI
+installs an OTLP trace exporter over tonic, keeps normal `tracing` logs enabled, and flushes the
+tracer provider on shutdown. The service name defaults to `polyphony` and can be overridden with
+`OTEL_SERVICE_NAME`.
+
 Enable SQLite persistence:
 
 ```bash
@@ -147,7 +162,7 @@ just schema-linear
 ```
 
 `schema-linear` requires `LINEAR_API_KEY` in the environment and refreshes
-`crates/polyphony-linear/src/linear_schema.json` from the live Linear endpoint.
+`crates/linear/src/linear_schema.json` from the live Linear endpoint.
 
 The repo-owned workflow can now declare multiple named agents:
 
@@ -183,6 +198,17 @@ agents:
       transport: openai_chat
       fetch_models: true
 ```
+
+For a simple single-agent Codex workflow, a top-level shorthand is also accepted:
+
+```yaml
+codex:
+  command: codex app-server
+  approval_policy: auto
+```
+
+The legacy top-level `provider:` block remains accepted as a deprecated alias for the same
+single-agent shorthand.
 
 The workflow can also declare automated PR handoff and feedback sinks:
 

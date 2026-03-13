@@ -1,0 +1,43 @@
+[package]
+name = "polyphony-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "polyphony"
+path = "src/main.rs"
+
+[features]
+default = ["mock", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
+mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
+linear = ["dep:polyphony-linear"]
+github = ["dep:polyphony-github"]
+sqlite = ["polyphony-sqlite/sqlite"]
+agent-codex = ["polyphony-agents/codex"]
+agent-claude = ["polyphony-agents/claude"]
+agent-copilot = ["polyphony-agents/copilot"]
+agent-openai = ["polyphony-agents/openai"]
+agent-local = ["polyphony-agents/local"]
+
+[dependencies]
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+polyphony-core = { path = "../core" }
+polyphony-agents = { path = "../agents", default-features = false }
+polyphony-git = { path = "../git" }
+polyphony-github = { path = "../github", optional = true }
+polyphony-feedback = { path = "../feedback" }
+polyphony-issue-mock = { path = "../issue-mock", optional = true, default-features = false }
+polyphony-linear = { path = "../linear", optional = true }
+polyphony-orchestrator = { path = "../orchestrator" }
+polyphony-sqlite = { path = "../sqlite", default-features = false }
+polyphony-tui = { path = "../tui" }
+polyphony-workflow = { path = "../workflow" }
