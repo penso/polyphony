@@ -21,7 +21,7 @@ use {
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
         HooksConfig, LoadedWorkflow, load_workflow, render_issue_template_with_strings,
-        render_prompt,
+        render_turn_prompt, render_turn_template,
     },
     polyphony_workspace::WorkspaceManager,
     serde_json::Value,
@@ -529,7 +529,7 @@ impl RuntimeService {
         let active_states = workflow.config.tracker.active_states.clone();
         let max_turns = workflow.config.agent.max_turns;
         let prompt = append_saved_context(
-            render_prompt(&workflow.definition, &issue, attempt)?,
+            render_turn_prompt(&workflow.definition, &issue, attempt, 1, max_turns)?,
             saved_context.as_ref(),
             attempt.is_some()
                 || saved_context
@@ -603,6 +603,7 @@ impl RuntimeService {
                     prompt,
                     active_states,
                     max_turns,
+                    workflow.config.agent.continuation_prompt.clone(),
                     selected_agent_for_task,
                     saved_context,
                     command_tx.clone(),
@@ -1960,6 +1961,7 @@ async fn run_worker_attempt(
     prompt: String,
     active_states: Vec<String>,
     max_turns: u32,
+    continuation_prompt_template: Option<String>,
     selected_agent: polyphony_core::AgentDefinition,
     saved_context: Option<AgentContextSnapshot>,
     command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
@@ -2067,7 +2069,14 @@ async fn run_worker_attempt(
                 state = %current_issue.state,
                 "continuing live agent session"
             );
-            current_prompt = build_continuation_prompt(&current_issue, turn_number, max_turns);
+            current_prompt = build_continuation_prompt(
+                &current_issue,
+                attempt,
+                turn_number,
+                max_turns,
+                continuation_prompt_template.as_deref(),
+            )
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
         };
         let stop_result = session.stop().await;
         match (run_result, stop_result) {
@@ -2107,16 +2116,22 @@ fn is_active_state(active_states: &[String], state: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(state))
 }
 
-fn build_continuation_prompt(issue: &Issue, turn_number: u32, max_turns: u32) -> String {
-    format!(
-        "Continue working on issue {}: {}.\n\
+fn build_continuation_prompt(
+    issue: &Issue,
+    attempt: Option<u32>,
+    turn_number: u32,
+    max_turns: u32,
+    template: Option<&str>,
+) -> Result<String, polyphony_workflow::Error> {
+    let source = template.unwrap_or(
+        "Continue working on issue {{ issue.identifier }}: {{ issue.title }}.\n\
 You are continuing the same live agent thread in the current workspace.\n\
 Do not restart from scratch or repeat the original prompt.\n\
-Current tracker state: {}.\n\
-This is continuation turn {} of {}.\n\
+Current tracker state: {{ issue.state }}.\n\
+This is continuation turn {{ turn_number }} of {{ max_turns }}.\n\
 If the work is complete or blocked, say so explicitly. Otherwise continue with the next concrete steps.",
-        issue.identifier, issue.title, issue.state, turn_number, max_turns
-    )
+    );
+    render_turn_template(source, issue, attempt, turn_number, max_turns)
 }
 
 fn agent_run_result_from_error(error: &Error) -> AgentRunResult {
@@ -3054,6 +3069,11 @@ mod tests {
             "Initial prompt".into(),
             vec!["Todo".into(), "In Progress".into()],
             4,
+            Some(
+                "Continue {{ issue.identifier }} in state {{ issue.state }}.\n\
+Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
+                    .into(),
+            ),
             polyphony_core::AgentDefinition {
                 name: "codex".into(),
                 kind: "codex".into(),
@@ -3076,8 +3096,10 @@ mod tests {
         let prompts = agent.prompts();
         assert_eq!(prompts.len(), 2);
         assert_eq!(prompts[0], "Initial prompt");
-        assert!(prompts[1].contains("Continue working on issue FAC-TURNS"));
-        assert!(prompts[1].contains("continuation turn 2 of 4"));
+        assert_eq!(
+            prompts[1],
+            "Continue FAC-TURNS in state Todo.\nTurn 2 of 4. Continuation=true."
+        );
     }
 
     #[tokio::test]

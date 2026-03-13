@@ -86,6 +86,7 @@ Each agent profile can also control:
 - `approval_policy`, `thread_sandbox`, and `turn_sandbox_policy` for app-server-backed agents
 - `turn_timeout_ms`, `read_timeout_ms`, and `stall_timeout_ms` for agent timing controls
 - `stall_timeout_ms <= 0` to disable orchestrator stall detection
+- `agent.continuation_prompt` as an optional Liquid template for later live turns on the same thread
 - `interaction_mode` with `one_shot` or `interactive`
 - `prompt_mode` with `env`, `stdin`, or `tmux_paste`
 - `idle_timeout_ms` for interactive local CLI polling
@@ -129,6 +130,8 @@ The Markdown body of `WORKFLOW.md` is treated as a template. At runtime, the wor
 prompt text with issue and execution context before handing control to the selected agent.
 
 The template has access to issue data and the current attempt value. `attempt` is `nil` on the
-first run, and an integer on retry or continuation runs. Unknown variables and unknown filters fail
-rendering instead of silently producing empty output. The parsed workflow is then normalized into
-`AgentDefinition` values that the rest of the runtime consumes.
+first run, and an integer on retry or continuation runs. Turn rendering also exposes
+`turn_number`, `max_turns`, and `is_continuation`, which are especially useful for
+`agent.continuation_prompt`. Unknown variables and unknown filters fail rendering instead of
+silently producing empty output. The parsed workflow is then normalized into `AgentDefinition`
+values that the rest of the runtime consumes.

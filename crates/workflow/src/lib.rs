@@ -89,6 +89,7 @@ pub struct AgentConfig {
     pub max_concurrent_agents_by_state: HashMap<String, usize>,
     pub max_retry_backoff_ms: u64,
     pub max_turns: u32,
+    pub continuation_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -854,12 +855,36 @@ pub fn render_prompt(
     issue: &Issue,
     attempt: Option<u32>,
 ) -> Result<String, Error> {
+    render_turn_prompt(workflow, issue, attempt, 1, 1)
+}
+
+pub fn render_turn_prompt(
+    workflow: &WorkflowDefinition,
+    issue: &Issue,
+    attempt: Option<u32>,
+    turn_number: u32,
+    max_turns: u32,
+) -> Result<String, Error> {
     let source = if workflow.prompt_template.trim().is_empty() {
         "You are working on an issue from Linear."
     } else {
         workflow.prompt_template.as_str()
     };
-    render_issue_template(source, issue, attempt, Object::new())
+    render_turn_template(source, issue, attempt, turn_number, max_turns)
+}
+
+pub fn render_turn_template(
+    source: &str,
+    issue: &Issue,
+    attempt: Option<u32>,
+    turn_number: u32,
+    max_turns: u32,
+) -> Result<String, Error> {
+    let mut extra = Object::new();
+    extra.insert("turn_number".into(), Value::scalar(turn_number));
+    extra.insert("max_turns".into(), Value::scalar(max_turns));
+    extra.insert("is_continuation".into(), Value::scalar(turn_number > 1));
+    render_issue_template(source, issue, attempt, extra)
 }
 
 pub fn render_issue_template(
@@ -1316,7 +1341,7 @@ const fn default_true() -> bool {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use {
-        super::{ServiceConfig, WorkflowDefinition, render_issue_template},
+        super::{ServiceConfig, WorkflowDefinition, render_issue_template, render_turn_template},
         polyphony_core::{AgentInteractionMode, AgentPromptMode, AgentTransport, Issue},
         serde_yaml::Value as YamlValue,
     };
@@ -1405,6 +1430,20 @@ workspace:
     }
 
     #[test]
+    fn render_template_exposes_turn_context() {
+        let rendered = render_turn_template(
+            "{{ turn_number }}/{{ max_turns }}/{{ is_continuation }}",
+            &sample_issue(),
+            None,
+            2,
+            5,
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "2/5/true");
+    }
+
+    #[test]
     fn render_template_rejects_unknown_variables() {
         let error = render_issue_template(
             "{{ missing_value }}",
@@ -1479,6 +1518,28 @@ agents:
 
         let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
         assert_eq!(selected.stall_timeout_ms, 0);
+    }
+
+    #[test]
+    fn continuation_prompt_is_loaded_from_agent_config() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agent:
+  continuation_prompt: |
+    Continue {{ issue.identifier }} turn {{ turn_number }} of {{ max_turns }}
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert_eq!(
+            config.agent.continuation_prompt.as_deref(),
+            Some("Continue {{ issue.identifier }} turn {{ turn_number }} of {{ max_turns }}\n")
+        );
     }
 
     #[test]

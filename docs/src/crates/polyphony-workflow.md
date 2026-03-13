@@ -25,6 +25,8 @@ The loader handles more than transport selection. It also resolves:
   `idle_timeout_ms`, and `completion_sentinel`
 - first-run prompt rendering with `attempt = nil`, and retry/continuation rendering with a numeric
   `attempt`
+- turn-aware prompt rendering with `turn_number`, `max_turns`, and `is_continuation`, including an
+  optional `agent.continuation_prompt` template for live multi-turn sessions
 
 ## Runtime role
 

@@ -18,7 +18,8 @@ including:
 
 When the orchestrator chooses to continue work after a successful turn, the Codex runtime keeps the
 same app-server process and `threadId` alive and issues another `turn/start` instead of starting a
-fresh session.
+fresh session. Those continuation turns can carry a workflow-configured `agent.continuation_prompt`
+instead of a hardcoded follow-up message.
 
 The runtime now emits structured live-session metadata on its upstream events so the orchestrator
 can surface and persist the active `session_id`, `thread_id`, `turn_id`, and `codex_app_server_pid`

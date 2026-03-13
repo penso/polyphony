@@ -62,6 +62,7 @@ This repository already provides:
 - a top-level `codex:` workflow shorthand for simple single-agent Codex runs, with legacy `provider:` compatibility
 - named agent profiles with state/label-based selection in `WORKFLOW.md`
 - fallback agent chains so retries or throttled runs can hand off to another provider profile
+- workflow-configured continuation prompts for live multi-turn agent sessions, with turn context such as `turn_number` and `max_turns`
 - an agent registry runtime that delegates to provider-specific runtimes
 - automatic model discovery for agents, via `/models` for OpenAI-compatible providers or `models_command` for CLI/app-server-backed agents
 - saved per-issue agent context snapshots, built from streamed runtime events and reused on retries/handoffs
