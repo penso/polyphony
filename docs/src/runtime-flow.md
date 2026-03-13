@@ -16,11 +16,15 @@ At startup the CLI:
 7. starts the workflow file watcher
 8. launches the TUI unless `--no-tui` is set
 
+The file watcher is only a nudge. The orchestrator still re-reads `WORKFLOW.md` defensively on poll
+ticks so missed filesystem events do not leave the runtime on stale config.
+
 ## Scheduling loop
 
 `polyphony-orchestrator` owns the main loop. On each tick it:
 
 - validates the currently loaded workflow
+- defensively re-loads `WORKFLOW.md` and rebuilds hot-reloadable runtime components when it changed
 - refreshes running issue state
 - polls tracker candidates
 - respects throttles and concurrency limits
@@ -41,6 +45,10 @@ When an issue is dispatched:
 7. agent events stream back into the orchestrator
 8. the orchestrator updates snapshots, retry state, and budgets
 9. optional handoff automation can commit the branch, open a PR, run a review pass, and notify humans
+
+When `WORKFLOW.md` changes successfully, future dispatch, retry handling, model discovery, budget
+polling, and feedback/automation surfaces use the rebuilt runtime components. In-flight agent
+sessions are not restarted automatically.
 
 ## Completion and recovery
 

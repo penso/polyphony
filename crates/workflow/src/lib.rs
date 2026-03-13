@@ -38,7 +38,7 @@ pub enum Error {
     InvalidConfig(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkflowDefinition {
     pub config: YamlValue,
     pub prompt_template: String,

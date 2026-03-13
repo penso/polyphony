@@ -5,10 +5,13 @@ use {
     opentelemetry::{KeyValue, global, trace::TracerProvider as _},
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
     polyphony_core::{
-        AgentRuntime, IssueTracker, PullRequestCommenter, PullRequestManager, StateStore,
-        WorkspaceCommitter, WorkspaceProvisioner,
+        IssueTracker, PullRequestCommenter, PullRequestManager, StateStore, WorkspaceCommitter,
+        WorkspaceProvisioner,
     },
-    polyphony_orchestrator::{RuntimeCommand, RuntimeService, spawn_workflow_watcher},
+    polyphony_orchestrator::{
+        RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
+        spawn_workflow_watcher,
+    },
     polyphony_workflow::load_workflow,
     thiserror::Error,
     tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt},
@@ -54,28 +57,32 @@ async fn main() -> Result<(), Error> {
         "starting polyphony"
     );
     let workflow = load_workflow(&cli.workflow_path)?;
-    let (tracker, agent, committer, pull_request_manager, pull_request_commenter, feedback) =
-        build_runtime_components(&workflow)?;
+    let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
+        build_runtime_components(workflow)
+            .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))
+    });
+    let components = build_runtime_components(&workflow)?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
         Arc::new(polyphony_git::GitWorkspaceProvisioner);
     let store = build_store(cli.sqlite_url.as_deref()).await?;
     let (workflow_tx, workflow_rx) = tokio::sync::watch::channel(workflow.clone());
     let (service, handle) = RuntimeService::new(
-        tracker,
-        agent,
+        components.tracker,
+        components.agent,
         provisioner,
-        committer,
-        pull_request_manager,
-        pull_request_commenter,
-        feedback,
+        components.committer,
+        components.pull_request_manager,
+        components.pull_request_commenter,
+        components.feedback,
         store,
         workflow_rx,
     );
-    let _watcher = spawn_workflow_watcher(
+    let service = service.with_workflow_reload(
         cli.workflow_path.clone(),
-        workflow_tx,
-        handle.command_tx.clone(),
-    )?;
+        workflow_tx.clone(),
+        component_factory,
+    );
+    let _watcher = spawn_workflow_watcher(cli.workflow_path.clone(), handle.command_tx.clone())?;
     let service_task = tokio::spawn(service.run());
 
     if cli.no_tui {
@@ -178,22 +185,19 @@ fn otel_configured() -> bool {
 #[allow(unused_variables)]
 fn build_runtime_components(
     workflow: &polyphony_workflow::LoadedWorkflow,
-) -> Result<
-    (
-        Arc<dyn IssueTracker>,
-        Arc<dyn AgentRuntime>,
-        Option<Arc<dyn WorkspaceCommitter>>,
-        Option<Arc<dyn PullRequestManager>>,
-        Option<Arc<dyn PullRequestCommenter>>,
-        Option<Arc<polyphony_feedback::FeedbackRegistry>>,
-    ),
-    Error,
-> {
+) -> Result<RuntimeComponents, Error> {
     #[cfg(feature = "mock")]
     if is_mock_workflow(workflow) {
         let tracker = polyphony_issue_mock::MockTracker::seeded_demo();
         let agent = polyphony_issue_mock::MockAgentRuntime::new(tracker.clone());
-        return Ok((Arc::new(tracker), Arc::new(agent), None, None, None, None));
+        return Ok(RuntimeComponents {
+            tracker: Arc::new(tracker),
+            agent: Arc::new(agent),
+            committer: None,
+            pull_request_manager: None,
+            pull_request_commenter: None,
+            feedback: None,
+        });
     }
 
     let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind.as_str() {
@@ -274,14 +278,14 @@ fn build_runtime_components(
         Option<Arc<dyn PullRequestCommenter>>,
     ) = (None, None);
 
-    Ok((
+    Ok(RuntimeComponents {
         tracker,
-        Arc::new(polyphony_agents::AgentRegistryRuntime::new()),
+        agent: Arc::new(polyphony_agents::AgentRegistryRuntime::new()),
         committer,
         pull_request_manager,
         pull_request_commenter,
         feedback,
-    ))
+    })
 }
 
 async fn build_store(sqlite_url: Option<&str>) -> Result<Option<Arc<dyn StateStore>>, Error> {

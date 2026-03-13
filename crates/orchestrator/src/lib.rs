@@ -1,8 +1,9 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use {
@@ -63,6 +64,18 @@ pub struct RuntimeHandle {
     pub command_tx: mpsc::UnboundedSender<RuntimeCommand>,
 }
 
+pub struct RuntimeComponents {
+    pub tracker: Arc<dyn IssueTracker>,
+    pub agent: Arc<dyn AgentRuntime>,
+    pub committer: Option<Arc<dyn WorkspaceCommitter>>,
+    pub pull_request_manager: Option<Arc<dyn PullRequestManager>>,
+    pub pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
+    pub feedback: Option<Arc<FeedbackRegistry>>,
+}
+
+pub type RuntimeComponentFactory =
+    dyn Fn(&LoadedWorkflow) -> Result<RuntimeComponents, CoreError> + Send + Sync;
+
 pub struct RuntimeService {
     tracker: Arc<dyn IssueTracker>,
     agent: Arc<dyn AgentRuntime>,
@@ -78,6 +91,7 @@ pub struct RuntimeService {
     command_rx: mpsc::UnboundedReceiver<OrchestratorMessage>,
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     state: RuntimeState,
+    reload_support: Option<WorkflowReloadSupport>,
 }
 
 #[derive(Debug)]
@@ -149,6 +163,23 @@ struct RuntimeState {
     last_model_discovery_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowFileFingerprint {
+    Missing,
+    Present {
+        len: u64,
+        modified: Option<SystemTime>,
+    },
+}
+
+struct WorkflowReloadSupport {
+    workflow_path: PathBuf,
+    workflow_tx: watch::Sender<LoadedWorkflow>,
+    component_factory: Arc<RuntimeComponentFactory>,
+    last_seen_fingerprint: Option<WorkflowFileFingerprint>,
+    reload_error: Option<String>,
+}
+
 impl RuntimeService {
     pub fn new(
         tracker: Arc<dyn IssueTracker>,
@@ -179,6 +210,7 @@ impl RuntimeService {
                 command_tx: command_tx.clone(),
                 command_rx,
                 external_command_rx,
+                reload_support: None,
                 state: RuntimeState {
                     running: HashMap::new(),
                     claim_states: HashMap::new(),
@@ -201,6 +233,22 @@ impl RuntimeService {
                 command_tx: external_command_tx,
             },
         )
+    }
+
+    pub fn with_workflow_reload(
+        mut self,
+        workflow_path: PathBuf,
+        workflow_tx: watch::Sender<LoadedWorkflow>,
+        component_factory: Arc<RuntimeComponentFactory>,
+    ) -> Self {
+        self.reload_support = Some(WorkflowReloadSupport {
+            last_seen_fingerprint: workflow_file_fingerprint(&workflow_path).ok(),
+            workflow_path,
+            workflow_tx,
+            component_factory,
+            reload_error: None,
+        });
+        self
     }
 
     pub async fn run(mut self) -> Result<(), Error> {
@@ -235,6 +283,7 @@ impl RuntimeService {
                 }
                 Some(command) = self.external_command_rx.recv() => match command {
                     RuntimeCommand::Refresh => {
+                        self.reload_workflow_from_disk(true, "watcher").await;
                         next_tick = Instant::now();
                     }
                     RuntimeCommand::Shutdown => {
@@ -303,10 +352,15 @@ impl RuntimeService {
     }
 
     async fn tick(&mut self) {
+        self.reload_workflow_from_disk(false, "poll_tick").await;
         self.reconcile_running().await;
         self.poll_budgets().await;
         self.refresh_agent_catalogs().await;
-        let workflow = self.workflow_rx.borrow().clone();
+        if self.workflow_reload_error().is_some() {
+            let _ = self.emit_snapshot().await;
+            return;
+        }
+        let workflow = self.workflow();
         if let Err(error) = workflow.config.validate() {
             self.push_event("workflow".into(), format!("validation failed: {error}"));
             error!(%error, "workflow validation failed");
@@ -360,7 +414,7 @@ impl RuntimeService {
     }
 
     async fn reconcile_running(&mut self) {
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         let stale_ids = self
             .state
             .running
@@ -604,6 +658,12 @@ impl RuntimeService {
     }
 
     async fn process_due_retries(&mut self) {
+        if self.workflow_reload_error().is_some() {
+            return;
+        }
+        if self.workflow().config.validate().is_err() {
+            return;
+        }
         let due_ids = self
             .state
             .retrying
@@ -626,7 +686,7 @@ impl RuntimeService {
         let Some(retry) = self.state.retrying.remove(&issue_id) else {
             return;
         };
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         let query = workflow.config.tracker_query();
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
@@ -780,7 +840,7 @@ impl RuntimeService {
                 .await?;
         }
 
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         match outcome.status {
             AttemptStatus::Succeeded => {
                 let workflow_status = outcome
@@ -837,7 +897,7 @@ impl RuntimeService {
     }
 
     async fn startup_cleanup(&mut self) {
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         let terminal = workflow.config.tracker.terminal_states.clone();
         let issues = match self
             .tracker
@@ -870,7 +930,7 @@ impl RuntimeService {
     }
 
     async fn stop_running(&mut self, issue_id: &str, cleanup_workspace: bool) {
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         if let Some(running) = self.state.running.remove(issue_id) {
             running.handle.abort();
             self.release_issue(issue_id);
@@ -897,7 +957,7 @@ impl RuntimeService {
     async fn fail_running(&mut self, issue_id: &str, reason: &str) {
         if let Some(running) = self.state.running.remove(issue_id) {
             running.handle.abort();
-            let max_retry_backoff_ms = self.workflow_rx.borrow().config.agent.max_retry_backoff_ms;
+            let max_retry_backoff_ms = self.workflow().config.agent.max_retry_backoff_ms;
             self.schedule_retry(
                 issue_id.to_string(),
                 running.issue.identifier.clone(),
@@ -1189,7 +1249,7 @@ impl RuntimeService {
             Err(error) => warn!(%error, "tracker budget poll failed"),
         }
 
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         match self
             .agent
             .fetch_budgets(&workflow.config.all_agents())
@@ -1215,7 +1275,7 @@ impl RuntimeService {
             return;
         }
         self.state.last_model_discovery_at = Some(Utc::now());
-        let workflow = self.workflow_rx.borrow().clone();
+        let workflow = self.workflow();
         match self
             .agent
             .discover_models(&workflow.config.all_agents())
@@ -1251,6 +1311,176 @@ impl RuntimeService {
         {
             warn!(%error, "persisting budget snapshot failed");
         }
+    }
+
+    fn workflow(&self) -> LoadedWorkflow {
+        self.workflow_rx.borrow().clone()
+    }
+
+    fn workflow_reload_error(&self) -> Option<&str> {
+        self.reload_support
+            .as_ref()
+            .and_then(|support| support.reload_error.as_deref())
+    }
+
+    async fn reload_workflow_from_disk(&mut self, force: bool, reason: &str) {
+        let Some(reload_support) = self.reload_support.as_ref() else {
+            return;
+        };
+        let workflow_path = reload_support.workflow_path.clone();
+        let workflow_tx = reload_support.workflow_tx.clone();
+        let component_factory = reload_support.component_factory.clone();
+        let last_seen_fingerprint = reload_support.last_seen_fingerprint;
+
+        let fingerprint = match workflow_file_fingerprint(&workflow_path) {
+            Ok(fingerprint) => Some(fingerprint),
+            Err(error) => {
+                self.note_workflow_reload_failure(
+                    None,
+                    format!("workflow fingerprint failed: {error}"),
+                    reason,
+                );
+                return;
+            },
+        };
+        if !force && fingerprint == last_seen_fingerprint {
+            return;
+        }
+
+        match load_workflow(&workflow_path) {
+            Ok(workflow) => {
+                let current_workflow = self.workflow();
+                let recovered = self.clear_workflow_reload_error(fingerprint);
+                if workflow.definition == current_workflow.definition {
+                    if recovered {
+                        self.push_event(
+                            "workflow".into(),
+                            format!("workflow reload recovered via {reason}"),
+                        );
+                        info!(%reason, "workflow reload recovered without config changes");
+                    }
+                    return;
+                }
+
+                match component_factory(&workflow) {
+                    Ok(components) => {
+                        self.apply_reloaded_components(&current_workflow, &workflow, components);
+                        let _ = workflow_tx.send(workflow);
+                        self.push_event(
+                            "workflow".into(),
+                            format!("workflow reloaded via {reason}"),
+                        );
+                        info!(%reason, path = %workflow_path.display(), "workflow reloaded");
+                    },
+                    Err(error) => {
+                        self.note_workflow_reload_failure(
+                            fingerprint,
+                            format!("component rebuild failed: {error}"),
+                            reason,
+                        );
+                    },
+                }
+            },
+            Err(error) => {
+                self.note_workflow_reload_failure(fingerprint, error.to_string(), reason);
+            },
+        }
+    }
+
+    fn clear_workflow_reload_error(
+        &mut self,
+        fingerprint: Option<WorkflowFileFingerprint>,
+    ) -> bool {
+        let Some(reload_support) = self.reload_support.as_mut() else {
+            return false;
+        };
+        if let Some(fingerprint) = fingerprint {
+            reload_support.last_seen_fingerprint = Some(fingerprint);
+        }
+        reload_support.reload_error.take().is_some()
+    }
+
+    fn note_workflow_reload_failure(
+        &mut self,
+        fingerprint: Option<WorkflowFileFingerprint>,
+        error: String,
+        reason: &str,
+    ) {
+        let changed = {
+            let Some(reload_support) = self.reload_support.as_mut() else {
+                return;
+            };
+            if let Some(fingerprint) = fingerprint {
+                reload_support.last_seen_fingerprint = Some(fingerprint);
+            }
+            let changed = reload_support.reload_error.as_deref() != Some(error.as_str());
+            reload_support.reload_error = Some(error.clone());
+            changed
+        };
+        if changed {
+            self.push_event(
+                "workflow".into(),
+                format!("workflow reload failed via {reason}: {error}"),
+            );
+        }
+        warn!(%error, %reason, "workflow reload failed; keeping last good config");
+    }
+
+    fn apply_reloaded_components(
+        &mut self,
+        current_workflow: &LoadedWorkflow,
+        new_workflow: &LoadedWorkflow,
+        components: RuntimeComponents,
+    ) {
+        let old_tracker_key = self.tracker.component_key();
+        let new_tracker_key = components.tracker.component_key();
+        let old_agent_runtime_key = self.agent.component_key();
+        let new_agent_runtime_key = components.agent.component_key();
+        let old_agent_names = current_workflow
+            .config
+            .all_agents()
+            .into_iter()
+            .map(|agent| agent.name)
+            .collect::<HashSet<_>>();
+        let new_agent_names = new_workflow
+            .config
+            .all_agents()
+            .into_iter()
+            .map(|agent| agent.name)
+            .collect::<HashSet<_>>();
+        let removed_agents = old_agent_names
+            .difference(&new_agent_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        let affected_agent_budgets = old_agent_names
+            .union(&new_agent_names)
+            .map(|name| format!("agent:{name}"))
+            .collect::<HashSet<_>>();
+
+        self.tracker = components.tracker;
+        self.agent = components.agent;
+        self.committer = components.committer;
+        self.pull_request_manager = components.pull_request_manager;
+        self.pull_request_commenter = components.pull_request_commenter;
+        self.feedback = components.feedback;
+
+        if old_tracker_key != new_tracker_key {
+            self.state.throttles.remove(&old_tracker_key);
+            self.state.budgets.remove(&old_tracker_key);
+        }
+        if old_agent_runtime_key != new_agent_runtime_key {
+            self.state.throttles.remove(&old_agent_runtime_key);
+        }
+        for agent_name in removed_agents {
+            self.state.throttles.remove(&format!("agent:{agent_name}"));
+            self.state.agent_catalogs.remove(&agent_name);
+        }
+        self.state
+            .budgets
+            .retain(|component, _| !affected_agent_budgets.contains(component));
+        self.state.agent_catalogs.clear();
+        self.state.last_budget_poll_at = None;
+        self.state.last_model_discovery_at = None;
     }
 
     fn update_saved_context_from_event(&mut self, event: &AgentEvent, model: Option<String>) {
@@ -1639,7 +1869,6 @@ impl RuntimeService {
 
 pub fn spawn_workflow_watcher(
     workflow_path: PathBuf,
-    workflow_tx: watch::Sender<LoadedWorkflow>,
     runtime_command_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<JoinHandle<Result<(), Error>>, Error> {
     Ok(tokio::spawn(async move {
@@ -1650,21 +1879,28 @@ pub fn spawn_workflow_watcher(
         watcher.watch(&workflow_path, RecursiveMode::NonRecursive)?;
         while let Some(event) = notify_rx.recv().await {
             match event {
-                Ok(_) => match load_workflow(&workflow_path) {
-                    Ok(workflow) => {
-                        let _ = workflow_tx.send(workflow);
-                        let _ = runtime_command_tx.send(RuntimeCommand::Refresh);
-                        info!("workflow reloaded");
-                    },
-                    Err(error) => {
-                        warn!(%error, "workflow reload failed; keeping last good config");
-                    },
+                Ok(_) => {
+                    let _ = runtime_command_tx.send(RuntimeCommand::Refresh);
+                    info!(path = %workflow_path.display(), "workflow change detected");
                 },
                 Err(error) => warn!(%error, "workflow watch event failed"),
             }
         }
         Ok(())
     }))
+}
+
+fn workflow_file_fingerprint(path: &Path) -> Result<WorkflowFileFingerprint, std::io::Error> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(WorkflowFileFingerprint::Present {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(WorkflowFileFingerprint::Missing)
+        },
+        Err(error) => Err(error),
+    }
 }
 
 async fn run_worker_attempt(
@@ -2086,6 +2322,121 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct NamedTracker {
+        component: String,
+        issues: Arc<Mutex<HashMap<String, Issue>>>,
+    }
+
+    impl NamedTracker {
+        fn new(component: impl Into<String>, issues: Vec<Issue>) -> Self {
+            Self {
+                component: component.into(),
+                issues: Arc::new(Mutex::new(
+                    issues
+                        .into_iter()
+                        .map(|issue| (issue.id.clone(), issue))
+                        .collect(),
+                )),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl IssueTracker for NamedTracker {
+        fn component_key(&self) -> String {
+            self.component.clone()
+        }
+
+        async fn fetch_candidate_issues(
+            &self,
+            _query: &polyphony_core::TrackerQuery,
+        ) -> Result<Vec<Issue>, polyphony_core::Error> {
+            Ok(self.issues.lock().unwrap().values().cloned().collect())
+        }
+
+        async fn fetch_issues_by_states(
+            &self,
+            _project_slug: Option<&str>,
+            states: &[String],
+        ) -> Result<Vec<Issue>, polyphony_core::Error> {
+            let normalized = states
+                .iter()
+                .map(|state| state.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            Ok(self
+                .issues
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|issue| normalized.contains(&issue.state.to_ascii_lowercase()))
+                .cloned()
+                .collect())
+        }
+
+        async fn fetch_issues_by_ids(
+            &self,
+            issue_ids: &[String],
+        ) -> Result<Vec<Issue>, polyphony_core::Error> {
+            let issues = self.issues.lock().unwrap();
+            Ok(issue_ids
+                .iter()
+                .filter_map(|issue_id| issues.get(issue_id))
+                .cloned()
+                .collect())
+        }
+
+        async fn fetch_issue_states_by_ids(
+            &self,
+            issue_ids: &[String],
+        ) -> Result<Vec<IssueStateUpdate>, polyphony_core::Error> {
+            let issues = self.issues.lock().unwrap();
+            Ok(issue_ids
+                .iter()
+                .filter_map(|issue_id| issues.get(issue_id))
+                .map(|issue| IssueStateUpdate {
+                    id: issue.id.clone(),
+                    identifier: issue.identifier.clone(),
+                    state: issue.state.clone(),
+                    updated_at: issue.updated_at,
+                })
+                .collect())
+        }
+    }
+
+    #[derive(Clone)]
+    struct NamedAgent {
+        component: String,
+    }
+
+    impl NamedAgent {
+        fn new(component: impl Into<String>) -> Self {
+            Self {
+                component: component.into(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentRuntime for NamedAgent {
+        fn component_key(&self) -> String {
+            self.component.clone()
+        }
+
+        async fn run(
+            &self,
+            _spec: AgentRunSpec,
+            _event_tx: mpsc::UnboundedSender<AgentEvent>,
+        ) -> Result<AgentRunResult, polyphony_core::Error> {
+            Ok(AgentRunResult {
+                status: AttemptStatus::Succeeded,
+                turns_completed: 1,
+                error: None,
+                final_issue_state: None,
+            })
+        }
+    }
+
     #[derive(Clone, Default)]
     struct RecordingSessionAgent {
         prompts: Arc<Mutex<Vec<String>>>,
@@ -2305,6 +2656,29 @@ mod tests {
             rx,
         )
         .0
+    }
+
+    fn test_service_with_reload(
+        workflow: LoadedWorkflow,
+        tracker: Arc<dyn IssueTracker>,
+        agent: Arc<dyn AgentRuntime>,
+        provisioner: RecordingProvisioner,
+        component_factory: Arc<RuntimeComponentFactory>,
+    ) -> RuntimeService {
+        let (tx, rx) = watch::channel(workflow.clone());
+        RuntimeService::new(
+            tracker,
+            agent,
+            Arc::new(provisioner),
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0
+        .with_workflow_reload(workflow.path.clone(), tx, component_factory)
     }
 
     fn sample_issue(issue_id: &str, identifier: &str, state: &str, title: &str) -> Issue {
@@ -2683,6 +3057,97 @@ mod tests {
         let running = service.state.running.get(&issue.id).unwrap();
         assert_eq!(running.agent_name, "kimi");
         running.handle.abort();
+    }
+
+    #[tokio::test]
+    async fn tick_defensively_reloads_workflow_and_rebuilds_components() {
+        let workspace_root = unique_workspace_root("workflow-reload");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: alpha\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nInitial prompt\n",
+        );
+        let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
+            Ok(RuntimeComponents {
+                tracker: Arc::new(NamedTracker::new(
+                    format!("tracker:{}", workflow.config.tracker.kind),
+                    Vec::new(),
+                )),
+                agent: Arc::new(NamedAgent::new(format!(
+                    "agent:{}",
+                    workflow.config.tracker.kind
+                ))),
+                committer: None,
+                pull_request_manager: None,
+                pull_request_commenter: None,
+                feedback: None,
+            })
+        });
+        let mut service = test_service_with_reload(
+            workflow.clone(),
+            Arc::new(NamedTracker::new("tracker:alpha", Vec::new())),
+            Arc::new(NamedAgent::new("agent:alpha")),
+            RecordingProvisioner::default(),
+            component_factory,
+        );
+
+        fs::write(
+            &workflow.path,
+            "---\ntracker:\n  kind: beta\npolling:\n  interval_ms: 250\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nReloaded prompt\n"
+                .replace("__ROOT__", &workspace_root.display().to_string()),
+        )
+        .unwrap();
+
+        service.tick().await;
+
+        assert_eq!(service.tracker.component_key(), "tracker:beta");
+        assert_eq!(service.agent.component_key(), "agent:beta");
+        assert_eq!(service.workflow().config.polling.interval_ms, 250);
+        assert_eq!(
+            service.workflow().definition.prompt_template,
+            "Reloaded prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_reloaded_workflow_blocks_dispatch_until_fixed() {
+        let workspace_root = unique_workspace_root("workflow-invalid");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: alpha\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nPrompt\n",
+        );
+        let issue = sample_issue("issue-reload", "FAC-RELOAD", "Todo", "Blocked");
+        let issue_for_factory = issue.clone();
+        let component_factory: Arc<RuntimeComponentFactory> = Arc::new(move |workflow| {
+            Ok(RuntimeComponents {
+                tracker: Arc::new(NamedTracker::new(
+                    format!("tracker:{}", workflow.config.tracker.kind),
+                    vec![issue_for_factory.clone()],
+                )),
+                agent: Arc::new(NamedAgent::new(format!(
+                    "agent:{}",
+                    workflow.config.tracker.kind
+                ))),
+                committer: None,
+                pull_request_manager: None,
+                pull_request_commenter: None,
+                feedback: None,
+            })
+        });
+        let mut service = test_service_with_reload(
+            workflow.clone(),
+            Arc::new(NamedTracker::new("tracker:alpha", vec![issue.clone()])),
+            Arc::new(NamedAgent::new("agent:alpha")),
+            RecordingProvisioner::default(),
+            component_factory,
+        );
+
+        fs::write(&workflow.path, "---\ntracker:\n  kind: [\n").unwrap();
+
+        service.tick().await;
+
+        assert!(service.workflow_reload_error().is_some());
+        assert!(service.state.running.is_empty());
+        assert_eq!(service.workflow().definition.prompt_template, "Prompt");
     }
 
     #[test]

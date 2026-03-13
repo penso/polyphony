@@ -18,7 +18,11 @@ It owns:
 
 - `RuntimeService::new` assembles the service and exposes a `RuntimeHandle`
 - `RuntimeService::run` drives the main loop
-- `spawn_workflow_watcher` reloads `WORKFLOW.md` and triggers refreshes
+- `spawn_workflow_watcher` watches `WORKFLOW.md` and nudges the runtime to reload
+
+The orchestrator owns the authoritative reload path. It re-reads `WORKFLOW.md` on watcher nudges
+and also re-checks it defensively on poll ticks, then rebuilds hot-reloadable runtime components
+for future dispatch without restarting in-flight agent sessions.
 
 ## Why it is separate
 
