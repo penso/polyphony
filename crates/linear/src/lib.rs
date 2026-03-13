@@ -6,9 +6,12 @@ use {
         BlockerRef, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
         IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
     },
+    std::time::Duration,
     thiserror::Error,
     tracing::{debug, info},
 };
+
+const LINEAR_HTTP_TIMEOUT: Duration = Duration::from_millis(30_000);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -50,12 +53,15 @@ pub struct LinearTracker {
 }
 
 impl LinearTracker {
-    pub fn new(endpoint: String, api_key: String) -> Self {
-        Self {
-            client: reqwest::Client::new(),
+    pub fn new(endpoint: String, api_key: String) -> Result<Self, CoreError> {
+        Ok(Self {
+            client: reqwest::Client::builder()
+                .timeout(LINEAR_HTTP_TIMEOUT)
+                .build()
+                .map_err(|error| CoreError::Adapter(format!("linear_api_request: {error}")))?,
             endpoint,
             api_key,
-        }
+        })
     }
 
     async fn graphql(&self, body: serde_json::Value) -> Result<serde_json::Value, CoreError> {
@@ -66,7 +72,7 @@ impl LinearTracker {
             .json(&body)
             .send()
             .await
-            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+            .map_err(|error| CoreError::Adapter(format!("linear_api_request: {error}")))?;
         let status = response.status();
         if status.as_u16() == 429 {
             return Err(CoreError::RateLimited(Box::new(rate_limit_signal(
@@ -125,15 +131,29 @@ impl LinearTracker {
                 .ok_or_else(|| CoreError::Adapter("linear_unknown_payload".into()))?;
             issues.extend(data.issues.nodes.iter().map(linear_issue_from_node));
 
-            let has_next_page = data.issues.page_info.has_next_page;
-            after = data.issues.page_info.end_cursor;
-            if !has_next_page || after.is_none() {
+            after = next_page_cursor(
+                data.issues.page_info.has_next_page,
+                data.issues.page_info.end_cursor,
+            )?;
+            if after.is_none() {
                 break;
             }
         }
 
         Ok(issues)
     }
+}
+
+fn next_page_cursor(
+    has_next_page: bool,
+    end_cursor: Option<String>,
+) -> Result<Option<String>, CoreError> {
+    if !has_next_page {
+        return Ok(None);
+    }
+    end_cursor
+        .ok_or_else(|| CoreError::Adapter("linear_missing_end_cursor".into()))
+        .map(Some)
 }
 
 #[async_trait]
@@ -531,5 +551,43 @@ fn rate_limit_signal(
         reset_at,
         status_code: Some(response.status().as_u16()),
         raw: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use polyphony_core::Error as CoreError;
+
+    use crate::{LINEAR_HTTP_TIMEOUT, next_page_cursor};
+
+    #[test]
+    fn next_page_cursor_requires_end_cursor_when_more_pages_exist() {
+        let error = next_page_cursor(true, None).unwrap_err();
+
+        assert!(matches!(
+            error,
+            CoreError::Adapter(message) if message == "linear_missing_end_cursor"
+        ));
+    }
+
+    #[test]
+    fn next_page_cursor_returns_cursor_when_present() {
+        let cursor = next_page_cursor(true, Some("cursor-1".into())).unwrap();
+
+        assert_eq!(cursor.as_deref(), Some("cursor-1"));
+    }
+
+    #[test]
+    fn next_page_cursor_stops_when_no_more_pages_exist() {
+        let cursor = next_page_cursor(false, None).unwrap();
+
+        assert!(cursor.is_none());
+    }
+
+    #[test]
+    fn linear_http_timeout_matches_spec() {
+        assert_eq!(LINEAR_HTTP_TIMEOUT, Duration::from_millis(30_000));
     }
 }

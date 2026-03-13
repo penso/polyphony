@@ -214,7 +214,7 @@ fn build_runtime_components(
             Arc::new(polyphony_linear::LinearTracker::new(
                 workflow.config.tracker.endpoint.clone(),
                 api_key,
-            ))
+            )?)
         },
         #[cfg(feature = "github")]
         "github" => Arc::new(polyphony_github::GithubIssueTracker::new(
