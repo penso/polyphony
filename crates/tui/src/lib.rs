@@ -12,7 +12,7 @@ use {
         event::{self, Event, KeyCode},
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
-    polyphony_core::{RunningRow, RuntimeEvent, RuntimeSnapshot, VisibleIssueRow},
+    polyphony_core::{EventScope, RunningRow, RuntimeEvent, RuntimeSnapshot, VisibleIssueRow},
     polyphony_orchestrator::RuntimeCommand,
     ratatui::{
         Terminal,
@@ -197,7 +197,7 @@ impl ActiveTab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EventMarker {
     at: DateTime<Utc>,
-    scope: String,
+    scope: EventScope,
     message: String,
 }
 
@@ -205,7 +205,7 @@ impl From<&RuntimeEvent> for EventMarker {
     fn from(event: &RuntimeEvent) -> Self {
         Self {
             at: event.at,
-            scope: event.scope.clone(),
+            scope: event.scope,
             message: event.message.clone(),
         }
     }
@@ -1594,7 +1594,7 @@ fn draw_events_panel(
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}]", event.scope),
-                    Style::default().fg(scope_color(&event.scope, theme)),
+                    Style::default().fg(scope_color(event.scope, theme)),
                 ),
                 Span::raw("  "),
                 Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
@@ -2028,13 +2028,14 @@ fn budget_ratio_label(
     )
 }
 
-fn scope_color(scope: &str, theme: Theme) -> Color {
+fn scope_color(scope: EventScope, theme: Theme) -> Color {
     match scope {
-        "dispatch" | "workflow" => theme.info,
-        "retry" => theme.warning,
-        "handoff" => theme.highlight,
-        "throttle" => theme.danger,
-        _ => theme.muted,
+        EventScope::Dispatch | EventScope::Workflow => theme.info,
+        EventScope::Retry => theme.warning,
+        EventScope::Handoff => theme.highlight,
+        EventScope::Throttle => theme.danger,
+        EventScope::Agent | EventScope::Worker | EventScope::Reconcile | EventScope::Tracker
+        | EventScope::Startup | EventScope::Feedback => theme.muted,
     }
 }
 
@@ -2551,8 +2552,8 @@ mod tests {
         },
         chrono::Utc,
         polyphony_core::{
-            CodexTotals, RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts,
-            VisibleIssueRow,
+            CodexTotals, EventScope, RuntimeCadence, RuntimeEvent, RuntimeSnapshot,
+            SnapshotCounts, VisibleIssueRow,
         },
         ratatui::{Terminal, backend::TestBackend},
         std::path::Path,
@@ -2593,7 +2594,7 @@ mod tests {
             saved_contexts: Vec::new(),
             recent_events: vec![RuntimeEvent {
                 at: Utc::now(),
-                scope: "workflow".into(),
+                scope: EventScope::Workflow,
                 message: "updated".into(),
             }],
         }

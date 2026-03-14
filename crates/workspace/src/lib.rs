@@ -189,7 +189,7 @@ impl WorkspaceManager {
             workspace_path,
             workspace_key,
             branch_name,
-            checkout_kind: self.checkout_kind.clone(),
+            checkout_kind: self.checkout_kind,
             sync_on_reuse: self.sync_on_reuse,
             source_repo_path: self.source_repo_path.clone(),
             clone_url: self.clone_url.clone(),

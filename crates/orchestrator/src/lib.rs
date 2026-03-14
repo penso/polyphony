@@ -12,7 +12,7 @@ use {
     polyphony_core::{
         AgentContextEntry, AgentContextSnapshot, AgentEvent, AgentEventKind, AgentModelCatalog,
         AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CodexTotals,
-        Error as CoreError, FeedbackAction, FeedbackLink, FeedbackNotification, Issue,
+        Error as CoreError, EventScope, FeedbackAction, FeedbackLink, FeedbackNotification, Issue,
         IssueTracker, PersistedRunRecord, PullRequestCommenter, PullRequestManager,
         PullRequestRequest, RateLimitSignal, RetryRow, RunningRow, RuntimeCadence, RuntimeEvent,
         RuntimeSnapshot, SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, VisibleIssueRow,
@@ -169,6 +169,29 @@ struct RuntimeState {
     last_model_discovery_at: Option<DateTime<Utc>>,
 }
 
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self {
+            running: HashMap::new(),
+            claim_states: HashMap::new(),
+            retrying: HashMap::new(),
+            completed: HashSet::new(),
+            throttles: HashMap::new(),
+            budgets: HashMap::new(),
+            agent_catalogs: HashMap::new(),
+            visible_issues: Vec::new(),
+            saved_contexts: HashMap::new(),
+            recent_events: VecDeque::with_capacity(128),
+            ended_runtime_seconds: 0.0,
+            totals: CodexTotals::default(),
+            rate_limits: None,
+            last_tracker_poll_at: None,
+            last_budget_poll_at: None,
+            last_model_discovery_at: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkflowFileFingerprint {
     Missing,
@@ -218,24 +241,7 @@ impl RuntimeService {
                 command_rx,
                 external_command_rx,
                 reload_support: None,
-                state: RuntimeState {
-                    running: HashMap::new(),
-                    claim_states: HashMap::new(),
-                    retrying: HashMap::new(),
-                    completed: HashSet::new(),
-                    throttles: HashMap::new(),
-                    budgets: HashMap::new(),
-                    agent_catalogs: HashMap::new(),
-                    visible_issues: Vec::new(),
-                    saved_contexts: HashMap::new(),
-                    recent_events: VecDeque::with_capacity(128),
-                    ended_runtime_seconds: 0.0,
-                    totals: CodexTotals::default(),
-                    rate_limits: None,
-                    last_tracker_poll_at: None,
-                    last_budget_poll_at: None,
-                    last_model_discovery_at: None,
-                },
+                state: RuntimeState::default(),
             },
             RuntimeHandle {
                 snapshot_rx,
@@ -323,7 +329,7 @@ impl RuntimeService {
         WorkspaceManager::new(
             workflow.config.workspace.root.clone(),
             self.provisioner.clone(),
-            workflow.config.workspace_checkout_kind(),
+            workflow.config.workspace.checkout_kind,
             workflow.config.workspace.sync_on_reuse,
             workflow.config.workspace.transient_paths.clone(),
             workflow.config.workspace.source_repo_path.clone(),
@@ -373,7 +379,7 @@ impl RuntimeService {
         }
         let workflow = self.workflow();
         if let Err(error) = workflow.config.validate() {
-            self.push_event("workflow".into(), format!("validation failed: {error}"));
+            self.push_event(EventScope::Workflow, format!("validation failed: {error}"));
             error!(%error, "workflow validation failed");
             let _ = self.emit_snapshot().await;
             return;
@@ -382,7 +388,7 @@ impl RuntimeService {
             || self.is_throttled(&self.agent.component_key())
         {
             self.push_event(
-                "throttle".into(),
+                EventScope::Throttle,
                 "dispatch skipped while a component is throttled".into(),
             );
             let _ = self.emit_snapshot().await;
@@ -398,7 +404,7 @@ impl RuntimeService {
                 return;
             },
             Err(error) => {
-                self.push_event("tracker".into(), format!("candidate fetch failed: {error}"));
+                self.push_event(EventScope::Tracker, format!("candidate fetch failed: {error}"));
                 error!(%error, "candidate fetch failed");
                 let _ = self.emit_snapshot().await;
                 return;
@@ -423,7 +429,7 @@ impl RuntimeService {
                 .dispatch_issue(workflow.clone(), issue, None, false)
                 .await
             {
-                self.push_event("dispatch".into(), format!("dispatch failed: {error}"));
+                self.push_event(EventScope::Dispatch, format!("dispatch failed: {error}"));
                 error!(%error, "dispatch failed");
             }
         }
@@ -497,7 +503,7 @@ impl RuntimeService {
         {
             self.stop_running(&missing_issue_id, false).await;
             self.push_event(
-                "reconcile".into(),
+                EventScope::Reconcile,
                 format!("released missing issue {}", missing_issue_id),
             );
         }
@@ -558,7 +564,7 @@ impl RuntimeService {
             .is_some_and(|context| context.agent_name != selected_agent.name)
         {
             self.push_event(
-                "handoff".into(),
+                EventScope::Handoff,
                 format!(
                     "{} switched from {} to {}",
                     issue.identifier,
@@ -599,7 +605,7 @@ impl RuntimeService {
                 let manager = WorkspaceManager::new(
                     workflow.config.workspace.root.clone(),
                     provisioner,
-                    workflow.config.workspace_checkout_kind(),
+                    workflow.config.workspace.checkout_kind,
                     workflow.config.workspace.sync_on_reuse,
                     workflow.config.workspace.transient_paths.clone(),
                     workflow.config.workspace.source_repo_path.clone(),
@@ -671,7 +677,7 @@ impl RuntimeService {
             rate_limits: None,
             handle,
         });
-        self.push_event("dispatch".into(), format!("dispatched {issue_identifier}"));
+        self.push_event(EventScope::Dispatch, format!("dispatched {issue_identifier}"));
         Ok(())
     }
 
@@ -800,7 +806,7 @@ impl RuntimeService {
                 }
                 self.update_saved_context_from_event(&event, running_model);
                 self.push_event(
-                    "agent".into(),
+                    EventScope::Agent,
                     format!(
                         "{} {}",
                         event.issue_identifier,
@@ -864,7 +870,7 @@ impl RuntimeService {
                     thread_id: running.thread_id.clone(),
                     turn_id: running.turn_id.clone(),
                     codex_app_server_pid: running.codex_app_server_pid.clone(),
-                    status: format!("{:?}", outcome.status),
+                    status: outcome.status,
                     attempt,
                     started_at,
                     finished_at: Some(Utc::now()),
@@ -891,7 +897,7 @@ impl RuntimeService {
                     if let Err(error) = self.run_success_handoff(&workflow, &running).await {
                         warn!(%error, issue_identifier = %running.issue.identifier, "post-run handoff failed");
                         self.push_event(
-                            "handoff".into(),
+                            EventScope::Handoff,
                             format!("{} handoff failed: {}", running.issue.identifier, error),
                         );
                     }
@@ -922,7 +928,7 @@ impl RuntimeService {
         }
         self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
         self.push_event(
-            "worker".into(),
+            EventScope::Worker,
             format!("{} {:?}", issue_identifier, outcome.status),
         );
         self.emit_snapshot().await?;
@@ -981,7 +987,7 @@ impl RuntimeService {
                 }
             }
             self.push_event(
-                "reconcile".into(),
+                EventScope::Reconcile,
                 format!("stopped {}", running.issue.identifier),
             );
         }
@@ -1102,7 +1108,7 @@ impl RuntimeService {
             due_at: Instant::now() + Duration::from_millis(delay_ms),
         });
         self.push_event(
-            "retry".into(),
+            EventScope::Retry,
             format!(
                 "{} retry attempt={} delay_ms={} {}",
                 issue_identifier,
@@ -1117,7 +1123,7 @@ impl RuntimeService {
         self.state.retrying.values().map(|entry| entry.due_at).min()
     }
 
-    fn push_event(&mut self, scope: String, message: String) {
+    fn push_event(&mut self, scope: EventScope, message: String) {
         self.state.recent_events.push_front(RuntimeEvent {
             at: Utc::now(),
             scope,
@@ -1269,7 +1275,7 @@ impl RuntimeService {
                 due_at,
             });
         self.push_event(
-            "throttle".into(),
+            EventScope::Throttle,
             format!(
                 "{} limited until {} ({})",
                 signal.component, until, signal.reason
@@ -1414,7 +1420,7 @@ impl RuntimeService {
                 {
                     if recovered {
                         self.push_event(
-                            "workflow".into(),
+                            EventScope::Workflow,
                             format!("workflow reload recovered via {reason}"),
                         );
                         info!(%reason, "workflow reload recovered without config changes");
@@ -1427,7 +1433,7 @@ impl RuntimeService {
                         self.apply_reloaded_components(&current_workflow, &workflow, components);
                         let _ = workflow_tx.send(workflow);
                         self.push_event(
-                            "workflow".into(),
+                            EventScope::Workflow,
                             format!("workflow reloaded via {reason}"),
                         );
                         info!(%reason, path = %workflow_path.display(), "workflow reloaded");
@@ -1479,7 +1485,7 @@ impl RuntimeService {
         };
         if changed {
             self.push_event(
-                "workflow".into(),
+                EventScope::Workflow,
                 format!("workflow reload failed via {reason}: {error}"),
             );
         }
@@ -1633,7 +1639,7 @@ impl RuntimeService {
         context.thread_id = running.thread_id.clone();
         context.turn_id = running.turn_id.clone();
         context.codex_app_server_pid = running.codex_app_server_pid.clone();
-        context.status = Some(format!("{:?}", outcome.status));
+        context.status = Some(outcome.status);
         context.error = outcome.error.clone();
         context.usage = running.tokens.clone();
         if let Some(error) = &outcome.error {
@@ -1706,7 +1712,7 @@ impl RuntimeService {
             .await?;
         let Some(commit_result) = commit_result else {
             self.push_event(
-                "handoff".into(),
+                EventScope::Handoff,
                 format!(
                     "{} handoff skipped because the workspace is clean",
                     running.issue.identifier
@@ -1768,7 +1774,7 @@ impl RuntimeService {
         self.send_handoff_feedback(workflow, running, &pull_request, &commit_result)
             .await;
         self.push_event(
-            "handoff".into(),
+            EventScope::Handoff,
             format!(
                 "{} opened PR #{} on {}",
                 running.issue.identifier, pull_request.number, commit_result.branch_name
@@ -1936,7 +1942,7 @@ impl RuntimeService {
         for (component, error) in feedback.send_all(&notification).await {
             warn!(%component, %error, "feedback sink failed");
             self.push_event(
-                "feedback".into(),
+                EventScope::Feedback,
                 format!(
                     "{} sink {} failed: {}",
                     running.issue.identifier, component, error
@@ -2456,12 +2462,7 @@ mod tests {
             _spec: AgentRunSpec,
             _event_tx: mpsc::UnboundedSender<AgentEvent>,
         ) -> Result<AgentRunResult, polyphony_core::Error> {
-            Ok(AgentRunResult {
-                status: AttemptStatus::Succeeded,
-                turns_completed: 1,
-                error: None,
-                final_issue_state: None,
-            })
+            Ok(AgentRunResult::succeeded(1))
         }
     }
 
@@ -2571,12 +2572,7 @@ mod tests {
             _spec: AgentRunSpec,
             _event_tx: mpsc::UnboundedSender<AgentEvent>,
         ) -> Result<AgentRunResult, polyphony_core::Error> {
-            Ok(AgentRunResult {
-                status: AttemptStatus::Succeeded,
-                turns_completed: 1,
-                error: None,
-                final_issue_state: None,
-            })
+            Ok(AgentRunResult::succeeded(1))
         }
     }
 
@@ -2613,12 +2609,7 @@ mod tests {
             prompt: String,
         ) -> Result<AgentRunResult, polyphony_core::Error> {
             self.prompts.lock().unwrap().push(prompt);
-            Ok(AgentRunResult {
-                status: AttemptStatus::Succeeded,
-                turns_completed: 1,
-                error: None,
-                final_issue_state: None,
-            })
+            Ok(AgentRunResult::succeeded(1))
         }
 
         async fn stop(&mut self) -> Result<(), polyphony_core::Error> {
@@ -2833,13 +2824,10 @@ mod tests {
             priority: Some(1),
             state: state.to_string(),
             branch_name: Some(format!("task/{}", identifier.to_ascii_lowercase())),
-            url: None,
-            author: None,
             labels: vec!["test".into()],
-            comments: Vec::new(),
-            blocked_by: Vec::new(),
             created_at: Some(Utc::now()),
             updated_at: Some(Utc::now()),
+            ..Issue::default()
         }
     }
 
@@ -3117,7 +3105,7 @@ mod tests {
         let retry = service.state.retrying.get(&issue.id).unwrap();
         assert_eq!(retry.row.error.as_deref(), Some("stall_timeout"));
         let context = service.state.saved_contexts.get(&issue.id).unwrap();
-        assert_eq!(context.status.as_deref(), Some("Stalled"));
+        assert_eq!(context.status, Some(AttemptStatus::Stalled));
         assert_eq!(context.error.as_deref(), Some("stall_timeout"));
     }
 
@@ -3286,7 +3274,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                 thread_id: None,
                 turn_id: None,
                 codex_app_server_pid: None,
-                status: Some("Failed".into()),
+                status: Some(AttemptStatus::Failed),
                 error: Some("rate limited".into()),
                 usage: TokenUsage::default(),
                 transcript: vec![AgentContextEntry {
@@ -3311,7 +3299,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
         let workspace_root = unique_workspace_root("workflow-reload");
         let workflow = test_workflow_with_front_matter(
             &workspace_root,
-            "---\ntracker:\n  kind: alpha\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nInitial prompt\n",
+            "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nInitial prompt\n",
         );
         let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
             Ok(RuntimeComponents {
@@ -3331,23 +3319,23 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
         });
         let mut service = test_service_with_reload(
             workflow.clone(),
-            Arc::new(NamedTracker::new("tracker:alpha", Vec::new())),
-            Arc::new(NamedAgent::new("agent:alpha")),
+            Arc::new(NamedTracker::new("tracker:mock", Vec::new())),
+            Arc::new(NamedAgent::new("agent:mock")),
             RecordingProvisioner::default(),
             component_factory,
         );
 
         fs::write(
             &workflow.path,
-            "---\ntracker:\n  kind: beta\npolling:\n  interval_ms: 250\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nReloaded prompt\n"
+            "---\ntracker:\n  kind: none\npolling:\n  interval_ms: 250\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nReloaded prompt\n"
                 .replace("__ROOT__", &workspace_root.display().to_string()),
         )
         .unwrap();
 
         service.tick().await;
 
-        assert_eq!(service.tracker.component_key(), "tracker:beta");
-        assert_eq!(service.agent.component_key(), "agent:beta");
+        assert_eq!(service.tracker.component_key(), "tracker:none");
+        assert_eq!(service.agent.component_key(), "agent:none");
         assert_eq!(service.workflow().config.polling.interval_ms, 250);
         assert_eq!(
             service.workflow().definition.prompt_template,
@@ -3360,7 +3348,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
         let workspace_root = unique_workspace_root("workflow-invalid");
         let workflow = test_workflow_with_front_matter(
             &workspace_root,
-            "---\ntracker:\n  kind: alpha\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nPrompt\n",
+            "---\ntracker:\n  kind: none\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nPrompt\n",
         );
         let issue = sample_issue("issue-reload", "FAC-RELOAD", "Todo", "Blocked");
         let issue_for_factory = issue.clone();
@@ -3382,8 +3370,8 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
         });
         let mut service = test_service_with_reload(
             workflow.clone(),
-            Arc::new(NamedTracker::new("tracker:alpha", vec![issue.clone()])),
-            Arc::new(NamedAgent::new("agent:alpha")),
+            Arc::new(NamedTracker::new("tracker:none", vec![issue.clone()])),
+            Arc::new(NamedAgent::new("agent:none")),
             RecordingProvisioner::default(),
             component_factory,
         );
@@ -3411,7 +3399,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                 thread_id: None,
                 turn_id: None,
                 codex_app_server_pid: None,
-                status: Some("Failed".into()),
+                status: Some(AttemptStatus::Failed),
                 error: Some("tool timeout".into()),
                 usage: TokenUsage::default(),
                 transcript: vec![AgentContextEntry {

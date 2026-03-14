@@ -9,7 +9,7 @@ use {
     },
     polyphony_core::{
         AgentDefinition, AgentEventKind, AgentModel, AgentModelCatalog, AgentProviderRuntime,
-        AgentRunResult, AgentRunSpec, AgentTransport, AttemptStatus, BudgetSnapshot,
+        AgentRunResult, AgentRunSpec, AgentTransport, BudgetSnapshot,
         Error as CoreError, RateLimitSignal, TokenUsage,
     },
     reqwest::header::CONTENT_TYPE,
@@ -364,12 +364,7 @@ async fn run_openai_chat(
                 session_id = %session_id,
                 "OpenAI-compatible agent turn completed"
             );
-            return Ok(AgentRunResult {
-                status: AttemptStatus::Succeeded,
-                turns_completed: 1,
-                error: None,
-                final_issue_state: None,
-            });
+            return Ok(AgentRunResult::succeeded(1));
         }
 
         messages.push(json!({

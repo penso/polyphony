@@ -13,7 +13,7 @@ use {
     },
     polyphony_core::{
         AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind,
-        Issue, TrackerQuery,
+        Issue, TrackerKind, TrackerQuery,
     },
     serde::{Deserialize, Serialize},
     serde_yaml::{Mapping, Value as YamlValue},
@@ -23,7 +23,6 @@ use {
 const DEFAULT_USER_CONFIG_TEMPLATE: &str = include_str!("../../../templates/config.toml");
 const DEFAULT_WORKFLOW_TEMPLATE: &str = include_str!("../../../templates/WORKFLOW.md");
 const DEFAULT_REPO_CONFIG_TEMPLATE: &str = include_str!("../../../templates/repo-config.toml");
-const DEFAULT_TRACKER_KIND: &str = "none";
 const DEFAULT_LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 #[derive(Debug, Error)]
@@ -52,7 +51,7 @@ pub struct WorkflowDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TrackerConfig {
-    pub kind: String,
+    pub kind: TrackerKind,
     pub profile: Option<String>,
     pub endpoint: String,
     pub api_key: Option<String>,
@@ -68,7 +67,7 @@ pub struct TrackerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 struct TrackerProfileConfig {
-    pub kind: Option<String>,
+    pub kind: Option<TrackerKind>,
     pub endpoint: Option<String>,
     pub api_key: Option<String>,
     pub project_slug: Option<String>,
@@ -94,7 +93,7 @@ pub struct PollingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceConfig {
     pub root: PathBuf,
-    pub checkout_kind: String,
+    pub checkout_kind: CheckoutKind,
     pub sync_on_reuse: bool,
     pub transient_paths: Vec<String>,
     pub source_repo_path: Option<PathBuf>,
@@ -441,10 +440,10 @@ fn apply_tracker_profile(
         Error::InvalidConfig(format!("tracker.profile `{profile_name}` is not defined"))
     })?;
 
-    if is_default_tracker_kind(&tracker.kind)
-        && let Some(kind) = &profile.kind
+    if tracker.kind == TrackerKind::None
+        && let Some(kind) = profile.kind
     {
-        tracker.kind = kind.clone();
+        tracker.kind = kind;
     }
     if is_default_tracker_endpoint(&tracker.endpoint)
         && let Some(endpoint) = &profile.endpoint
@@ -480,10 +479,6 @@ fn apply_tracker_profile(
         tracker.terminal_states = profile.terminal_states.clone();
     }
     Ok(tracker)
-}
-
-fn is_default_tracker_kind(kind: &str) -> bool {
-    kind.trim().is_empty() || kind == DEFAULT_TRACKER_KIND
 }
 
 fn is_default_tracker_endpoint(endpoint: &str) -> bool {
@@ -531,7 +526,7 @@ impl ServiceConfig {
         let front_matter = serde_yaml::to_string(&workflow.config)
             .map_err(|err| Error::WorkflowParse(err.to_string()))?;
         let mut builder = Config::builder()
-            .set_default("tracker.kind", DEFAULT_TRACKER_KIND)
+            .set_default("tracker.kind", "none")
             .map_err(config_error)?
             .set_default("tracker.endpoint", DEFAULT_LINEAR_ENDPOINT)
             .map_err(config_error)?
@@ -657,13 +652,13 @@ impl ServiceConfig {
     }
 
     fn resolve(&mut self) {
-        let tracker_api_key = match self.tracker.kind.as_str() {
-            "linear" => self
+        let tracker_api_key = match self.tracker.kind {
+            TrackerKind::Linear => self
                 .tracker
                 .api_key
                 .clone()
                 .or_else(|| env::var("LINEAR_API_KEY").ok()),
-            "github" => self
+            TrackerKind::Github => self
                 .tracker
                 .api_key
                 .clone()
@@ -788,10 +783,7 @@ impl ServiceConfig {
     }
 
     pub fn validate(&self) -> Result<(), Error> {
-        if self.tracker.kind.is_empty() {
-            return Err(Error::InvalidConfig("tracker.kind is required".into()));
-        }
-        if self.tracker.kind == "linear" {
+        if self.tracker.kind == TrackerKind::Linear {
             if self
                 .tracker
                 .api_key
@@ -815,7 +807,7 @@ impl ServiceConfig {
                 ));
             }
         }
-        if self.tracker.kind == "github"
+        if self.tracker.kind == TrackerKind::Github
             && self
                 .tracker
                 .repository
@@ -904,7 +896,7 @@ impl ServiceConfig {
                 )));
             }
         }
-        if self.workspace.checkout_kind != "directory"
+        if self.workspace.checkout_kind != CheckoutKind::Directory
             && self.workspace.source_repo_path.is_none()
             && self.workspace.clone_url.is_none()
         {
@@ -913,12 +905,12 @@ impl ServiceConfig {
             ));
         }
         if self.automation.enabled {
-            if self.tracker.kind != "github" {
+            if self.tracker.kind != TrackerKind::Github {
                 return Err(Error::InvalidConfig(
                     "automation.enabled currently requires tracker.kind = github".into(),
                 ));
             }
-            if self.workspace.checkout_kind == "directory" {
+            if self.workspace.checkout_kind == CheckoutKind::Directory {
                 return Err(Error::InvalidConfig(
                     "automation.enabled requires a git-backed workspace checkout".into(),
                 ));
@@ -990,14 +982,6 @@ impl ServiceConfig {
             .terminal_states
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(state))
-    }
-
-    pub fn workspace_checkout_kind(&self) -> CheckoutKind {
-        match self.workspace.checkout_kind.as_str() {
-            "linked_worktree" => CheckoutKind::LinkedWorktree,
-            "discrete_clone" => CheckoutKind::DiscreteClone,
-            _ => CheckoutKind::Directory,
-        }
     }
 
     pub fn state_concurrency_limit(&self, state: &str) -> Option<usize> {
@@ -1570,7 +1554,10 @@ mod tests {
             ServiceConfig, WorkflowDefinition, load_workflow_with_user_config,
             render_issue_template, render_turn_template, repo_config_path,
         },
-        polyphony_core::{AgentInteractionMode, AgentPromptMode, AgentTransport, Issue},
+        polyphony_core::{
+            AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue,
+            TrackerKind,
+        },
         serde_yaml::Value as YamlValue,
     };
 
@@ -1615,7 +1602,7 @@ mod tests {
 
         assert!(config.workspace.sync_on_reuse);
         assert_eq!(config.workspace.transient_paths, vec!["tmp", ".elixir_ls"]);
-        assert_eq!(config.tracker.kind, "none");
+        assert_eq!(config.tracker.kind, TrackerKind::None);
         assert!(config.agents.default.is_none());
         assert!(config.agents.profiles.is_empty());
     }
@@ -2202,7 +2189,7 @@ tracker:
         };
         let config = ServiceConfig::from_workflow(&workflow).unwrap();
 
-        assert_eq!(config.tracker.kind, "github");
+        assert_eq!(config.tracker.kind, TrackerKind::Github);
         assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
         assert_eq!(config.tracker.api_key, None);
     }
@@ -2237,7 +2224,7 @@ tracker:
         let _ = fs::remove_file(&user_config_path);
 
         assert_eq!(config.tracker.profile.as_deref(), Some("github_personal"));
-        assert_eq!(config.tracker.kind, "github");
+        assert_eq!(config.tracker.kind, TrackerKind::Github);
         assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
         assert_eq!(config.tracker.api_key.as_deref(), Some("test-token"));
     }
@@ -2298,7 +2285,7 @@ command = "codex app-server"
                 .unwrap();
         let _ = fs::remove_file(&user_config_path);
 
-        assert_eq!(config.tracker.kind, "github");
+        assert_eq!(config.tracker.kind, TrackerKind::Github);
         assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
         assert_eq!(config.agents.default.as_deref(), Some("codex"));
     }
@@ -2445,12 +2432,12 @@ source_repo_path = "/tmp/polyphony"
         let workflow = load_workflow_with_user_config(&workflow_path, None).unwrap();
         let _ = fs::remove_dir_all(&root);
 
-        assert_eq!(workflow.config.tracker.kind, "github");
+        assert_eq!(workflow.config.tracker.kind, TrackerKind::Github);
         assert_eq!(
             workflow.config.tracker.repository.as_deref(),
             Some("penso/polyphony")
         );
-        assert_eq!(workflow.config.workspace.checkout_kind, "linked_worktree");
+        assert_eq!(workflow.config.workspace.checkout_kind, CheckoutKind::LinkedWorktree);
         assert_eq!(
             workflow.config.workspace.source_repo_path.as_deref(),
             Some(std::path::Path::new("/tmp/polyphony"))

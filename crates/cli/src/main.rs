@@ -13,8 +13,8 @@ use {
     opentelemetry::{KeyValue, global, trace::TracerProvider as _},
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
     polyphony_core::{
-        IssueTracker, PullRequestCommenter, PullRequestManager, RuntimeSnapshot, StateStore,
-        WorkspaceCommitter, WorkspaceProvisioner,
+        CheckoutKind, IssueTracker, PullRequestCommenter, PullRequestManager, RuntimeSnapshot,
+        StateStore, TrackerKind, WorkspaceCommitter, WorkspaceProvisioner,
     },
     polyphony_orchestrator::{
         RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
@@ -209,9 +209,6 @@ fn format_fatal_error(error: &Error) -> String {
 
 fn format_invalid_config_error(message: &str) -> String {
     match message {
-        "tracker.kind is required" => {
-            "Invalid workflow configuration: tracker.kind is missing.".into()
-        },
         "tracker.repository is required for github" => "Invalid workflow configuration: the GitHub tracker is selected, but tracker.repository is missing.\nAdd `repository = \"owner/repo\"` to `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
         "tracker.project_slug is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.project_slug is missing.\nAdd `project_slug = \"ENG\"` to `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
         "tracker.api_key is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.api_key is missing.\nSet `api_key = \"$LINEAR_API_KEY\"` in config and export `LINEAR_API_KEY`.".into(),
@@ -367,8 +364,8 @@ fn maybe_seed_repo_config_with_github_detection(
 
 fn should_seed_repo_config(config: &ServiceConfig, workflow_root: &Path) -> bool {
     workflow_root.join(".git").exists()
-        && (config.tracker.kind == "none"
-            || (config.workspace.checkout_kind == "directory"
+        && (config.tracker.kind == TrackerKind::None
+            || (config.workspace.checkout_kind == CheckoutKind::Directory
                 && config.workspace.source_repo_path.is_none()
                 && config.workspace.clone_url.is_none()))
 }
@@ -676,10 +673,10 @@ impl IssueTracker for EmptyTracker {
 fn build_runtime_components(
     workflow: &polyphony_workflow::LoadedWorkflow,
 ) -> Result<RuntimeComponents, Error> {
-    let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind.as_str() {
-        "none" => Arc::new(EmptyTracker),
+    let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind {
+        TrackerKind::None => Arc::new(EmptyTracker),
         #[cfg(feature = "linear")]
-        "linear" => {
+        TrackerKind::Linear => {
             let api_key =
                 workflow.config.tracker.api_key.clone().ok_or_else(|| {
                     Error::Config("tracker.api_key is required for linear".into())
@@ -690,7 +687,7 @@ fn build_runtime_components(
             )?)
         },
         #[cfg(feature = "github")]
-        "github" => Arc::new(polyphony_github::GithubIssueTracker::new(
+        TrackerKind::Github => Arc::new(polyphony_github::GithubIssueTracker::new(
             workflow
                 .config
                 .tracker
@@ -719,7 +716,7 @@ fn build_runtime_components(
         );
     #[cfg(feature = "github")]
     let (pull_request_manager, pull_request_commenter) =
-        if workflow.config.automation.enabled && workflow.config.tracker.kind == "github" {
+        if workflow.config.automation.enabled && workflow.config.tracker.kind == TrackerKind::Github {
             let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
                 Error::Config("tracker.repository is required for github automation".into())
             })?;

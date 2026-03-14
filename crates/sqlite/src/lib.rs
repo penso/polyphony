@@ -156,7 +156,7 @@ impl StateStore for SqliteStateStore {
         .bind(&run.issue_id)
         .bind(&run.issue_identifier)
         .bind(&run.session_id)
-        .bind(&run.status)
+        .bind(run.status.to_string())
         .bind(run.attempt.map(i64::from))
         .bind(run.started_at.to_rfc3339())
         .bind(run.finished_at.map(|value| value.to_rfc3339()))

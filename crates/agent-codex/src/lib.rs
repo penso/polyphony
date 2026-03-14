@@ -288,12 +288,7 @@ impl CodexAppServerSession {
                         session_id = event_metadata.session_id.as_deref().unwrap_or("unknown"),
                         "codex turn completed"
                     );
-                    return Ok(AgentRunResult {
-                        status: polyphony_core::AttemptStatus::Succeeded,
-                        turns_completed: 1,
-                        error: None,
-                        final_issue_state: None,
-                    });
+                    return Ok(AgentRunResult::succeeded(1));
                 },
                 Some("turn/failed") => {
                     emit_codex(
@@ -311,12 +306,9 @@ impl CodexAppServerSession {
                         session_id = event_metadata.session_id.as_deref().unwrap_or("unknown"),
                         "codex turn failed"
                     );
-                    return Ok(AgentRunResult {
-                        status: polyphony_core::AttemptStatus::Failed,
-                        turns_completed: 0,
-                        error: extract_message(&value).or_else(|| Some("turn_failed".into())),
-                        final_issue_state: None,
-                    });
+                    return Ok(AgentRunResult::failed(
+                        extract_message(&value).unwrap_or_else(|| "turn_failed".into()),
+                    ));
                 },
                 Some("turn/cancelled") => {
                     emit_codex(
@@ -334,12 +326,9 @@ impl CodexAppServerSession {
                         session_id = event_metadata.session_id.as_deref().unwrap_or("unknown"),
                         "codex turn cancelled"
                     );
-                    return Ok(AgentRunResult {
-                        status: polyphony_core::AttemptStatus::CancelledByReconciliation,
-                        turns_completed: 0,
-                        error: extract_message(&value).or_else(|| Some("turn_cancelled".into())),
-                        final_issue_state: None,
-                    });
+                    return Ok(AgentRunResult::cancelled(
+                        extract_message(&value).unwrap_or_else(|| "turn_cancelled".into()),
+                    ));
                 },
                 Some(method)
                     if method.contains("requestUserInput") || method.contains("input_required") =>

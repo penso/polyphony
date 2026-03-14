@@ -7,7 +7,7 @@ use {
     chrono::Utc,
     polyphony_core::{
         AgentDefinition, AgentEvent, AgentEventKind, AgentModel, AgentModelCatalog, AgentRunResult,
-        AgentRunSpec, AttemptStatus, BudgetSnapshot, Error as CoreError, TokenUsage,
+        AgentRunSpec, BudgetSnapshot, Error as CoreError, TokenUsage,
     },
     serde_json::Value,
     tokio::{
@@ -241,29 +241,20 @@ pub fn status_to_result(
             None,
             None,
         );
-        AgentRunResult {
-            status: AttemptStatus::Succeeded,
-            turns_completed: 1,
-            error: None,
-            final_issue_state: None,
-        }
+        AgentRunResult::succeeded(1)
     } else {
+        let error = format!("agent exited with status {}", code.unwrap_or(-1));
         emit(
             event_tx,
             spec,
             AgentEventKind::TurnFailed,
-            Some(format!("agent exited with status {}", code.unwrap_or(-1))),
+            Some(error.clone()),
             session_id,
             None,
             None,
             None,
         );
-        AgentRunResult {
-            status: AttemptStatus::Failed,
-            turns_completed: 0,
-            error: Some(format!("agent exited with status {}", code.unwrap_or(-1))),
-            final_issue_state: None,
-        }
+        AgentRunResult::failed(error)
     }
 }
 
@@ -313,13 +304,11 @@ pub fn model_from_json(value: &Value) -> Option<AgentModel> {
 
 pub fn merge_models(configured: Vec<AgentModel>, discovered: Vec<AgentModel>) -> Vec<AgentModel> {
     let mut seen = HashSet::new();
-    let mut merged = Vec::new();
-    for model in configured.into_iter().chain(discovered) {
-        if seen.insert(model.id.clone()) {
-            merged.push(model);
-        }
-    }
-    merged
+    configured
+        .into_iter()
+        .chain(discovered)
+        .filter(|m| seen.insert(m.id.clone()))
+        .collect()
 }
 
 pub fn selected_model(agent: &AgentDefinition, models: &[AgentModel]) -> Option<String> {
@@ -514,17 +503,8 @@ mod tests {
                 id: "issue-1".into(),
                 identifier: "FAC-1".into(),
                 title: "Title".into(),
-                description: None,
-                priority: None,
                 state: "Todo".into(),
-                branch_name: None,
-                url: None,
-                author: None,
-                labels: Vec::new(),
-                comments: Vec::new(),
-                blocked_by: Vec::new(),
-                created_at: None,
-                updated_at: None,
+                ..Issue::default()
             },
             attempt: Some(2),
             workspace_path: std::env::temp_dir(),
@@ -544,7 +524,7 @@ mod tests {
                 thread_id: None,
                 turn_id: None,
                 codex_app_server_pid: None,
-                status: Some("Failed".into()),
+                status: Some(polyphony_core::AttemptStatus::Failed),
                 error: Some("rate limited".into()),
                 usage: TokenUsage::default(),
                 transcript: Vec::new(),

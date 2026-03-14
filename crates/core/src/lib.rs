@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     path::PathBuf,
 };
 
@@ -53,7 +54,7 @@ pub struct IssueComment {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Issue {
     pub id: String,
     pub identifier: String,
@@ -85,8 +86,10 @@ pub struct Workspace {
     pub branch_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckoutKind {
+    #[default]
     Directory,
     LinkedWorktree,
     DiscreteClone,
@@ -160,7 +163,29 @@ pub struct AgentEvent {
     pub raw: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackerKind {
+    #[default]
+    None,
+    Linear,
+    Github,
+    Mock,
+}
+
+impl fmt::Display for TrackerKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::None => "none",
+            Self::Linear => "linear",
+            Self::Github => "github",
+            Self::Mock => "mock",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AttemptStatus {
     Succeeded,
     Failed,
@@ -169,12 +194,47 @@ pub enum AttemptStatus {
     CancelledByReconciliation,
 }
 
+impl fmt::Display for AttemptStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRunResult {
     pub status: AttemptStatus,
     pub turns_completed: u32,
     pub error: Option<String>,
     pub final_issue_state: Option<String>,
+}
+
+impl AgentRunResult {
+    pub fn succeeded(turns: u32) -> Self {
+        Self {
+            status: AttemptStatus::Succeeded,
+            turns_completed: turns,
+            error: None,
+            final_issue_state: None,
+        }
+    }
+
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self {
+            status: AttemptStatus::Failed,
+            turns_completed: 0,
+            error: Some(error.into()),
+            final_issue_state: None,
+        }
+    }
+
+    pub fn cancelled(error: impl Into<String>) -> Self {
+        Self {
+            status: AttemptStatus::CancelledByReconciliation,
+            turns_completed: 0,
+            error: Some(error.into()),
+            final_issue_state: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -293,10 +353,45 @@ pub struct RetryRow {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventScope {
+    Workflow,
+    Throttle,
+    Dispatch,
+    Handoff,
+    Agent,
+    Retry,
+    Worker,
+    Reconcile,
+    Tracker,
+    Startup,
+    Feedback,
+}
+
+impl fmt::Display for EventScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Workflow => "workflow",
+            Self::Throttle => "throttle",
+            Self::Dispatch => "dispatch",
+            Self::Handoff => "handoff",
+            Self::Agent => "agent",
+            Self::Retry => "retry",
+            Self::Worker => "worker",
+            Self::Reconcile => "reconcile",
+            Self::Tracker => "tracker",
+            Self::Startup => "startup",
+            Self::Feedback => "feedback",
+        };
+        f.write_str(label)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeEvent {
     pub at: DateTime<Utc>,
-    pub scope: String,
+    pub scope: EventScope,
     pub message: String,
 }
 
@@ -369,7 +464,7 @@ pub struct PersistedRunRecord {
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub codex_app_server_pid: Option<String>,
-    pub status: String,
+    pub status: AttemptStatus,
     pub attempt: Option<u32>,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
@@ -403,7 +498,7 @@ pub struct AgentContextSnapshot {
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub codex_app_server_pid: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<AttemptStatus>,
     pub error: Option<String>,
     pub usage: TokenUsage,
     pub transcript: Vec<AgentContextEntry>,

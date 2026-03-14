@@ -282,7 +282,7 @@ fn linear_issue_from_node(node: &linear_issues_page::LinearIssuesPageIssuesNodes
         state: node.state.name.clone(),
         branch_name: Some(node.branch_name.clone()),
         url: Some(node.url.clone()),
-        author: node.creator.as_ref().map(linear_author_from_user),
+        author: node.creator.as_ref().map(linear_author),
         labels: node
             .labels
             .nodes
@@ -316,7 +316,7 @@ fn linear_issue_from_id_node(node: &linear_issues_by_ids::LinearIssuesByIdsIssue
         state: node.state.name.clone(),
         branch_name: Some(node.branch_name.clone()),
         url: Some(node.url.clone()),
-        author: node.creator.as_ref().map(linear_author_from_id_user),
+        author: node.creator.as_ref().map(linear_author),
         labels: node
             .labels
             .nodes
@@ -340,57 +340,47 @@ fn linear_issue_from_id_node(node: &linear_issues_by_ids::LinearIssuesByIdsIssue
     }
 }
 
-fn linear_author_from_user(
-    user: &linear_issues_page::LinearIssuesPageIssuesNodesCreator,
-) -> IssueAuthor {
+trait LinearUser {
+    fn id(&self) -> &str;
+    fn name(&self) -> &str;
+    fn display_name(&self) -> &str;
+    fn owner(&self) -> bool;
+    fn admin(&self) -> bool;
+    fn guest(&self) -> bool;
+    fn url(&self) -> &str;
+}
+
+fn linear_author<U: LinearUser>(user: &U) -> IssueAuthor {
     IssueAuthor {
-        id: Some(user.id.clone()),
-        username: Some(user.name.clone()),
-        display_name: Some(user.display_name.clone()),
-        role: Some(linear_role(user.owner, user.admin, user.guest)),
-        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
-        url: Some(user.url.clone()),
+        id: Some(user.id().to_string()),
+        username: Some(user.name().to_string()),
+        display_name: Some(user.display_name().to_string()),
+        role: Some(linear_role(user.owner(), user.admin(), user.guest())),
+        trust_level: Some(linear_trust_level(user.owner(), user.admin(), user.guest())),
+        url: Some(user.url().to_string()),
     }
 }
 
-fn linear_author_from_id_user(
-    user: &linear_issues_by_ids::LinearIssuesByIdsIssuesNodesCreator,
-) -> IssueAuthor {
-    IssueAuthor {
-        id: Some(user.id.clone()),
-        username: Some(user.name.clone()),
-        display_name: Some(user.display_name.clone()),
-        role: Some(linear_role(user.owner, user.admin, user.guest)),
-        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
-        url: Some(user.url.clone()),
-    }
+macro_rules! impl_linear_user {
+    ($type:ty) => {
+        impl LinearUser for $type {
+            fn id(&self) -> &str { &self.id }
+            fn name(&self) -> &str { &self.name }
+            fn display_name(&self) -> &str { &self.display_name }
+            fn owner(&self) -> bool { self.owner }
+            fn admin(&self) -> bool { self.admin }
+            fn guest(&self) -> bool { self.guest }
+            fn url(&self) -> &str { &self.url }
+        }
+    };
 }
 
-fn linear_comment_author_from_user(
-    user: &linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodesUser,
-) -> IssueAuthor {
-    IssueAuthor {
-        id: Some(user.id.clone()),
-        username: Some(user.name.clone()),
-        display_name: Some(user.display_name.clone()),
-        role: Some(linear_role(user.owner, user.admin, user.guest)),
-        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
-        url: Some(user.url.clone()),
-    }
-}
-
-fn linear_comment_author_from_id_user(
-    user: &linear_issues_by_ids::LinearIssuesByIdsIssuesNodesCommentsNodesUser,
-) -> IssueAuthor {
-    IssueAuthor {
-        id: Some(user.id.clone()),
-        username: Some(user.name.clone()),
-        display_name: Some(user.display_name.clone()),
-        role: Some(linear_role(user.owner, user.admin, user.guest)),
-        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
-        url: Some(user.url.clone()),
-    }
-}
+impl_linear_user!(linear_issues_page::LinearIssuesPageIssuesNodesCreator);
+impl_linear_user!(linear_issues_by_ids::LinearIssuesByIdsIssuesNodesCreator);
+impl_linear_user!(linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodesUser);
+impl_linear_user!(linear_issues_by_ids::LinearIssuesByIdsIssuesNodesCommentsNodesUser);
+impl_linear_user!(linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodesChildrenNodesUser);
+impl_linear_user!(linear_issues_by_ids::LinearIssuesByIdsIssuesNodesCommentsNodesChildrenNodesUser);
 
 fn linear_comments_from_connection(
     comments: &[linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodes],
@@ -400,7 +390,7 @@ fn linear_comments_from_connection(
         collected.push(IssueComment {
             id: comment.id.clone(),
             body: comment.body.clone(),
-            author: comment.user.as_ref().map(linear_comment_author_from_user),
+            author: comment.user.as_ref().map(linear_author),
             url: Some(comment.url.clone()),
             created_at: parse_rfc3339(&comment.created_at),
             updated_at: parse_rfc3339(&comment.updated_at),
@@ -412,7 +402,7 @@ fn linear_comments_from_connection(
                 author: child
                     .user
                     .as_ref()
-                    .map(linear_child_comment_author_from_user),
+                    .map(linear_author),
                 url: Some(child.url.clone()),
                 created_at: parse_rfc3339(&child.created_at),
                 updated_at: parse_rfc3339(&child.updated_at),
@@ -433,7 +423,7 @@ fn linear_comments_from_id_connection(
             author: comment
                 .user
                 .as_ref()
-                .map(linear_comment_author_from_id_user),
+                .map(linear_author),
             url: Some(comment.url.clone()),
             created_at: parse_rfc3339(&comment.created_at),
             updated_at: parse_rfc3339(&comment.updated_at),
@@ -445,7 +435,7 @@ fn linear_comments_from_id_connection(
                 author: child
                     .user
                     .as_ref()
-                    .map(linear_child_comment_author_from_id_user),
+                    .map(linear_author),
                 url: Some(child.url.clone()),
                 created_at: parse_rfc3339(&child.created_at),
                 updated_at: parse_rfc3339(&child.updated_at),
@@ -453,32 +443,6 @@ fn linear_comments_from_id_connection(
         }
     }
     collected
-}
-
-fn linear_child_comment_author_from_user(
-    user: &linear_issues_page::LinearIssuesPageIssuesNodesCommentsNodesChildrenNodesUser,
-) -> IssueAuthor {
-    IssueAuthor {
-        id: Some(user.id.clone()),
-        username: Some(user.name.clone()),
-        display_name: Some(user.display_name.clone()),
-        role: Some(linear_role(user.owner, user.admin, user.guest)),
-        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
-        url: Some(user.url.clone()),
-    }
-}
-
-fn linear_child_comment_author_from_id_user(
-    user: &linear_issues_by_ids::LinearIssuesByIdsIssuesNodesCommentsNodesChildrenNodesUser,
-) -> IssueAuthor {
-    IssueAuthor {
-        id: Some(user.id.clone()),
-        username: Some(user.name.clone()),
-        display_name: Some(user.display_name.clone()),
-        role: Some(linear_role(user.owner, user.admin, user.guest)),
-        trust_level: Some(linear_trust_level(user.owner, user.admin, user.guest)),
-        url: Some(user.url.clone()),
-    }
 }
 
 fn linear_role(owner: bool, admin: bool, guest: bool) -> String {
