@@ -323,8 +323,11 @@ impl RuntimeService {
                 }
                 Some(command) = self.external_command_rx.recv() => match command {
                     RuntimeCommand::Refresh => {
-                        self.reload_workflow_from_disk(true, "watcher").await;
+                        info!("manual refresh requested");
+                        self.state.throttles.clear();
+                        self.reload_workflow_from_disk(true, "manual_refresh").await;
                         next_tick = Instant::now();
+                        let _ = self.emit_snapshot().await;
                     }
                     RuntimeCommand::Shutdown => {
                         self.abort_all().await;
@@ -2372,6 +2375,10 @@ fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
         labels: issue.labels.clone(),
         description: issue.description.clone(),
         url: issue.url.clone(),
+        author: issue
+            .author
+            .as_ref()
+            .and_then(|a| a.username.clone().or(a.display_name.clone())),
         updated_at: issue.updated_at,
         created_at: issue.created_at,
     }

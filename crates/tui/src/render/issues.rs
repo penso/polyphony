@@ -86,8 +86,11 @@ pub fn draw_issues_tab(
                 .alignment(Alignment::Right),
         ),
         Cell::from(
-            Line::from(Span::styled("Age", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
+            Line::from(vec![
+                Span::styled("Age", Style::default().fg(theme.muted)),
+                Span::raw(" "),
+            ])
+            .alignment(Alignment::Right),
         ),
     ])
     .height(1)
@@ -143,10 +146,13 @@ pub fn draw_issues_tab(
                     .alignment(Alignment::Right),
                 ),
                 Cell::from(
-                    Line::from(Span::styled(
-                        age.clone().unwrap_or_default(),
-                        Style::default().fg(theme.muted),
-                    ))
+                    Line::from(vec![
+                        Span::styled(
+                            age.clone().unwrap_or_default(),
+                            Style::default().fg(theme.muted),
+                        ),
+                        Span::raw(" "),
+                    ])
                     .alignment(Alignment::Right),
                 ),
             ])
@@ -161,6 +167,29 @@ pub fn draw_issues_tab(
     let count = indices.len();
     let footer_info = selection_info(app.issues_state.selected(), count);
     let sort_label = app.issue_sort.label();
+
+    // Build title with search indicator
+    let title_spans = if app.search_active {
+        vec![
+            Span::styled(" Issues ", Style::default().fg(theme.foreground).add_modifier(Modifier::BOLD)),
+            Span::styled("/", Style::default().fg(theme.highlight)),
+            Span::styled(&app.search_query, Style::default().fg(theme.foreground)),
+            Span::styled("▏", Style::default().fg(theme.highlight)),
+        ]
+    } else if !app.search_query.is_empty() {
+        vec![
+            Span::styled(" Issues ", Style::default().fg(theme.foreground).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("[{}] ", app.search_query),
+                Style::default().fg(theme.highlight),
+            ),
+        ]
+    } else {
+        vec![Span::styled(
+            " Issues ",
+            Style::default().fg(theme.foreground).add_modifier(Modifier::BOLD),
+        )]
+    };
 
     let table = Table::new(
         rows,
@@ -178,12 +207,7 @@ pub fn draw_issues_tab(
     .highlight_symbol("▸ ")
     .block(
         Block::default()
-            .title(Line::from(Span::styled(
-                " Issues ",
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            )))
+            .title(Line::from(title_spans))
             .title_bottom(
                 Line::from(vec![
                     Span::styled("─s:", Style::default().fg(theme.muted)),

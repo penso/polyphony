@@ -583,6 +583,8 @@ pub struct VisibleIssueRow {
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,

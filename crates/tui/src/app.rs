@@ -5,7 +5,7 @@ use {
     ratatui::widgets::TableState,
 };
 
-use crate::theme::Theme;
+use crate::{LogBuffer, theme::Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -13,10 +13,17 @@ pub enum ActiveTab {
     Orchestrator,
     Tasks,
     Deliverables,
+    Logs,
 }
 
 impl ActiveTab {
-    pub const ALL: [Self; 4] = [Self::Issues, Self::Orchestrator, Self::Tasks, Self::Deliverables];
+    pub const ALL: [Self; 5] = [
+        Self::Issues,
+        Self::Orchestrator,
+        Self::Tasks,
+        Self::Deliverables,
+        Self::Logs,
+    ];
 
     pub const fn title(self) -> &'static str {
         match self {
@@ -24,6 +31,7 @@ impl ActiveTab {
             Self::Orchestrator => "Orchestrator",
             Self::Tasks => "Tasks",
             Self::Deliverables => "PR/MR",
+            Self::Logs => "Logs",
         }
     }
 
@@ -33,6 +41,7 @@ impl ActiveTab {
             Self::Orchestrator => 1,
             Self::Tasks => 2,
             Self::Deliverables => 3,
+            Self::Logs => 4,
         }
     }
 
@@ -84,16 +93,23 @@ pub struct AppState {
     pub deliverables_state: TableState,
     pub movements_state: TableState,
     pub show_issue_detail: bool,
+    pub detail_scroll: u16,
     pub issue_sort: IssueSortKey,
     /// Sorted index mapping: sorted_issues[display_index] = original snapshot index
     pub sorted_issue_indices: Vec<usize>,
     pub frame_count: u64,
     pub leaving: bool,
     pub leaving_since: Option<Instant>,
+    pub log_buffer: LogBuffer,
+    pub prev_request_count: Option<u64>,
+    pub prev_request_count_at: Option<Instant>,
+    pub requests_per_sec: f64,
+    pub search_active: bool,
+    pub search_query: String,
 }
 
 impl AppState {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: Theme, log_buffer: LogBuffer) -> Self {
         Self {
             theme,
             active_tab: ActiveTab::Issues,
@@ -102,17 +118,24 @@ impl AppState {
             deliverables_state: TableState::default(),
             movements_state: TableState::default(),
             show_issue_detail: false,
+            detail_scroll: 0,
             issue_sort: IssueSortKey::Newest,
             sorted_issue_indices: Vec::new(),
             frame_count: 0,
             leaving: false,
             leaving_since: None,
+            log_buffer,
+            prev_request_count: None,
+            prev_request_count_at: None,
+            requests_per_sec: 0.0,
+            search_active: false,
+            search_query: String::new(),
         }
     }
 
     pub fn on_snapshot(&mut self, snapshot: &RuntimeSnapshot) {
         self.rebuild_sorted_indices(snapshot);
-        sync_selection(&mut self.issues_state, snapshot.visible_issues.len());
+        sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());
         sync_selection(&mut self.tasks_state, snapshot.tasks.len());
         let deliverable_count = snapshot
             .movements
@@ -121,11 +144,48 @@ impl AppState {
             .count();
         sync_selection(&mut self.deliverables_state, deliverable_count);
         sync_selection(&mut self.movements_state, snapshot.movements.len());
+
+        // Compute requests/sec from budget raw data
+        let total_requests: u64 = snapshot
+            .budgets
+            .iter()
+            .filter_map(|b| {
+                b.raw
+                    .as_ref()
+                    .and_then(|v| v.get("requests"))
+                    .and_then(|v| v.as_u64())
+            })
+            .sum();
+
+        if total_requests > 0 {
+            let now = Instant::now();
+            if let (Some(prev_count), Some(prev_at)) =
+                (self.prev_request_count, self.prev_request_count_at)
+            {
+                let elapsed = now.duration_since(prev_at).as_secs_f64();
+                if elapsed > 0.5 {
+                    let delta = total_requests.saturating_sub(prev_count);
+                    self.requests_per_sec = delta as f64 / elapsed;
+                    self.prev_request_count = Some(total_requests);
+                    self.prev_request_count_at = Some(now);
+                }
+            } else {
+                self.prev_request_count = Some(total_requests);
+                self.prev_request_count_at = Some(now);
+            }
+        }
     }
 
     pub fn rebuild_sorted_indices(&mut self, snapshot: &RuntimeSnapshot) {
         let issues = &snapshot.visible_issues;
-        let mut indices: Vec<usize> = (0..issues.len()).collect();
+        let mut indices: Vec<usize> = if self.search_query.is_empty() {
+            (0..issues.len()).collect()
+        } else {
+            let q = self.search_query.to_lowercase();
+            (0..issues.len())
+                .filter(|&i| issue_matches(&issues[i], &q))
+                .collect()
+        };
         match self.issue_sort {
             IssueSortKey::Newest => {
                 indices.sort_by(|&a, &b| {
@@ -196,7 +256,7 @@ impl AppState {
 
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {
         match self.active_tab {
-            ActiveTab::Issues => snapshot.visible_issues.len(),
+            ActiveTab::Issues => self.sorted_issue_indices.len(),
             ActiveTab::Orchestrator => snapshot.movements.len(),
             ActiveTab::Tasks => snapshot.tasks.len(),
             ActiveTab::Deliverables => snapshot
@@ -204,6 +264,7 @@ impl AppState {
                 .iter()
                 .filter(|m| m.has_deliverable)
                 .count(),
+            ActiveTab::Logs => 0,
         }
     }
 
@@ -212,7 +273,7 @@ impl AppState {
             ActiveTab::Issues => &mut self.issues_state,
             ActiveTab::Orchestrator => &mut self.movements_state,
             ActiveTab::Tasks => &mut self.tasks_state,
-            ActiveTab::Deliverables => &mut self.deliverables_state,
+            ActiveTab::Deliverables | ActiveTab::Logs => &mut self.deliverables_state,
         }
     }
 
@@ -237,6 +298,23 @@ fn extract_issue_number(identifier: &str) -> u64 {
         .collect::<String>()
         .parse()
         .unwrap_or(0)
+}
+
+fn issue_matches(issue: &VisibleIssueRow, query: &str) -> bool {
+    issue.title.to_lowercase().contains(query)
+        || issue.issue_identifier.to_lowercase().contains(query)
+        || issue.state.to_lowercase().contains(query)
+        || issue.labels.iter().any(|l| l.to_lowercase().contains(query))
+        || issue
+            .description
+            .as_deref()
+            .map(|d| d.to_lowercase().contains(query))
+            .unwrap_or(false)
+        || issue
+            .url
+            .as_deref()
+            .map(|u| u.to_lowercase().contains(query))
+            .unwrap_or(false)
 }
 
 fn sync_selection(state: &mut TableState, len: usize) {

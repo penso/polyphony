@@ -184,7 +184,7 @@ pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Erro
 pub async fn run(
     mut snapshot_rx: watch::Receiver<RuntimeSnapshot>,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
-    _log_buffer: LogBuffer,
+    log_buffer: LogBuffer,
 ) -> Result<(), Error> {
     let theme = detect_terminal_theme().unwrap_or_else(default_theme);
     enable_raw_mode()?;
@@ -194,7 +194,7 @@ pub async fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = AppState::new(theme);
+    let mut app = AppState::new(theme, log_buffer);
     let mut snapshot = snapshot_rx.borrow().clone();
     app.on_snapshot(&snapshot);
 
@@ -235,6 +235,52 @@ pub async fn run(
                     match key.code {
                         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
                             app.show_issue_detail = false;
+                            app.detail_scroll = 0;
+                        },
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.detail_scroll = app.detail_scroll.saturating_add(1);
+                        },
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(1);
+                        },
+                        KeyCode::PageDown => {
+                            app.detail_scroll = app.detail_scroll.saturating_add(8);
+                        },
+                        KeyCode::PageUp => {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(8);
+                        },
+                        KeyCode::Char('o') => {
+                            if let Some(issue) = app.selected_issue(&snapshot) {
+                                if let Some(url) = &issue.url {
+                                    let _ = std::process::Command::new("open")
+                                        .arg(url)
+                                        .spawn();
+                                }
+                            }
+                        },
+                        _ => {},
+                    }
+                } else if app.search_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.search_active = false;
+                            app.search_query.clear();
+                            app.rebuild_sorted_indices(&snapshot);
+                            sync_selection_after_search(&mut app, &snapshot);
+                        },
+                        KeyCode::Enter => {
+                            app.search_active = false;
+                            // Keep filter active, just exit input mode
+                        },
+                        KeyCode::Backspace => {
+                            app.search_query.pop();
+                            app.rebuild_sorted_indices(&snapshot);
+                            sync_selection_after_search(&mut app, &snapshot);
+                        },
+                        KeyCode::Char(c) => {
+                            app.search_query.push(c);
+                            app.rebuild_sorted_indices(&snapshot);
+                            sync_selection_after_search(&mut app, &snapshot);
                         },
                         _ => {},
                     }
@@ -250,20 +296,17 @@ pub async fn run(
             }
         }
 
-        if !key_handled {
-            tokio::select! {
-                changed = snapshot_rx.changed() => {
-                    if changed.is_err() {
-                        break Ok(());
-                    }
-                    snapshot = snapshot_rx.borrow().clone();
-                    app.on_snapshot(&snapshot);
+        // Always check for snapshot updates, whether or not a key was handled.
+        // Use a short timeout so the draw loop stays responsive.
+        tokio::select! {
+            changed = snapshot_rx.changed() => {
+                if changed.is_err() {
+                    break Ok(());
                 }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                snapshot = snapshot_rx.borrow().clone();
+                app.on_snapshot(&snapshot);
             }
-        } else if snapshot_rx.has_changed().unwrap_or(false) {
-            snapshot = snapshot_rx.borrow().clone();
-            app.on_snapshot(&snapshot);
+            _ = tokio::time::sleep(Duration::from_millis(if key_handled { 1 } else { 100 })) => {}
         }
     };
 
@@ -294,6 +337,7 @@ fn handle_key(
         KeyCode::Char('2') => app.active_tab = app::ActiveTab::Orchestrator,
         KeyCode::Char('3') => app.active_tab = app::ActiveTab::Tasks,
         KeyCode::Char('4') => app.active_tab = app::ActiveTab::Deliverables,
+        KeyCode::Char('5') => app.active_tab = app::ActiveTab::Logs,
 
         // Navigation (works on active tab's table)
         KeyCode::Char('j') | KeyCode::Down => {
@@ -330,9 +374,53 @@ fn handle_key(
             }
         },
 
+        // Open issue in browser
+        KeyCode::Char('o') => {
+            if app.active_tab == app::ActiveTab::Issues {
+                if let Some(issue) = app.selected_issue(snapshot) {
+                    if let Some(url) = &issue.url {
+                        let _ = std::process::Command::new("open")
+                            .arg(url)
+                            .spawn();
+                    }
+                }
+            }
+        },
+
+        // Search
+        KeyCode::Char('/') => {
+            if app.active_tab == app::ActiveTab::Issues {
+                app.search_active = true;
+                app.search_query.clear();
+            }
+        },
+
+        // Clear search filter
+        KeyCode::Esc => {
+            if !app.search_query.is_empty() {
+                app.search_query.clear();
+                app.rebuild_sorted_indices(snapshot);
+                sync_selection_after_search(app, snapshot);
+            }
+        },
+
         _ => {},
     }
     None
+}
+
+fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
+    let len = app.sorted_issue_indices.len();
+    if len == 0 {
+        app.issues_state.select(None);
+    } else {
+        match app.issues_state.selected() {
+            Some(i) if i >= len => app.issues_state.select(Some(len - 1)),
+            None => app.issues_state.select(Some(0)),
+            _ => {},
+        }
+    }
+    let _ = snapshot; // used only for consistent API
 }
 
 // --- Helper functions ---
@@ -460,6 +548,7 @@ mod tests {
                     labels: vec![],
                     description: None,
                     url: None,
+                    author: None,
                     updated_at: None,
                     created_at: None,
                 })
@@ -483,7 +572,7 @@ mod tests {
 
     #[test]
     fn app_state_selection_syncs() {
-        let mut app = AppState::new(default_theme());
+        let mut app = AppState::new(default_theme(), LogBuffer::default());
         let snapshot = test_snapshot(5);
         app.on_snapshot(&snapshot);
         assert_eq!(app.issues_state.selected(), Some(0));
@@ -491,7 +580,7 @@ mod tests {
 
     #[test]
     fn app_state_empty_snapshot() {
-        let mut app = AppState::new(default_theme());
+        let mut app = AppState::new(default_theme(), LogBuffer::default());
         let snapshot = test_snapshot(0);
         app.on_snapshot(&snapshot);
         assert_eq!(app.issues_state.selected(), None);
@@ -502,7 +591,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let snapshot = test_snapshot(3);
-        let mut app = AppState::new(default_theme());
+        let mut app = AppState::new(default_theme(), LogBuffer::default());
         app.on_snapshot(&snapshot);
 
         terminal
@@ -514,7 +603,7 @@ mod tests {
 
     #[test]
     fn tab_switching() {
-        let mut app = AppState::new(default_theme());
+        let mut app = AppState::new(default_theme(), LogBuffer::default());
         assert_eq!(app.active_tab, app::ActiveTab::Issues);
 
         app.active_tab = app.active_tab.next();
@@ -525,6 +614,9 @@ mod tests {
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Deliverables);
+
+        app.active_tab = app.active_tab.next();
+        assert_eq!(app.active_tab, app::ActiveTab::Logs);
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Issues);

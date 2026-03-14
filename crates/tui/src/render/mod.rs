@@ -2,6 +2,7 @@ mod deliverables;
 mod footer;
 mod header;
 pub(crate) mod issues;
+mod logs;
 mod orchestrator;
 pub(crate) mod popups;
 mod tasks;
@@ -37,14 +38,15 @@ pub fn render(
         ActiveTab::Deliverables => {
             deliverables::draw_deliverables_tab(frame, areas[1], snapshot, app);
         },
+        ActiveTab::Logs => logs::draw_logs_tab(frame, areas[1], snapshot, app),
     }
 
     footer::draw_footer(frame, areas[2], app);
 
     // Popups render on top
     if app.show_issue_detail {
-        if let Some(issue) = app.selected_issue(snapshot) {
-            popups::draw_issue_detail_modal(frame, issue, app.theme);
+        if let Some(issue) = app.selected_issue(snapshot).cloned() {
+            popups::draw_issue_detail_modal(frame, &issue, app);
         }
     }
 

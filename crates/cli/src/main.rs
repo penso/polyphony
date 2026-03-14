@@ -515,7 +515,13 @@ impl Drop for TelemetryGuard {
 }
 
 fn init_tracing(log_json: bool, tui_mode: bool, tracing_output: TracingOutput) -> TelemetryGuard {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let default_filter = if tui_mode {
+        // Show network activity in the TUI logs tab
+        "info,polyphony_github=debug,polyphony_linear=debug,polyphony_orchestrator=debug"
+    } else {
+        "info"
+    };
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let tracer_provider = match build_tracer_provider() {
         Ok(provider) => provider,
         Err(error) => {
@@ -544,10 +550,10 @@ fn install_tracing_subscriber(
     filter: EnvFilter,
     tracer_provider: Option<SdkTracerProvider>,
     log_json: bool,
-    _tui_mode: bool,
+    tui_mode: bool,
     tracing_output: TracingOutput,
 ) -> Result<(), Error> {
-    if log_json {
+    if log_json || tui_mode {
         let otel_layer = tracer_provider.map(|provider| {
             tracing_opentelemetry::layer().with_tracer(provider.tracer("polyphony"))
         });
