@@ -2,7 +2,7 @@ use std::{collections::VecDeque, time::Instant};
 
 use {
     polyphony_core::{RuntimeSnapshot, VisibleIssueRow},
-    ratatui::widgets::TableState,
+    ratatui::{layout::Rect, widgets::TableState},
 };
 
 const RPS_HISTORY_CAP: usize = 120;
@@ -115,6 +115,8 @@ pub struct AppState {
     pub logs_auto_scroll: bool,
     pub rps_history: VecDeque<u64>,
     pub prev_credits_used: f64,
+    /// Inner area of the tab bar block, set each frame by draw_header.
+    pub tab_inner_area: Rect,
 }
 
 impl AppState {
@@ -146,6 +148,7 @@ impl AppState {
             logs_auto_scroll: true,
             rps_history: VecDeque::with_capacity(RPS_HISTORY_CAP),
             prev_credits_used: 0.0,
+            tab_inner_area: Rect::default(),
         }
     }
 
@@ -332,6 +335,28 @@ impl AppState {
 
     pub fn move_up(&mut self, len: usize, amount: usize) {
         move_selection_back(self.active_table_state_mut(), len, amount);
+    }
+
+    /// Return the tab that was clicked, if the position falls within a tab label.
+    pub fn tab_at_position(&self, column: u16, row: u16) -> Option<ActiveTab> {
+        let area = self.tab_inner_area;
+        if area.width == 0 || row < area.y || row >= area.y + area.height {
+            return None;
+        }
+        if column < area.x || column >= area.x + area.width {
+            return None;
+        }
+        // Walk tab titles with 2-char divider spacing (matches divider(Span::raw("  ")))
+        let rel = (column - area.x) as usize;
+        let mut pos = 0;
+        for tab in ActiveTab::ALL {
+            let title_len = tab.title().len();
+            if rel >= pos && rel < pos + title_len {
+                return Some(tab);
+            }
+            pos += title_len + 2; // title + "  " divider
+        }
+        None
     }
 }
 

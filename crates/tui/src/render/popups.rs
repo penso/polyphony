@@ -192,10 +192,13 @@ pub fn draw_issue_detail_modal(
     // Separator
     render_separator(frame, rows[2], inner.width, theme);
 
-    // Description with markdown rendering and scroll
-    let desc_text = issue.description.as_deref().unwrap_or("No description.");
+    // Description with markdown rendering and scroll.
+    // Strip HTML tags first — GitHub issues often contain <details>, <img>, etc.
+    // which tui-markdown doesn't support and would log warnings for.
+    let desc_raw = issue.description.as_deref().unwrap_or("No description.");
+    let desc_cleaned = strip_html_tags(desc_raw);
 
-    let desc_widget = tui_markdown::from_str(desc_text);
+    let desc_widget = tui_markdown::from_str(&desc_cleaned);
     let desc_area = rows[3];
     let visible_height = desc_area.height as usize;
     let total_lines = desc_widget.lines.len();
@@ -289,4 +292,19 @@ fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 2;
     Rect::new(x, y, width, height)
+}
+
+/// Strip HTML tags from text, preserving content between tags.
+fn strip_html_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {},
+        }
+    }
+    out
 }

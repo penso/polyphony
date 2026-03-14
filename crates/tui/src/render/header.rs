@@ -14,7 +14,7 @@ pub fn draw_header(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
-    app: &AppState,
+    app: &mut AppState,
 ) {
     let theme = app.theme;
 
@@ -49,6 +49,11 @@ pub fn draw_header(
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border)),
     );
+    // Store the inner area of the tab block for mouse click hit-testing.
+    app.tab_inner_area = sections[0].inner(ratatui::layout::Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
     frame.render_widget(tabs, sections[0]);
 
     // Status summary

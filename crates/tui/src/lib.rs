@@ -11,7 +11,7 @@ use std::{
 
 use {
     crossterm::{
-        event::{self, Event, KeyCode},
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
     polyphony_core::RuntimeSnapshot,
@@ -192,7 +192,7 @@ pub async fn run(
     enable_raw_mode()?;
     drain_pending_input();
     let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -200,10 +200,8 @@ pub async fn run(
     let mut snapshot = snapshot_rx.borrow().clone();
     app.on_snapshot(&snapshot);
 
-    // Always refresh on startup when starting from cache
-    if snapshot.from_cache {
-        let _ = command_tx.send(RuntimeCommand::Refresh);
-    }
+    // Always trigger a fresh fetch on startup so issues appear immediately.
+    let _ = command_tx.send(RuntimeCommand::Refresh);
 
     let result = loop {
         terminal.draw(|frame| {
@@ -217,9 +215,19 @@ pub async fn run(
         }
 
         let mut key_handled = false;
-        if event::poll(Duration::from_millis(50))?
-            && let Event::Key(key) = event::read()?
-        {
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Mouse(mouse) => {
+                    if !app.leaving
+                        && !app.show_issue_detail
+                        && mouse.kind == MouseEventKind::Down(event::MouseButton::Left)
+                        && let Some(tab) = app.tab_at_position(mouse.column, mouse.row)
+                    {
+                        app.active_tab = tab;
+                    }
+                    key_handled = true;
+                },
+                Event::Key(key) => {
             if app.leaving {
                 // Ignore keys while leaving
             } else if app.show_issue_detail {
@@ -304,6 +312,9 @@ pub async fn run(
                 }
             }
             key_handled = true;
+                },
+                _ => {},
+            }
         }
 
         // Always check for snapshot updates, whether or not a key was handled.
@@ -322,7 +333,11 @@ pub async fn run(
 
     drain_pending_input();
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     result
 }
