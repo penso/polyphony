@@ -1639,17 +1639,8 @@ mod tests {
             id: "1".into(),
             identifier: "ISSUE-1".into(),
             title: "Title".into(),
-            description: None,
-            priority: None,
             state: "Todo".into(),
-            branch_name: None,
-            url: None,
-            author: None,
-            labels: Vec::new(),
-            comments: Vec::new(),
-            blocked_by: Vec::new(),
-            created_at: None,
-            updated_at: None,
+            ..Issue::default()
         }
     }
 
@@ -1977,17 +1968,9 @@ agents:
             id: "1".into(),
             identifier: "ISSUE-1".into(),
             title: "Title".into(),
-            description: None,
-            priority: None,
             state: "Todo".into(),
-            branch_name: None,
-            url: None,
-            author: None,
             labels: vec!["risky".into()],
-            comments: Vec::new(),
-            blocked_by: Vec::new(),
-            created_at: None,
-            updated_at: None,
+            ..Issue::default()
         };
 
         let selected = config.select_agent_for_issue(&issue).unwrap();
@@ -2034,17 +2017,8 @@ agents:
             id: "1".into(),
             identifier: "ISSUE-1".into(),
             title: "Title".into(),
-            description: None,
-            priority: None,
             state: "Todo".into(),
-            branch_name: None,
-            url: None,
-            author: None,
-            labels: Vec::new(),
-            comments: Vec::new(),
-            blocked_by: Vec::new(),
-            created_at: None,
-            updated_at: None,
+            ..Issue::default()
         };
 
         let candidates = config.candidate_agents_for_issue(&issue).unwrap();
@@ -2158,17 +2132,8 @@ agents:
                 id: "1".into(),
                 identifier: "ISSUE-1".into(),
                 title: "Title".into(),
-                description: None,
-                priority: None,
                 state: "Todo".into(),
-                branch_name: None,
-                url: None,
-                author: None,
-                labels: Vec::new(),
-                comments: Vec::new(),
-                blocked_by: Vec::new(),
-                created_at: None,
-                updated_at: None,
+                ..Issue::default()
             })
             .unwrap();
 

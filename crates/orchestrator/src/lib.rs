@@ -3320,6 +3320,7 @@ fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
             .author
             .as_ref()
             .and_then(|a| a.username.clone().or(a.display_name.clone())),
+        parent_id: issue.parent_id.clone(),
         updated_at: issue.updated_at,
         created_at: issue.created_at,
     }

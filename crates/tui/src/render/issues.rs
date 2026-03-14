@@ -30,18 +30,27 @@ pub fn draw_issues_tab(
     // Precompute types and age so we can measure column widths
     let issue_data: Vec<_> = indices
         .iter()
-        .filter_map(|&i| snapshot.visible_issues.get(i))
-        .map(|issue| {
-            let (issue_type, clean_title) = extract_type_and_title(&issue.title);
-            let age = issue.created_at.map(|c| format_relative_time(c, now));
-            (issue, issue_type, clean_title, age)
+        .enumerate()
+        .filter_map(|(di, &i)| {
+            snapshot.visible_issues.get(i).map(|issue| {
+                let (mut issue_type, clean_title) = extract_type_and_title(&issue.title);
+                if issue_type.is_empty()
+                    && let Some(label) = issue.labels.first()
+                {
+                    issue_type = normalize_type(label);
+                }
+                let age = issue.created_at.map(|c| format_relative_time(c, now));
+                let depth = app.tree_depth.get(di).copied().unwrap_or(0);
+                let is_last = app.tree_last_child.get(di).copied().unwrap_or(false);
+                (issue, issue_type, clean_title, age, depth, is_last)
+            })
         })
         .collect();
 
     // Compute ID column width from actual identifiers (icon + id + padding)
     let max_id_len = issue_data
         .iter()
-        .map(|(issue, _, _, _)| issue.issue_identifier.len() + 1) // +1 for source icon
+        .map(|(issue, _, _, _, _, _)| issue.issue_identifier.len())
         .max()
         .unwrap_or(4) as u16
         + 1; // +1 right padding
@@ -49,7 +58,7 @@ pub fn draw_issues_tab(
     // Compute Type column width from actual types + 1 padding
     let max_type_len = issue_data
         .iter()
-        .map(|(_, t, _, _)| t.len())
+        .map(|(_, t, _, _, _, _)| t.len())
         .max()
         .unwrap_or(4)
         .max(4) as u16 // min width = "Type" header
@@ -58,7 +67,7 @@ pub fn draw_issues_tab(
     // Compute Status column width: max of data and "Status" header + 1 trailing space
     let max_status_len = issue_data
         .iter()
-        .map(|(issue, _, _, _)| issue.state.len())
+        .map(|(issue, _, _, _, _, _)| issue.state.len())
         .max()
         .unwrap_or(6)
         .max(6) as u16 // min width = "Status" header
@@ -67,7 +76,7 @@ pub fn draw_issues_tab(
     // Age column: max of data and "Age" header + 1 padding
     let max_age_len = issue_data
         .iter()
-        .filter_map(|(_, _, _, age)| age.as_ref().map(|a| a.len()))
+        .filter_map(|(_, _, _, age, _, _)| age.as_ref().map(|a| a.len()))
         .max()
         .unwrap_or(3)
         .max(3) as u16 // min width = "Age" header
@@ -112,27 +121,41 @@ pub fn draw_issues_tab(
 
     let rows: Vec<Row> = issue_data
         .iter()
-        .map(|(issue, issue_type, clean_title, age)| {
+        .map(|(issue, issue_type, clean_title, age, depth, is_last)| {
             let state_color = state_color(&issue.state, theme);
-            let source_icon = infer_source_icon(&issue.issue_identifier);
-            let display_title = truncate_with_ellipsis(clean_title, title_max_width);
+
+            // Tree prefix for child issues
+            let (tree_prefix, tree_prefix_width) = if *depth > 0 {
+                let connector = if *is_last { "└── " } else { "├── " };
+                (connector, 4)
+            } else {
+                ("", 0)
+            };
+            let effective_title_width = title_max_width.saturating_sub(tree_prefix_width);
+            let display_title = truncate_with_ellipsis(clean_title, effective_title_width);
             let type_color = type_color(issue_type, theme);
+
+            let title_spans = if tree_prefix_width > 0 {
+                vec![
+                    Span::styled(tree_prefix, Style::default().fg(theme.muted)),
+                    Span::styled(display_title, Style::default().fg(theme.foreground)),
+                ]
+            } else {
+                vec![Span::styled(
+                    display_title,
+                    Style::default().fg(theme.foreground),
+                )]
+            };
 
             Row::new(vec![
                 Cell::from(
-                    Line::from(vec![
-                        Span::styled(source_icon.to_string(), Style::default().fg(theme.muted)),
-                        Span::styled(
-                            issue.issue_identifier.clone(),
-                            Style::default().fg(theme.info),
-                        ),
-                    ])
+                    Line::from(Span::styled(
+                        issue.issue_identifier.clone(),
+                        Style::default().fg(theme.info),
+                    ))
                     .alignment(Alignment::Center),
                 ),
-                Cell::from(Span::styled(
-                    display_title,
-                    Style::default().fg(theme.foreground),
-                )),
+                Cell::from(Line::from(title_spans)),
                 Cell::from(
                     Line::from(Span::styled(
                         issue_type.clone(),
@@ -303,14 +326,6 @@ fn type_color(issue_type: &str, theme: crate::theme::Theme) -> ratatui::style::C
         "docs" => theme.info,
         "test" => theme.warning,
         _ => theme.muted,
-    }
-}
-
-pub fn infer_source_icon(identifier: &str) -> &'static str {
-    if identifier.starts_with("GH-") || identifier.contains('#') {
-        " "
-    } else {
-        "◆"
     }
 }
 

@@ -73,6 +73,8 @@ pub struct Issue {
     pub labels: Vec<String>,
     pub comments: Vec<IssueComment>,
     pub blocked_by: Vec<BlockerRef>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -635,6 +637,8 @@ pub struct VisibleIssueRow {
     pub url: Option<String>,
     #[serde(default)]
     pub author: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
     #[serde(default)]

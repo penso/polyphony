@@ -608,6 +608,7 @@ mod tests {
                     description: None,
                     url: None,
                     author: None,
+                    parent_id: None,
                     updated_at: None,
                     created_at: None,
                 })

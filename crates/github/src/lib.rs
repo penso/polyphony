@@ -863,6 +863,7 @@ fn to_issue(issue: GithubIssue, comments: Vec<GithubComment>) -> Issue {
             .collect(),
         comments: comments.into_iter().map(github_comment).collect(),
         blocked_by: Vec::new(),
+        parent_id: None,
         created_at: Some(issue.created_at.with_timezone(&Utc)),
         updated_at: Some(issue.updated_at.with_timezone(&Utc)),
     }

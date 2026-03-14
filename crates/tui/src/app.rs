@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, time::Instant};
+use std::{collections::{HashMap, VecDeque}, time::Instant};
 
 use {
     polyphony_core::{RuntimeSnapshot, VisibleIssueRow},
@@ -99,6 +99,10 @@ pub struct AppState {
     pub issue_sort: IssueSortKey,
     /// Sorted index mapping: sorted_issues[display_index] = original snapshot index
     pub sorted_issue_indices: Vec<usize>,
+    /// Tree depth for each entry in sorted_issue_indices (0=root, 1=child)
+    pub tree_depth: Vec<u8>,
+    /// Whether each entry is the last child under its parent
+    pub tree_last_child: Vec<bool>,
     pub frame_count: u64,
     pub leaving: bool,
     pub leaving_since: Option<Instant>,
@@ -132,6 +136,8 @@ impl AppState {
             detail_scroll: 0,
             issue_sort: IssueSortKey::Newest,
             sorted_issue_indices: Vec::new(),
+            tree_depth: Vec::new(),
+            tree_last_child: Vec::new(),
             frame_count: 0,
             leaving: false,
             leaving_since: None,
@@ -271,7 +277,59 @@ impl AppState {
                 indices.sort_by(|&a, &b| issues[a].state.cmp(&issues[b].state));
             },
         }
-        self.sorted_issue_indices = indices;
+        // Tree grouping: place children immediately after their parent
+        let mut children_by_parent: HashMap<&str, Vec<usize>> = HashMap::new();
+        for &idx in &indices {
+            if let Some(ref pid) = issues[idx].parent_id {
+                children_by_parent.entry(pid.as_str()).or_default().push(idx);
+            }
+        }
+        // Only group if there are any parent-child relationships
+        if !children_by_parent.is_empty() {
+            let child_set: std::collections::HashSet<usize> = children_by_parent
+                .values()
+                .flat_map(|v| v.iter().copied())
+                .collect();
+            // Build a set of parent issue_ids that are visible in this list
+            let visible_parents: std::collections::HashSet<&str> = indices
+                .iter()
+                .filter(|&&idx| children_by_parent.contains_key(issues[idx].issue_id.as_str()))
+                .map(|&idx| issues[idx].issue_id.as_str())
+                .collect();
+
+            let mut grouped = Vec::with_capacity(indices.len());
+            let mut depth = Vec::with_capacity(indices.len());
+            let mut last_child = Vec::with_capacity(indices.len());
+            for &idx in &indices {
+                let is_child = child_set.contains(&idx);
+                // Skip children here; they'll be inserted after their parent
+                if is_child
+                    && let Some(ref pid) = issues[idx].parent_id
+                    && visible_parents.contains(pid.as_str())
+                {
+                    continue;
+                }
+                grouped.push(idx);
+                depth.push(0);
+                last_child.push(false);
+                // Insert children after this parent
+                if let Some(kids) = children_by_parent.get(issues[idx].issue_id.as_str()) {
+                    for (ci, &kid_idx) in kids.iter().enumerate() {
+                        grouped.push(kid_idx);
+                        depth.push(1);
+                        last_child.push(ci == kids.len() - 1);
+                    }
+                }
+            }
+            self.sorted_issue_indices = grouped;
+            self.tree_depth = depth;
+            self.tree_last_child = last_child;
+        } else {
+            let len = indices.len();
+            self.sorted_issue_indices = indices;
+            self.tree_depth = vec![0; len];
+            self.tree_last_child = vec![false; len];
+        }
     }
 
     /// Get the issue at the given display row (sorted).

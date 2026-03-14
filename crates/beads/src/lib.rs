@@ -27,6 +27,8 @@ struct BeadsIssue {
     #[serde(default)]
     created_by: Option<String>,
     #[serde(default)]
+    parent: Option<String>,
+    #[serde(default)]
     created_at: Option<DateTime<Utc>>,
     #[serde(default)]
     updated_at: Option<DateTime<Utc>>,
@@ -50,6 +52,8 @@ struct BeadsIssueDetail {
     owner: Option<String>,
     #[serde(default)]
     created_by: Option<String>,
+    #[serde(default)]
+    parent: Option<String>,
     #[serde(default)]
     created_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -146,15 +150,22 @@ fn normalize_status(status: &str) -> String {
     }
 }
 
+/// Strip the project prefix from a beads ID: `polyphony-oio.2` → `oio.2`.
+fn shorten_beads_id(id: &str) -> String {
+    id.split_once('-')
+        .map_or_else(|| id.to_string(), |(_, rest)| rest.to_string())
+}
+
 fn beads_to_issue(b: &BeadsIssue) -> Issue {
     let state = normalize_status(&b.status);
     let mut labels = Vec::new();
     if let Some(ref t) = b.issue_type {
         labels.push(t.clone());
     }
+    let identifier = shorten_beads_id(&b.id);
     Issue {
         id: b.id.clone(),
-        identifier: b.id.clone(),
+        identifier,
         title: b.title.clone(),
         description: b.description.clone(),
         priority: b.priority,
@@ -172,6 +183,7 @@ fn beads_to_issue(b: &BeadsIssue) -> Issue {
         labels,
         comments: Vec::new(),
         blocked_by: Vec::new(),
+        parent_id: b.parent.clone(),
         created_at: b.created_at,
         updated_at: b.updated_at,
     }
@@ -192,9 +204,10 @@ fn detail_to_issue(d: &BeadsIssueDetail) -> Issue {
             state: dep.status.as_deref().map(normalize_status),
         })
         .collect();
+    let identifier = shorten_beads_id(&d.id);
     Issue {
         id: d.id.clone(),
-        identifier: d.id.clone(),
+        identifier,
         title: d.title.clone(),
         description: d.description.clone(),
         priority: d.priority,
@@ -212,6 +225,7 @@ fn detail_to_issue(d: &BeadsIssueDetail) -> Issue {
         labels,
         comments: Vec::new(),
         blocked_by,
+        parent_id: d.parent.clone(),
         created_at: d.created_at,
         updated_at: d.updated_at,
     }

@@ -835,17 +835,8 @@ mod tests {
             id: "1".into(),
             identifier: "TEST-1".into(),
             title: "Test".into(),
-            description: None,
-            priority: None,
             state: "Todo".into(),
-            branch_name: None,
-            url: None,
-            author: None,
-            labels: Vec::new(),
-            comments: Vec::new(),
-            blocked_by: Vec::new(),
-            created_at: None,
-            updated_at: None,
+            ..Issue::default()
         }
     }
 
