@@ -286,6 +286,7 @@ impl RuntimeService {
                 self.restore_cache(cached);
             }
         }
+        self.emit_snapshot().await?;
         self.startup_cleanup().await;
         self.emit_snapshot().await?;
         let mut next_tick = Instant::now();
