@@ -1,0 +1,14 @@
+[package]
+name = "polyphony-beads"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+polyphony-core = { path = "../core" }

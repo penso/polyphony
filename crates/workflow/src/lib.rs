@@ -432,6 +432,31 @@ pub fn seed_repo_config_with_github(
     Ok(true)
 }
 
+/// Write a repo config file with the beads tracker pre-configured.
+pub fn seed_repo_config_with_beads(
+    path: impl AsRef<Path>,
+    source_repo_path: &Path,
+) -> Result<bool, Error> {
+    let path = path.as_ref();
+    if path.exists() {
+        if path.is_file() {
+            return Ok(false);
+        }
+        return Err(Error::Config(format!(
+            "repo config path `{}` exists but is not a file",
+            path.display()
+        )));
+    }
+    ensure_parent_dir(path, "repo config path")?;
+    let content = default_repo_config_toml(source_repo_path).replace(
+        "kind = \"none\"",
+        "kind = \"beads\"\n\n[tracker.query]\nactive_states = [\"Open\", \"In Progress\", \"Blocked\"]\nterminal_states = [\"Closed\", \"Deferred\"]",
+    );
+    fs::write(path, content)
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    Ok(true)
+}
+
 fn default_active_states() -> Vec<String> {
     vec!["Todo".to_string(), "In Progress".to_string()]
 }

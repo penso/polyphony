@@ -12,6 +12,7 @@ members = [
   "crates/orchestrator",
   "crates/workspace",
   "crates/issue-mock",
+  "crates/beads",
   "crates/linear",
   "crates/git",
   "crates/github",

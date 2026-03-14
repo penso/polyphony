@@ -9,10 +9,11 @@ name = "polyphony"
 path = "src/main.rs"
 
 [features]
-default = ["linear", "github", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
+default = ["linear", "github", "beads", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
 github = ["dep:polyphony-github"]
+beads = ["dep:polyphony-beads"]
 sqlite = ["polyphony-sqlite/sqlite"]
 agent-codex = ["polyphony-agents/codex"]
 agent-claude = ["polyphony-agents/claude"]
@@ -37,6 +38,7 @@ polyphony-git = { path = "../git" }
 polyphony-github = { path = "../github", optional = true }
 polyphony-feedback = { path = "../feedback" }
 polyphony-issue-mock = { path = "../issue-mock", optional = true, default-features = false }
+polyphony-beads = { path = "../beads", optional = true }
 polyphony-linear = { path = "../linear", optional = true }
 polyphony-orchestrator = { path = "../orchestrator" }
 polyphony-sqlite = { path = "../sqlite", default-features = false }

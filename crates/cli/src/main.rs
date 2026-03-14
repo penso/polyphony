@@ -353,6 +353,19 @@ fn maybe_seed_repo_config_with_github_detection(
         .canonicalize()
         .unwrap_or_else(|_| workflow_root.clone());
 
+    // Try beads first (local tracker, highest priority).
+    if workflow_root.join(".beads").is_dir() {
+        if polyphony_workflow::seed_repo_config_with_beads(&rcp, &source_repo_path)? {
+            eprintln!("Detected beads issue tracker — tracker configured automatically.");
+            tracing::info!(
+                workflow_path = %workflow_path.display(),
+                repo_config_path = %rcp.display(),
+                "created repo-local config with beads tracker"
+            );
+        }
+        return Ok((Some(rcp), false));
+    }
+
     // Try to detect a GitHub remote and pre-configure the tracker.
     if let Some(github_repo) = polyphony_git::detect_github_remote(&workflow_root) {
         if seed_repo_config_with_github(&rcp, &source_repo_path, &github_repo)? {
@@ -724,6 +737,11 @@ fn build_runtime_components(
             workflow.config.tracker.project_number,
             workflow.config.tracker.project_status_field.clone(),
         )?),
+        #[cfg(feature = "beads")]
+        TrackerKind::Beads => {
+            let workflow_root = workflow_root_dir(&workflow.path)?;
+            Arc::new(polyphony_beads::BeadsTracker::new(workflow_root)?)
+        },
         other => {
             return Err(Error::Config(format!(
                 "unsupported tracker.kind `{other}` for this build"

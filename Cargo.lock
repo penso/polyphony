@@ -2509,6 +2509,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyphony-beads"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "polyphony-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "polyphony-cli"
 version = "0.1.0"
 dependencies = [
@@ -2518,6 +2531,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "polyphony-agents",
+ "polyphony-beads",
  "polyphony-core",
  "polyphony-feedback",
  "polyphony-git",

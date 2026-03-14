@@ -176,6 +176,7 @@ pub enum TrackerKind {
     None,
     Linear,
     Github,
+    Beads,
     Mock,
 }
 
