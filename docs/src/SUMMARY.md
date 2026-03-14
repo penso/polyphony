@@ -4,6 +4,7 @@
 - [Getting Started](./getting-started.md)
 - [Runtime Flow](./runtime-flow.md)
 - [Architecture](./architecture.md)
+  - [Architecture Diagrams](./architecture-diagrams.md)
 - [Workflow Configuration](./workflow.md)
 - [Workspace Crates](./crates.md)
   - [polyphony-core](./crates/polyphony-core.md)
