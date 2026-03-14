@@ -131,14 +131,32 @@ impl AppState {
                 indices.sort_by(|&a, &b| {
                     let ta = issues[a].updated_at.as_ref();
                     let tb = issues[b].updated_at.as_ref();
-                    tb.cmp(&ta)
+                    match (ta, tb) {
+                        (Some(a_t), Some(b_t)) => b_t.cmp(a_t),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => {
+                            let na = extract_issue_number(&issues[a].issue_identifier);
+                            let nb = extract_issue_number(&issues[b].issue_identifier);
+                            nb.cmp(&na)
+                        },
+                    }
                 });
             },
             IssueSortKey::Oldest => {
                 indices.sort_by(|&a, &b| {
                     let ta = issues[a].updated_at.as_ref();
                     let tb = issues[b].updated_at.as_ref();
-                    ta.cmp(&tb)
+                    match (ta, tb) {
+                        (Some(a_t), Some(b_t)) => a_t.cmp(b_t),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => {
+                            let na = extract_issue_number(&issues[a].issue_identifier);
+                            let nb = extract_issue_number(&issues[b].issue_identifier);
+                            na.cmp(&nb)
+                        },
+                    }
                 });
             },
             IssueSortKey::Priority => {
@@ -205,6 +223,20 @@ impl AppState {
     pub fn move_up(&mut self, len: usize, amount: usize) {
         move_selection_back(self.active_table_state_mut(), len, amount);
     }
+}
+
+/// Extract a numeric issue number from identifiers like "#375", "GH-42", "PROJ-123".
+fn extract_issue_number(identifier: &str) -> u64 {
+    identifier
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
 }
 
 fn sync_selection(state: &mut TableState, len: usize) {

@@ -1,7 +1,7 @@
 use {
     polyphony_core::RuntimeSnapshot,
     ratatui::{
-        layout::{Constraint, Rect},
+        layout::{Alignment, Constraint, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::{
@@ -22,14 +22,31 @@ pub fn draw_issues_tab(
     let theme = app.theme;
     let indices = &app.sorted_issue_indices;
 
+    // Compute ID column width from actual identifiers (icon + id + padding)
+    let max_id_len = indices
+        .iter()
+        .filter_map(|&i| snapshot.visible_issues.get(i))
+        .map(|issue| issue.issue_identifier.len() + 1) // +1 for source icon
+        .max()
+        .unwrap_or(4) as u16
+        + 1; // +1 right padding
+
     let header = Row::new(vec![
         Cell::from(Span::styled("ID", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Type", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
+        Cell::from(
+            Line::from(Span::styled("Status", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
+
+    // Available width for the title column:
+    // area.width - borders(2) - highlight_symbol(2) - id_col - type_col(7) - status_col(12) - column_gaps(3)
+    let title_max_width =
+        (area.width as usize).saturating_sub(2 + 2 + max_id_len as usize + 7 + 12 + 3);
 
     let rows: Vec<Row> = indices
         .iter()
@@ -38,6 +55,7 @@ pub fn draw_issues_tab(
             let state_color = state_color(&issue.state, theme);
             let source_icon = infer_source_icon(&issue.issue_identifier);
             let (issue_type, clean_title) = extract_type_and_title(&issue.title);
+            let display_title = truncate_with_ellipsis(&clean_title, title_max_width);
             let type_color = type_color(&issue_type, theme);
 
             Row::new(vec![
@@ -52,17 +70,20 @@ pub fn draw_issues_tab(
                     ),
                 ])),
                 Cell::from(Span::styled(
-                    clean_title,
+                    display_title,
                     Style::default().fg(theme.foreground),
                 )),
                 Cell::from(Span::styled(
                     issue_type.clone(),
                     Style::default().fg(type_color),
                 )),
-                Cell::from(Span::styled(
-                    issue.state.clone(),
-                    Style::default().fg(state_color),
-                )),
+                Cell::from(
+                    Line::from(Span::styled(
+                        issue.state.clone(),
+                        Style::default().fg(state_color),
+                    ))
+                    .alignment(Alignment::Right),
+                ),
             ])
         })
         .collect();
@@ -79,7 +100,7 @@ pub fn draw_issues_tab(
     let table = Table::new(
         rows,
         [
-            Constraint::Max(10),
+            Constraint::Length(max_id_len),
             Constraint::Fill(1),
             Constraint::Length(7),
             Constraint::Length(12),
@@ -198,6 +219,19 @@ fn selection_info(selected: Option<usize>, total: usize) -> String {
         return "empty".into();
     }
     format!("{} of {total}", selected.unwrap_or_default() + 1)
+}
+
+fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if s.len() <= max_width {
+        return s.to_string();
+    }
+    let end = max_width.saturating_sub(1);
+    // Find a valid char boundary
+    let end = s.floor_char_boundary(end);
+    format!("{}…", &s[..end])
 }
 
 fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, position: usize) {
