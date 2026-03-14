@@ -195,10 +195,10 @@ pub fn draw_issue_detail_modal(
     // Description with markdown rendering and scroll
     let desc_text = issue.description.as_deref().unwrap_or("No description.");
 
-    let desc_lines = render_markdown(desc_text, theme);
+    let desc_widget = tui_markdown::from_str(desc_text);
     let desc_area = rows[3];
     let visible_height = desc_area.height as usize;
-    let total_lines = desc_lines.len();
+    let total_lines = desc_widget.lines.len();
 
     let max_scroll = total_lines.saturating_sub(visible_height);
     if (app.detail_scroll as usize) > max_scroll {
@@ -206,7 +206,7 @@ pub fn draw_issue_detail_modal(
     }
 
     frame.render_widget(
-        Paragraph::new(desc_lines)
+        Paragraph::new(desc_widget)
             .wrap(Wrap { trim: false })
             .scroll((app.detail_scroll, 0)),
         desc_area,
@@ -251,237 +251,6 @@ fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     } else {
         format!("{}mo", secs / 2_592_000)
     }
-}
-
-/// Render markdown text into styled ratatui Lines.
-fn render_markdown<'a>(text: &str, theme: Theme) -> Vec<Line<'a>> {
-    let mut lines: Vec<Line<'a>> = Vec::new();
-    let mut in_code_block = false;
-
-    for raw_line in text.lines() {
-        let trimmed = raw_line.trim();
-
-        // Code block fences
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-
-        if in_code_block {
-            lines.push(Line::from(Span::styled(
-                format!("  {raw_line}"),
-                Style::default().fg(Color::Cyan),
-            )));
-            continue;
-        }
-
-        // Blank line
-        if trimmed.is_empty() {
-            lines.push(Line::default());
-            continue;
-        }
-
-        // Headers
-        if let Some(header_text) = trimmed.strip_prefix("### ") {
-            lines.push(Line::from(Span::styled(
-                format!("  {header_text}"),
-                Style::default()
-                    .fg(theme.highlight)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            continue;
-        }
-        if let Some(header_text) = trimmed.strip_prefix("## ") {
-            lines.push(Line::from(Span::styled(
-                header_text.to_string(),
-                Style::default()
-                    .fg(theme.highlight)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            continue;
-        }
-        if let Some(header_text) = trimmed.strip_prefix("# ") {
-            lines.push(Line::from(Span::styled(
-                header_text.to_string(),
-                Style::default()
-                    .fg(theme.highlight)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-
-        // Checkboxes
-        if let Some(rest) = trimmed
-            .strip_prefix("- [x] ")
-            .or(trimmed.strip_prefix("- [X] "))
-        {
-            lines.push(Line::from(vec![
-                Span::styled("  ✓ ", Style::default().fg(Color::Green)),
-                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
-            ]));
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
-            lines.push(Line::from(vec![
-                Span::styled("  ☐ ", Style::default().fg(theme.muted)),
-                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
-            ]));
-            continue;
-        }
-
-        // List items
-        if let Some(rest) = trimmed.strip_prefix("- ").or(trimmed.strip_prefix("* ")) {
-            lines.push(Line::from(vec![
-                Span::styled("  • ", Style::default().fg(theme.highlight)),
-                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
-            ]));
-            continue;
-        }
-
-        // Numbered list
-        if let Some(dot_pos) = trimmed.find(". ")
-            && dot_pos <= 3
-            && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit())
-        {
-            let num = &trimmed[..dot_pos];
-            let rest = &trimmed[dot_pos + 2..];
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {num}. "), Style::default().fg(theme.highlight)),
-                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
-            ]));
-            continue;
-        }
-
-        // Blockquote
-        if let Some(rest) = trimmed.strip_prefix("> ") {
-            lines.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(theme.border)),
-                Span::styled(
-                    inline_markdown(rest),
-                    Style::default()
-                        .fg(theme.muted)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]));
-            continue;
-        }
-
-        // Horizontal rule
-        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            lines.push(Line::from(Span::styled(
-                "─".repeat(40),
-                Style::default().fg(theme.border),
-            )));
-            continue;
-        }
-
-        // Regular paragraph text with inline markdown
-        lines.push(Line::from(render_inline_spans(trimmed, theme)));
-    }
-
-    lines
-}
-
-/// Render inline markdown (bold, italic, code, links) into spans.
-fn render_inline_spans<'a>(text: &str, theme: Theme) -> Vec<Span<'a>> {
-    let mut spans: Vec<Span<'a>> = Vec::new();
-    let mut remaining = text;
-
-    while !remaining.is_empty() {
-        // Bold: **text**
-        if let Some(pos) = remaining.find("**") {
-            if pos > 0 {
-                spans.push(Span::styled(
-                    remaining[..pos].to_string(),
-                    Style::default().fg(theme.foreground),
-                ));
-            }
-            remaining = &remaining[pos + 2..];
-            if let Some(end) = remaining.find("**") {
-                spans.push(Span::styled(
-                    remaining[..end].to_string(),
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                ));
-                remaining = &remaining[end + 2..];
-                continue;
-            }
-            spans.push(Span::styled(
-                "**".to_string(),
-                Style::default().fg(theme.foreground),
-            ));
-            continue;
-        }
-
-        // Inline code: `text`
-        if let Some(pos) = remaining.find('`') {
-            if pos > 0 {
-                spans.push(Span::styled(
-                    remaining[..pos].to_string(),
-                    Style::default().fg(theme.foreground),
-                ));
-            }
-            remaining = &remaining[pos + 1..];
-            if let Some(end) = remaining.find('`') {
-                spans.push(Span::styled(
-                    remaining[..end].to_string(),
-                    Style::default().fg(Color::Cyan),
-                ));
-                remaining = &remaining[end + 1..];
-                continue;
-            }
-            spans.push(Span::styled(
-                "`".to_string(),
-                Style::default().fg(theme.foreground),
-            ));
-            continue;
-        }
-
-        // Link: [text](url)
-        if let Some(pos) = remaining.find('[') {
-            if pos > 0 {
-                spans.push(Span::styled(
-                    remaining[..pos].to_string(),
-                    Style::default().fg(theme.foreground),
-                ));
-            }
-            remaining = &remaining[pos + 1..];
-            if let Some(bracket_end) = remaining.find("](") {
-                let link_text = &remaining[..bracket_end];
-                remaining = &remaining[bracket_end + 2..];
-                if let Some(paren_end) = remaining.find(')') {
-                    spans.push(Span::styled(
-                        link_text.to_string(),
-                        Style::default()
-                            .fg(theme.info)
-                            .add_modifier(Modifier::UNDERLINED),
-                    ));
-                    remaining = &remaining[paren_end + 1..];
-                    continue;
-                }
-            }
-            spans.push(Span::styled(
-                "[".to_string(),
-                Style::default().fg(theme.foreground),
-            ));
-            continue;
-        }
-
-        // Plain text — rest of the line
-        spans.push(Span::styled(
-            remaining.to_string(),
-            Style::default().fg(theme.foreground),
-        ));
-        break;
-    }
-
-    spans
-}
-
-/// Simple inline markdown stripping for list items (returns plain string).
-fn inline_markdown(text: &str) -> String {
-    text.replace("**", "").replace('`', "").replace("__", "")
 }
 
 pub fn draw_leaving_modal(frame: &mut ratatui::Frame<'_>, theme: Theme) {

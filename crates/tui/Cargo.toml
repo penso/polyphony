@@ -12,5 +12,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tui-markdown.workspace = true
 polyphony-core = { path = "../core" }
 polyphony-orchestrator = { path = "../orchestrator" }
