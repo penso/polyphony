@@ -508,7 +508,7 @@ pub async fn run(
         terminal.draw(|frame| {
             draw(frame, &snapshot, &log_buffer, &mut app);
             if app.leaving {
-                draw_leaving_modal(frame, app.frame_count, app.theme);
+                draw_leaving_modal(frame, app.theme);
             }
         })?;
 
@@ -560,17 +560,10 @@ pub async fn run(
     result
 }
 
-fn draw_leaving_modal(frame: &mut ratatui::Frame<'_>, frame_count: u64, theme: Theme) {
+fn draw_leaving_modal(frame: &mut ratatui::Frame<'_>, theme: Theme) {
     let area = centered_rect(frame.area(), 24, 3);
     frame.render_widget(Clear, area);
-    let spinner = spinner_char(frame_count);
-    let text = Line::from(vec![
-        Span::styled(
-            format!("{spinner} "),
-            Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("Leaving...", Style::default().fg(theme.foreground)),
-    ]);
+    let text = Line::from(Span::styled("Leaving...", Style::default().fg(theme.foreground)));
     frame.render_widget(
         Paragraph::new(text)
             .alignment(Alignment::Center)
