@@ -27,18 +27,13 @@ pub enum Error {
 }
 
 /// Resolve the base URL for an OpenAI-compatible agent. Uses the explicit
-/// `base_url` when set, otherwise infers from well-known provider kinds.
+/// `base_url` when set (typically injected by the workflow layer's
+/// `default_agent_base_url`), otherwise falls back to `api.openai.com`.
 fn resolve_base_url(agent: &AgentDefinition) -> String {
-    if let Some(url) = &agent.base_url {
-        return url.clone();
-    }
-    match agent.kind.as_str() {
-        "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => {
-            "https://api.moonshot.cn/v1".into()
-        },
-        "openrouter" => "https://openrouter.ai/api/v1".into(),
-        _ => "https://api.openai.com/v1".into(),
-    }
+    agent
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.openai.com/v1".into())
 }
 
 #[derive(Debug, Default, Clone)]

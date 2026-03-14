@@ -1510,7 +1510,8 @@ fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransport {
             "mock" => AgentTransport::Mock,
             "codex" => AgentTransport::AppServer,
             "openai" | "openai-compatible" | "openrouter" | "kimi" | "kimi-2.5" | "kimi-k2"
-            | "moonshot" | "moonshotai" => AgentTransport::OpenAiChat,
+            | "moonshot" | "moonshotai" | "mistral" | "deepseek" | "cerebras" | "gemini"
+            | "zai" | "minimax" | "venice" | "groq" => AgentTransport::OpenAiChat,
             _ => AgentTransport::LocalCli,
         },
     }
@@ -1555,12 +1556,22 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
 }
 
 fn default_agent_base_url(kind: &str) -> Option<String> {
-    match kind {
+    let url = match kind {
         "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => {
-            Some("https://api.moonshot.ai/v1".into())
+            "https://api.moonshot.ai/v1"
         },
-        _ => None,
-    }
+        "openrouter" => "https://openrouter.ai/api/v1",
+        "mistral" => "https://api.mistral.ai/v1",
+        "deepseek" => "https://api.deepseek.com",
+        "cerebras" => "https://api.cerebras.ai/v1",
+        "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai",
+        "zai" => "https://api.z.ai/api/paas/v4",
+        "minimax" => "https://api.minimax.io/v1",
+        "venice" => "https://api.venice.ai/api/v1",
+        "groq" => "https://api.groq.com/openai/v1",
+        _ => return None,
+    };
+    Some(url.into())
 }
 
 fn parse_interaction_mode(value: Option<&str>) -> AgentInteractionMode {
