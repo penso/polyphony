@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use polyphony_core::{
-    BlockerRef, Error as CoreError, Issue, IssueAuthor, IssueStateUpdate, IssueTracker,
-    TrackerQuery,
+    BlockerRef, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueStateUpdate,
+    IssueTracker, TrackerQuery, UpdateIssueRequest,
 };
 use serde::Deserialize;
 use tokio::process::Command;
@@ -325,5 +325,73 @@ impl IssueTracker for BeadsTracker {
                 updated_at: b.updated_at,
             })
             .collect())
+    }
+
+    async fn create_issue(&self, request: &CreateIssueRequest) -> Result<Issue, CoreError> {
+        let mut args = vec!["create", "--json"];
+        let title_arg = format!("--title={}", request.title);
+        args.push(&title_arg);
+        let desc_arg;
+        if let Some(ref desc) = request.description {
+            desc_arg = format!("--description={}", desc);
+            args.push(&desc_arg);
+        }
+        let priority_str;
+        if let Some(priority) = request.priority {
+            priority_str = format!("--priority={priority}");
+            args.push(&priority_str);
+        }
+        args.push("--type=task");
+
+        let json = self.run_bd(&args).await?;
+
+        // bd create --json returns the created issue; parse for the ID.
+        let created: serde_json::Value = serde_json::from_str(&json).map_err(|e| {
+            CoreError::Adapter(format!("failed to parse bd create JSON: {e}"))
+        })?;
+        let id = created
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CoreError::Adapter("bd create did not return an id".into()))?;
+
+        // Fetch full issue detail.
+        let details = self.show_issue(id).await?;
+        details
+            .first()
+            .map(detail_to_issue)
+            .ok_or_else(|| CoreError::Adapter("bd show returned empty after create".into()))
+    }
+
+    async fn update_issue(&self, request: &UpdateIssueRequest) -> Result<Issue, CoreError> {
+        let mut args = vec!["update", &request.id];
+        let title_arg;
+        if let Some(ref title) = request.title {
+            title_arg = format!("--title={}", title);
+            args.push(&title_arg);
+        }
+        let desc_arg;
+        if let Some(ref desc) = request.description {
+            desc_arg = format!("--description={}", desc);
+            args.push(&desc_arg);
+        }
+        let state_arg;
+        if let Some(ref state) = request.state {
+            state_arg = format!("--status={}", state);
+            args.push(&state_arg);
+        }
+        let priority_str;
+        if let Some(priority) = request.priority {
+            priority_str = format!("--priority={priority}");
+            args.push(&priority_str);
+        }
+
+        self.run_bd(&args).await?;
+
+        // Fetch updated issue.
+        let details = self.show_issue(&request.id).await?;
+        details
+            .first()
+            .map(detail_to_issue)
+            .ok_or_else(|| CoreError::Adapter("bd show returned empty after update".into()))
     }
 }

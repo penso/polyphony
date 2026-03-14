@@ -2542,6 +2542,7 @@ dependencies = [
  "polyphony-sqlite",
  "polyphony-tui",
  "polyphony-workflow",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

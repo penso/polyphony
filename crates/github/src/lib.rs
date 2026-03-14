@@ -18,9 +18,9 @@ use {
         },
     },
     polyphony_core::{
-        BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment, IssueStateUpdate,
-        IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestRef, PullRequestRequest,
-        RateLimitSignal, TrackerQuery,
+        BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueComment,
+        IssueStateUpdate, IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestRef,
+        PullRequestRequest, RateLimitSignal, TrackerQuery, UpdateIssueRequest,
     },
     reqwest::{
         Response, StatusCode,
@@ -559,6 +559,53 @@ impl IssueTracker for GithubIssueTracker {
         )
         .await?;
         Ok(())
+    }
+
+    async fn create_issue(&self, request: &CreateIssueRequest) -> Result<Issue, CoreError> {
+        self.track_request();
+        let issues = self.crab.issues(&self.owner, &self.repo);
+        let mut builder = issues.create(&request.title);
+        if let Some(ref desc) = request.description {
+            builder = builder.body(desc);
+        }
+        if !request.labels.is_empty() {
+            builder = builder.labels(request.labels.clone());
+        }
+        let created = builder.send().await.map_err(map_github_error)?;
+        Ok(to_issue(created, Vec::new()))
+    }
+
+    async fn update_issue(&self, request: &UpdateIssueRequest) -> Result<Issue, CoreError> {
+        let number = request
+            .id
+            .parse::<u64>()
+            .map_err(|error| CoreError::Adapter(format!("invalid issue number: {error}")))?;
+        self.track_request();
+        let issues = self.crab.issues(&self.owner, &self.repo);
+        let mut builder = issues.update(number);
+        if let Some(ref title) = request.title {
+            builder = builder.title(title);
+        }
+        if let Some(ref desc) = request.description {
+            builder = builder.body(desc);
+        }
+        if let Some(ref state) = request.state {
+            let gh_state = match state.to_ascii_lowercase().as_str() {
+                "open" => octocrab::models::IssueState::Open,
+                "closed" => octocrab::models::IssueState::Closed,
+                _ => {
+                    return Err(CoreError::Adapter(format!(
+                        "unsupported GitHub issue state: {state}"
+                    )));
+                },
+            };
+            builder = builder.state(gh_state);
+        }
+        if let Some(ref labels) = request.labels {
+            builder = builder.labels(labels);
+        }
+        let updated = builder.send().await.map_err(map_github_error)?;
+        Ok(to_issue(updated, Vec::new()))
     }
 }
 

@@ -1,0 +1,49 @@
+mutation LinearCreateIssue(
+  $teamId: String!
+  $title: String!
+  $description: String
+  $priority: Int
+  $labelIds: [String!]
+  $parentId: String
+) {
+  issueCreate(
+    input: {
+      teamId: $teamId
+      title: $title
+      description: $description
+      priority: $priority
+      labelIds: $labelIds
+      parentId: $parentId
+    }
+  ) {
+    success
+    issue {
+      id
+      identifier
+      title
+      description
+      priority
+      branchName
+      url
+      createdAt
+      updatedAt
+      state {
+        name
+      }
+      creator {
+        id
+        name
+        displayName
+        url
+        guest
+        admin
+        owner
+      }
+      labels {
+        nodes {
+          name
+        }
+      }
+    }
+  }
+}

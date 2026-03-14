@@ -9,7 +9,7 @@ use std::{
 
 use {
     async_trait::async_trait,
-    clap::Parser,
+    clap::{Parser, Subcommand},
     opentelemetry::{KeyValue, global, trace::TracerProvider as _},
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
     polyphony_core::{
@@ -40,17 +40,74 @@ type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + 
 #[derive(Debug, Parser)]
 #[command(name = "polyphony")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Path to the repository or directory to operate in.
-    #[arg(short = 'C', long = "directory", value_name = "DIR")]
+    #[arg(short = 'C', long = "directory", value_name = "DIR", global = true)]
     directory: Option<PathBuf>,
-    #[arg(value_name = "WORKFLOW", default_value = "WORKFLOW.md")]
-    workflow_path: PathBuf,
-    #[arg(long)]
+    /// Path to the workflow file (default: WORKFLOW.md)
+    #[arg(long = "workflow", value_name = "WORKFLOW", global = true)]
+    workflow_path: Option<PathBuf>,
+    #[arg(long, global = true)]
     no_tui: bool,
-    #[arg(long)]
+    #[arg(long, global = true)]
     log_json: bool,
-    #[arg(long, env = "POLYPHONY_SQLITE_URL")]
+    #[arg(long, env = "POLYPHONY_SQLITE_URL", global = true)]
     sqlite_url: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Manage tracker issues
+    Issue {
+        #[command(subcommand)]
+        action: IssueAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum IssueAction {
+    /// Create a new issue
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        priority: Option<i32>,
+        #[arg(long, value_delimiter = ',')]
+        labels: Vec<String>,
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Update an existing issue
+    Update {
+        /// Issue identifier (e.g. GH-42, beads ID)
+        identifier: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        priority: Option<i32>,
+        #[arg(long, value_delimiter = ',')]
+        labels: Option<Vec<String>>,
+    },
+    /// List issues from the tracker
+    List {
+        #[arg(long, value_delimiter = ',')]
+        state: Option<Vec<String>>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show issue details
+    Show {
+        /// Issue identifier
+        identifier: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -83,6 +140,138 @@ async fn main() {
     }
 }
 
+fn build_tracker(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+) -> Result<Arc<dyn IssueTracker>, Error> {
+    #[allow(unused_variables)]
+    let tracker: Arc<dyn IssueTracker> = match workflow.config.tracker.kind {
+        TrackerKind::None => Arc::new(EmptyTracker),
+        #[cfg(feature = "linear")]
+        TrackerKind::Linear => {
+            let api_key = workflow.config.tracker.api_key.clone().ok_or_else(|| {
+                Error::Config("tracker.api_key is required for linear".into())
+            })?;
+            Arc::new(polyphony_linear::LinearTracker::new(
+                workflow.config.tracker.endpoint.clone(),
+                api_key,
+                workflow.config.tracker.team_id.clone(),
+            )?)
+        },
+        #[cfg(feature = "github")]
+        TrackerKind::Github => Arc::new(polyphony_github::GithubIssueTracker::new(
+            workflow
+                .config
+                .tracker
+                .repository
+                .clone()
+                .ok_or_else(|| Error::Config("tracker.repository is required".into()))?,
+            workflow.config.tracker.api_key.clone(),
+            workflow.config.tracker.project_owner.clone(),
+            workflow.config.tracker.project_number,
+            workflow.config.tracker.project_status_field.clone(),
+        )?),
+        #[cfg(feature = "beads")]
+        TrackerKind::Beads => {
+            let workflow_root = workflow_root_dir(&workflow.path)?;
+            Arc::new(polyphony_beads::BeadsTracker::new(workflow_root)?)
+        },
+        other => {
+            return Err(Error::Config(format!(
+                "unsupported tracker.kind `{other}` for this build"
+            )));
+        },
+    };
+    Ok(tracker)
+}
+
+async fn handle_issue_command(
+    action: IssueAction,
+    workflow: &polyphony_workflow::LoadedWorkflow,
+) -> Result<(), Error> {
+    let tracker = build_tracker(workflow)?;
+    match action {
+        IssueAction::Create {
+            title,
+            description,
+            priority,
+            labels,
+            parent,
+        } => {
+            let request = polyphony_core::CreateIssueRequest {
+                title,
+                description,
+                priority,
+                labels,
+                parent_id: parent,
+            };
+            let issue = tracker.create_issue(&request).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&issue)
+                    .map_err(|e| Error::Config(e.to_string()))?
+            );
+        },
+        IssueAction::Update {
+            identifier,
+            title,
+            description,
+            state,
+            priority,
+            labels,
+        } => {
+            let request = polyphony_core::UpdateIssueRequest {
+                id: identifier,
+                title,
+                description,
+                state,
+                priority,
+                labels,
+            };
+            let issue = tracker.update_issue(&request).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&issue)
+                    .map_err(|e| Error::Config(e.to_string()))?
+            );
+        },
+        IssueAction::List { state, all } => {
+            let states = if all {
+                let mut s = workflow.config.tracker.active_states.clone();
+                s.extend(workflow.config.tracker.terminal_states.clone());
+                s
+            } else {
+                state.unwrap_or_else(|| workflow.config.tracker.active_states.clone())
+            };
+            let issues = tracker
+                .fetch_issues_by_states(
+                    workflow.config.tracker.project_slug.as_deref(),
+                    &states,
+                )
+                .await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&issues)
+                    .map_err(|e| Error::Config(e.to_string()))?
+            );
+        },
+        IssueAction::Show { identifier } => {
+            let issues = tracker
+                .fetch_issues_by_ids(std::slice::from_ref(&identifier))
+                .await?;
+            if let Some(issue) = issues.first() {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(issue)
+                        .map_err(|e| Error::Config(e.to_string()))?
+                );
+            } else {
+                return Err(Error::Config(format!("issue not found: {identifier}")));
+            }
+        },
+    }
+    Ok(())
+}
+
 async fn try_main() -> Result<(), Error> {
     let cli = Cli::parse();
     if let Some(dir) = &cli.directory {
@@ -90,6 +279,18 @@ async fn try_main() -> Result<(), Error> {
             Error::Config(format!("cannot change to directory {}: {e}", dir.display()))
         })?;
     }
+    let workflow_path = cli
+        .workflow_path
+        .unwrap_or_else(|| PathBuf::from("WORKFLOW.md"));
+
+    // For issue subcommands, skip TUI/tracing setup — just load the workflow and dispatch.
+    if let Some(Commands::Issue { action }) = cli.command {
+        let user_config_path = user_config_path()?;
+        let workflow =
+            load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
+        return handle_issue_command(action, &workflow).await;
+    }
+
     let tui_logs = LogBuffer::default();
     let tracing_output = if cli.no_tui {
         TracingOutput::stderr()
@@ -98,7 +299,7 @@ async fn try_main() -> Result<(), Error> {
     };
     let _telemetry = init_tracing(cli.log_json, !cli.no_tui, tracing_output.clone());
     tracing::info!(
-        workflow_path = %cli.workflow_path.display(),
+        workflow_path = %workflow_path.display(),
         no_tui = cli.no_tui,
         sqlite_enabled = cli.sqlite_url.is_some(),
         "starting polyphony"
@@ -110,23 +311,23 @@ async fn try_main() -> Result<(), Error> {
             "created default user config file"
         );
     }
-    if ensure_bootstrapped_workflow(&cli.workflow_path, cli.no_tui, |workflow_path| {
+    if ensure_bootstrapped_workflow(&workflow_path, cli.no_tui, |workflow_path| {
         Ok(prompt_workflow_initialization(workflow_path)?)
     })? == WorkflowBootstrap::Canceled
     {
         tracing::info!(
-            workflow_path = %cli.workflow_path.display(),
+            workflow_path = %workflow_path.display(),
             "workflow initialization canceled"
         );
         return Ok(());
     }
     let (repo_config_path, first_run_no_github) =
-        maybe_seed_repo_config_with_github_detection(&cli.workflow_path, Some(&user_config_path))?;
+        maybe_seed_repo_config_with_github_detection(&workflow_path, Some(&user_config_path))?;
     if first_run_no_github {
         eprintln!("Edit polyphony.toml to configure your tracker, then restart polyphony.");
         return Ok(());
     }
-    let workflow = load_workflow_with_user_config(&cli.workflow_path, Some(&user_config_path))?;
+    let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
     let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
         build_runtime_components(workflow)
             .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))
@@ -136,7 +337,7 @@ async fn try_main() -> Result<(), Error> {
         Arc::new(polyphony_git::GitWorkspaceProvisioner);
     let store = build_store(cli.sqlite_url.as_deref()).await?;
     let cache: Option<Arc<dyn NetworkCache>> = {
-        let cache_path = workflow_root_dir(&cli.workflow_path)?
+        let cache_path = workflow_root_dir(&workflow_path)?
             .join(".polyphony")
             .join("cache.json");
         Some(Arc::new(polyphony_core::file_cache::FileNetworkCache::new(
@@ -157,13 +358,13 @@ async fn try_main() -> Result<(), Error> {
         workflow_rx,
     );
     let service = service.with_workflow_reload(
-        cli.workflow_path.clone(),
+        workflow_path.clone(),
         Some(user_config_path),
         workflow_tx.clone(),
         component_factory,
     );
     let _watcher = spawn_workflow_watcher(
-        cli.workflow_path.clone(),
+        workflow_path.clone(),
         repo_config_path,
         handle.command_tx.clone(),
     )?;
@@ -722,6 +923,7 @@ fn build_runtime_components(
             Arc::new(polyphony_linear::LinearTracker::new(
                 workflow.config.tracker.endpoint.clone(),
                 api_key,
+                workflow.config.tracker.team_id.clone(),
             )?)
         },
         #[cfg(feature = "github")]

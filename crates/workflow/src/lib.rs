@@ -60,6 +60,7 @@ pub struct TrackerConfig {
     pub project_number: Option<u32>,
     pub project_status_field: Option<String>,
     pub repository: Option<String>,
+    pub team_id: Option<String>,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
 }
@@ -75,6 +76,7 @@ struct TrackerProfileConfig {
     pub project_number: Option<u32>,
     pub project_status_field: Option<String>,
     pub repository: Option<String>,
+    pub team_id: Option<String>,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
 }
@@ -511,6 +513,9 @@ fn apply_tracker_profile(
     }
     if tracker.repository.is_none() {
         tracker.repository = profile.repository.clone();
+    }
+    if tracker.team_id.is_none() {
+        tracker.team_id = profile.team_id.clone();
     }
     if (tracker.active_states.is_empty() || tracker.active_states == default_active_states())
         && !profile.active_states.is_empty()

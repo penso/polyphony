@@ -20,6 +20,25 @@ pub type IssueId = String;
 pub type MovementId = String;
 pub type TaskId = String;
 
+#[derive(Debug, Clone, Default)]
+pub struct CreateIssueRequest {
+    pub title: String,
+    pub description: Option<String>,
+    pub priority: Option<i32>,
+    pub labels: Vec<String>,
+    pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UpdateIssueRequest {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub state: Option<String>,
+    pub priority: Option<i32>,
+    pub labels: Option<Vec<String>>,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid issue: {0}")]
@@ -91,6 +110,26 @@ pub struct Workspace {
     pub workspace_key: String,
     pub created_now: bool,
     pub branch_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchMode {
+    #[default]
+    Manual,
+    Automatic,
+    Nightshift,
+}
+
+impl fmt::Display for DispatchMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Manual => "manual",
+            Self::Automatic => "automatic",
+            Self::Nightshift => "nightshift",
+        };
+        f.write_str(s)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -669,6 +708,8 @@ pub struct RuntimeSnapshot {
     #[serde(default)]
     pub loading: LoadingState,
     #[serde(default)]
+    pub dispatch_mode: DispatchMode,
+    #[serde(default)]
     pub from_cache: bool,
     #[serde(default)]
     pub cached_at: Option<DateTime<Utc>>,
@@ -916,6 +957,12 @@ pub trait IssueTracker: Send + Sync {
         _status: &str,
     ) -> Result<(), Error> {
         Ok(())
+    }
+    async fn create_issue(&self, _request: &CreateIssueRequest) -> Result<Issue, Error> {
+        Err(Error::Adapter("create_issue not supported".into()))
+    }
+    async fn update_issue(&self, _request: &UpdateIssueRequest) -> Result<Issue, Error> {
+        Err(Error::Adapter("update_issue not supported".into()))
     }
 }
 

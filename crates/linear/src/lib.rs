@@ -3,8 +3,9 @@ use {
     chrono::Utc,
     graphql_client::GraphQLQuery,
     polyphony_core::{
-        BlockerRef, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
-        IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
+        BlockerRef, BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor,
+        IssueComment, IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
+        UpdateIssueRequest,
     },
     std::time::Duration,
     tracing::debug,
@@ -38,15 +39,36 @@ pub struct LinearIssueStates;
 )]
 pub struct LinearIssuesByIds;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/linear_schema.json",
+    query_path = "src/create_issue.graphql",
+    response_derives = "Debug, Serialize, Deserialize"
+)]
+pub struct LinearCreateIssue;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/linear_schema.json",
+    query_path = "src/update_issue.graphql",
+    response_derives = "Debug, Serialize, Deserialize"
+)]
+pub struct LinearUpdateIssue;
+
 #[derive(Debug, Clone)]
 pub struct LinearTracker {
     client: reqwest::Client,
     endpoint: String,
     api_key: String,
+    team_id: Option<String>,
 }
 
 impl LinearTracker {
-    pub fn new(endpoint: String, api_key: String) -> Result<Self, CoreError> {
+    pub fn new(
+        endpoint: String,
+        api_key: String,
+        team_id: Option<String>,
+    ) -> Result<Self, CoreError> {
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(LINEAR_HTTP_TIMEOUT)
@@ -54,6 +76,7 @@ impl LinearTracker {
                 .map_err(|error| CoreError::Adapter(format!("linear_api_request: {error}")))?,
             endpoint,
             api_key,
+            team_id,
         })
     }
 
@@ -270,6 +293,72 @@ impl IssueTracker for LinearTracker {
     async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, CoreError> {
         Ok(None)
     }
+
+    async fn create_issue(&self, request: &CreateIssueRequest) -> Result<Issue, CoreError> {
+        let team_id = self
+            .team_id
+            .clone()
+            .ok_or_else(|| CoreError::Adapter("tracker.team_id is required for Linear issue creation".into()))?;
+        debug!(title = %request.title, "creating Linear issue");
+        let variables = linear_create_issue::Variables {
+            team_id,
+            title: request.title.clone(),
+            description: request.description.clone(),
+            priority: request.priority.map(|p| p as i64),
+            label_ids: if request.labels.is_empty() {
+                None
+            } else {
+                Some(request.labels.clone())
+            },
+            parent_id: request.parent_id.clone(),
+        };
+        let payload = self
+            .graphql(
+                serde_json::to_value(LinearCreateIssue::build_query(variables))
+                    .map_err(|error| CoreError::Adapter(error.to_string()))?,
+            )
+            .await?;
+        let response: graphql_client::Response<linear_create_issue::ResponseData> =
+            serde_json::from_value(payload)
+                .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        let data = response
+            .data
+            .ok_or_else(|| CoreError::Adapter("linear_create_issue: missing data".into()))?;
+        let node = data
+            .issue_create
+            .issue
+            .ok_or_else(|| CoreError::Adapter("linear_create_issue: missing issue".into()))?;
+        Ok(linear_issue_from_create_node(&node))
+    }
+
+    async fn update_issue(&self, request: &UpdateIssueRequest) -> Result<Issue, CoreError> {
+        debug!(id = %request.id, "updating Linear issue");
+        let variables = linear_update_issue::Variables {
+            id: request.id.clone(),
+            title: request.title.clone(),
+            description: request.description.clone(),
+            state_id: request.state.clone(),
+            priority: request.priority.map(|p| p as i64),
+            label_ids: request.labels.clone(),
+        };
+        let payload = self
+            .graphql(
+                serde_json::to_value(LinearUpdateIssue::build_query(variables))
+                    .map_err(|error| CoreError::Adapter(error.to_string()))?,
+            )
+            .await?;
+        let response: graphql_client::Response<linear_update_issue::ResponseData> =
+            serde_json::from_value(payload)
+                .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        let data = response
+            .data
+            .ok_or_else(|| CoreError::Adapter("linear_update_issue: missing data".into()))?;
+        let node = data
+            .issue_update
+            .issue
+            .ok_or_else(|| CoreError::Adapter("linear_update_issue: missing issue".into()))?;
+        Ok(linear_issue_from_update_node(&node))
+    }
 }
 
 fn linear_issue_from_node(node: &linear_issues_page::LinearIssuesPageIssuesNodes) -> Issue {
@@ -459,6 +548,63 @@ fn linear_trust_level(owner: bool, admin: bool, guest: bool) -> String {
         "internal_admin".into()
     } else {
         "internal_member".into()
+    }
+}
+
+fn linear_issue_from_create_node(
+    node: &linear_create_issue::LinearCreateIssueIssueCreateIssue,
+) -> Issue {
+    Issue {
+        id: node.id.clone(),
+        identifier: node.identifier.clone(),
+        title: node.title.clone(),
+        description: node.description.clone(),
+        priority: parse_linear_priority(node.priority),
+        state: node.state.name.clone(),
+        branch_name: Some(node.branch_name.clone()),
+        url: Some(node.url.clone()),
+        author: node.creator.as_ref().map(linear_author),
+        labels: node
+            .labels
+            .nodes
+            .iter()
+            .map(|label| label.name.to_ascii_lowercase())
+            .collect(),
+        comments: Vec::new(),
+        blocked_by: Vec::new(),
+        parent_id: None,
+        created_at: parse_rfc3339(&node.created_at),
+        updated_at: parse_rfc3339(&node.updated_at),
+    }
+}
+
+impl_linear_user!(linear_create_issue::LinearCreateIssueIssueCreateIssueCreator);
+impl_linear_user!(linear_update_issue::LinearUpdateIssueIssueUpdateIssueCreator);
+
+fn linear_issue_from_update_node(
+    node: &linear_update_issue::LinearUpdateIssueIssueUpdateIssue,
+) -> Issue {
+    Issue {
+        id: node.id.clone(),
+        identifier: node.identifier.clone(),
+        title: node.title.clone(),
+        description: node.description.clone(),
+        priority: parse_linear_priority(node.priority),
+        state: node.state.name.clone(),
+        branch_name: Some(node.branch_name.clone()),
+        url: Some(node.url.clone()),
+        author: node.creator.as_ref().map(linear_author),
+        labels: node
+            .labels
+            .nodes
+            .iter()
+            .map(|label| label.name.to_ascii_lowercase())
+            .collect(),
+        comments: Vec::new(),
+        blocked_by: Vec::new(),
+        parent_id: None,
+        created_at: parse_rfc3339(&node.created_at),
+        updated_at: parse_rfc3339(&node.updated_at),
     }
 }
 
