@@ -20,13 +20,15 @@ pub fn draw_orchestrator_tab(
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5), // Status panel
-            Constraint::Min(6),    // Movements table
+            Constraint::Length(5),  // Status panel
+            Constraint::Min(6),     // Movements table
+            Constraint::Length(8),  // Recent events
         ])
         .split(area);
 
     draw_status_panel(frame, sections[0], snapshot, app);
     draw_movements_table(frame, sections[1], snapshot, app);
+    draw_events_panel(frame, sections[2], snapshot, app);
 }
 
 fn draw_status_panel(
@@ -253,4 +255,56 @@ fn movement_status_color(
         MovementStatus::Failed => theme.danger,
         MovementStatus::Cancelled => theme.muted,
     }
+}
+
+fn draw_events_panel(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &RuntimeSnapshot,
+    app: &AppState,
+) {
+    let theme = app.theme;
+    let max_visible = area.height.saturating_sub(2) as usize; // border top+bottom
+    let lines: Vec<Line> = snapshot
+        .recent_events
+        .iter()
+        .take(max_visible)
+        .map(|event| {
+            let ts = event.at.format("%H:%M:%S");
+            let scope_color = match event.scope {
+                polyphony_core::EventScope::Dispatch => theme.info,
+                polyphony_core::EventScope::Handoff => theme.highlight,
+                polyphony_core::EventScope::Worker | polyphony_core::EventScope::Agent => {
+                    theme.success
+                }
+                polyphony_core::EventScope::Retry => theme.warning,
+                polyphony_core::EventScope::Throttle => theme.danger,
+                _ => theme.muted,
+            };
+            Line::from(vec![
+                Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
+                Span::styled(
+                    format!("{:<10}", format!("{}", event.scope)),
+                    Style::default().fg(scope_color),
+                ),
+                Span::styled(&event.message, Style::default().fg(theme.foreground)),
+            ])
+        })
+        .collect();
+
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(Line::from(Span::styled(
+                    " Events ",
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                )))
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.border)),
+        ),
+        area,
+    );
 }

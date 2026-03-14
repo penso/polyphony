@@ -507,6 +507,7 @@ impl RuntimeService {
         if dispatches.is_empty() {
             return;
         }
+        info!(count = dispatches.len(), "processing manual dispatches");
         let workflow = self.workflow();
         for (issue_id, agent_name) in dispatches {
             let issues = match self.tracker.fetch_issues_by_ids(std::slice::from_ref(&issue_id)).await {
@@ -529,19 +530,22 @@ impl RuntimeService {
                 continue;
             };
             if self.state.running.contains_key(&issue.id) {
-                self.push_event(
-                    EventScope::Dispatch,
-                    format!("manual dispatch skipped: {} already running", issue.identifier),
-                );
+                let msg = format!("manual dispatch skipped: {} already running", issue.identifier);
+                info!(%issue_id, "{msg}");
+                self.push_event(EventScope::Dispatch, msg);
                 continue;
             }
             if !self.has_available_slot(&workflow, &issue.state) {
-                self.push_event(
-                    EventScope::Dispatch,
-                    format!("manual dispatch skipped: no slot for {}", issue.identifier),
-                );
+                let msg = format!("manual dispatch skipped: no slot for {}", issue.identifier);
+                warn!(%issue_id, "{msg}");
+                self.push_event(EventScope::Dispatch, msg);
                 continue;
             }
+            info!(
+                issue_identifier = %issue.identifier,
+                agent = agent_name.as_deref().unwrap_or("default"),
+                "manual dispatch: dispatching issue"
+            );
             self.push_event(
                 EventScope::Dispatch,
                 format!(
