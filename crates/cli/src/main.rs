@@ -179,9 +179,15 @@ async fn try_main() -> Result<(), Error> {
     )
     .await?;
 
-    service_task
-        .await
-        .map_err(|error| Error::Config(error.to_string()))??;
+    // Give the service a brief window to shut down gracefully, then abort.
+    // Network calls in tick() or startup_cleanup() can block for seconds;
+    // the user should not have to wait.
+    tokio::select! {
+        result = service_task => {
+            result.map_err(|error| Error::Config(error.to_string()))??;
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+    }
     Ok(())
 }
 
