@@ -1969,7 +1969,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Existing non-directory path at workspace location is handled safely (replace or fail per
   implementation policy)
 - Optional workspace population/synchronization errors are surfaced
-- Temporary artifacts (`tmp`, `.elixir_ls`) are removed during prep
+- Temporary artifacts (`tmp`) are removed during prep
 - `after_create` hook runs only on new workspace creation
 - `before_run` hook runs before each attempt and failure/timeouts abort the current attempt
 - `after_run` hook runs after each attempt and failure/timeouts are logged and ignored

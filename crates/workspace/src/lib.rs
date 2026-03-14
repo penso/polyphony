@@ -466,7 +466,7 @@ mod tests {
             provisioner,
             CheckoutKind::Directory,
             true,
-            vec!["tmp".into(), ".elixir_ls".into()],
+            vec!["tmp".into()],
             None,
             None,
             None,
@@ -534,9 +534,8 @@ mod tests {
             .await
             .unwrap();
         std::fs::create_dir_all(workspace.path.join("tmp")).unwrap();
-        std::fs::create_dir_all(workspace.path.join(".elixir_ls")).unwrap();
         let mut hooks = hooks();
-        hooks.before_run = Some("[ ! -e tmp ] && [ ! -e .elixir_ls ]".into());
+        hooks.before_run = Some("[ ! -e tmp ]".into());
 
         manager
             .run_before_run(&hooks, &workspace.path)
@@ -544,7 +543,6 @@ mod tests {
             .unwrap();
 
         assert!(!workspace.path.join("tmp").exists());
-        assert!(!workspace.path.join(".elixir_ls").exists());
     }
 
     #[tokio::test]

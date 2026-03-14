@@ -25,7 +25,7 @@ interval_ms = 60000
 root = ".polyphony/workspaces"
 checkout_kind = "directory"
 sync_on_reuse = true
-transient_paths = ["tmp", ".elixir_ls"]
+transient_paths = ["tmp"]
 
 [hooks]
 timeout_ms = 60000

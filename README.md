@@ -100,7 +100,7 @@ This repository now provides provider-specific runtime building blocks for:
 Related workspace controls:
 
 - `workspace.sync_on_reuse`: when `true`, reused git workspaces are re-checked out to the target branch and clones fetch `origin` before reuse.
-- `workspace.transient_paths`: paths to delete inside a workspace before runs, defaulting to `tmp` and `.elixir_ls`.
+- `workspace.transient_paths`: paths to delete inside a workspace before runs, defaulting to `tmp`.
 
 Branch names default to the issue branch metadata when present, otherwise `task/<sanitized-issue-id>`.
 

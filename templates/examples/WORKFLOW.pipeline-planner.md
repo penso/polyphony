@@ -12,7 +12,6 @@ workspace:
   sync_on_reuse: true
   transient_paths:
     - tmp
-    - .elixir_ls
 agent:
   max_concurrent_agents: 3
   max_turns: 10

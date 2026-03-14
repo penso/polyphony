@@ -570,7 +570,6 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("workspace.transient_paths", vec![
                 "tmp".to_string(),
-                ".elixir_ls".to_string(),
             ])
             .map_err(config_error)?
             .set_default("hooks.timeout_ms", 60_000)
@@ -1654,7 +1653,7 @@ mod tests {
         let config = ServiceConfig::from_workflow(&workflow).unwrap();
 
         assert!(config.workspace.sync_on_reuse);
-        assert_eq!(config.workspace.transient_paths, vec!["tmp", ".elixir_ls"]);
+        assert_eq!(config.workspace.transient_paths, vec!["tmp"]);
         assert_eq!(config.tracker.kind, TrackerKind::None);
         assert!(config.agents.default.is_none());
         assert!(config.agents.profiles.is_empty());

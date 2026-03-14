@@ -22,7 +22,6 @@ workspace:
   sync_on_reuse: true
   transient_paths:
     - tmp
-    - .elixir_ls
   # Keep shared workspace policy here.
   # Put local repo wiring such as `source_repo_path` in `polyphony.toml`
   # when the checked-in workflow is a shared template.

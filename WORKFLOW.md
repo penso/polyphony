@@ -1,39 +1,54 @@
 ---
+# Destination: copy to WORKFLOW.md in the repository root.
 tracker:
   kind: none
+  # Keep shared repository policy here.
+  # Keep local tracker identity in `polyphony.toml` when you do not want to edit
+  # the checked-in workflow.
+  # GitHub:
+  # kind: github
+  # repository: owner/repo
+  # project_owner: owner-or-org
+  # project_number: 7
+  # project_status_field: Status
+  # Linear:
+  # kind: linear
+  # project_slug: ENG
 polling:
   interval_ms: 60000
 workspace:
   root: .polyphony/workspaces
-  checkout_kind: worktree
-  clone_url: https://github.com/penso/polyphony.git
-  default_branch: main
+  checkout_kind: directory
   sync_on_reuse: true
   transient_paths:
     - tmp
-    - .elixir_ls
+  # Keep shared workspace policy here.
+  # Put local repo wiring such as `source_repo_path` in `polyphony.toml`
+  # when the checked-in workflow is a shared template.
+  # checkout_kind: linked_worktree
+  # source_repo_path: /abs/path/to/this/repo
+  # default_branch: main
+  # checkout_kind: discrete_clone
+  # clone_url: git@github.com:owner/repo.git
 agent:
   max_concurrent_agents: 3
   max_turns: 4
   max_retry_backoff_ms: 60000
 ---
-# Polyphony Repository Workflow
+# Polyphony Workflow
 
-You are working on the Polyphony Rust workspace.
+You are operating inside an isolated per-issue workspace.
 
 Issue: {{ issue.identifier }} - {{ issue.title }}
 State: {{ issue.state }}
 
 Execution rules:
 
-- Stay inside the assigned workspace and keep changes focused on the issue.
-- Prefer simple, typed Rust changes. Do not introduce panics in non-test code.
-- Run `just format`, `just lint`, and `just test` when code changes.
-- Run `just docs-build` when docs or user-facing behavior changes.
-- Keep `README.md` and `docs/` in sync with behavior changes.
-- Prefer unit or end-to-end coverage over mock-only tests.
-- Leave the issue in a clear handoff state with changed files, tests, and follow-up notes.
+- Stay inside the assigned workspace.
+- Make progress that is observable and incremental.
+- Prefer tests, logs, and explicit status over hidden work.
+- Leave the issue in a non-active handoff state when work is complete.
 
-This checked-in `WORKFLOW.md` is the real workflow policy for the Polyphony repository.
-Use `.polyphony/config.toml` for local tracker selection, project identity, and machine-specific
-workspace overrides without editing the tracked workflow.
+Shared workflow policy belongs in this file.
+Shared credentials and reusable agent profiles belong in `~/.config/polyphony/config.toml`.
+Local tracker identity and repo wiring can live in `polyphony.toml`.
