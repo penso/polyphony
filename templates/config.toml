@@ -2,11 +2,11 @@
 # Destination: copy to ~/.config/polyphony/config.toml.
 # This file is created automatically on first start.
 # Merge order is: built-in defaults, this file, WORKFLOW.md front matter,
-# .polyphony/config.toml, then POLYPHONY__... env vars.
+# polyphony.toml, then POLYPHONY__... env vars.
 # Use "$ENV_VAR" to resolve secrets from the environment instead of writing them directly.
 # Keep reusable credentials and agent profiles here.
 # Keep shared tracker credentials in `[trackers.profiles.<name>]`.
-# Keep local repository/project selection and git-backed workspace settings in `.polyphony/config.toml`
+# Keep local repository/project selection and git-backed workspace settings in `polyphony.toml`
 # when you do not want to edit the checked-in workflow.
 
 [tracker]
@@ -17,7 +17,7 @@ active_states = ["Todo", "In Progress"]
 terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Human Review"]
 
 # Shared tracker credential profiles. Select one with `tracker.profile = "profile_name"`
-# in `.polyphony/config.toml` or `WORKFLOW.md`.
+# in `polyphony.toml` or `WORKFLOW.md`.
 [trackers.profiles]
 
 # GitHub example.

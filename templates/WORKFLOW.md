@@ -3,7 +3,7 @@
 tracker:
   kind: none
   # Keep shared repository policy here.
-  # Keep local tracker identity in `.polyphony/config.toml` when you do not want to edit
+  # Keep local tracker identity in `polyphony.toml` when you do not want to edit
   # the checked-in workflow.
   # GitHub:
   # kind: github
@@ -24,7 +24,7 @@ workspace:
     - tmp
     - .elixir_ls
   # Keep shared workspace policy here.
-  # Put local repo wiring such as `source_repo_path` in `.polyphony/config.toml`
+  # Put local repo wiring such as `source_repo_path` in `polyphony.toml`
   # when the checked-in workflow is a shared template.
   # checkout_kind: linked_worktree
   # source_repo_path: /abs/path/to/this/repo
@@ -52,4 +52,4 @@ Execution rules:
 
 Shared workflow policy belongs in this file.
 Shared credentials and reusable agent profiles belong in `~/.config/polyphony/config.toml`.
-Local tracker identity and repo wiring can live in `.polyphony/config.toml`.
+Local tracker identity and repo wiring can live in `polyphony.toml`.

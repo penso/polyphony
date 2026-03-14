@@ -1,10 +1,9 @@
 # Polyphony repo-local config.
-# Destination: copy to .polyphony/config.toml in the repository root.
+# Destination: polyphony.toml in the repository root.
 # This file is created automatically when a repo already has a shared WORKFLOW.md and
 # local tracker or workspace wiring is still unset.
 # Merge order is: built-in defaults, ~/.config/polyphony/config.toml, WORKFLOW.md,
 # this file, then POLYPHONY__... env vars.
-# This file is intended to stay untracked.
 
 [tracker]
 kind = "none"

@@ -127,7 +127,7 @@ async fn try_main() -> Result<(), Error> {
         )?;
     if first_run_no_github {
         eprintln!(
-            "Edit .polyphony/config.toml to configure your tracker, then restart polyphony."
+            "Edit polyphony.toml to configure your tracker, then restart polyphony."
         );
         return Ok(());
     }
@@ -232,8 +232,8 @@ fn format_fatal_error(error: &Error) -> String {
 
 fn format_invalid_config_error(message: &str) -> String {
     match message {
-        "tracker.repository is required for github" => "Invalid workflow configuration: the GitHub tracker is selected, but tracker.repository is missing.\nAdd `repository = \"owner/repo\"` to `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
-        "tracker.project_slug is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.project_slug is missing.\nAdd `project_slug = \"ENG\"` to `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
+        "tracker.repository is required for github" => "Invalid workflow configuration: the GitHub tracker is selected, but tracker.repository is missing.\nAdd `repository = \"owner/repo\"` to `polyphony.toml` or `WORKFLOW.md`.".into(),
+        "tracker.project_slug is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.project_slug is missing.\nAdd `project_slug = \"ENG\"` to `polyphony.toml` or `WORKFLOW.md`.".into(),
         "tracker.api_key is required for linear" => "Invalid workflow configuration: the Linear tracker is selected, but tracker.api_key is missing.\nSet `api_key = \"$LINEAR_API_KEY\"` in config and export `LINEAR_API_KEY`.".into(),
         "agents.default is required" => "Invalid workflow configuration: agent profiles are defined, but agents.default is missing.".into(),
         message if message.starts_with("tracker.profile `") && message.ends_with("` is not defined") => {
@@ -251,7 +251,7 @@ fn format_config_error(message: &str) -> String {
         "tracker.repository is required for github" => {
             format_invalid_config_error(message)
         },
-        "tracker.api_key is required for github automation" => "Invalid workflow configuration: GitHub automation is enabled, but tracker.api_key is missing.\nSet `api_key = \"$GITHUB_TOKEN\"` in `.polyphony/config.toml` or `WORKFLOW.md`.".into(),
+        "tracker.api_key is required for github automation" => "Invalid workflow configuration: GitHub automation is enabled, but tracker.api_key is missing.\nSet `api_key = \"$GITHUB_TOKEN\"` in `polyphony.toml` or `WORKFLOW.md`.".into(),
         "tracker.repository is required for github automation" => "Invalid workflow configuration: GitHub automation is enabled, but tracker.repository is missing.".into(),
         _ => message.to_string(),
     }
@@ -944,7 +944,7 @@ mod tests {
 
         assert!(!rendered.contains("Workflow("));
         assert!(!rendered.contains("InvalidConfig("));
-        assert!(rendered.contains(".polyphony/config.toml"));
+        assert!(rendered.contains("polyphony.toml"));
     }
 
     #[test]

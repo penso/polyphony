@@ -1,4 +1,4 @@
-# Destination: copy to .polyphony/config.toml in the repository root.
+# Destination: copy to polyphony.toml in the repository root.
 # Values here override the checked-in WORKFLOW.md for this machine only.
 
 [tracker]

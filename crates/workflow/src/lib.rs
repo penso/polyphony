@@ -297,9 +297,7 @@ pub fn user_config_path() -> Result<PathBuf, Error> {
 }
 
 pub fn repo_config_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
-    Ok(workflow_root_dir(path.as_ref())?
-        .join(".polyphony")
-        .join("config.toml"))
+    Ok(workflow_root_dir(path.as_ref())?.join("polyphony.toml"))
 }
 
 pub fn ensure_user_config_file(path: impl AsRef<Path>) -> Result<bool, Error> {
@@ -2380,7 +2378,7 @@ polling:
     fn ensure_repo_config_file_writes_template_once() {
         let root = unique_temp_path("repo-config-root", "d");
         fs::create_dir_all(&root).unwrap();
-        let repo_config_path = root.join(".polyphony").join("config.toml");
+        let repo_config_path = root.join("polyphony.toml");
 
         let created = super::ensure_repo_config_file(&repo_config_path, &root).unwrap();
         let contents = fs::read_to_string(&repo_config_path).unwrap();
