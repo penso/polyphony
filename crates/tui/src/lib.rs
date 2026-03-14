@@ -2083,10 +2083,17 @@ fn budget_ratio_label(
         } else {
             theme.danger
         };
+        let requests_suffix = budget
+            .raw
+            .as_ref()
+            .and_then(|raw| raw.get("requests"))
+            .and_then(|v| v.as_u64())
+            .map(|n| format!("  ({n} reqs)"))
+            .unwrap_or_default();
         return (
             Some(ratio),
             format!(
-                "{}  {:.1}/{:.1} credits",
+                "{}  {:.0}/{:.0}{requests_suffix}",
                 budget.component, remaining, total
             ),
             accent,

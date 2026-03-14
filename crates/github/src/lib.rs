@@ -1,4 +1,10 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use {
     async_trait::async_trait,
@@ -79,7 +85,7 @@ pub struct AddIssueToProject;
 )]
 pub struct UpdateIssueProjectStatus;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GithubIssueTracker {
     crab: Octocrab,
     http: reqwest::Client,
@@ -87,6 +93,15 @@ pub struct GithubIssueTracker {
     owner: String,
     repo: String,
     project: Option<GithubProjectConfig>,
+    request_count: AtomicU64,
+    last_rate_limit: Mutex<Option<CapturedRateLimit>>,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedRateLimit {
+    remaining: u64,
+    limit: u64,
+    reset_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +139,8 @@ impl GithubIssueTracker {
             owner,
             repo,
             project,
+            request_count: AtomicU64::new(0),
+            last_rate_limit: Mutex::new(None),
         })
     }
 
@@ -131,6 +148,7 @@ impl GithubIssueTracker {
         &self,
         state: octocrab::params::State,
     ) -> Result<Vec<GithubIssue>, CoreError> {
+        self.track_request();
         let mut page = self
             .crab
             .issues(&self.owner, &self.repo)
@@ -147,6 +165,7 @@ impl GithubIssueTracker {
             .await
             .map_err(map_github_error)?
         {
+            self.track_request();
             page = next;
             issues.extend(page.take_items());
         }
@@ -154,6 +173,7 @@ impl GithubIssueTracker {
     }
 
     async fn issue_by_number(&self, number: u64) -> Result<GithubIssue, CoreError> {
+        self.track_request();
         self.crab
             .issues(&self.owner, &self.repo)
             .get(number)
@@ -162,6 +182,7 @@ impl GithubIssueTracker {
     }
 
     async fn comments_for_issue(&self, number: u64) -> Result<Vec<GithubComment>, CoreError> {
+        self.track_request();
         let mut page = self
             .crab
             .issues(&self.owner, &self.repo)
@@ -177,6 +198,7 @@ impl GithubIssueTracker {
             .await
             .map_err(map_github_error)?
         {
+            self.track_request();
             page = next;
             comments.extend(page.take_items());
         }
@@ -190,6 +212,31 @@ impl GithubIssueTracker {
             Vec::new()
         };
         Ok(to_issue(issue, comments))
+    }
+
+    fn track_request(&self) {
+        self.request_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn capture_rate_limit_headers(&self, headers: &HeaderMap) {
+        let remaining = headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        let limit = headers
+            .get("x-ratelimit-limit")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        if let (Some(remaining), Some(limit)) = (remaining, limit) {
+            let reset_at = parse_rate_limit_reset(headers);
+            if let Ok(mut guard) = self.last_rate_limit.lock() {
+                *guard = Some(CapturedRateLimit {
+                    remaining,
+                    limit,
+                    reset_at,
+                });
+            }
+        }
     }
 
     async fn graphql<ResponseData, QueryBody>(
@@ -213,6 +260,8 @@ impl GithubIssueTracker {
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        self.track_request();
+        self.capture_rate_limit_headers(response.headers());
         if let Some(signal) = github_rate_limit_signal_from_response("tracker:github", &response) {
             return Err(CoreError::RateLimited(Box::new(signal)));
         }
@@ -426,7 +475,41 @@ impl IssueTracker for GithubIssueTracker {
     }
 
     async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, CoreError> {
-        Ok(None)
+        let Some(token) = &self.token else {
+            return Ok(None);
+        };
+        self.track_request();
+        let response = self
+            .http
+            .get("https://api.github.com/rate_limit")
+            .bearer_auth(token)
+            .header("User-Agent", "polyphony")
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        self.capture_rate_limit_headers(response.headers());
+        let captured = self
+            .last_rate_limit
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let requests = self.request_count.load(Ordering::Relaxed);
+        let (remaining, total, reset_at) = match captured {
+            Some(rl) => (Some(rl.remaining as f64), Some(rl.limit as f64), rl.reset_at),
+            None => (None, None, None),
+        };
+        let raw = serde_json::json!({ "requests": requests });
+        Ok(Some(BudgetSnapshot {
+            component: "tracker:github".into(),
+            captured_at: Utc::now(),
+            credits_remaining: remaining,
+            credits_total: total,
+            spent_usd: None,
+            soft_limit_usd: None,
+            hard_limit_usd: None,
+            reset_at,
+            raw: Some(raw),
+        }))
     }
 
     async fn ensure_issue_workflow_tracking(&self, issue: &Issue) -> Result<(), CoreError> {
