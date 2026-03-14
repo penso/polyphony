@@ -286,6 +286,7 @@ pub async fn run(
                     }
                 } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
                     let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                    app.log_buffer.push_line(format!("[TUI] sending command: {command:?}"));
                     let _ = command_tx.send(command);
                     if shutdown {
                         app.leaving = true;
