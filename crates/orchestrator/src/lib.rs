@@ -1226,6 +1226,7 @@ impl RuntimeService {
             counts: SnapshotCounts {
                 running: self.state.running.len(),
                 retrying: self.state.retrying.len(),
+                ..Default::default()
             },
             cadence: RuntimeCadence {
                 tracker_poll_interval_ms: self.workflow_rx.borrow().config.polling.interval_ms,
@@ -1279,6 +1280,8 @@ impl RuntimeService {
             agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
             saved_contexts: self.state.saved_contexts.values().cloned().collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
+            movements: Vec::new(),
+            tasks: Vec::new(),
             loading: self.state.loading.clone(),
             from_cache: self.state.from_cache,
         }
@@ -2346,6 +2349,8 @@ fn empty_snapshot() -> RuntimeSnapshot {
         agent_catalogs: Vec::new(),
         saved_contexts: Vec::new(),
         recent_events: Vec::new(),
+        movements: Vec::new(),
+        tasks: Vec::new(),
         loading: LoadingState::default(),
         from_cache: false,
     }

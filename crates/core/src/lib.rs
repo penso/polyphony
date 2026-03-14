@@ -16,6 +16,8 @@ use {
 };
 
 pub type IssueId = String;
+pub type MovementId = String;
+pub type TaskId = String;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -196,6 +198,184 @@ impl fmt::Display for AttemptStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MovementStatus {
+    Pending,
+    Planning,
+    InProgress,
+    Review,
+    Delivered,
+    Failed,
+    Cancelled,
+}
+
+impl fmt::Display for MovementStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::Planning => "planning",
+            Self::InProgress => "in_progress",
+            Self::Review => "review",
+            Self::Delivered => "delivered",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskCategory {
+    Research,
+    Coding,
+    Testing,
+    Documentation,
+    Review,
+}
+
+impl fmt::Display for TaskCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Research => "research",
+            Self::Coding => "coding",
+            Self::Testing => "testing",
+            Self::Documentation => "documentation",
+            Self::Review => "review",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableKind {
+    GithubPullRequest,
+    GitlabMergeRequest,
+    Patch,
+}
+
+impl fmt::Display for DeliverableKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::GithubPullRequest => "github_pull_request",
+            Self::GitlabMergeRequest => "gitlab_merge_request",
+            Self::Patch => "patch",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableStatus {
+    Pending,
+    Open,
+    Merged,
+    Closed,
+}
+
+impl fmt::Display for DeliverableStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::Open => "open",
+            Self::Merged => "merged",
+            Self::Closed => "closed",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Deliverable {
+    pub kind: DeliverableKind,
+    pub status: DeliverableStatus,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Movement {
+    pub id: MovementId,
+    pub issue_id: Option<IssueId>,
+    pub issue_identifier: Option<String>,
+    pub title: String,
+    pub status: MovementStatus,
+    pub workspace_key: Option<String>,
+    pub workspace_path: Option<PathBuf>,
+    pub deliverable: Option<Deliverable>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub id: TaskId,
+    pub movement_id: MovementId,
+    pub title: String,
+    pub category: TaskCategory,
+    pub status: TaskStatus,
+    pub ordinal: u32,
+    pub parent_id: Option<TaskId>,
+    pub agent_name: Option<String>,
+    pub turns_completed: u32,
+    pub tokens: TokenUsage,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovementRow {
+    pub id: MovementId,
+    pub issue_identifier: Option<String>,
+    pub title: String,
+    pub status: MovementStatus,
+    pub task_count: usize,
+    pub tasks_completed: usize,
+    pub has_deliverable: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRow {
+    pub id: TaskId,
+    pub movement_id: MovementId,
+    pub title: String,
+    pub category: TaskCategory,
+    pub status: TaskStatus,
+    pub ordinal: u32,
+    pub agent_name: Option<String>,
+    pub turns_completed: u32,
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,6 +598,10 @@ pub struct RuntimeSnapshot {
     pub saved_contexts: Vec<AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
     #[serde(default)]
+    pub movements: Vec<MovementRow>,
+    #[serde(default)]
+    pub tasks: Vec<TaskRow>,
+    #[serde(default)]
     pub loading: LoadingState,
     #[serde(default)]
     pub from_cache: bool,
@@ -427,6 +611,14 @@ pub struct RuntimeSnapshot {
 pub struct SnapshotCounts {
     pub running: usize,
     pub retrying: usize,
+    #[serde(default)]
+    pub movements: usize,
+    #[serde(default)]
+    pub tasks_pending: usize,
+    #[serde(default)]
+    pub tasks_in_progress: usize,
+    #[serde(default)]
+    pub tasks_completed: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,6 +659,10 @@ pub struct StoreBootstrap {
     pub budgets: HashMap<String, BudgetSnapshot>,
     pub saved_contexts: HashMap<String, AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
+    #[serde(default)]
+    pub movements: HashMap<String, Movement>,
+    #[serde(default)]
+    pub tasks: HashMap<String, Task>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -768,6 +964,19 @@ pub trait StateStore: Send + Sync {
     async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error>;
     async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
     async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error>;
+
+    async fn save_movement(&self, _movement: &Movement) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn save_task(&self, _task: &Task) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn load_movements(&self) -> Result<Vec<Movement>, Error> {
+        Ok(Vec::new())
+    }
+    async fn load_tasks_for_movement(&self, _movement_id: &str) -> Result<Vec<Task>, Error> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

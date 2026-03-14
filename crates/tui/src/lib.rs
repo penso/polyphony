@@ -2748,7 +2748,11 @@ mod tests {
     ) -> RuntimeSnapshot {
         RuntimeSnapshot {
             generated_at: Utc::now(),
-            counts: SnapshotCounts { running, retrying },
+            counts: SnapshotCounts {
+                running,
+                retrying,
+                ..Default::default()
+            },
             cadence: RuntimeCadence::default(),
             visible_issues: (0..visible)
                 .map(|index| VisibleIssueRow {
@@ -2778,6 +2782,8 @@ mod tests {
                 scope: EventScope::Workflow,
                 message: "updated".into(),
             }],
+            movements: Vec::new(),
+            tasks: Vec::new(),
             loading: polyphony_core::LoadingState::default(),
             from_cache: false,
         }
