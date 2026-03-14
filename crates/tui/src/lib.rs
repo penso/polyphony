@@ -475,10 +475,9 @@ pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Erro
     };
 
     drain_pending_input();
+    disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    drain_tty();
-    disable_raw_mode()?;
     result
 }
 
@@ -536,10 +535,9 @@ pub async fn run(
     };
 
     drain_pending_input();
+    disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    drain_tty();
-    disable_raw_mode()?;
     result
 }
 
@@ -2411,39 +2409,6 @@ fn drain_pending_input() {
     }
 }
 
-/// Drain any late-arriving OSC responses from the tty so they don't leak
-/// into the shell prompt after the TUI exits.
-fn drain_tty() {
-    #[cfg(unix)]
-    {
-        let Ok(mut tty) = std::fs::OpenOptions::new()
-            .read(true)
-            .write(false)
-            .open("/dev/tty")
-        else {
-            return;
-        };
-        let mut scratch = [0u8; 256];
-        // First poll with a longer timeout to catch responses triggered by
-        // LeaveAlternateScreen, then loop with short polls to drain any
-        // remaining bytes.
-        let mut first = true;
-        loop {
-            let timeout = if first { 50 } else { 5 };
-            first = false;
-            if !poll_tty_readable(tty.as_raw_fd(), Duration::from_millis(timeout))
-                .unwrap_or(false)
-            {
-                break;
-            }
-            match tty.read(&mut scratch) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    }
-}
-
 fn detect_terminal_theme() -> Option<Theme> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return None;
@@ -2572,6 +2537,18 @@ fn query_unix_terminal_colors() -> Option<(RgbColor, RgbColor)> {
         .write(true)
         .open("/dev/tty")
         .ok()?;
+
+    // Must be in raw mode so read() returns immediately with available
+    // bytes instead of blocking for a newline in canonical mode.
+    // OSC responses end with BEL (0x07), not newline.
+    enable_raw_mode().ok()?;
+    let result = read_osc_color_responses(&mut tty);
+    let _ = disable_raw_mode();
+    result
+}
+
+#[cfg(unix)]
+fn read_osc_color_responses(tty: &mut std::fs::File) -> Option<(RgbColor, RgbColor)> {
     tty.write_all(b"\x1b]10;?\x07\x1b]11;?\x07").ok()?;
     tty.flush().ok()?;
 
