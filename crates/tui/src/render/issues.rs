@@ -1,0 +1,217 @@
+use {
+    polyphony_core::RuntimeSnapshot,
+    ratatui::{
+        layout::{Constraint, Rect},
+        style::{Modifier, Style},
+        text::{Line, Span},
+        widgets::{
+            Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
+            ScrollbarState, Table,
+        },
+    },
+};
+
+use crate::app::AppState;
+
+pub fn draw_issues_tab(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &RuntimeSnapshot,
+    app: &mut AppState,
+) {
+    let theme = app.theme;
+    let indices = &app.sorted_issue_indices;
+
+    let header = Row::new(vec![
+        Cell::from(Span::styled("ID", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Type", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
+    ])
+    .height(1)
+    .style(Style::default().add_modifier(Modifier::BOLD));
+
+    let rows: Vec<Row> = indices
+        .iter()
+        .filter_map(|&i| snapshot.visible_issues.get(i))
+        .map(|issue| {
+            let state_color = state_color(&issue.state, theme);
+            let source_icon = infer_source_icon(&issue.issue_identifier);
+            let (issue_type, clean_title) = extract_type_and_title(&issue.title);
+            let type_color = type_color(&issue_type, theme);
+
+            Row::new(vec![
+                Cell::from(Line::from(vec![
+                    Span::styled(
+                        format!("{source_icon}"),
+                        Style::default().fg(theme.muted),
+                    ),
+                    Span::styled(
+                        issue.issue_identifier.clone(),
+                        Style::default().fg(theme.info),
+                    ),
+                ])),
+                Cell::from(Span::styled(
+                    clean_title,
+                    Style::default().fg(theme.foreground),
+                )),
+                Cell::from(Span::styled(
+                    issue_type.clone(),
+                    Style::default().fg(type_color),
+                )),
+                Cell::from(Span::styled(
+                    issue.state.clone(),
+                    Style::default().fg(state_color),
+                )),
+            ])
+        })
+        .collect();
+
+    let selected_style = Style::default()
+        .bg(theme.selection)
+        .fg(theme.foreground)
+        .add_modifier(Modifier::BOLD);
+
+    let count = indices.len();
+    let footer_info = selection_info(app.issues_state.selected(), count);
+    let sort_label = app.issue_sort.label();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Max(10),
+            Constraint::Fill(1),
+            Constraint::Length(7),
+            Constraint::Length(12),
+        ],
+    )
+    .header(header)
+    .row_highlight_style(selected_style)
+    .highlight_spacing(HighlightSpacing::Always)
+    .highlight_symbol("▸ ")
+    .block(
+        Block::default()
+            .title(Line::from(Span::styled(
+                " Issues ",
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .title_bottom(
+                Line::from(vec![
+                    Span::styled("─s:", Style::default().fg(theme.muted)),
+                    Span::styled(sort_label, Style::default().fg(theme.highlight)),
+                    Span::styled(
+                        format!(" {footer_info}─"),
+                        Style::default().fg(theme.muted),
+                    ),
+                ])
+                .right_aligned(),
+            )
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border))
+            .style(Style::default().bg(theme.panel)),
+    );
+
+    frame.render_stateful_widget(table, area, &mut app.issues_state);
+    draw_scrollbar(frame, area, count, app.issues_state.selected().unwrap_or(0));
+}
+
+/// Extract a type prefix like "[Feature]", "[Bug]", "Feature:", "Bug:" from the title.
+/// Returns (type_label, cleaned_title).
+fn extract_type_and_title(title: &str) -> (String, String) {
+    let trimmed = title.trim();
+
+    // Match [Type]: ... or [Type] ...
+    if trimmed.starts_with('[') {
+        if let Some(end) = trimmed.find(']') {
+            let tag = &trimmed[1..end];
+            let rest = trimmed[end + 1..].trim_start_matches(':').trim_start();
+            return (normalize_type(tag), rest.to_string());
+        }
+    }
+
+    // Match Type: ... (first word before colon)
+    if let Some(colon_pos) = trimmed.find(':') {
+        let candidate = &trimmed[..colon_pos];
+        if !candidate.contains(' ') && is_known_type(candidate) {
+            let rest = trimmed[colon_pos + 1..].trim_start();
+            return (normalize_type(candidate), rest.to_string());
+        }
+    }
+
+    ("".into(), trimmed.to_string())
+}
+
+fn is_known_type(s: &str) -> bool {
+    matches!(
+        s.to_ascii_lowercase().as_str(),
+        "feature" | "bug" | "feat" | "fix" | "model" | "chore" | "docs" | "refactor" | "test"
+    )
+}
+
+fn normalize_type(s: &str) -> String {
+    match s.to_ascii_lowercase().as_str() {
+        "feat" | "feature" => "feature".into(),
+        "bug" | "fix" => "bug".into(),
+        "model" => "model".into(),
+        "chore" => "chore".into(),
+        "docs" => "docs".into(),
+        "refactor" => "refac".into(),
+        "test" => "test".into(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
+fn type_color(issue_type: &str, theme: crate::theme::Theme) -> ratatui::style::Color {
+    match issue_type {
+        "feature" => theme.success,
+        "bug" => theme.danger,
+        "model" => theme.highlight,
+        "chore" => theme.muted,
+        "docs" => theme.info,
+        "test" => theme.warning,
+        _ => theme.muted,
+    }
+}
+
+pub fn infer_source_icon(identifier: &str) -> &'static str {
+    if identifier.starts_with("GH-") || identifier.contains('#') {
+        " "
+    } else {
+        "◆"
+    }
+}
+
+pub fn state_color(state: &str, theme: crate::theme::Theme) -> ratatui::style::Color {
+    match state.to_ascii_lowercase().as_str() {
+        "open" | "in progress" | "started" | "in_progress" => theme.success,
+        "todo" | "unstarted" | "backlog" => theme.info,
+        "closed" | "done" | "completed" | "cancelled" | "canceled" => theme.muted,
+        _ => theme.foreground,
+    }
+}
+
+fn selection_info(selected: Option<usize>, total: usize) -> String {
+    if total == 0 {
+        return "empty".into();
+    }
+    format!("{} of {total}", selected.unwrap_or_default() + 1)
+}
+
+fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, position: usize) {
+    let content_height = area.height.saturating_sub(3) as usize;
+    if count > content_height {
+        let mut scrollbar_state = ScrollbarState::new(count).position(position);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .thumb_symbol("┃"),
+            area,
+            &mut scrollbar_state,
+        );
+    }
+}

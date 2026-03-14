@@ -2364,6 +2364,9 @@ fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
         state: issue.state.clone(),
         priority: issue.priority,
         labels: issue.labels.clone(),
+        description: issue.description.clone(),
+        url: issue.url.clone(),
+        updated_at: issue.updated_at,
     }
 }
 

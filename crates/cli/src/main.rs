@@ -40,6 +40,9 @@ type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + 
 #[derive(Debug, Parser)]
 #[command(name = "polyphony")]
 struct Cli {
+    /// Path to the repository or directory to operate in.
+    #[arg(short = 'C', long = "directory", value_name = "DIR")]
+    directory: Option<PathBuf>,
     #[arg(value_name = "WORKFLOW", default_value = "WORKFLOW.md")]
     workflow_path: PathBuf,
     #[arg(long)]
@@ -82,6 +85,11 @@ async fn main() {
 
 async fn try_main() -> Result<(), Error> {
     let cli = Cli::parse();
+    if let Some(dir) = &cli.directory {
+        std::env::set_current_dir(dir).map_err(|e| {
+            Error::Config(format!("cannot change to directory {}: {e}", dir.display()))
+        })?;
+    }
     let tui_logs = LogBuffer::default();
     let tracing_output = if cli.no_tui {
         TracingOutput::stderr()

@@ -578,6 +578,12 @@ pub struct VisibleIssueRow {
     pub state: String,
     pub priority: Option<i32>,
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
