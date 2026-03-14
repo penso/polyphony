@@ -1,0 +1,29 @@
+# Polyphony repo-local config.
+# Destination: polyphony.toml in the repository root.
+# This file is created automatically when a repo already has a shared WORKFLOW.md and
+# local tracker or workspace wiring is still unset.
+# Merge order is: built-in defaults, ~/.config/polyphony/config.toml, WORKFLOW.md,
+# this file, then POLYPHONY__... env vars.
+
+[tracker]
+api_key    = "$GITHUB_TOKEN"
+kind       = "github"
+repository = "penso/polyphony"
+# Optional shared tracker profile from ~/.config/polyphony/config.toml:
+# profile = "github_personal"
+# GitHub example:
+# kind = "github"
+# repository = "owner/repo"
+# Optional for public repository issue polling, but recommended.
+#
+# Linear example:
+# kind = "linear"
+# profile = "linear_work"
+# project_slug = "ENG"
+# api_key = "$LINEAR_API_KEY"
+
+[workspace]
+checkout_kind    = "linked_worktree"
+source_repo_path = "/Users/penso/code/polyphony"
+sync_on_reuse    = true
+# default_branch = "main"

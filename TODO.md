@@ -44,3 +44,11 @@ reviews it, then sends me a Telegram with buttons to review or merge
 
 - add setup tear down per worktree.
 - Look at features in moltis and arbor and see what to take
+
+# Interesting links
+
+https://x.com/agent_wrapper/status/2025986105485733945
+https://github.com/ComposioHQ/agent-orchestrator
+https://www.8090.ai/
+https://factory.ai/news/missions
+https://www.terminaluse.com/
