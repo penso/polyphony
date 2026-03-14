@@ -6,15 +6,16 @@
 # this file, then POLYPHONY__... env vars.
 
 [tracker]
-api_key    = "$GITHUB_TOKEN"
-kind       = "github"
-repository = "penso/polyphony"
+kind = "beads"
+active_states = ["Open", "In Progress", "Blocked"]
+terminal_states = ["Closed", "Deferred"]
 # Optional shared tracker profile from ~/.config/polyphony/config.toml:
 # profile = "github_personal"
 # GitHub example:
 # kind = "github"
 # repository = "owner/repo"
 # Optional for public repository issue polling, but recommended.
+# api_key = "$GITHUB_TOKEN"
 #
 # Linear example:
 # kind = "linear"
@@ -23,7 +24,7 @@ repository = "penso/polyphony"
 # api_key = "$LINEAR_API_KEY"
 
 [workspace]
-checkout_kind    = "linked_worktree"
+checkout_kind = "linked_worktree"
 source_repo_path = "/Users/penso/code/polyphony"
-sync_on_reuse    = true
+sync_on_reuse = true
 # default_branch = "main"
