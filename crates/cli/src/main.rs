@@ -13,8 +13,8 @@ use {
     opentelemetry::{KeyValue, global, trace::TracerProvider as _},
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
     polyphony_core::{
-        CheckoutKind, IssueTracker, PullRequestCommenter, PullRequestManager, RuntimeSnapshot,
-        StateStore, TrackerKind, WorkspaceCommitter, WorkspaceProvisioner,
+        CheckoutKind, IssueTracker, NetworkCache, PullRequestCommenter, PullRequestManager,
+        RuntimeSnapshot, StateStore, TrackerKind, WorkspaceCommitter, WorkspaceProvisioner,
     },
     polyphony_orchestrator::{
         RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
@@ -132,6 +132,14 @@ async fn try_main() -> Result<(), Error> {
     let provisioner: Arc<dyn WorkspaceProvisioner> =
         Arc::new(polyphony_git::GitWorkspaceProvisioner);
     let store = build_store(cli.sqlite_url.as_deref()).await?;
+    let cache: Option<Arc<dyn NetworkCache>> = {
+        let cache_path = workflow_root_dir(&cli.workflow_path)?
+            .join(".polyphony")
+            .join("cache.json");
+        Some(Arc::new(polyphony_core::file_cache::FileNetworkCache::new(
+            cache_path,
+        )))
+    };
     let (workflow_tx, workflow_rx) = tokio::sync::watch::channel(workflow.clone());
     let (service, handle) = RuntimeService::new(
         components.tracker,
@@ -142,6 +150,7 @@ async fn try_main() -> Result<(), Error> {
         components.pull_request_commenter,
         components.feedback,
         store,
+        cache,
         workflow_rx,
     );
     let service = service.with_workflow_reload(
@@ -813,6 +822,7 @@ mod tests {
             Arc::new(tracker),
             Arc::new(agent),
             Arc::new(polyphony_git::GitWorkspaceProvisioner),
+            None,
             None,
             None,
             None,

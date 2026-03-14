@@ -1,3 +1,5 @@
+pub mod file_cache;
+
 use std::{
     collections::{BTreeMap, HashMap},
     fmt,
@@ -415,6 +417,10 @@ pub struct RuntimeSnapshot {
     pub agent_catalogs: Vec<AgentModelCatalog>,
     pub saved_contexts: Vec<AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
+    #[serde(default)]
+    pub loading: LoadingState,
+    #[serde(default)]
+    pub from_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -762,6 +768,37 @@ pub trait StateStore: Send + Sync {
     async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error>;
     async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
     async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CachedSnapshot {
+    pub saved_at: Option<DateTime<Utc>>,
+    pub visible_issues: Vec<VisibleIssueRow>,
+    pub budgets: Vec<BudgetSnapshot>,
+    pub agent_catalogs: Vec<AgentModelCatalog>,
+}
+
+#[async_trait]
+pub trait NetworkCache: Send + Sync {
+    async fn load(&self) -> Result<CachedSnapshot, Error>;
+    async fn save(&self, snapshot: &CachedSnapshot) -> Result<(), Error>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LoadingState {
+    pub fetching_issues: bool,
+    pub fetching_budgets: bool,
+    pub fetching_models: bool,
+    pub reconciling: bool,
+}
+
+impl LoadingState {
+    pub fn any_active(&self) -> bool {
+        self.fetching_issues
+            || self.fetching_budgets
+            || self.fetching_models
+            || self.reconciling
+    }
 }
 
 pub fn sanitize_workspace_key(identifier: &str) -> String {

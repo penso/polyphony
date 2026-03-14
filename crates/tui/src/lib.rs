@@ -244,6 +244,7 @@ struct AppState {
     events_scroll: usize,
     last_total_tokens: u64,
     last_event_marker: Option<EventMarker>,
+    frame_count: u64,
 }
 
 impl Default for AppState {
@@ -261,6 +262,7 @@ impl Default for AppState {
             events_scroll: 0,
             last_total_tokens: 0,
             last_event_marker: None,
+            frame_count: 0,
         }
     }
 }
@@ -472,6 +474,7 @@ pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Erro
         }
     };
 
+    drain_pending_input();
     disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -523,6 +526,7 @@ pub async fn run(
         }
     };
 
+    drain_pending_input();
     disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -624,12 +628,19 @@ fn draw_workflow_bootstrap(
     );
 }
 
+const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+fn spinner_char(frame: u64) -> char {
+    BRAILLE_SPINNER[(frame / 4) as usize % BRAILLE_SPINNER.len()]
+}
+
 fn draw(
     frame: &mut ratatui::Frame<'_>,
     snapshot: &RuntimeSnapshot,
     log_buffer: &LogBuffer,
     app: &mut AppState,
 ) {
+    app.frame_count = app.frame_count.wrapping_add(1);
     let theme = app.theme;
     frame.render_widget(
         Block::default().style(Style::default().bg(theme.background)),
@@ -719,8 +730,13 @@ fn draw_header(
             ),
         ]),
     ];
+    let live_title = if snapshot.loading.any_active() {
+        format!("{} syncing", spinner_char(app.frame_count))
+    } else {
+        "Live".into()
+    };
     frame.render_widget(
-        Paragraph::new(summary).block(panel_block("Live", theme)),
+        Paragraph::new(summary).block(panel_block(&live_title, theme)),
         sections[1],
     );
 }
@@ -805,6 +821,8 @@ fn draw_summary_strip(
         snapshot.cadence.tracker_poll_interval_ms,
         theme.info,
         theme,
+        snapshot.loading.fetching_issues,
+        app.frame_count,
     );
     draw_cadence_card(
         frame,
@@ -815,6 +833,8 @@ fn draw_summary_strip(
         snapshot.cadence.budget_poll_interval_ms,
         theme.success,
         theme,
+        snapshot.loading.fetching_budgets,
+        app.frame_count,
     );
     draw_cadence_card(
         frame,
@@ -825,6 +845,8 @@ fn draw_summary_strip(
         snapshot.cadence.model_discovery_interval_ms,
         theme.highlight,
         theme,
+        snapshot.loading.fetching_models,
+        app.frame_count,
     );
     draw_metric_card(
         frame,
@@ -1155,11 +1177,18 @@ fn draw_cadence_card(
     interval_ms: u64,
     accent: Color,
     theme: Theme,
+    is_loading: bool,
+    frame_count: u64,
 ) {
     let (ratio, label) = cadence_progress(now, last_at, interval_ms);
+    let display_title = if is_loading {
+        format!("{} {}", spinner_char(frame_count), title)
+    } else {
+        title.to_string()
+    };
     frame.render_widget(
         LineGauge::default()
-            .block(card_block(title, accent, theme))
+            .block(card_block(&display_title, accent, theme))
             .filled_style(Style::default().fg(accent))
             .unfilled_style(Style::default().fg(theme.border))
             .line_set(symbols::line::THICK)
@@ -1261,9 +1290,14 @@ fn draw_visible_issues_table(
     )
     .row_highlight_style(selected_row_style(theme))
     .highlight_symbol("▶ ")
-    .highlight_spacing(HighlightSpacing::Always)
-    .block(
-        panel_block("Visible Issues", theme).title_bottom(panel_footer(
+    .highlight_spacing(HighlightSpacing::Always);
+    let issues_title = if snapshot.from_cache {
+        "Visible Issues (cached)"
+    } else {
+        "Visible Issues"
+    };
+    let table = table.block(
+        panel_block(issues_title, theme).title_bottom(panel_footer(
             &selection_indicator(app.visible_state.selected(), snapshot.visible_issues.len()),
             theme,
         )),
@@ -2597,6 +2631,8 @@ mod tests {
                 scope: EventScope::Workflow,
                 message: "updated".into(),
             }],
+            loading: polyphony_core::LoadingState::default(),
+            from_cache: false,
         }
     }
 

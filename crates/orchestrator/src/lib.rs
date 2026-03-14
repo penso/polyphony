@@ -11,12 +11,13 @@ use {
     notify::{RecommendedWatcher, RecursiveMode, Watcher},
     polyphony_core::{
         AgentContextEntry, AgentContextSnapshot, AgentEvent, AgentEventKind, AgentModelCatalog,
-        AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CodexTotals,
-        Error as CoreError, EventScope, FeedbackAction, FeedbackLink, FeedbackNotification, Issue,
-        IssueTracker, PersistedRunRecord, PullRequestCommenter, PullRequestManager,
-        PullRequestRequest, RateLimitSignal, RetryRow, RunningRow, RuntimeCadence, RuntimeEvent,
-        RuntimeSnapshot, SnapshotCounts, StateStore, ThrottleWindow, TokenUsage, VisibleIssueRow,
-        WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner, sanitize_workspace_key,
+        AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CachedSnapshot,
+        CodexTotals, Error as CoreError, EventScope, FeedbackAction, FeedbackLink,
+        FeedbackNotification, Issue, IssueTracker, LoadingState, NetworkCache, PersistedRunRecord,
+        PullRequestCommenter, PullRequestManager, PullRequestRequest, RateLimitSignal, RetryRow,
+        RunningRow, RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts, StateStore,
+        ThrottleWindow, TokenUsage, VisibleIssueRow, WorkspaceCommitRequest, WorkspaceCommitter,
+        WorkspaceProvisioner, sanitize_workspace_key,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
@@ -85,6 +86,7 @@ pub struct RuntimeService {
     pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
     feedback: Option<Arc<FeedbackRegistry>>,
     store: Option<Arc<dyn StateStore>>,
+    cache: Option<Arc<dyn NetworkCache>>,
     workflow_rx: watch::Receiver<LoadedWorkflow>,
     snapshot_tx: watch::Sender<RuntimeSnapshot>,
     command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
@@ -167,6 +169,8 @@ struct RuntimeState {
     last_tracker_poll_at: Option<DateTime<Utc>>,
     last_budget_poll_at: Option<DateTime<Utc>>,
     last_model_discovery_at: Option<DateTime<Utc>>,
+    loading: LoadingState,
+    from_cache: bool,
 }
 
 impl Default for RuntimeState {
@@ -188,6 +192,8 @@ impl Default for RuntimeState {
             last_tracker_poll_at: None,
             last_budget_poll_at: None,
             last_model_discovery_at: None,
+            loading: LoadingState::default(),
+            from_cache: false,
         }
     }
 }
@@ -220,6 +226,7 @@ impl RuntimeService {
         pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
         feedback: Option<Arc<FeedbackRegistry>>,
         store: Option<Arc<dyn StateStore>>,
+        cache: Option<Arc<dyn NetworkCache>>,
         workflow_rx: watch::Receiver<LoadedWorkflow>,
     ) -> (Self, RuntimeHandle) {
         let (snapshot_tx, snapshot_rx) = watch::channel(empty_snapshot());
@@ -235,6 +242,7 @@ impl RuntimeService {
                 pull_request_commenter,
                 feedback,
                 store,
+                cache,
                 workflow_rx,
                 snapshot_tx,
                 command_tx: command_tx.clone(),
@@ -272,6 +280,11 @@ impl RuntimeService {
         if let Some(store) = &self.store {
             let bootstrap = store.bootstrap().await?;
             self.restore_bootstrap(bootstrap);
+        }
+        if let Some(cache) = &self.cache {
+            if let Ok(cached) = cache.load().await {
+                self.restore_cache(cached);
+            }
         }
         self.startup_cleanup().await;
         self.emit_snapshot().await?;
@@ -370,9 +383,20 @@ impl RuntimeService {
 
     async fn tick(&mut self) {
         self.reload_workflow_from_disk(false, "poll_tick").await;
+
+        self.state.loading.reconciling = true;
+        let _ = self.emit_snapshot().await;
         self.reconcile_running().await;
+        self.state.loading.reconciling = false;
+
+        self.state.loading.fetching_budgets = true;
         self.poll_budgets().await;
+        self.state.loading.fetching_budgets = false;
+
+        self.state.loading.fetching_models = true;
         self.refresh_agent_catalogs().await;
+        self.state.loading.fetching_models = false;
+
         if self.workflow_reload_error().is_some() {
             let _ = self.emit_snapshot().await;
             return;
@@ -396,24 +420,31 @@ impl RuntimeService {
         }
         let query = workflow.config.tracker_query();
         self.state.last_tracker_poll_at = Some(Utc::now());
+        self.state.loading.fetching_issues = true;
+        let _ = self.emit_snapshot().await;
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
+                self.state.loading.fetching_issues = false;
                 self.register_throttle(*signal);
                 let _ = self.emit_snapshot().await;
                 return;
             },
             Err(error) => {
+                self.state.loading.fetching_issues = false;
                 self.push_event(EventScope::Tracker, format!("candidate fetch failed: {error}"));
                 error!(%error, "candidate fetch failed");
                 let _ = self.emit_snapshot().await;
                 return;
             },
         };
+        self.state.loading.fetching_issues = false;
+        self.state.from_cache = false;
 
         let mut issues = issues;
         issues.sort_by(dispatch_order);
         self.state.visible_issues = issues.iter().map(summarize_issue).collect();
+        self.save_cache().await;
         if !workflow.config.has_dispatch_agents() {
             let _ = self.emit_snapshot().await;
             return;
@@ -1216,6 +1247,41 @@ impl RuntimeService {
             agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
             saved_contexts: self.state.saved_contexts.values().cloned().collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
+            loading: self.state.loading.clone(),
+            from_cache: self.state.from_cache,
+        }
+    }
+
+    fn restore_cache(&mut self, cached: CachedSnapshot) {
+        if self.state.visible_issues.is_empty() {
+            self.state.visible_issues = cached.visible_issues;
+        }
+        if self.state.budgets.is_empty() {
+            for budget in cached.budgets {
+                self.state.budgets.insert(budget.component.clone(), budget);
+            }
+        }
+        if self.state.agent_catalogs.is_empty() {
+            for catalog in cached.agent_catalogs {
+                self.state
+                    .agent_catalogs
+                    .insert(catalog.agent_name.clone(), catalog);
+            }
+        }
+        self.state.from_cache = true;
+    }
+
+    async fn save_cache(&self) {
+        if let Some(cache) = &self.cache {
+            let cached = CachedSnapshot {
+                saved_at: Some(Utc::now()),
+                visible_issues: self.state.visible_issues.clone(),
+                budgets: self.state.budgets.values().cloned().collect(),
+                agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
+            };
+            if let Err(e) = cache.save(&cached).await {
+                warn!(%e, "cache save failed");
+            }
         }
     }
 
@@ -2248,6 +2314,8 @@ fn empty_snapshot() -> RuntimeSnapshot {
         agent_catalogs: Vec::new(),
         saved_contexts: Vec::new(),
         recent_events: Vec::new(),
+        loading: LoadingState::default(),
+        from_cache: false,
     }
 }
 
@@ -2787,6 +2855,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             rx,
         )
         .0
@@ -2804,6 +2873,7 @@ mod tests {
             tracker,
             agent,
             Arc::new(provisioner),
+            None,
             None,
             None,
             None,
@@ -2901,6 +2971,7 @@ mod tests {
             Arc::new(tracker),
             Arc::new(NoopAgent),
             Arc::new(provisioner),
+            None,
             None,
             None,
             None,
@@ -3252,6 +3323,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
             Arc::new(tracker),
             Arc::new(NoopAgent),
             Arc::new(provisioner),
+            None,
             None,
             None,
             None,
