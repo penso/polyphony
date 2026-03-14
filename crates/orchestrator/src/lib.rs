@@ -92,6 +92,7 @@ pub struct RuntimeService {
     command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
     command_rx: mpsc::UnboundedReceiver<OrchestratorMessage>,
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
+    pending_refresh: bool,
     state: RuntimeState,
     reload_support: Option<WorkflowReloadSupport>,
 }
@@ -250,6 +251,7 @@ impl RuntimeService {
                 command_tx: command_tx.clone(),
                 command_rx,
                 external_command_rx,
+                pending_refresh: false,
                 reload_support: None,
                 state: RuntimeState::default(),
             },
@@ -289,13 +291,23 @@ impl RuntimeService {
             }
         }
         self.emit_snapshot().await?;
-        if !self.shutdown_requested() {
+        if !self.drain_commands() {
             self.startup_cleanup().await;
             self.emit_snapshot().await?;
         }
         let mut next_tick = Instant::now();
 
         loop {
+            // Handle any Refresh commands absorbed by drain_commands() during tick()
+            if self.pending_refresh {
+                self.pending_refresh = false;
+                info!("manual refresh requested");
+                self.state.throttles.clear();
+                self.reload_workflow_from_disk(true, "manual_refresh").await;
+                next_tick = Instant::now();
+                let _ = self.emit_snapshot().await;
+            }
+
             let next_retry = self.next_retry_deadline();
             let next_deadline = next_retry
                 .map(|retry| retry.min(next_tick))
@@ -304,6 +316,27 @@ impl RuntimeService {
             tokio::pin!(sleep);
 
             tokio::select! {
+                biased;
+
+                Some(command) = self.external_command_rx.recv() => {
+                    match command {
+                        RuntimeCommand::Refresh => {
+                            info!("manual refresh requested");
+                            self.state.throttles.clear();
+                            self.reload_workflow_from_disk(true, "manual_refresh").await;
+                            next_tick = Instant::now();
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::Shutdown => {
+                            self.abort_all().await;
+                            self.emit_snapshot().await?;
+                            return Ok(());
+                        }
+                    }
+                }
+                Some(message) = self.command_rx.recv() => {
+                    self.handle_message(message).await?;
+                }
                 _ = &mut sleep => {
                     let now = Instant::now();
                     if now >= next_tick {
@@ -317,23 +350,6 @@ impl RuntimeService {
                         next_tick = Instant::now() + interval;
                     }
                     self.process_due_retries().await;
-                }
-                Some(message) = self.command_rx.recv() => {
-                    self.handle_message(message).await?;
-                }
-                Some(command) = self.external_command_rx.recv() => match command {
-                    RuntimeCommand::Refresh => {
-                        info!("manual refresh requested");
-                        self.state.throttles.clear();
-                        self.reload_workflow_from_disk(true, "manual_refresh").await;
-                        next_tick = Instant::now();
-                        let _ = self.emit_snapshot().await;
-                    }
-                    RuntimeCommand::Shutdown => {
-                        self.abort_all().await;
-                        self.emit_snapshot().await?;
-                        return Ok(());
-                    }
                 }
             }
         }
@@ -394,17 +410,24 @@ impl RuntimeService {
             })
     }
 
-    fn shutdown_requested(&mut self) -> bool {
-        match self.external_command_rx.try_recv() {
-            Ok(RuntimeCommand::Shutdown) => true,
-            _ => false,
+    /// Drain pending external commands. Returns `true` if shutdown was requested.
+    /// Refresh commands set `pending_refresh` so the caller can act on them.
+    fn drain_commands(&mut self) -> bool {
+        loop {
+            match self.external_command_rx.try_recv() {
+                Ok(RuntimeCommand::Shutdown) => return true,
+                Ok(RuntimeCommand::Refresh) => {
+                    self.pending_refresh = true;
+                }
+                Err(_) => return false,
+            }
         }
     }
 
     async fn tick(&mut self) -> bool {
         self.reload_workflow_from_disk(false, "poll_tick").await;
 
-        if self.shutdown_requested() {
+        if self.drain_commands() {
             return true;
         }
 
@@ -414,7 +437,7 @@ impl RuntimeService {
         self.reconcile_running().await;
         self.state.loading.reconciling = false;
 
-        if self.shutdown_requested() {
+        if self.drain_commands() {
             return true;
         }
 
@@ -423,7 +446,7 @@ impl RuntimeService {
         self.poll_budgets().await;
         self.state.loading.fetching_budgets = false;
 
-        if self.shutdown_requested() {
+        if self.drain_commands() {
             return true;
         }
 
@@ -432,7 +455,7 @@ impl RuntimeService {
         self.refresh_agent_catalogs().await;
         self.state.loading.fetching_models = false;
 
-        if self.shutdown_requested() {
+        if self.drain_commands() {
             return true;
         }
 
