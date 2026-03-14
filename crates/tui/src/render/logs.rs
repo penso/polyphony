@@ -6,6 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
     },
 };
 
@@ -33,24 +34,27 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
 
     let raw_lines = app.log_buffer.recent_lines(500);
 
-    let mut display_lines: Vec<Line<'_>> = Vec::new();
-    for line in &raw_lines {
-        let styled_line = parse_log_line(line, theme);
-
-        // Estimate line length for wrapping
-        let line_len: usize = styled_line.spans.iter().map(|s| s.content.len()).sum();
-        if inner_width > 0 && line_len > inner_width {
-            // For long lines, render as single line and let Paragraph handle it
-            // (ratatui will truncate, which is fine for log lines)
-            display_lines.push(styled_line);
-        } else {
-            display_lines.push(styled_line);
-        }
-    }
+    let display_lines: Vec<Line<'_>> = raw_lines
+        .iter()
+        .map(|line| parse_log_line(line, theme))
+        .collect();
 
     let visible_height = area.height.saturating_sub(2) as usize;
-    let total_lines = display_lines.len();
-    let scroll_offset = total_lines.saturating_sub(visible_height);
+
+    // Estimate total wrapped lines for scroll offset
+    let total_wrapped: usize = display_lines
+        .iter()
+        .map(|line| {
+            let line_len: usize = line.spans.iter().map(|s| s.content.len()).sum();
+            if inner_width > 0 {
+                (line_len / inner_width) + 1
+            } else {
+                1
+            }
+        })
+        .sum();
+
+    let scroll_offset = total_wrapped.saturating_sub(visible_height);
 
     let block = Block::default()
         .title(Span::styled(
@@ -63,13 +67,15 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
 
     let paragraph = Paragraph::new(display_lines)
         .block(block)
+        .wrap(Wrap { trim: false })
         .scroll((scroll_offset as u16, 0));
 
     frame.render_widget(paragraph, area);
 
-    if total_lines > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(visible_height))
-            .position(scroll_offset);
+    if total_wrapped > visible_height {
+        let mut scrollbar_state =
+            ScrollbarState::new(total_wrapped.saturating_sub(visible_height))
+                .position(scroll_offset);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             area,

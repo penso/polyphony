@@ -40,7 +40,7 @@ pub fn draw_header(
             .add_modifier(Modifier::BOLD),
     )
     .block({
-        let mut block = Block::default()
+        let block = Block::default()
             .title(Line::from(Span::styled(
                 " Polyphony ",
                 Style::default()
@@ -51,23 +51,6 @@ pub fn draw_header(
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border));
 
-        if snapshot.loading.fetching_issues {
-            let spinner =
-                BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
-            block = block.title(
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {spinner} "),
-                        Style::default().fg(theme.highlight),
-                    ),
-                    Span::styled(
-                        "refreshing ",
-                        Style::default().fg(theme.muted),
-                    ),
-                ])
-                .right_aligned(),
-            );
-        }
         block
     });
     frame.render_widget(tabs, sections[0]);
@@ -105,13 +88,9 @@ pub fn draw_header(
         ),
     ])];
 
-    let live_title = if app.refresh_requested || snapshot.loading.any_active() {
+    let live_title = if snapshot.loading.any_active() {
         let spinner = BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
-        if app.refresh_requested {
-            format!("{spinner} Refreshing…")
-        } else {
-            format!("{spinner} syncing")
-        }
+        format!("{spinner} syncing")
     } else if snapshot.from_cache {
         "Cached".into()
     } else {

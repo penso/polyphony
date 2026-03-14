@@ -14,6 +14,8 @@ use {
 
 use crate::app::AppState;
 
+const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 pub fn draw_issues_tab(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -205,10 +207,27 @@ pub fn draw_issues_tab(
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
     .highlight_symbol("▸ ")
-    .block(
-        Block::default()
-            .title(Line::from(title_spans))
-            .title_bottom(
+    .block({
+        let mut block = Block::default()
+            .title(Line::from(title_spans));
+        if app.refresh_requested || snapshot.loading.fetching_issues {
+            let spinner =
+                BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
+            block = block.title(
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {spinner} "),
+                        Style::default().fg(theme.highlight),
+                    ),
+                    Span::styled(
+                        "refreshing ",
+                        Style::default().fg(theme.muted),
+                    ),
+                ])
+                .right_aligned(),
+            );
+        }
+        block.title_bottom(
                 Line::from(vec![
                     Span::styled("─s:", Style::default().fg(theme.muted)),
                     Span::styled(sort_label, Style::default().fg(theme.highlight)),
@@ -223,8 +242,8 @@ pub fn draw_issues_tab(
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border))
             .padding(Padding::right(1))
-            .style(Style::default().bg(theme.panel)),
-    );
+            .style(Style::default().bg(theme.panel))
+    });
 
     frame.render_stateful_widget(table, area, &mut app.issues_state);
     draw_scrollbar(frame, area, count, app.issues_state.selected().unwrap_or(0));
