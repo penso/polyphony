@@ -171,6 +171,7 @@ struct RuntimeState {
     last_model_discovery_at: Option<DateTime<Utc>>,
     loading: LoadingState,
     from_cache: bool,
+    cached_at: Option<DateTime<Utc>>,
 }
 
 impl Default for RuntimeState {
@@ -194,6 +195,7 @@ impl Default for RuntimeState {
             last_model_discovery_at: None,
             loading: LoadingState::default(),
             from_cache: false,
+            cached_at: None,
         }
     }
 }
@@ -471,6 +473,7 @@ impl RuntimeService {
         };
         self.state.loading.fetching_issues = false;
         self.state.from_cache = false;
+        self.state.cached_at = None;
 
         let mut issues = issues;
         issues.sort_by(dispatch_order);
@@ -1284,6 +1287,7 @@ impl RuntimeService {
             tasks: Vec::new(),
             loading: self.state.loading.clone(),
             from_cache: self.state.from_cache,
+            cached_at: self.state.cached_at,
         }
     }
 
@@ -1304,6 +1308,7 @@ impl RuntimeService {
             }
         }
         self.state.from_cache = true;
+        self.state.cached_at = cached.saved_at;
     }
 
     async fn save_cache(&self) {
@@ -2353,6 +2358,7 @@ fn empty_snapshot() -> RuntimeSnapshot {
         tasks: Vec::new(),
         loading: LoadingState::default(),
         from_cache: false,
+        cached_at: None,
     }
 }
 

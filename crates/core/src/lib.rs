@@ -613,6 +613,8 @@ pub struct RuntimeSnapshot {
     pub loading: LoadingState,
     #[serde(default)]
     pub from_cache: bool,
+    #[serde(default)]
+    pub cached_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
