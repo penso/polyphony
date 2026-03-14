@@ -550,7 +550,10 @@ mod tests {
         tempfile::tempdir,
     };
 
-    use super::{GitWorkspaceCommitter, GitWorkspaceProvisioner, detect_github_remote, parse_github_owner_repo};
+    use super::{
+        GitWorkspaceCommitter, GitWorkspaceProvisioner, detect_github_remote,
+        parse_github_owner_repo,
+    };
 
     fn make_request(
         root: &Path,

@@ -21,7 +21,7 @@ pub fn draw_orchestrator_tab(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5), // Status panel
-            Constraint::Min(6),   // Movements table
+            Constraint::Min(6),    // Movements table
         ])
         .split(area);
 
@@ -111,10 +111,7 @@ fn draw_status_panel(
                 ),
                 Style::default().fg(theme.info),
             ),
-            Span::styled(
-                " (done/active/pending)",
-                Style::default().fg(theme.muted),
-            ),
+            Span::styled(" (done/active/pending)", Style::default().fg(theme.muted)),
         ]),
     ];
 
@@ -159,7 +156,11 @@ fn draw_movements_table(
         .map(|m| {
             let status_color = movement_status_color(&m.status, theme);
             let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
-            let pr_icon = if m.has_deliverable { "✓" } else { "—" };
+            let pr_icon = if m.has_deliverable {
+                "✓"
+            } else {
+                "—"
+            };
 
             Row::new(vec![
                 Cell::from(Span::styled(
@@ -205,16 +206,13 @@ fn draw_movements_table(
         )
     };
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(14),
-            Constraint::Fill(1),
-            Constraint::Length(14),
-            Constraint::Length(8),
-            Constraint::Length(4),
-        ],
-    )
+    let table = Table::new(rows, [
+        Constraint::Length(14),
+        Constraint::Fill(1),
+        Constraint::Length(14),
+        Constraint::Length(8),
+        Constraint::Length(4),
+    ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)

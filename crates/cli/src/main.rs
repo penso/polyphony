@@ -121,14 +121,9 @@ async fn try_main() -> Result<(), Error> {
         return Ok(());
     }
     let (repo_config_path, first_run_no_github) =
-        maybe_seed_repo_config_with_github_detection(
-            &cli.workflow_path,
-            Some(&user_config_path),
-        )?;
+        maybe_seed_repo_config_with_github_detection(&cli.workflow_path, Some(&user_config_path))?;
     if first_run_no_github {
-        eprintln!(
-            "Edit polyphony.toml to configure your tracker, then restart polyphony."
-        );
+        eprintln!("Edit polyphony.toml to configure your tracker, then restart polyphony.");
         return Ok(());
     }
     let workflow = load_workflow_with_user_config(&cli.workflow_path, Some(&user_config_path))?;
@@ -521,7 +516,8 @@ fn init_tracing(log_json: bool, tui_mode: bool, tracing_output: TracingOutput) -
     } else {
         "info"
     };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let tracer_provider = match build_tracer_provider() {
         Ok(provider) => provider,
         Err(error) => {
@@ -744,27 +740,28 @@ fn build_runtime_components(
             Arc::new(polyphony_git::GitWorkspaceCommitter) as Arc<dyn WorkspaceCommitter>,
         );
     #[cfg(feature = "github")]
-    let (pull_request_manager, pull_request_commenter) =
-        if workflow.config.automation.enabled && workflow.config.tracker.kind == TrackerKind::Github {
-            let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
-                Error::Config("tracker.repository is required for github automation".into())
-            })?;
-            let token = workflow.config.tracker.api_key.clone().ok_or_else(|| {
-                Error::Config("tracker.api_key is required for github automation".into())
-            })?;
-            (
-                Some(Arc::new(polyphony_github::GithubPullRequestManager::new(
-                    repository.clone(),
-                    token.clone(),
-                )?) as Arc<dyn PullRequestManager>),
-                Some(
-                    Arc::new(polyphony_github::GithubPullRequestCommenter::new(token))
-                        as Arc<dyn PullRequestCommenter>,
-                ),
-            )
-        } else {
-            (None, None)
-        };
+    let (pull_request_manager, pull_request_commenter) = if workflow.config.automation.enabled
+        && workflow.config.tracker.kind == TrackerKind::Github
+    {
+        let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
+            Error::Config("tracker.repository is required for github automation".into())
+        })?;
+        let token = workflow.config.tracker.api_key.clone().ok_or_else(|| {
+            Error::Config("tracker.api_key is required for github automation".into())
+        })?;
+        (
+            Some(Arc::new(polyphony_github::GithubPullRequestManager::new(
+                repository.clone(),
+                token.clone(),
+            )?) as Arc<dyn PullRequestManager>),
+            Some(
+                Arc::new(polyphony_github::GithubPullRequestCommenter::new(token))
+                    as Arc<dyn PullRequestCommenter>,
+            ),
+        )
+    } else {
+        (None, None)
+    };
     #[cfg(not(feature = "github"))]
     let (pull_request_manager, pull_request_commenter): (
         Option<Arc<dyn PullRequestManager>>,

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use {
     async_trait::async_trait,
     polyphony_core::{
-        FeedbackCapabilities, FeedbackChannelDescriptor, FeedbackChannelKind,
-        FeedbackInboundMode, FeedbackNotification, FeedbackSink,
+        FeedbackCapabilities, FeedbackChannelDescriptor, FeedbackChannelKind, FeedbackInboundMode,
+        FeedbackNotification, FeedbackSink,
     },
     polyphony_workflow::FeedbackConfig,
     serde::Serialize,
@@ -277,10 +277,10 @@ webhook:
             .map(|descriptor| descriptor.kind)
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            kinds,
-            vec![FeedbackChannelKind::Telegram, FeedbackChannelKind::Webhook]
-        );
+        assert_eq!(kinds, vec![
+            FeedbackChannelKind::Telegram,
+            FeedbackChannelKind::Webhook
+        ]);
     }
 
     #[test]

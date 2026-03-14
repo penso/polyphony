@@ -399,10 +399,7 @@ fn linear_comments_from_connection(
             collected.push(IssueComment {
                 id: child.id.clone(),
                 body: child.body.clone(),
-                author: child
-                    .user
-                    .as_ref()
-                    .map(linear_author),
+                author: child.user.as_ref().map(linear_author),
                 url: Some(child.url.clone()),
                 created_at: parse_rfc3339(&child.created_at),
                 updated_at: parse_rfc3339(&child.updated_at),
@@ -420,10 +417,7 @@ fn linear_comments_from_id_connection(
         collected.push(IssueComment {
             id: comment.id.clone(),
             body: comment.body.clone(),
-            author: comment
-                .user
-                .as_ref()
-                .map(linear_author),
+            author: comment.user.as_ref().map(linear_author),
             url: Some(comment.url.clone()),
             created_at: parse_rfc3339(&comment.created_at),
             updated_at: parse_rfc3339(&comment.updated_at),
@@ -432,10 +426,7 @@ fn linear_comments_from_id_connection(
             collected.push(IssueComment {
                 id: child.id.clone(),
                 body: child.body.clone(),
-                author: child
-                    .user
-                    .as_ref()
-                    .map(linear_author),
+                author: child.user.as_ref().map(linear_author),
                 url: Some(child.url.clone()),
                 created_at: parse_rfc3339(&child.created_at),
                 updated_at: parse_rfc3339(&child.updated_at),

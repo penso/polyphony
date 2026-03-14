@@ -31,12 +31,11 @@ impl NetworkCache for FileNetworkCache {
 
     async fn save(&self, snapshot: &CachedSnapshot) -> Result<(), Error> {
         let path = self.path.clone();
-        let data = serde_json::to_string_pretty(snapshot)
-            .map_err(|e| Error::Store(e.to_string()))?;
+        let data =
+            serde_json::to_string_pretty(snapshot).map_err(|e| Error::Store(e.to_string()))?;
         tokio::task::spawn_blocking(move || {
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| Error::Store(e.to_string()))?;
+                std::fs::create_dir_all(parent).map_err(|e| Error::Store(e.to_string()))?;
             }
             let tmp = path.with_extension("tmp");
             std::fs::write(&tmp, &data).map_err(|e| Error::Store(e.to_string()))?;

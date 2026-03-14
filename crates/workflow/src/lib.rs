@@ -423,11 +423,10 @@ pub fn seed_repo_config_with_github(
         )));
     }
     ensure_parent_dir(path, "repo config path")?;
-    let content = default_repo_config_toml(source_repo_path)
-        .replace(
-            "kind = \"none\"",
-            &format!("kind = \"github\"\nrepository = \"{github_repo}\""),
-        );
+    let content = default_repo_config_toml(source_repo_path).replace(
+        "kind = \"none\"",
+        &format!("kind = \"github\"\nrepository = \"{github_repo}\""),
+    );
     fs::write(path, content)
         .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
     Ok(true)
@@ -568,9 +567,7 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("workspace.sync_on_reuse", true)
             .map_err(config_error)?
-            .set_default("workspace.transient_paths", vec![
-                "tmp".to_string(),
-            ])
+            .set_default("workspace.transient_paths", vec!["tmp".to_string()])
             .map_err(config_error)?
             .set_default("hooks.timeout_ms", 60_000)
             .map_err(config_error)?
@@ -1607,8 +1604,7 @@ mod tests {
             render_issue_template, render_turn_template, repo_config_path,
         },
         polyphony_core::{
-            AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue,
-            TrackerKind,
+            AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, TrackerKind,
         },
         serde_yaml::Value as YamlValue,
     };
@@ -2489,7 +2485,10 @@ source_repo_path = "/tmp/polyphony"
             workflow.config.tracker.repository.as_deref(),
             Some("penso/polyphony")
         );
-        assert_eq!(workflow.config.workspace.checkout_kind, CheckoutKind::LinkedWorktree);
+        assert_eq!(
+            workflow.config.workspace.checkout_kind,
+            CheckoutKind::LinkedWorktree
+        );
         assert_eq!(
             workflow.config.workspace.source_repo_path.as_deref(),
             Some(std::path::Path::new("/tmp/polyphony"))

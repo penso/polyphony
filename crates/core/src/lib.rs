@@ -1065,10 +1065,7 @@ pub struct LoadingState {
 
 impl LoadingState {
     pub fn any_active(&self) -> bool {
-        self.fetching_issues
-            || self.fetching_budgets
-            || self.fetching_models
-            || self.reconciling
+        self.fetching_issues || self.fetching_budgets || self.fetching_models || self.reconciling
     }
 }
 

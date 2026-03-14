@@ -1,17 +1,19 @@
-use chrono::Utc;
-use polyphony_core::RuntimeSnapshot;
-use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{
-        Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph, RenderDirection,
-        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table,
+use {
+    chrono::Utc,
+    polyphony_core::RuntimeSnapshot,
+    ratatui::{
+        layout::{Alignment, Constraint, Direction, Layout, Rect},
+        style::{Color, Modifier, Style},
+        text::{Line, Span, Text},
+        widgets::{
+            Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph,
+            RenderDirection, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline,
+            Table,
+        },
     },
 };
 
-use crate::app::AppState;
-use crate::theme::Theme;
+use crate::{app::AppState, theme::Theme};
 
 struct LogEntry {
     time: String,
@@ -87,8 +89,8 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
 
     // Compute available message column width for wrapping
     // area.width - 2 (borders) - 2 (L+R padding) - 9 - 6 - target - 3 (column gaps)
-    let msg_width = (area.width as usize)
-        .saturating_sub(2 + 2 + 9 + 6 + max_target_len as usize + 3);
+    let msg_width =
+        (area.width as usize).saturating_sub(2 + 2 + 9 + 6 + max_target_len as usize + 3);
 
     let header = Row::new(vec![
         Cell::from(
@@ -131,15 +133,12 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
 
     let title = build_logs_title(&app.logs_search_query, app.logs_search_active, theme);
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(9),
-            Constraint::Length(6),
-            Constraint::Length(max_target_len),
-            Constraint::Fill(1),
-        ],
-    )
+    let table = Table::new(rows, [
+        Constraint::Length(9),
+        Constraint::Length(6),
+        Constraint::Length(max_target_len),
+        Constraint::Fill(1),
+    ])
     .header(header)
     .highlight_spacing(HighlightSpacing::Always)
     .block(
@@ -257,7 +256,11 @@ fn wrap_message_cell<'a>(
     };
 
     // Combine all chars; msg_chars.len() is the boundary
-    let all_chars: Vec<char> = msg_chars.iter().chain(extras_chars.iter()).copied().collect();
+    let all_chars: Vec<char> = msg_chars
+        .iter()
+        .chain(extras_chars.iter())
+        .copied()
+        .collect();
     let msg_boundary = msg_chars.len();
 
     if all_chars.is_empty() {
@@ -334,10 +337,7 @@ fn build_logs_title<'a>(query: &str, typing: bool, theme: Theme) -> Line<'a> {
             Span::styled(format!("[{query}] "), Style::default().fg(theme.info)),
         ])
     } else {
-        Line::from(Span::styled(
-            " Logs ",
-            Style::default().fg(theme.highlight),
-        ))
+        Line::from(Span::styled(" Logs ", Style::default().fg(theme.highlight)))
     }
 }
 
@@ -524,9 +524,7 @@ fn throttle_spans<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Line<'a> {
     } else {
         spans.push(Span::styled(
             format!("Throttles: {} ", snapshot.throttles.len()),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
         let now = Utc::now();
         for (i, t) in snapshot.throttles.iter().enumerate() {

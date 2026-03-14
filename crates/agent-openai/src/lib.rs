@@ -9,8 +9,8 @@ use {
     },
     polyphony_core::{
         AgentDefinition, AgentEventKind, AgentModel, AgentModelCatalog, AgentProviderRuntime,
-        AgentRunResult, AgentRunSpec, AgentTransport, BudgetSnapshot,
-        Error as CoreError, RateLimitSignal, TokenUsage,
+        AgentRunResult, AgentRunSpec, AgentTransport, BudgetSnapshot, Error as CoreError,
+        RateLimitSignal, TokenUsage,
     },
     reqwest::header::CONTENT_TYPE,
     serde_json::{Value, json},

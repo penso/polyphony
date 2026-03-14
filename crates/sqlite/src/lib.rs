@@ -157,16 +157,11 @@ impl StateStore for SqliteStateStore {
                     movements: Default::default(),
                     tasks: Default::default(),
                 }
-            }
+            },
         };
 
-        let movements = self
-            .load_movements()
-            .await?;
-        bootstrap.movements = movements
-            .into_iter()
-            .map(|m| (m.id.clone(), m))
-            .collect();
+        let movements = self.load_movements().await?;
+        bootstrap.movements = movements.into_iter().map(|m| (m.id.clone(), m)).collect();
 
         for movement_id in bootstrap.movements.keys().cloned().collect::<Vec<_>>() {
             let tasks = self.load_tasks_for_movement(&movement_id).await?;
@@ -237,8 +232,8 @@ impl StateStore for SqliteStateStore {
     }
 
     async fn save_movement(&self, movement: &Movement) -> Result<(), CoreError> {
-        let payload = serde_json::to_string(movement)
-            .map_err(|error| CoreError::Store(error.to_string()))?;
+        let payload =
+            serde_json::to_string(movement).map_err(|error| CoreError::Store(error.to_string()))?;
         sqlx::query(
             r#"
             insert or replace into movements (
@@ -295,16 +290,12 @@ impl StateStore for SqliteStateStore {
 
         rows.iter()
             .map(|(payload,)| {
-                serde_json::from_str(payload)
-                    .map_err(|error| CoreError::Store(error.to_string()))
+                serde_json::from_str(payload).map_err(|error| CoreError::Store(error.to_string()))
             })
             .collect()
     }
 
-    async fn load_tasks_for_movement(
-        &self,
-        movement_id: &str,
-    ) -> Result<Vec<Task>, CoreError> {
+    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, CoreError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             r#"
             select payload from tasks
@@ -319,8 +310,7 @@ impl StateStore for SqliteStateStore {
 
         rows.iter()
             .map(|(payload,)| {
-                serde_json::from_str(payload)
-                    .map_err(|error| CoreError::Store(error.to_string()))
+                serde_json::from_str(payload).map_err(|error| CoreError::Store(error.to_string()))
             })
             .collect()
     }

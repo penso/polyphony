@@ -283,10 +283,7 @@ impl AppState {
     }
 
     /// Get the currently selected issue (in sorted order).
-    pub fn selected_issue<'a>(
-        &self,
-        snapshot: &'a RuntimeSnapshot,
-    ) -> Option<&'a VisibleIssueRow> {
+    pub fn selected_issue<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a VisibleIssueRow> {
         self.issues_state
             .selected()
             .and_then(|display_idx| self.sorted_issue(snapshot, display_idx))
@@ -356,7 +353,10 @@ fn issue_matches(issue: &VisibleIssueRow, query: &str) -> bool {
     issue.title.to_lowercase().contains(query)
         || issue.issue_identifier.to_lowercase().contains(query)
         || issue.state.to_lowercase().contains(query)
-        || issue.labels.iter().any(|l| l.to_lowercase().contains(query))
+        || issue
+            .labels
+            .iter()
+            .any(|l| l.to_lowercase().contains(query))
         || issue
             .description
             .as_deref()

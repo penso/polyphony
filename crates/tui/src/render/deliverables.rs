@@ -72,14 +72,11 @@ pub fn draw_deliverables_tab(
         )
     };
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(14),
-            Constraint::Fill(1),
-            Constraint::Length(14),
-        ],
-    )
+    let table = Table::new(rows, [
+        Constraint::Length(14),
+        Constraint::Fill(1),
+        Constraint::Length(14),
+    ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)

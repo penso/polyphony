@@ -495,7 +495,11 @@ impl IssueTracker for GithubIssueTracker {
             .and_then(|guard| guard.clone());
         let requests = self.request_count.load(Ordering::Relaxed);
         let (remaining, total, reset_at) = match captured {
-            Some(rl) => (Some(rl.remaining as f64), Some(rl.limit as f64), rl.reset_at),
+            Some(rl) => (
+                Some(rl.remaining as f64),
+                Some(rl.limit as f64),
+                rl.reset_at,
+            ),
             None => (None, None, None),
         };
         let raw = serde_json::json!({ "requests": requests });
