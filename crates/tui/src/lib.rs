@@ -503,26 +503,34 @@ pub async fn run(
     let result = loop {
         terminal.draw(|frame| draw(frame, &snapshot, &log_buffer, &mut app))?;
 
+        let mut key_handled = false;
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
-            && let Some(command) = app.handle_key(key.code, &snapshot)
         {
-            let shutdown = matches!(command, RuntimeCommand::Shutdown);
-            let _ = command_tx.send(command);
-            if shutdown {
-                break Ok(());
-            }
-        }
-
-        tokio::select! {
-            changed = snapshot_rx.changed() => {
-                if changed.is_err() {
+            if let Some(command) = app.handle_key(key.code, &snapshot) {
+                let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                let _ = command_tx.send(command);
+                if shutdown {
                     break Ok(());
                 }
-                snapshot = snapshot_rx.borrow().clone();
-                app.on_snapshot(&snapshot);
             }
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            key_handled = true;
+        }
+
+        if !key_handled {
+            tokio::select! {
+                changed = snapshot_rx.changed() => {
+                    if changed.is_err() {
+                        break Ok(());
+                    }
+                    snapshot = snapshot_rx.borrow().clone();
+                    app.on_snapshot(&snapshot);
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+        } else if snapshot_rx.has_changed().unwrap_or(false) {
+            snapshot = snapshot_rx.borrow().clone();
+            app.on_snapshot(&snapshot);
         }
     };
 
