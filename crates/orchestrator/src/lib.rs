@@ -1596,7 +1596,7 @@ impl RuntimeService {
         {
             context.transcript.push(AgentContextEntry {
                 at: event.at,
-                kind: format!("{:?}", event.kind),
+                kind: event.kind,
                 message: message.clone(),
             });
             while context.transcript.len() > 40 {
@@ -1645,7 +1645,7 @@ impl RuntimeService {
         if let Some(error) = &outcome.error {
             context.transcript.push(AgentContextEntry {
                 at: Utc::now(),
-                kind: "outcome".into(),
+                kind: AgentEventKind::Outcome,
                 message: format!("run ended with error: {error}"),
             });
         }
@@ -2293,7 +2293,7 @@ fn append_saved_context(
     result.push_str("Recent transcript:\n");
     for entry in saved_context.transcript.iter().rev().take(12).rev() {
         result.push_str(&format!(
-            "- [{}] {}: {}\n",
+            "- [{:?}] {}: {}\n",
             entry.kind,
             entry.at.to_rfc3339(),
             entry.message
@@ -3279,7 +3279,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                 usage: TokenUsage::default(),
                 transcript: vec![AgentContextEntry {
                     at: Utc::now(),
-                    kind: "Notification".into(),
+                    kind: AgentEventKind::Notification,
                     message: "Partial work already completed".into(),
                 }],
             });
@@ -3404,7 +3404,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                 usage: TokenUsage::default(),
                 transcript: vec![AgentContextEntry {
                     at: Utc::now(),
-                    kind: "Notification".into(),
+                    kind: AgentEventKind::Notification,
                     message: "Implemented parser, tests still failing".into(),
                 }],
             }),

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use {
     async_trait::async_trait,
     polyphony_core::{
-        FeedbackCapabilities, FeedbackChannelDescriptor, FeedbackInboundMode, FeedbackNotification,
-        FeedbackSink,
+        FeedbackCapabilities, FeedbackChannelDescriptor, FeedbackChannelKind,
+        FeedbackInboundMode, FeedbackNotification, FeedbackSink,
     },
     polyphony_workflow::FeedbackConfig,
     serde::Serialize,
@@ -112,7 +112,7 @@ impl FeedbackSink for TelegramFeedbackSink {
 
     fn descriptor(&self) -> FeedbackChannelDescriptor {
         FeedbackChannelDescriptor {
-            kind: "telegram".into(),
+            kind: FeedbackChannelKind::Telegram,
             inbound_mode: FeedbackInboundMode::Polling,
             capabilities: FeedbackCapabilities {
                 supports_outbound: true,
@@ -192,7 +192,7 @@ impl FeedbackSink for WebhookFeedbackSink {
 
     fn descriptor(&self) -> FeedbackChannelDescriptor {
         FeedbackChannelDescriptor {
-            kind: "webhook".into(),
+            kind: FeedbackChannelKind::Webhook,
             inbound_mode: FeedbackInboundMode::Webhook,
             capabilities: FeedbackCapabilities {
                 supports_outbound: true,
@@ -250,7 +250,7 @@ fn render_notification_text(notification: &FeedbackNotification) -> String {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use polyphony_core::FeedbackNotification;
+    use polyphony_core::{FeedbackChannelKind, FeedbackNotification};
 
     use super::FeedbackRegistry;
 
@@ -277,7 +277,10 @@ webhook:
             .map(|descriptor| descriptor.kind)
             .collect::<Vec<_>>();
 
-        assert_eq!(kinds, vec!["telegram".to_string(), "webhook".to_string()]);
+        assert_eq!(
+            kinds,
+            vec![FeedbackChannelKind::Telegram, FeedbackChannelKind::Webhook]
+        );
     }
 
     #[test]

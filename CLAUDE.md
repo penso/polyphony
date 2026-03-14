@@ -18,6 +18,14 @@ For general repository rules, Rust workflow, testing expectations, and release h
 - Design for both wide and narrow terminals. Do not assume a large screen.
 - Check the ratatui version pinned in the workspace `Cargo.toml` and `Cargo.lock` before copying APIs from the website or local checkout. The local `~/code/ratatui` clone may be ahead of the version this repo actually builds against.
 
+## Type System Conventions
+
+- Prefer enums over `String` for fields with a fixed set of values. Enums catch invalid values at compile time (or deserialization time), enable exhaustive `match`, and eliminate manual string validation.
+- Derive `Copy` on fieldless enums (`AgentTransport`, `FeedbackChannelKind`, `AgentEventKind`, etc.) so they can be passed by value without `.clone()`.
+- Use `#[serde(rename_all = "snake_case")]` on enums whose serialized form must be lowercase/snake_case.
+- **Config crate limitation:** `AgentProfileConfig` and `FeedbackConfig` are deserialized through the `config` crate, which does not honor serde `rename_all` on enum variants. Fields in these structs that accept enum-like values must stay as `String` with manual parsing (see `infer_agent_transport()` and the `feedback.offered` validation in `ServiceConfig::validate()`). Only use typed enums in structs deserialized directly by serde (serde_yaml, serde_json).
+- When replacing a `String` field with an enum, update all construction sites, match arms, format strings (use `{:?}` for Debug output of enums where the old code printed the string), and test assertions.
+
 ## Symphony References
 
 - For orchestration architecture and workflow-contract reference, inspect the upstream Symphony project at [github.com/openai/symphony](https://github.com/openai/symphony).

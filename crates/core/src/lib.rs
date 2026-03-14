@@ -132,7 +132,7 @@ pub struct AgentModelCatalog {
     pub models: Vec<AgentModel>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentEventKind {
     SessionStarted,
     TurnStarted,
@@ -144,6 +144,7 @@ pub enum AgentEventKind {
     RateLimitsUpdated,
     StartupFailed,
     OtherMessage,
+    Outcome,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,7 +233,7 @@ impl AgentRunResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentTransport {
     #[default]
@@ -465,7 +466,7 @@ pub struct StoreBootstrap {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentContextEntry {
     pub at: DateTime<Utc>,
-    pub kind: String,
+    pub kind: AgentEventKind,
     pub message: String,
 }
 
@@ -571,9 +572,22 @@ pub struct FeedbackCapabilities {
     pub supports_interactive: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackChannelKind {
+    Telegram,
+    Webhook,
+}
+
+impl fmt::Display for FeedbackChannelKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", format!("{self:?}").to_lowercase())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedbackChannelDescriptor {
-    pub kind: String,
+    pub kind: FeedbackChannelKind,
     pub inbound_mode: FeedbackInboundMode,
     pub capabilities: FeedbackCapabilities,
 }
