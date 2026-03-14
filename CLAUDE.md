@@ -17,6 +17,7 @@ For general repository rules, Rust workflow, testing expectations, and release h
 - Prefer stateful tables, scrollbars for long panes, sparklines for short history trends, and gauges or progress bars for cadence, retry, or completion state.
 - Design for both wide and narrow terminals. Do not assume a large screen.
 - Check the ratatui version pinned in the workspace `Cargo.toml` and `Cargo.lock` before copying APIs from the website or local checkout. The local `~/code/ratatui` clone may be ahead of the version this repo actually builds against.
+- **Never block the TUI loop.** The draw → input → update cycle must stay instant. After handling a keypress, loop back to draw immediately — do not sleep, await network, or fall into a timed select. Network fetches and other async work belong in the orchestrator; the TUI only reads the latest snapshot.
 
 ## Type System Conventions
 
