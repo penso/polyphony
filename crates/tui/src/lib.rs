@@ -478,6 +478,7 @@ pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Erro
     disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+    drain_tty();
     result
 }
 
@@ -538,6 +539,7 @@ pub async fn run(
     disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+    drain_tty();
     result
 }
 
@@ -2406,6 +2408,28 @@ const DANGER_ACCENT: RgbColor = RgbColor::new(248, 113, 113);
 fn drain_pending_input() {
     while event::poll(Duration::from_millis(10)).unwrap_or(false) {
         let _ = event::read();
+    }
+}
+
+/// Drain any late-arriving OSC responses from the tty so they don't leak
+/// into the shell prompt after the TUI exits.
+fn drain_tty() {
+    #[cfg(unix)]
+    {
+        let Ok(mut tty) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(false)
+            .open("/dev/tty")
+        else {
+            return;
+        };
+        let mut scratch = [0u8; 256];
+        while poll_tty_readable(tty.as_raw_fd(), Duration::from_millis(20)).unwrap_or(false) {
+            match tty.read(&mut scratch) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
     }
 }
 
