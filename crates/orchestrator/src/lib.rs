@@ -408,6 +408,7 @@ impl RuntimeService {
             return true;
         }
 
+        debug!("tick: reconciling running sessions");
         self.state.loading.reconciling = true;
         let _ = self.emit_snapshot().await;
         self.reconcile_running().await;
@@ -417,6 +418,7 @@ impl RuntimeService {
             return true;
         }
 
+        debug!("tick: polling budgets");
         self.state.loading.fetching_budgets = true;
         self.poll_budgets().await;
         self.state.loading.fetching_budgets = false;
@@ -425,6 +427,7 @@ impl RuntimeService {
             return true;
         }
 
+        debug!("tick: refreshing agent catalogs");
         self.state.loading.fetching_models = true;
         self.refresh_agent_catalogs().await;
         self.state.loading.fetching_models = false;
@@ -451,17 +454,20 @@ impl RuntimeService {
                 EventScope::Throttle,
                 "dispatch skipped while a component is throttled".into(),
             );
+            info!("tick: skipped — tracker or agent is throttled");
             let _ = self.emit_snapshot().await;
             return false;
         }
         let query = workflow.config.tracker_query();
         self.state.last_tracker_poll_at = Some(Utc::now());
         self.state.loading.fetching_issues = true;
+        info!("tick: fetching issues from tracker");
         let _ = self.emit_snapshot().await;
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
                 self.state.loading.fetching_issues = false;
+                warn!("tick: tracker returned rate-limited, re-throttling");
                 self.register_throttle(*signal);
                 let _ = self.emit_snapshot().await;
                 return false;
@@ -477,6 +483,7 @@ impl RuntimeService {
         self.state.loading.fetching_issues = false;
         self.state.from_cache = false;
         self.state.cached_at = None;
+        info!(count = issues.len(), "tick: fetched issues from tracker");
 
         let mut issues = issues;
         issues.sort_by(dispatch_order);
