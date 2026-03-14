@@ -35,6 +35,13 @@ For general repository rules, Rust workflow, testing expectations, and release h
 - For a concrete implementation reference, inspect `/Users/penso/code/symphony/elixir/README.md` and `/Users/penso/code/symphony/elixir/WORKFLOW.md`.
 - Treat Symphony as a reference for single-repo, repository-owned workflow orchestration, not as proof that Polyphony already supports one daemon managing many repos or projects.
 
+## Remote API Calls
+
+- Minimize network round-trips to trackers (GitHub, GitLab, Linear). Batch and deduplicate requests wherever possible.
+- GitHub's GraphQL API can fetch issues with full data (body, labels, author metadata, timestamps, comments) in a single paginated query — prefer it over multiple REST calls when adding new fetch paths.
+- Avoid per-issue REST fetches in loops; use bulk list endpoints or GraphQL instead.
+- Cache results locally (via `NetworkCache` / `CachedSnapshot`) and only re-fetch on poll intervals or explicit refresh.
+
 ## Git Workflow
 
 Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): description`
