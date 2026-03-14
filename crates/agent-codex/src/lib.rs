@@ -62,11 +62,7 @@ impl AgentProviderRuntime for CodexRuntime {
         &self,
         agent: &polyphony_core::AgentDefinition,
     ) -> Result<Option<polyphony_core::AgentModelCatalog>, CoreError> {
-        let mut resolved = agent.clone();
-        if resolved.models_command.is_none() && resolved.fetch_models {
-            resolved.models_command = Some("codex models --json".into());
-        }
-        discover_models_from_command(&resolved).await
+        discover_models_from_command(agent).await
     }
 }
 

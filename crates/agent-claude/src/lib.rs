@@ -50,11 +50,7 @@ impl AgentProviderRuntime for ClaudeRuntime {
         &self,
         agent: &AgentDefinition,
     ) -> Result<Option<AgentModelCatalog>, CoreError> {
-        let mut resolved = agent.clone();
-        if resolved.models_command.is_none() && resolved.fetch_models {
-            resolved.models_command = Some("claude models --json".into());
-        }
-        self.local.discover_models(&resolved).await
+        self.local.discover_models(agent).await
     }
 }
 
