@@ -665,7 +665,7 @@ fn draw(
         ActiveTab::Logs => draw_logs_tab(frame, areas[2], log_buffer, app),
         ActiveTab::Agents => draw_agents_tab(frame, areas[2], snapshot, app),
     }
-    draw_footer(frame, areas[3], app);
+    draw_footer(frame, areas[3], snapshot, app);
 }
 
 fn draw_header(
@@ -1010,15 +1010,80 @@ fn draw_agents_tab(
     draw_budget_gauges(frame, side[1], snapshot, theme);
 }
 
-fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
+fn draw_footer(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    snapshot: &RuntimeSnapshot,
+    app: &AppState,
+) {
     let theme = app.theme;
+    let status = loading_status_line(snapshot, app.frame_count, theme);
+    let status_width = status
+        .spans
+        .iter()
+        .map(|s| s.content.len())
+        .sum::<usize>() as u16
+        + 4; // padding
+    let sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(20),
+            Constraint::Length(status_width.max(12)),
+        ])
+        .split(area);
     let footer = Paragraph::new(shortcut_line(
         app.active_tab,
-        area.width.saturating_sub(2) as usize,
+        sections[0].width.saturating_sub(2) as usize,
         theme,
     ))
     .block(panel_block("Controls", theme));
-    frame.render_widget(footer, area);
+    frame.render_widget(footer, sections[0]);
+    let status_widget =
+        Paragraph::new(status).block(panel_block("Status", theme));
+    frame.render_widget(status_widget, sections[1]);
+}
+
+fn loading_status_line(
+    snapshot: &RuntimeSnapshot,
+    frame_count: u64,
+    theme: Theme,
+) -> Line<'static> {
+    let loading = &snapshot.loading;
+    if !loading.any_active() && !snapshot.from_cache {
+        return Line::from(Span::styled("ready", Style::default().fg(theme.success)));
+    }
+    let spinner = spinner_char(frame_count).to_string();
+    let mut spans = vec![Span::styled(
+        spinner,
+        Style::default()
+            .fg(theme.highlight)
+            .add_modifier(Modifier::BOLD),
+    )];
+    let mut parts: Vec<&str> = Vec::new();
+    if loading.fetching_issues {
+        parts.push("issues");
+    }
+    if loading.fetching_budgets {
+        parts.push("budgets");
+    }
+    if loading.fetching_models {
+        parts.push("models");
+    }
+    if loading.reconciling {
+        parts.push("reconciling");
+    }
+    if snapshot.from_cache {
+        parts.push("cached");
+    }
+    if parts.is_empty() {
+        spans.push(Span::styled(" syncing", Style::default().fg(theme.muted)));
+    } else {
+        spans.push(Span::styled(
+            format!(" {}", parts.join(", ")),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn shortcut_line(active_tab: ActiveTab, width: usize, theme: Theme) -> Line<'static> {
@@ -1263,26 +1328,19 @@ fn draw_visible_issues_table(
     let rows = snapshot.visible_issues.iter().map(|issue| {
         Row::new([
             Cell::from(issue.issue_identifier.clone()),
-            Cell::from(issue.state.clone()),
-            Cell::from(
-                issue
-                    .priority
-                    .map(|priority| priority.to_string())
-                    .unwrap_or_else(|| "-".into()),
-            ),
-            Cell::from(issue.labels.join(", ")),
             Cell::from(issue.title.clone()),
+            Cell::from(issue.state.clone()),
+            Cell::from(issue.labels.join(", ")),
         ])
     });
     let table = Table::new(rows, [
         Constraint::Length(14),
-        Constraint::Length(14),
-        Constraint::Length(8),
-        Constraint::Length(18),
         Constraint::Min(18),
+        Constraint::Length(14),
+        Constraint::Length(18),
     ])
     .header(
-        Row::new(["Issue", "State", "Pri", "Labels", "Title"]).style(
+        Row::new(["Issue", "Title", "State", "Labels"]).style(
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
@@ -2781,9 +2839,10 @@ mod tests {
             Err(error) => panic!("test terminal should initialize: {error}"),
         };
         let app = AppState::default();
+        let snapshot = snapshot_with(0, 0, 0, 0);
 
         if let Err(error) = terminal.draw(|frame| {
-            draw_footer(frame, frame.area(), &app);
+            draw_footer(frame, frame.area(), &snapshot, &app);
         }) {
             panic!("footer should render: {error}");
         }
