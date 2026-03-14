@@ -33,3 +33,14 @@ For general repository rules, Rust workflow, testing expectations, and release h
 - Prefer the local Symphony checkout at `/Users/penso/code/symphony` when comparing implementation details or reading larger docs offline.
 - For a concrete implementation reference, inspect `/Users/penso/code/symphony/elixir/README.md` and `/Users/penso/code/symphony/elixir/WORKFLOW.md`.
 - Treat Symphony as a reference for single-repo, repository-owned workflow orchestration, not as proof that Polyphony already supports one daemon managing many repos or projects.
+
+## Git Workflow
+
+Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): description`
+**No `Co-Authored-By` trailers.** Update `README.md` features list with `feat` commits.
+
+## Changelog
+
+- Do **not** add manual `CHANGELOG.md` entries in normal PRs.
+- `CHANGELOG.md` entries are generated from commit history via `git-cliff` (`cliff.toml`).
+- Use conventional commits and preview unreleased notes with `just changelog-unreleased`.
