@@ -269,6 +269,7 @@ async fn run_tmux(
 
     let model = selected_model_hint(&spec.agent);
     let mut tmux = Command::new("tmux");
+    tmux.env_remove("CLAUDECODE");
     tmux.arg("new-session")
         .arg("-d")
         .arg("-s")

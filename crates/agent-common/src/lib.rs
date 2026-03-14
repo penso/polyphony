@@ -160,6 +160,9 @@ pub fn shell_command(
 ) -> Command {
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(cwd);
+    // Clear nesting-guard env vars so child CLI agents can start their own
+    // sessions (e.g. Claude Code's CLAUDECODE check).
+    cmd.env_remove("CLAUDECODE");
     for (key, value) in base_agent_env(spec, prompt_file, context_file, model) {
         cmd.env(key, value);
     }
