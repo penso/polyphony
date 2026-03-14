@@ -11,7 +11,7 @@ pub fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
     let theme = app.theme;
 
     let version = env!("CARGO_PKG_VERSION");
-    let shortcuts = vec![
+    let shortcuts = [
         ("1-5", "tabs"),
         ("j/k", "navigate"),
         ("s", "sort"),
@@ -23,10 +23,7 @@ pub fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
     ];
 
     let mut spans = vec![
-        Span::styled(
-            format!(" v{version} "),
-            Style::default().fg(theme.muted),
-        ),
+        Span::styled(format!(" v{version} "), Style::default().fg(theme.muted)),
         Span::styled("│ ", Style::default().fg(theme.border)),
     ];
 

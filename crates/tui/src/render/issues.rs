@@ -101,7 +101,13 @@ pub fn draw_issues_tab(
     // Available width for the title column
     // area.width - borders(2) - right_padding(1) - highlight_symbol(2) - id - type - status - age - column_gaps(4)
     let title_max_width = (area.width as usize).saturating_sub(
-        2 + 1 + 2 + max_id_len as usize + max_type_len as usize + max_status_len as usize + max_age_len as usize + 4,
+        2 + 1
+            + 2
+            + max_id_len as usize
+            + max_type_len as usize
+            + max_status_len as usize
+            + max_age_len as usize
+            + 4,
     );
 
     let rows: Vec<Row> = issue_data
@@ -115,10 +121,7 @@ pub fn draw_issues_tab(
             Row::new(vec![
                 Cell::from(
                     Line::from(vec![
-                        Span::styled(
-                            format!("{source_icon}"),
-                            Style::default().fg(theme.muted),
-                        ),
+                        Span::styled(source_icon.to_string(), Style::default().fg(theme.muted)),
                         Span::styled(
                             issue.issue_identifier.clone(),
                             Style::default().fg(theme.info),
@@ -139,10 +142,7 @@ pub fn draw_issues_tab(
                 ),
                 Cell::from(
                     Line::from(vec![
-                        Span::styled(
-                            issue.state.clone(),
-                            Style::default().fg(state_color),
-                        ),
+                        Span::styled(issue.state.clone(), Style::default().fg(state_color)),
                         Span::raw(" "),
                     ])
                     .alignment(Alignment::Right),
@@ -173,14 +173,24 @@ pub fn draw_issues_tab(
     // Build title with search indicator
     let title_spans = if app.search_active {
         vec![
-            Span::styled(" Issues ", Style::default().fg(theme.foreground).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Issues ",
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("/", Style::default().fg(theme.highlight)),
             Span::styled(&app.search_query, Style::default().fg(theme.foreground)),
             Span::styled("▏", Style::default().fg(theme.highlight)),
         ]
     } else if !app.search_query.is_empty() {
         vec![
-            Span::styled(" Issues ", Style::default().fg(theme.foreground).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Issues ",
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(
                 format!("[{}] ", app.search_query),
                 Style::default().fg(theme.highlight),
@@ -189,52 +199,41 @@ pub fn draw_issues_tab(
     } else {
         vec![Span::styled(
             " Issues ",
-            Style::default().fg(theme.foreground).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
         )]
     };
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(max_id_len),
-            Constraint::Fill(1),
-            Constraint::Length(max_type_len),
-            Constraint::Length(max_status_len),
-            Constraint::Length(max_age_len),
-        ],
-    )
+    let table = Table::new(rows, [
+        Constraint::Length(max_id_len),
+        Constraint::Fill(1),
+        Constraint::Length(max_type_len),
+        Constraint::Length(max_status_len),
+        Constraint::Length(max_age_len),
+    ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
     .highlight_symbol("▸ ")
     .block({
-        let mut block = Block::default()
-            .title(Line::from(title_spans));
+        let mut block = Block::default().title(Line::from(title_spans));
         if app.refresh_requested || snapshot.loading.fetching_issues {
-            let spinner =
-                BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
+            let spinner = BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
             block = block.title(
                 Line::from(vec![
-                    Span::styled(
-                        format!(" {spinner} "),
-                        Style::default().fg(theme.highlight),
-                    ),
-                    Span::styled(
-                        "refreshing ",
-                        Style::default().fg(theme.muted),
-                    ),
+                    Span::styled(format!(" {spinner} "), Style::default().fg(theme.highlight)),
+                    Span::styled("refreshing ", Style::default().fg(theme.muted)),
                 ])
                 .right_aligned(),
             );
         }
-        block.title_bottom(
+        block
+            .title_bottom(
                 Line::from(vec![
                     Span::styled("─s:", Style::default().fg(theme.muted)),
                     Span::styled(sort_label, Style::default().fg(theme.highlight)),
-                    Span::styled(
-                        format!(" {footer_info}─"),
-                        Style::default().fg(theme.muted),
-                    ),
+                    Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
                 ])
                 .right_aligned(),
             )
@@ -255,12 +254,12 @@ fn extract_type_and_title(title: &str) -> (String, String) {
     let trimmed = title.trim();
 
     // Match [Type]: ... or [Type] ...
-    if trimmed.starts_with('[') {
-        if let Some(end) = trimmed.find(']') {
-            let tag = &trimmed[1..end];
-            let rest = trimmed[end + 1..].trim_start_matches(':').trim_start();
-            return (normalize_type(tag), rest.to_string());
-        }
+    if trimmed.starts_with('[')
+        && let Some(end) = trimmed.find(']')
+    {
+        let tag = &trimmed[1..end];
+        let rest = trimmed[end + 1..].trim_start_matches(':').trim_start();
+        return (normalize_type(tag), rest.to_string());
     }
 
     // Match Type: ... (first word before colon)

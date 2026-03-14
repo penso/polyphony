@@ -13,13 +13,12 @@ use {
         AgentContextEntry, AgentContextSnapshot, AgentEvent, AgentEventKind, AgentModelCatalog,
         AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CachedSnapshot,
         CodexTotals, Error as CoreError, EventScope, FeedbackAction, FeedbackLink,
-        FeedbackNotification, Issue, IssueTracker, LoadingState, Movement, MovementId,
-        MovementRow, MovementStatus, NetworkCache, PersistedRunRecord, PipelinePlan,
-        PullRequestCommenter, PullRequestManager, PullRequestRequest, RateLimitSignal, RetryRow,
-        RunningRow, RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts, StateStore,
-        Task, TaskId, TaskRow, TaskStatus, ThrottleWindow, TokenUsage, VisibleIssueRow,
-        WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner, new_movement_id,
-        sanitize_workspace_key,
+        FeedbackNotification, Issue, IssueTracker, LoadingState, Movement, MovementId, MovementRow,
+        MovementStatus, NetworkCache, PersistedRunRecord, PipelinePlan, PullRequestCommenter,
+        PullRequestManager, PullRequestRequest, RateLimitSignal, RetryRow, RunningRow,
+        RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts, StateStore, Task, TaskId,
+        TaskRow, TaskStatus, ThrottleWindow, TokenUsage, VisibleIssueRow, WorkspaceCommitRequest,
+        WorkspaceCommitter, WorkspaceProvisioner, new_movement_id, sanitize_workspace_key,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
@@ -325,10 +324,10 @@ impl RuntimeService {
             let bootstrap = store.bootstrap().await?;
             self.restore_bootstrap(bootstrap);
         }
-        if let Some(cache) = &self.cache {
-            if let Ok(cached) = cache.load().await {
-                self.restore_cache(cached);
-            }
+        if let Some(cache) = &self.cache
+            && let Ok(cached) = cache.load().await
+        {
+            self.restore_cache(cached);
         }
         self.emit_snapshot().await?;
         // startup_cleanup is deferred to the first tick so the select loop
@@ -462,7 +461,7 @@ impl RuntimeService {
                 Ok(RuntimeCommand::Shutdown) => return true,
                 Ok(RuntimeCommand::Refresh) => {
                     self.pending_refresh = true;
-                }
+                },
                 Err(_) => return false,
             }
         }
@@ -541,7 +540,10 @@ impl RuntimeService {
             },
             Err(error) => {
                 self.state.loading.fetching_issues = false;
-                self.push_event(EventScope::Tracker, format!("candidate fetch failed: {error}"));
+                self.push_event(
+                    EventScope::Tracker,
+                    format!("candidate fetch failed: {error}"),
+                );
                 error!(%error, "candidate fetch failed");
                 let _ = self.emit_snapshot().await;
                 return false;
@@ -827,7 +829,10 @@ impl RuntimeService {
             active_task_id: None,
             movement_id: None,
         });
-        self.push_event(EventScope::Dispatch, format!("dispatched {issue_identifier}"));
+        self.push_event(
+            EventScope::Dispatch,
+            format!("dispatched {issue_identifier}"),
+        );
         Ok(())
     }
 
@@ -886,9 +891,7 @@ impl RuntimeService {
         if let Some(store) = &self.store {
             store.save_movement(&movement).await?;
         }
-        self.state
-            .movements
-            .insert(movement_id.clone(), movement);
+        self.state.movements.insert(movement_id.clone(), movement);
 
         if has_planner {
             self.dispatch_planner_task(
@@ -901,18 +904,14 @@ impl RuntimeService {
             )
             .await
         } else {
-            let tasks = self.create_tasks_from_stages(
-                &workflow.config.pipeline.stages,
-                &movement_id,
-            );
+            let tasks =
+                self.create_tasks_from_stages(&workflow.config.pipeline.stages, &movement_id);
             if let Some(store) = &self.store {
                 for task in &tasks {
                     store.save_task(task).await?;
                 }
             }
-            self.state
-                .tasks
-                .insert(movement_id.clone(), tasks);
+            self.state.tasks.insert(movement_id.clone(), tasks);
             self.dispatch_next_task(
                 workflow,
                 issue,
@@ -974,16 +973,17 @@ impl RuntimeService {
         movement_id: &str,
         workspace_path: &Path,
     ) -> Result<(), Error> {
-        let planner_agent_name = workflow
-            .config
-            .pipeline
-            .planner_agent
-            .as_ref()
-            .ok_or_else(|| {
-                Error::Core(CoreError::Adapter(
-                    "pipeline.planner_agent is required".into(),
-                ))
-            })?;
+        let planner_agent_name =
+            workflow
+                .config
+                .pipeline
+                .planner_agent
+                .as_ref()
+                .ok_or_else(|| {
+                    Error::Core(CoreError::Adapter(
+                        "pipeline.planner_agent is required".into(),
+                    ))
+                })?;
         let profile = workflow
             .config
             .agents
@@ -994,17 +994,14 @@ impl RuntimeService {
                     "unknown planner agent `{planner_agent_name}`"
                 )))
             })?;
-        let selected_agent =
-            agent_definition(planner_agent_name, profile);
+        let selected_agent = agent_definition(planner_agent_name, profile);
 
         let prompt = workflow
             .config
             .pipeline
             .planner_prompt
             .as_deref()
-            .map(|template| {
-                render_issue_template_with_strings(template, issue, attempt, &[])
-            })
+            .map(|template| render_issue_template_with_strings(template, issue, attempt, &[]))
             .unwrap_or_else(|| {
                 render_issue_template_with_strings(DEFAULT_PLANNER_PROMPT, issue, attempt, &[])
             })?;
@@ -1031,17 +1028,13 @@ impl RuntimeService {
         movement_id: &str,
         workspace_path: &Path,
     ) -> Result<(), Error> {
-        let next_task = self
-            .state
-            .tasks
-            .get(movement_id)
-            .and_then(|tasks| {
-                tasks
-                    .iter()
-                    .filter(|task| task.status == TaskStatus::Pending)
-                    .min_by_key(|task| task.ordinal)
-                    .cloned()
-            });
+        let next_task = self.state.tasks.get(movement_id).and_then(|tasks| {
+            tasks
+                .iter()
+                .filter(|task| task.status == TaskStatus::Pending)
+                .min_by_key(|task| task.ordinal)
+                .cloned()
+        });
 
         let Some(task) = next_task else {
             self.complete_pipeline(&workflow, &issue, movement_id)
@@ -1059,9 +1052,7 @@ impl RuntimeService {
                     .pipeline
                     .stages
                     .iter()
-                    .find(|s| {
-                        s.category.eq_ignore_ascii_case(&task.category.to_string())
-                    })
+                    .find(|s| s.category.eq_ignore_ascii_case(&task.category.to_string()))
                     .and_then(|s| s.agent.clone())
             })
             .or_else(|| workflow.config.agents.default.clone())
@@ -1087,14 +1078,14 @@ impl RuntimeService {
         let prompt = self.build_task_prompt(&workflow, &issue, &task, movement_id, attempt)?;
 
         // Mark task in progress
-        if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
-            if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
-                t.status = TaskStatus::InProgress;
-                t.started_at = Some(Utc::now());
-                t.updated_at = Utc::now();
-                if let Some(store) = &self.store {
-                    store.save_task(t).await?;
-                }
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id)
+            && let Some(t) = tasks.iter_mut().find(|t| t.id == task.id)
+        {
+            t.status = TaskStatus::InProgress;
+            t.started_at = Some(Utc::now());
+            t.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_task(t).await?;
             }
         }
 
@@ -1147,8 +1138,7 @@ impl RuntimeService {
             .is_some_and(|path| path.join(".polyphony").join("plan.json").exists());
 
         // Render the workflow template with pipeline context injected
-        let base_prompt =
-            render_turn_prompt(&workflow.definition, issue, attempt, 1, 1)?;
+        let base_prompt = render_turn_prompt(&workflow.definition, issue, attempt, 1, 1)?;
 
         let mut prompt = base_prompt;
         prompt.push_str(&format!(
@@ -1166,9 +1156,7 @@ impl RuntimeService {
             prompt.push('\n');
         }
         if has_plan {
-            prompt.push_str(
-                "\n### Execution plan\nThe full plan is in `.polyphony/plan.json`.\n",
-            );
+            prompt.push_str("\n### Execution plan\nThe full plan is in `.polyphony/plan.json`.\n");
         }
         prompt.push_str(
             "\nRead any workspace artifacts from previous tasks in `.polyphony/` for context.\n",
@@ -1328,17 +1316,18 @@ impl RuntimeService {
         }
 
         let plan_path = workspace_path.join(".polyphony").join("plan.json");
-        let plan_raw = tokio::fs::read_to_string(&plan_path).await.map_err(|error| {
-            Error::Core(CoreError::Adapter(format!(
-                "failed to read plan.json: {error}"
-            )))
-        })?;
-        let plan: PipelinePlan =
-            serde_json::from_str(&plan_raw).map_err(|error| {
+        let plan_raw = tokio::fs::read_to_string(&plan_path)
+            .await
+            .map_err(|error| {
                 Error::Core(CoreError::Adapter(format!(
-                    "failed to parse plan.json: {error}"
+                    "failed to read plan.json: {error}"
                 )))
             })?;
+        let plan: PipelinePlan = serde_json::from_str(&plan_raw).map_err(|error| {
+            Error::Core(CoreError::Adapter(format!(
+                "failed to parse plan.json: {error}"
+            )))
+        })?;
 
         if plan.tasks.is_empty() {
             warn!(
@@ -1380,9 +1369,7 @@ impl RuntimeService {
                 store.save_task(task).await?;
             }
         }
-        self.state
-            .tasks
-            .insert(movement_id.to_string(), tasks);
+        self.state.tasks.insert(movement_id.to_string(), tasks);
 
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
             movement.status = MovementStatus::InProgress;
@@ -1427,20 +1414,20 @@ impl RuntimeService {
         attempt: Option<u32>,
     ) -> Result<(), Error> {
         let now = Utc::now();
-        if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
-            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                task.status = if matches!(outcome.status, AttemptStatus::Succeeded) {
-                    TaskStatus::Completed
-                } else {
-                    TaskStatus::Failed
-                };
-                task.turns_completed = outcome.turns_completed;
-                task.error = outcome.error.clone();
-                task.finished_at = Some(now);
-                task.updated_at = now;
-                if let Some(store) = &self.store {
-                    store.save_task(task).await?;
-                }
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id)
+            && let Some(task) = tasks.iter_mut().find(|t| t.id == task_id)
+        {
+            task.status = if matches!(outcome.status, AttemptStatus::Succeeded) {
+                TaskStatus::Completed
+            } else {
+                TaskStatus::Failed
+            };
+            task.turns_completed = outcome.turns_completed;
+            task.error = outcome.error.clone();
+            task.finished_at = Some(now);
+            task.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_task(task).await?;
             }
         }
 
@@ -1460,10 +1447,7 @@ impl RuntimeService {
             {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!(
-                        "{} task failed, re-running planner",
-                        issue.identifier
-                    ),
+                    format!("{} task failed, re-running planner", issue.identifier),
                 );
                 // Reset tasks and re-plan
                 if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
@@ -1524,10 +1508,7 @@ impl RuntimeService {
         }
         self.push_event(
             EventScope::Dispatch,
-            format!(
-                "{} pipeline completed ({:?})",
-                issue.identifier, status
-            ),
+            format!("{} pipeline completed ({:?})", issue.identifier, status),
         );
         Ok(())
     }
@@ -1783,16 +1764,9 @@ impl RuntimeService {
             }
 
             // After all tasks complete, run success handoff
-            let pipeline_done = self
-                .state
-                .movements
-                .get(&movement_id)
-                .is_some_and(|m| {
-                    matches!(
-                        m.status,
-                        MovementStatus::Review | MovementStatus::Delivered
-                    )
-                });
+            let pipeline_done = self.state.movements.get(&movement_id).is_some_and(|m| {
+                matches!(m.status, MovementStatus::Review | MovementStatus::Delivered)
+            });
             if pipeline_done {
                 let workflow_status = outcome
                     .final_issue_state

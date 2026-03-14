@@ -12,8 +12,7 @@ use {
     },
 };
 
-use crate::app::AppState;
-use crate::theme::Theme;
+use crate::{app::AppState, theme::Theme};
 
 pub fn draw_issue_detail_modal(
     frame: &mut ratatui::Frame<'_>,
@@ -26,21 +25,17 @@ pub fn draw_issue_detail_modal(
     let area = centered_rect(frame.area(), max_w, max_h);
     frame.render_widget(Clear, area);
 
-    let source_label = if issue.issue_identifier.starts_with("GH-")
-        || issue.issue_identifier.contains('#')
-    {
-        " GitHub"
-    } else {
-        "◆ Linear"
-    };
+    let source_label =
+        if issue.issue_identifier.starts_with("GH-") || issue.issue_identifier.contains('#') {
+            " GitHub"
+        } else {
+            "◆ Linear"
+        };
 
     // Border title: source + identifier
     let block = Block::default()
         .title(Line::from(vec![
-            Span::styled(
-                format!(" {source_label} "),
-                Style::default().fg(theme.info),
-            ),
+            Span::styled(format!(" {source_label} "), Style::default().fg(theme.info)),
             Span::styled(
                 format!("{} ", issue.issue_identifier),
                 Style::default()
@@ -73,21 +68,20 @@ pub fn draw_issue_detail_modal(
 
     // Compute title height: wrap title into available width
     let title_width = inner.width as usize;
-    let title_lines_count = if title_width > 0 {
-        (issue.title.len() + title_width - 1) / title_width
+    let title_lines_count = (if title_width > 0 {
+        issue.title.len().div_ceil(title_width)
     } else {
         1
-    }
-    .max(1)
-    .min(3); // cap at 3 lines
+    })
+    .clamp(1, 3); // cap at 3 lines
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(title_lines_count as u16), // Title (wraps) + created time
-            Constraint::Length(1),                         // Status, priority, labels, author, updated
-            Constraint::Length(1),                         // Separator
-            Constraint::Min(1),                            // Description
+            Constraint::Length(1), // Status, priority, labels, author, updated
+            Constraint::Length(1), // Separator
+            Constraint::Min(1),    // Description
         ])
         .split(inner);
 
@@ -199,10 +193,7 @@ pub fn draw_issue_detail_modal(
     render_separator(frame, rows[2], inner.width, theme);
 
     // Description with markdown rendering and scroll
-    let desc_text = issue
-        .description
-        .as_deref()
-        .unwrap_or("No description.");
+    let desc_text = issue.description.as_deref().unwrap_or("No description.");
 
     let desc_lines = render_markdown(desc_text, theme);
     let desc_area = rows[3];
@@ -320,23 +311,20 @@ fn render_markdown<'a>(text: &str, theme: Theme) -> Vec<Line<'a>> {
         }
 
         // Checkboxes
-        if let Some(rest) = trimmed.strip_prefix("- [x] ").or(trimmed.strip_prefix("- [X] ")) {
+        if let Some(rest) = trimmed
+            .strip_prefix("- [x] ")
+            .or(trimmed.strip_prefix("- [X] "))
+        {
             lines.push(Line::from(vec![
                 Span::styled("  ✓ ", Style::default().fg(Color::Green)),
-                Span::styled(
-                    inline_markdown(rest),
-                    Style::default().fg(theme.foreground),
-                ),
+                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
             ]));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
             lines.push(Line::from(vec![
                 Span::styled("  ☐ ", Style::default().fg(theme.muted)),
-                Span::styled(
-                    inline_markdown(rest),
-                    Style::default().fg(theme.foreground),
-                ),
+                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
             ]));
             continue;
         }
@@ -345,31 +333,23 @@ fn render_markdown<'a>(text: &str, theme: Theme) -> Vec<Line<'a>> {
         if let Some(rest) = trimmed.strip_prefix("- ").or(trimmed.strip_prefix("* ")) {
             lines.push(Line::from(vec![
                 Span::styled("  • ", Style::default().fg(theme.highlight)),
-                Span::styled(
-                    inline_markdown(rest),
-                    Style::default().fg(theme.foreground),
-                ),
+                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
             ]));
             continue;
         }
 
         // Numbered list
-        if let Some(dot_pos) = trimmed.find(". ") {
-            if dot_pos <= 3 && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit()) {
-                let num = &trimmed[..dot_pos];
-                let rest = &trimmed[dot_pos + 2..];
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {num}. "),
-                        Style::default().fg(theme.highlight),
-                    ),
-                    Span::styled(
-                        inline_markdown(rest),
-                        Style::default().fg(theme.foreground),
-                    ),
-                ]));
-                continue;
-            }
+        if let Some(dot_pos) = trimmed.find(". ")
+            && dot_pos <= 3
+            && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit())
+        {
+            let num = &trimmed[..dot_pos];
+            let rest = &trimmed[dot_pos + 2..];
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {num}. "), Style::default().fg(theme.highlight)),
+                Span::styled(inline_markdown(rest), Style::default().fg(theme.foreground)),
+            ]));
+            continue;
         }
 
         // Blockquote
@@ -501,9 +481,7 @@ fn render_inline_spans<'a>(text: &str, theme: Theme) -> Vec<Span<'a>> {
 
 /// Simple inline markdown stripping for list items (returns plain string).
 fn inline_markdown(text: &str) -> String {
-    text.replace("**", "")
-        .replace('`', "")
-        .replace("__", "")
+    text.replace("**", "").replace('`', "").replace("__", "")
 }
 
 pub fn draw_leaving_modal(frame: &mut ratatui::Frame<'_>, theme: Theme) {

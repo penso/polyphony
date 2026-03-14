@@ -28,8 +28,10 @@ use {
     tokio::sync::{mpsc, watch},
 };
 
-use app::AppState;
-use theme::{Theme, default_theme, detect_terminal_theme};
+use {
+    app::AppState,
+    theme::{Theme, default_theme, detect_terminal_theme},
+};
 
 const LOG_BUFFER_CAPACITY: usize = 2_000;
 
@@ -208,102 +210,100 @@ pub async fn run(
             render::render(frame, &snapshot, &mut app);
         })?;
 
-        if let Some(since) = app.leaving_since {
-            if since.elapsed() > Duration::from_secs(3) {
-                break Ok(());
-            }
+        if let Some(since) = app.leaving_since
+            && since.elapsed() > Duration::from_secs(3)
+        {
+            break Ok(());
         }
 
         let mut key_handled = false;
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if app.leaving {
-                    // Ignore keys while leaving
-                } else if app.show_issue_detail {
-                    // Modal is open — handle modal keys
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
-                            app.show_issue_detail = false;
-                            app.detail_scroll = 0;
-                        },
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            app.detail_scroll = app.detail_scroll.saturating_add(1);
-                        },
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            app.detail_scroll = app.detail_scroll.saturating_sub(1);
-                        },
-                        KeyCode::PageDown => {
-                            app.detail_scroll = app.detail_scroll.saturating_add(8);
-                        },
-                        KeyCode::PageUp => {
-                            app.detail_scroll = app.detail_scroll.saturating_sub(8);
-                        },
-                        KeyCode::Char('o') => {
-                            if let Some(issue) = app.selected_issue(&snapshot) {
-                                if let Some(url) = &issue.url {
-                                    let _ = std::process::Command::new("open")
-                                        .arg(url)
-                                        .spawn();
-                                }
-                            }
-                        },
-                        _ => {},
-                    }
-                } else if app.search_active {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.search_active = false;
-                            app.search_query.clear();
-                            app.rebuild_sorted_indices(&snapshot);
-                            sync_selection_after_search(&mut app, &snapshot);
-                        },
-                        KeyCode::Enter => {
-                            app.search_active = false;
-                            // Keep filter active, just exit input mode
-                        },
-                        KeyCode::Backspace => {
-                            app.search_query.pop();
-                            app.rebuild_sorted_indices(&snapshot);
-                            sync_selection_after_search(&mut app, &snapshot);
-                        },
-                        KeyCode::Char(c) => {
-                            app.search_query.push(c);
-                            app.rebuild_sorted_indices(&snapshot);
-                            sync_selection_after_search(&mut app, &snapshot);
-                        },
-                        _ => {},
-                    }
-                } else if app.logs_search_active {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.logs_search_active = false;
-                            app.logs_search_query.clear();
-                        },
-                        KeyCode::Enter => {
-                            app.logs_search_active = false;
-                        },
-                        KeyCode::Backspace => {
-                            app.logs_search_query.pop();
-                        },
-                        KeyCode::Char(c) => {
-                            app.logs_search_query.push(c);
-                        },
-                        _ => {},
-                    }
-                } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
-                    let shutdown = matches!(command, RuntimeCommand::Shutdown);
-                    if matches!(command, RuntimeCommand::Refresh) {
-                        app.refresh_requested = true;
-                    }
-                    tracing::info!(?command, "TUI sending command");
-                    let _ = command_tx.send(command);
-                    if shutdown {
-                        app.leaving = true;
-                        app.leaving_since = Some(Instant::now());
-                    }
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if app.leaving {
+                // Ignore keys while leaving
+            } else if app.show_issue_detail {
+                // Modal is open — handle modal keys
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                        app.show_issue_detail = false;
+                        app.detail_scroll = 0;
+                    },
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.detail_scroll = app.detail_scroll.saturating_add(1);
+                    },
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.detail_scroll = app.detail_scroll.saturating_sub(1);
+                    },
+                    KeyCode::PageDown => {
+                        app.detail_scroll = app.detail_scroll.saturating_add(8);
+                    },
+                    KeyCode::PageUp => {
+                        app.detail_scroll = app.detail_scroll.saturating_sub(8);
+                    },
+                    KeyCode::Char('o') => {
+                        if let Some(issue) = app.selected_issue(&snapshot)
+                            && let Some(url) = &issue.url
+                        {
+                            let _ = std::process::Command::new("open").arg(url).spawn();
+                        }
+                    },
+                    _ => {},
                 }
-                key_handled = true;
+            } else if app.search_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        app.search_active = false;
+                        app.search_query.clear();
+                        app.rebuild_sorted_indices(&snapshot);
+                        sync_selection_after_search(&mut app, &snapshot);
+                    },
+                    KeyCode::Enter => {
+                        app.search_active = false;
+                        // Keep filter active, just exit input mode
+                    },
+                    KeyCode::Backspace => {
+                        app.search_query.pop();
+                        app.rebuild_sorted_indices(&snapshot);
+                        sync_selection_after_search(&mut app, &snapshot);
+                    },
+                    KeyCode::Char(c) => {
+                        app.search_query.push(c);
+                        app.rebuild_sorted_indices(&snapshot);
+                        sync_selection_after_search(&mut app, &snapshot);
+                    },
+                    _ => {},
+                }
+            } else if app.logs_search_active {
+                match key.code {
+                    KeyCode::Esc => {
+                        app.logs_search_active = false;
+                        app.logs_search_query.clear();
+                    },
+                    KeyCode::Enter => {
+                        app.logs_search_active = false;
+                    },
+                    KeyCode::Backspace => {
+                        app.logs_search_query.pop();
+                    },
+                    KeyCode::Char(c) => {
+                        app.logs_search_query.push(c);
+                    },
+                    _ => {},
+                }
+            } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
+                let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                if matches!(command, RuntimeCommand::Refresh) {
+                    app.refresh_requested = true;
+                }
+                tracing::info!(?command, "TUI sending command");
+                let _ = command_tx.send(command);
+                if shutdown {
+                    app.leaving = true;
+                    app.leaving_since = Some(Instant::now());
+                }
             }
+            key_handled = true;
         }
 
         // Always check for snapshot updates, whether or not a key was handled.
@@ -411,23 +411,18 @@ fn handle_key(
 
         // Issue detail modal
         KeyCode::Enter => {
-            if app.active_tab == app::ActiveTab::Issues
-                && app.selected_issue(snapshot).is_some()
-            {
+            if app.active_tab == app::ActiveTab::Issues && app.selected_issue(snapshot).is_some() {
                 app.show_issue_detail = true;
             }
         },
 
         // Open issue in browser
         KeyCode::Char('o') => {
-            if app.active_tab == app::ActiveTab::Issues {
-                if let Some(issue) = app.selected_issue(snapshot) {
-                    if let Some(url) = &issue.url {
-                        let _ = std::process::Command::new("open")
-                            .arg(url)
-                            .spawn();
-                    }
-                }
+            if app.active_tab == app::ActiveTab::Issues
+                && let Some(issue) = app.selected_issue(snapshot)
+                && let Some(url) = &issue.url
+            {
+                let _ = std::process::Command::new("open").arg(url).spawn();
             }
         },
 

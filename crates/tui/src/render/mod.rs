@@ -11,11 +11,7 @@ use polyphony_core::RuntimeSnapshot;
 
 use crate::app::{ActiveTab, AppState};
 
-pub fn render(
-    frame: &mut ratatui::Frame<'_>,
-    snapshot: &RuntimeSnapshot,
-    app: &mut AppState,
-) {
+pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &mut AppState) {
     app.frame_count = app.frame_count.wrapping_add(1);
 
     let areas = ratatui::layout::Layout::default()
@@ -23,7 +19,7 @@ pub fn render(
         .constraints([
             ratatui::layout::Constraint::Length(3), // Header tabs
             ratatui::layout::Constraint::Min(6),    // Main content
-            ratatui::layout::Constraint::Length(1),  // Footer version bar
+            ratatui::layout::Constraint::Length(1), // Footer version bar
         ])
         .split(frame.area());
 
@@ -44,10 +40,10 @@ pub fn render(
     footer::draw_footer(frame, areas[2], app);
 
     // Popups render on top
-    if app.show_issue_detail {
-        if let Some(issue) = app.selected_issue(snapshot).cloned() {
-            popups::draw_issue_detail_modal(frame, &issue, app);
-        }
+    if app.show_issue_detail
+        && let Some(issue) = app.selected_issue(snapshot).cloned()
+    {
+        popups::draw_issue_detail_modal(frame, &issue, app);
     }
 
     if app.leaving {

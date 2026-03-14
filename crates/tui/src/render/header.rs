@@ -37,8 +37,8 @@ pub fn draw_header(
             .fg(theme.highlight)
             .add_modifier(Modifier::BOLD),
     )
-    .block({
-        let block = Block::default()
+    .block(
+        Block::default()
             .title(Line::from(Span::styled(
                 " Polyphony ",
                 Style::default()
@@ -47,10 +47,8 @@ pub fn draw_header(
             )))
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border));
-
-        block
-    });
+            .border_style(Style::default().fg(theme.border)),
+    );
     frame.render_widget(tabs, sections[0]);
 
     // Status summary
@@ -80,9 +78,7 @@ pub fn draw_header(
                     + snapshot.counts.tasks_in_progress
                     + snapshot.counts.tasks_completed
             ),
-            Style::default()
-                .fg(theme.info)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
         ),
     ])];
 
@@ -96,10 +92,7 @@ pub fn draw_header(
         Paragraph::new(summary).block(
             Block::default()
                 .title(Line::from(vec![
-                    Span::styled(
-                        format!(" {status_dot} "),
-                        Style::default().fg(status_color),
-                    ),
+                    Span::styled(format!(" {status_dot} "), Style::default().fg(status_color)),
                     Span::styled(
                         format!("{status_label} "),
                         Style::default()
