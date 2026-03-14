@@ -13,15 +13,17 @@ use {
         AgentContextEntry, AgentContextSnapshot, AgentEvent, AgentEventKind, AgentModelCatalog,
         AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CachedSnapshot,
         CodexTotals, Error as CoreError, EventScope, FeedbackAction, FeedbackLink,
-        FeedbackNotification, Issue, IssueTracker, LoadingState, NetworkCache, PersistedRunRecord,
+        FeedbackNotification, Issue, IssueTracker, LoadingState, Movement, MovementId,
+        MovementRow, MovementStatus, NetworkCache, PersistedRunRecord, PipelinePlan,
         PullRequestCommenter, PullRequestManager, PullRequestRequest, RateLimitSignal, RetryRow,
         RunningRow, RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts, StateStore,
-        ThrottleWindow, TokenUsage, VisibleIssueRow, WorkspaceCommitRequest, WorkspaceCommitter,
-        WorkspaceProvisioner, sanitize_workspace_key,
+        Task, TaskId, TaskRow, TaskStatus, ThrottleWindow, TokenUsage, VisibleIssueRow,
+        WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner, new_movement_id,
+        sanitize_workspace_key,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
-        HooksConfig, LoadedWorkflow, load_workflow_with_user_config,
+        HooksConfig, LoadedWorkflow, agent_definition, load_workflow_with_user_config,
         render_issue_template_with_strings, render_turn_prompt, render_turn_template,
     },
     polyphony_workspace::WorkspaceManager,
@@ -52,6 +54,36 @@ const DEFAULT_AUTOMATION_COMMIT_MESSAGE: &str = "fix({{ issue.identifier }}): {{
 const DEFAULT_AUTOMATION_PR_TITLE: &str = "{{ issue.identifier }}: {{ issue.title }}";
 const DEFAULT_AUTOMATION_PR_BODY: &str = "Automated handoff for {{ issue.identifier }}.\n\nIssue: {{ issue.url }}\nBase branch: {{ base_branch }}\nHead branch: {{ head_branch }}\nCommit: {{ commit_sha }}";
 const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str = "Review the current branch against {{ base_branch }}.\nInspect the repository state and write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Recommended human checks\nDo not modify tracked source files other than `.polyphony/review.md`.";
+
+const DEFAULT_PLANNER_PROMPT: &str = r#"You are a planning agent for issue {{ issue.identifier }}: {{ issue.title }}.
+
+{{ issue.description }}
+
+Analyze this issue and produce a structured execution plan.
+Write the plan to `.polyphony/plan.json` with this format:
+
+```json
+{
+  "tasks": [
+    {
+      "title": "Short task title",
+      "category": "research|coding|testing|review",
+      "description": "What to do and why",
+      "agent": "optional-agent-name"
+    }
+  ]
+}
+```
+
+Guidelines:
+- Break the issue into concrete, sequentially executable tasks
+- Each task should be completable by a single agent session
+- Use "research" for investigation, "coding" for implementation,
+  "testing" for test writing/validation, "review" for code review
+- The agent field is optional; omit it to use the default agent
+- Keep the plan focused — 2-5 tasks is typical
+- Write the plan file, then stop
+"#;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
@@ -132,6 +164,10 @@ struct RunningTask {
     turn_count: u32,
     rate_limits: Option<Value>,
     handle: JoinHandle<()>,
+    /// Set when this running task is part of a pipeline.
+    active_task_id: Option<TaskId>,
+    /// Set when this running task is part of a pipeline.
+    movement_id: Option<MovementId>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +209,8 @@ struct RuntimeState {
     loading: LoadingState,
     from_cache: bool,
     cached_at: Option<DateTime<Utc>>,
+    movements: HashMap<MovementId, Movement>,
+    tasks: HashMap<MovementId, Vec<Task>>,
 }
 
 impl Default for RuntimeState {
@@ -197,6 +235,8 @@ impl Default for RuntimeState {
             loading: LoadingState::default(),
             from_cache: false,
             cached_at: None,
+            movements: HashMap::new(),
+            tasks: HashMap::new(),
         }
     }
 }
@@ -619,6 +659,11 @@ impl RuntimeService {
         attempt: Option<u32>,
         prefer_alternate_agent: bool,
     ) -> Result<(), Error> {
+        if workflow.config.pipeline.enabled {
+            return self
+                .dispatch_pipeline(workflow, issue, attempt, prefer_alternate_agent)
+                .await;
+        }
         let saved_context = self.state.saved_contexts.get(&issue.id).cloned();
         let candidate_agents = workflow.config.candidate_agents_for_issue(&issue)?;
         let selected_agent = self.select_dispatch_agent(
@@ -779,8 +824,711 @@ impl RuntimeService {
             turn_count: 0,
             rate_limits: None,
             handle,
+            active_task_id: None,
+            movement_id: None,
         });
         self.push_event(EventScope::Dispatch, format!("dispatched {issue_identifier}"));
+        Ok(())
+    }
+
+    async fn dispatch_pipeline(
+        &mut self,
+        workflow: LoadedWorkflow,
+        issue: Issue,
+        attempt: Option<u32>,
+        prefer_alternate_agent: bool,
+    ) -> Result<(), Error> {
+        let workspace_manager = self.build_workspace_manager(&workflow);
+        let workspace = workspace_manager
+            .ensure_workspace(
+                &issue.identifier,
+                issue.branch_name.clone().or_else(|| {
+                    Some(format!(
+                        "task/{}",
+                        sanitize_workspace_key(&issue.identifier)
+                    ))
+                }),
+                &workflow.config.hooks,
+            )
+            .await?;
+
+        if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
+            warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
+        }
+        if let Err(error) = self
+            .tracker
+            .update_issue_workflow_status(&issue, "In Progress")
+            .await
+        {
+            warn!(%error, issue_identifier = %issue.identifier, "issue workflow status sync failed");
+        }
+
+        let movement_id = new_movement_id();
+        let has_planner = workflow.config.pipeline.planner_agent.is_some();
+        let initial_status = if has_planner {
+            MovementStatus::Planning
+        } else {
+            MovementStatus::InProgress
+        };
+        let now = Utc::now();
+        let movement = Movement {
+            id: movement_id.clone(),
+            issue_id: Some(issue.id.clone()),
+            issue_identifier: Some(issue.identifier.clone()),
+            title: issue.title.clone(),
+            status: initial_status,
+            workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
+            workspace_path: Some(workspace.path.clone()),
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        };
+        if let Some(store) = &self.store {
+            store.save_movement(&movement).await?;
+        }
+        self.state
+            .movements
+            .insert(movement_id.clone(), movement);
+
+        if has_planner {
+            self.dispatch_planner_task(
+                &workflow,
+                &issue,
+                attempt,
+                prefer_alternate_agent,
+                &movement_id,
+                &workspace.path,
+            )
+            .await
+        } else {
+            let tasks = self.create_tasks_from_stages(
+                &workflow.config.pipeline.stages,
+                &movement_id,
+            );
+            if let Some(store) = &self.store {
+                for task in &tasks {
+                    store.save_task(task).await?;
+                }
+            }
+            self.state
+                .tasks
+                .insert(movement_id.clone(), tasks);
+            self.dispatch_next_task(
+                workflow,
+                issue,
+                attempt,
+                prefer_alternate_agent,
+                &movement_id,
+                &workspace.path,
+            )
+            .await
+        }
+    }
+
+    fn create_tasks_from_stages(
+        &self,
+        stages: &[polyphony_workflow::PipelineStageConfig],
+        movement_id: &str,
+    ) -> Vec<Task> {
+        let now = Utc::now();
+        stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| {
+                let category = match stage.category.to_ascii_lowercase().as_str() {
+                    "research" => polyphony_core::TaskCategory::Research,
+                    "coding" => polyphony_core::TaskCategory::Coding,
+                    "testing" => polyphony_core::TaskCategory::Testing,
+                    "documentation" => polyphony_core::TaskCategory::Documentation,
+                    "review" => polyphony_core::TaskCategory::Review,
+                    _ => polyphony_core::TaskCategory::Coding,
+                };
+                Task {
+                    id: format!("task-{}", uuid::Uuid::new_v4()),
+                    movement_id: movement_id.to_string(),
+                    title: format!("{} stage", stage.category),
+                    description: None,
+                    category,
+                    status: TaskStatus::Pending,
+                    ordinal: (index + 1) as u32,
+                    parent_id: None,
+                    agent_name: stage.agent.clone(),
+                    turns_completed: 0,
+                    tokens: TokenUsage::default(),
+                    started_at: None,
+                    finished_at: None,
+                    error: None,
+                    created_at: now,
+                    updated_at: now,
+                }
+            })
+            .collect()
+    }
+
+    async fn dispatch_planner_task(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+        attempt: Option<u32>,
+        _prefer_alternate_agent: bool,
+        movement_id: &str,
+        workspace_path: &Path,
+    ) -> Result<(), Error> {
+        let planner_agent_name = workflow
+            .config
+            .pipeline
+            .planner_agent
+            .as_ref()
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(
+                    "pipeline.planner_agent is required".into(),
+                ))
+            })?;
+        let profile = workflow
+            .config
+            .agents
+            .profiles
+            .get(planner_agent_name)
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(format!(
+                    "unknown planner agent `{planner_agent_name}`"
+                )))
+            })?;
+        let selected_agent =
+            agent_definition(planner_agent_name, profile);
+
+        let prompt = workflow
+            .config
+            .pipeline
+            .planner_prompt
+            .as_deref()
+            .map(|template| {
+                render_issue_template_with_strings(template, issue, attempt, &[])
+            })
+            .unwrap_or_else(|| {
+                render_issue_template_with_strings(DEFAULT_PLANNER_PROMPT, issue, attempt, &[])
+            })?;
+
+        self.spawn_pipeline_worker(
+            workflow.clone(),
+            issue.clone(),
+            attempt,
+            workspace_path.to_path_buf(),
+            prompt,
+            selected_agent,
+            None,
+            Some(movement_id.to_string()),
+        )
+        .await
+    }
+
+    async fn dispatch_next_task(
+        &mut self,
+        workflow: LoadedWorkflow,
+        issue: Issue,
+        attempt: Option<u32>,
+        _prefer_alternate_agent: bool,
+        movement_id: &str,
+        workspace_path: &Path,
+    ) -> Result<(), Error> {
+        let next_task = self
+            .state
+            .tasks
+            .get(movement_id)
+            .and_then(|tasks| {
+                tasks
+                    .iter()
+                    .filter(|task| task.status == TaskStatus::Pending)
+                    .min_by_key(|task| task.ordinal)
+                    .cloned()
+            });
+
+        let Some(task) = next_task else {
+            self.complete_pipeline(&workflow, &issue, movement_id)
+                .await?;
+            return Ok(());
+        };
+
+        // Select agent for this task
+        let agent_name = task
+            .agent_name
+            .clone()
+            .or_else(|| {
+                workflow
+                    .config
+                    .pipeline
+                    .stages
+                    .iter()
+                    .find(|s| {
+                        s.category.eq_ignore_ascii_case(&task.category.to_string())
+                    })
+                    .and_then(|s| s.agent.clone())
+            })
+            .or_else(|| workflow.config.agents.default.clone())
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(
+                    "no agent available for pipeline task".into(),
+                ))
+            })?;
+
+        let profile = workflow
+            .config
+            .agents
+            .profiles
+            .get(&agent_name)
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(format!(
+                    "unknown agent `{agent_name}` for pipeline task"
+                )))
+            })?;
+        let selected_agent = agent_definition(&agent_name, profile);
+
+        // Build task prompt with pipeline context
+        let prompt = self.build_task_prompt(&workflow, &issue, &task, movement_id, attempt)?;
+
+        // Mark task in progress
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+            if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
+                t.status = TaskStatus::InProgress;
+                t.started_at = Some(Utc::now());
+                t.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_task(t).await?;
+                }
+            }
+        }
+
+        self.spawn_pipeline_worker(
+            workflow,
+            issue,
+            attempt,
+            workspace_path.to_path_buf(),
+            prompt,
+            selected_agent,
+            Some(task.id.clone()),
+            Some(movement_id.to_string()),
+        )
+        .await
+    }
+
+    fn build_task_prompt(
+        &self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+        task: &Task,
+        movement_id: &str,
+        attempt: Option<u32>,
+    ) -> Result<String, Error> {
+        let tasks = self.state.tasks.get(movement_id);
+        let completed_tasks: Vec<String> = tasks
+            .map(|ts| {
+                ts.iter()
+                    .filter(|t| t.status == TaskStatus::Completed)
+                    .map(|t| {
+                        format!(
+                            "- [{}] {}: {}",
+                            t.category,
+                            t.title,
+                            t.description.as_deref().unwrap_or("completed")
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let total_tasks = tasks.map(|ts| ts.len()).unwrap_or(0);
+
+        // Read plan.json if it exists
+        let has_plan = self
+            .state
+            .movements
+            .get(movement_id)
+            .and_then(|m| m.workspace_path.as_ref())
+            .is_some_and(|path| path.join(".polyphony").join("plan.json").exists());
+
+        // Render the workflow template with pipeline context injected
+        let base_prompt =
+            render_turn_prompt(&workflow.definition, issue, attempt, 1, 1)?;
+
+        let mut prompt = base_prompt;
+        prompt.push_str(&format!(
+            "\n\n## Pipeline Task {}/{}\n\
+             **Task:** {}\n\
+             **Category:** {}\n",
+            task.ordinal, total_tasks, task.title, task.category
+        ));
+        if let Some(desc) = &task.description {
+            prompt.push_str(&format!("**Description:** {desc}\n"));
+        }
+        if !completed_tasks.is_empty() {
+            prompt.push_str("\n### Completed tasks\n");
+            prompt.push_str(&completed_tasks.join("\n"));
+            prompt.push('\n');
+        }
+        if has_plan {
+            prompt.push_str(
+                "\n### Execution plan\nThe full plan is in `.polyphony/plan.json`.\n",
+            );
+        }
+        prompt.push_str(
+            "\nRead any workspace artifacts from previous tasks in `.polyphony/` for context.\n",
+        );
+
+        Ok(prompt)
+    }
+
+    async fn spawn_pipeline_worker(
+        &mut self,
+        workflow: LoadedWorkflow,
+        issue: Issue,
+        attempt: Option<u32>,
+        workspace_path: PathBuf,
+        prompt: String,
+        selected_agent: polyphony_core::AgentDefinition,
+        active_task_id: Option<TaskId>,
+        movement_id: Option<MovementId>,
+    ) -> Result<(), Error> {
+        let issue_id = issue.id.clone();
+        let issue_identifier = issue.identifier.clone();
+        let issue_identifier_for_task = issue_identifier.clone();
+        let issue_for_task = issue.clone();
+        let command_tx = self.command_tx.clone();
+        let agent = self.agent.clone();
+        let tracker = self.tracker.clone();
+        let provisioner = self.provisioner.clone();
+        let hooks = workflow.config.hooks.clone();
+        let active_states = workflow.config.tracker.active_states.clone();
+        let max_turns = workflow.config.agent.max_turns;
+        let started_at = Utc::now();
+        let selected_agent_for_task = selected_agent.clone();
+        let workspace_path_for_running = workspace_path.clone();
+
+        info!(
+            issue_identifier = %issue.identifier,
+            agent = %selected_agent.name,
+            task_id = ?active_task_id,
+            movement_id = ?movement_id,
+            "dispatching pipeline worker"
+        );
+
+        let worker_span = info_span!(
+            "pipeline_worker",
+            issue_identifier = %issue_identifier_for_task,
+            agent = %selected_agent_for_task.name,
+        );
+        let handle = tokio::spawn(
+            async move {
+                let manager = WorkspaceManager::new(
+                    workflow.config.workspace.root.clone(),
+                    provisioner,
+                    workflow.config.workspace.checkout_kind,
+                    workflow.config.workspace.sync_on_reuse,
+                    workflow.config.workspace.transient_paths.clone(),
+                    workflow.config.workspace.source_repo_path.clone(),
+                    workflow.config.workspace.clone_url.clone(),
+                    workflow.config.workspace.default_branch.clone(),
+                );
+                let outcome = run_worker_attempt(
+                    &manager,
+                    &hooks,
+                    agent,
+                    tracker,
+                    issue_for_task,
+                    attempt,
+                    workspace_path.clone(),
+                    prompt,
+                    active_states,
+                    max_turns,
+                    workflow.config.agent.continuation_prompt.clone(),
+                    selected_agent_for_task,
+                    None,
+                    command_tx.clone(),
+                )
+                .await;
+                let outcome = match outcome {
+                    Ok(result) => result,
+                    Err(error) => agent_run_result_from_error(&error),
+                };
+                let _ = command_tx.send(OrchestratorMessage::WorkerFinished {
+                    issue_id,
+                    issue_identifier: issue_identifier_for_task,
+                    attempt,
+                    started_at,
+                    outcome,
+                });
+            }
+            .instrument(worker_span),
+        );
+
+        self.claim_issue(issue.id.clone(), IssueClaimState::Running);
+        self.state.retrying.remove(&issue.id);
+        self.state.running.insert(issue.id.clone(), RunningTask {
+            issue,
+            agent_name: selected_agent.name.clone(),
+            model: selected_agent
+                .model
+                .clone()
+                .or_else(|| {
+                    self.state
+                        .agent_catalogs
+                        .get(&selected_agent.name)
+                        .and_then(|catalog| catalog.selected_model.clone())
+                })
+                .or_else(|| selected_agent.models.first().cloned()),
+            attempt,
+            workspace_path: workspace_path_for_running,
+            stall_timeout_ms: selected_agent.stall_timeout_ms,
+            max_turns,
+            started_at,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            last_event: Some("pipeline_dispatch_started".into()),
+            last_message: Some("pipeline worker launched".into()),
+            last_event_at: Some(Utc::now()),
+            tokens: TokenUsage::default(),
+            last_reported_tokens: TokenUsage::default(),
+            turn_count: 0,
+            rate_limits: None,
+            handle,
+            active_task_id,
+            movement_id,
+        });
+        self.push_event(
+            EventScope::Dispatch,
+            format!("pipeline dispatched {issue_identifier}"),
+        );
+        Ok(())
+    }
+
+    async fn handle_planner_finished(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+        movement_id: &str,
+        workspace_path: &Path,
+        outcome: &AgentRunResult,
+        attempt: Option<u32>,
+    ) -> Result<(), Error> {
+        if !matches!(outcome.status, AttemptStatus::Succeeded) {
+            warn!(
+                issue_identifier = %issue.identifier,
+                movement_id,
+                "planner failed, marking movement as failed"
+            );
+            if let Some(movement) = self.state.movements.get_mut(movement_id) {
+                movement.status = MovementStatus::Failed;
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_movement(movement).await?;
+                }
+            }
+            return Ok(());
+        }
+
+        let plan_path = workspace_path.join(".polyphony").join("plan.json");
+        let plan_raw = tokio::fs::read_to_string(&plan_path).await.map_err(|error| {
+            Error::Core(CoreError::Adapter(format!(
+                "failed to read plan.json: {error}"
+            )))
+        })?;
+        let plan: PipelinePlan =
+            serde_json::from_str(&plan_raw).map_err(|error| {
+                Error::Core(CoreError::Adapter(format!(
+                    "failed to parse plan.json: {error}"
+                )))
+            })?;
+
+        if plan.tasks.is_empty() {
+            warn!(
+                issue_identifier = %issue.identifier,
+                "planner produced empty plan"
+            );
+            if let Some(movement) = self.state.movements.get_mut(movement_id) {
+                movement.status = MovementStatus::Failed;
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_movement(movement).await?;
+                }
+            }
+            return Ok(());
+        }
+
+        // Validate agent names
+        for planned_task in &plan.tasks {
+            if let Some(agent_name) = &planned_task.agent
+                && !workflow.config.agents.profiles.contains_key(agent_name)
+            {
+                warn!(
+                    issue_identifier = %issue.identifier,
+                    agent = agent_name,
+                    "planner referenced unknown agent, ignoring agent hint"
+                );
+            }
+        }
+
+        let tasks: Vec<Task> = plan
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(index, planned)| planned.to_task(movement_id, (index + 1) as u32))
+            .collect();
+
+        if let Some(store) = &self.store {
+            for task in &tasks {
+                store.save_task(task).await?;
+            }
+        }
+        self.state
+            .tasks
+            .insert(movement_id.to_string(), tasks);
+
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            movement.status = MovementStatus::InProgress;
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+        }
+
+        self.push_event(
+            EventScope::Dispatch,
+            format!(
+                "{} planner created {} tasks",
+                issue.identifier,
+                self.state
+                    .tasks
+                    .get(movement_id)
+                    .map(|t| t.len())
+                    .unwrap_or(0)
+            ),
+        );
+
+        self.dispatch_next_task(
+            self.workflow(),
+            issue.clone(),
+            attempt,
+            false,
+            movement_id,
+            workspace_path,
+        )
+        .await
+    }
+
+    async fn handle_task_finished(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+        movement_id: &str,
+        task_id: &str,
+        workspace_path: &Path,
+        outcome: &AgentRunResult,
+        attempt: Option<u32>,
+    ) -> Result<(), Error> {
+        let now = Utc::now();
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                task.status = if matches!(outcome.status, AttemptStatus::Succeeded) {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Failed
+                };
+                task.turns_completed = outcome.turns_completed;
+                task.error = outcome.error.clone();
+                task.finished_at = Some(now);
+                task.updated_at = now;
+                if let Some(store) = &self.store {
+                    store.save_task(task).await?;
+                }
+            }
+        }
+
+        if matches!(outcome.status, AttemptStatus::Succeeded) {
+            self.dispatch_next_task(
+                self.workflow(),
+                issue.clone(),
+                attempt,
+                false,
+                movement_id,
+                workspace_path,
+            )
+            .await
+        } else {
+            if workflow.config.pipeline.replan_on_failure
+                && workflow.config.pipeline.planner_agent.is_some()
+            {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "{} task failed, re-running planner",
+                        issue.identifier
+                    ),
+                );
+                // Reset tasks and re-plan
+                if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+                    for task in tasks.iter_mut() {
+                        if task.status == TaskStatus::Pending {
+                            task.status = TaskStatus::Cancelled;
+                            task.updated_at = Utc::now();
+                        }
+                    }
+                }
+                if let Some(movement) = self.state.movements.get_mut(movement_id) {
+                    movement.status = MovementStatus::Planning;
+                    movement.updated_at = Utc::now();
+                    if let Some(store) = &self.store {
+                        store.save_movement(movement).await?;
+                    }
+                }
+                return self
+                    .dispatch_planner_task(
+                        workflow,
+                        issue,
+                        attempt,
+                        false,
+                        movement_id,
+                        workspace_path,
+                    )
+                    .await;
+            }
+            // Mark movement as failed
+            if let Some(movement) = self.state.movements.get_mut(movement_id) {
+                movement.status = MovementStatus::Failed;
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_movement(movement).await?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    async fn complete_pipeline(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+        movement_id: &str,
+    ) -> Result<(), Error> {
+        let status = if workflow.config.automation.enabled {
+            MovementStatus::Review
+        } else {
+            MovementStatus::Delivered
+        };
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            movement.status = status;
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+        }
+        self.push_event(
+            EventScope::Dispatch,
+            format!(
+                "{} pipeline completed ({:?})",
+                issue.identifier, status
+            ),
+        );
         Ok(())
     }
 
@@ -982,6 +1730,120 @@ impl RuntimeService {
                 .await?;
         }
 
+        // Pipeline worker handling
+        if let Some(movement_id) = running.movement_id.clone() {
+            let workflow = self.workflow();
+            let issue = running.issue.clone();
+            let workspace_path = running.workspace_path.clone();
+            let active_task_id = running.active_task_id.clone();
+
+            self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
+            self.push_event(
+                EventScope::Worker,
+                format!("{} pipeline worker {:?}", issue_identifier, outcome.status),
+            );
+
+            // Determine if this was a planner or a task worker
+            if active_task_id.is_none() {
+                // This was the planner
+                let result = self
+                    .handle_planner_finished(
+                        &workflow,
+                        &issue,
+                        &movement_id,
+                        &workspace_path,
+                        &outcome,
+                        attempt,
+                    )
+                    .await;
+                if let Err(error) = &result {
+                    warn!(%error, issue_identifier = %issue_identifier, "pipeline planner handling failed");
+                    self.release_issue(&issue_id);
+                }
+                self.emit_snapshot().await?;
+                return result;
+            }
+
+            // This was a task worker
+            let task_id = active_task_id.unwrap();
+            let result = self
+                .handle_task_finished(
+                    &workflow,
+                    &issue,
+                    &movement_id,
+                    &task_id,
+                    &workspace_path,
+                    &outcome,
+                    attempt,
+                )
+                .await;
+            if let Err(error) = &result {
+                warn!(%error, issue_identifier = %issue_identifier, "pipeline task handling failed");
+                self.release_issue(&issue_id);
+            }
+
+            // After all tasks complete, run success handoff
+            let pipeline_done = self
+                .state
+                .movements
+                .get(&movement_id)
+                .is_some_and(|m| {
+                    matches!(
+                        m.status,
+                        MovementStatus::Review | MovementStatus::Delivered
+                    )
+                });
+            if pipeline_done {
+                let workflow_status = outcome
+                    .final_issue_state
+                    .clone()
+                    .unwrap_or_else(|| "Human Review".into());
+                if !workflow.config.is_active_state(&workflow_status) {
+                    if let Err(error) = self
+                        .tracker
+                        .update_issue_workflow_status(&issue, &workflow_status)
+                        .await
+                    {
+                        warn!(%error, issue_identifier = %issue.identifier, "issue workflow status sync failed");
+                    }
+                    if let Err(error) = self.run_success_handoff(&workflow, &running).await {
+                        warn!(%error, issue_identifier = %issue.identifier, "pipeline handoff failed");
+                        self.push_event(
+                            EventScope::Handoff,
+                            format!("{} pipeline handoff failed: {}", issue.identifier, error),
+                        );
+                    }
+                }
+                self.state.completed.insert(issue_id.clone());
+                self.schedule_retry(
+                    issue_id.clone(),
+                    issue_identifier.clone(),
+                    1,
+                    None,
+                    true,
+                    workflow.config.agent.max_retry_backoff_ms,
+                );
+            } else if self
+                .state
+                .movements
+                .get(&movement_id)
+                .is_some_and(|m| matches!(m.status, MovementStatus::Failed))
+            {
+                self.schedule_retry(
+                    issue_id.clone(),
+                    issue_identifier.clone(),
+                    attempt.unwrap_or(0) + 1,
+                    outcome.error.clone(),
+                    false,
+                    workflow.config.agent.max_retry_backoff_ms,
+                );
+            }
+
+            self.emit_snapshot().await?;
+            return result;
+        }
+
+        // Non-pipeline (existing behavior)
         let workflow = self.workflow();
         match outcome.status {
             AttemptStatus::Succeeded => {
@@ -1266,7 +2128,28 @@ impl RuntimeService {
             counts: SnapshotCounts {
                 running: self.state.running.len(),
                 retrying: self.state.retrying.len(),
-                ..Default::default()
+                movements: self.state.movements.len(),
+                tasks_pending: self
+                    .state
+                    .tasks
+                    .values()
+                    .flat_map(|t| t.iter())
+                    .filter(|t| t.status == TaskStatus::Pending)
+                    .count(),
+                tasks_in_progress: self
+                    .state
+                    .tasks
+                    .values()
+                    .flat_map(|t| t.iter())
+                    .filter(|t| t.status == TaskStatus::InProgress)
+                    .count(),
+                tasks_completed: self
+                    .state
+                    .tasks
+                    .values()
+                    .flat_map(|t| t.iter())
+                    .filter(|t| t.status == TaskStatus::Completed)
+                    .count(),
             },
             cadence: RuntimeCadence {
                 tracker_poll_interval_ms: self.workflow_rx.borrow().config.polling.interval_ms,
@@ -1320,8 +2203,50 @@ impl RuntimeService {
             agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
             saved_contexts: self.state.saved_contexts.values().cloned().collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
-            movements: Vec::new(),
-            tasks: Vec::new(),
+            movements: self
+                .state
+                .movements
+                .values()
+                .map(|m| {
+                    let tasks = self.state.tasks.get(&m.id);
+                    let task_count = tasks.map(|t| t.len()).unwrap_or(0);
+                    let tasks_completed = tasks
+                        .map(|t| {
+                            t.iter()
+                                .filter(|t| t.status == TaskStatus::Completed)
+                                .count()
+                        })
+                        .unwrap_or(0);
+                    MovementRow {
+                        id: m.id.clone(),
+                        issue_identifier: m.issue_identifier.clone(),
+                        title: m.title.clone(),
+                        status: m.status,
+                        task_count,
+                        tasks_completed,
+                        has_deliverable: m.deliverable.is_some(),
+                        created_at: m.created_at,
+                    }
+                })
+                .collect(),
+            tasks: self
+                .state
+                .tasks
+                .values()
+                .flat_map(|tasks| {
+                    tasks.iter().map(|t| TaskRow {
+                        id: t.id.clone(),
+                        movement_id: t.movement_id.clone(),
+                        title: t.title.clone(),
+                        category: t.category,
+                        status: t.status,
+                        ordinal: t.ordinal,
+                        agent_name: t.agent_name.clone(),
+                        turns_completed: t.turns_completed,
+                        total_tokens: t.tokens.total_tokens,
+                    })
+                })
+                .collect(),
             loading: self.state.loading.clone(),
             from_cache: self.state.from_cache,
             cached_at: self.state.cached_at,
@@ -1390,6 +2315,14 @@ impl RuntimeService {
             self.state
                 .retrying
                 .insert(issue_id, RetryEntry { row, due_at });
+        }
+        self.state.movements = bootstrap.movements;
+        for (_task_id, task) in bootstrap.tasks {
+            self.state
+                .tasks
+                .entry(task.movement_id.clone())
+                .or_default()
+                .push(task);
         }
     }
 
@@ -3010,6 +3943,8 @@ mod tests {
             last_reported_tokens: TokenUsage::default(),
             turn_count: 0,
             rate_limits: None,
+            active_task_id: None,
+            movement_id: None,
             handle: tokio::spawn(async {
                 let _: () = std::future::pending().await;
             }),

@@ -229,6 +229,26 @@ pub struct FeedbackConfig {
     pub webhook: HashMap<String, WebhookFeedbackConfig>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct PipelineStageConfig {
+    pub category: String,
+    pub agent: Option<String>,
+    pub prompt: Option<String>,
+    pub max_turns: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct PipelineConfig {
+    pub enabled: bool,
+    pub planner_agent: Option<String>,
+    pub planner_prompt: Option<String>,
+    pub stages: Vec<PipelineStageConfig>,
+    pub replan_on_failure: bool,
+    pub validation_agent: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceConfig {
     pub tracker: TrackerConfig,
@@ -237,6 +257,7 @@ pub struct ServiceConfig {
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
     pub agents: AgentsConfig,
+    pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
@@ -254,6 +275,7 @@ struct RawServiceConfig {
     pub agents: AgentsConfig,
     pub codex: Option<CodexConfig>,
     pub provider: Option<CodexConfig>,
+    pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
@@ -572,6 +594,10 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("automation.git.remote_name", "origin")
             .map_err(config_error)?
+            .set_default("pipeline.enabled", false)
+            .map_err(config_error)?
+            .set_default("pipeline.replan_on_failure", false)
+            .map_err(config_error)?
             .set_default("feedback", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .set_default("server", HashMap::<String, i64>::new())
@@ -604,6 +630,7 @@ impl ServiceConfig {
             hooks: raw.hooks,
             agent: raw.agent,
             agents: raw.agents,
+            pipeline: raw.pipeline,
             automation: raw.automation,
             feedback: raw.feedback,
             server: raw.server,
@@ -671,6 +698,9 @@ impl ServiceConfig {
             .source_repo_path
             .take()
             .map(|path| expand_path_like(&path));
+        self.pipeline.planner_agent = resolve_env_token(self.pipeline.planner_agent.take());
+        self.pipeline.planner_prompt = resolve_env_token(self.pipeline.planner_prompt.take());
+        self.pipeline.validation_agent = resolve_env_token(self.pipeline.validation_agent.take());
         self.automation.review_agent = resolve_env_token(self.automation.review_agent.take());
         self.automation.commit_message = resolve_env_token(self.automation.commit_message.take());
         self.automation.pr_title = resolve_env_token(self.automation.pr_title.take());
@@ -919,6 +949,31 @@ impl ServiceConfig {
                 return Err(Error::InvalidConfig(format!(
                     "automation.review_agent `{agent_name}` is not defined"
                 )));
+            }
+        }
+        if self.pipeline.enabled {
+            if let Some(agent_name) = &self.pipeline.planner_agent
+                && !self.agents.profiles.contains_key(agent_name)
+            {
+                return Err(Error::InvalidConfig(format!(
+                    "pipeline.planner_agent `{agent_name}` is not defined"
+                )));
+            }
+            if let Some(agent_name) = &self.pipeline.validation_agent
+                && !self.agents.profiles.contains_key(agent_name)
+            {
+                return Err(Error::InvalidConfig(format!(
+                    "pipeline.validation_agent `{agent_name}` is not defined"
+                )));
+            }
+            for stage in &self.pipeline.stages {
+                if let Some(agent_name) = &stage.agent
+                    && !self.agents.profiles.contains_key(agent_name)
+                {
+                    return Err(Error::InvalidConfig(format!(
+                        "pipeline.stages references unknown agent `{agent_name}`"
+                    )));
+                }
             }
         }
         for offered in &self.feedback.offered {
@@ -1435,7 +1490,7 @@ fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransport {
     }
 }
 
-fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition {
+pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition {
     AgentDefinition {
         name: name.to_string(),
         kind: profile.kind.clone(),

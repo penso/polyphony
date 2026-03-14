@@ -153,6 +153,29 @@ max_turns = 20
 # api_key = "$KIMI_API_KEY"
 # fetch_models = true
 
+[pipeline]
+enabled = false
+# planner_agent = "planner"        # Agent that generates plan.json (omit for static stages)
+# planner_prompt = ""              # Custom Liquid template for planner (uses built-in default)
+# replan_on_failure = false        # Re-run planner if a task fails
+# validation_agent = "reviewer"   # Agent that validates after all tasks
+
+# Static pipeline stages (used when no planner_agent is configured).
+# [[pipeline.stages]]
+# category = "research"
+# agent = "researcher"
+# max_turns = 4
+#
+# [[pipeline.stages]]
+# category = "coding"
+# agent = "coder"
+# max_turns = 10
+#
+# [[pipeline.stages]]
+# category = "review"
+# agent = "reviewer"
+# max_turns = 4
+
 [automation]
 enabled = false
 draft_pull_requests = true

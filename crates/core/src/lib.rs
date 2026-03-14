@@ -13,6 +13,7 @@ use {
     serde_json::Value,
     thiserror::Error,
     tokio::sync::mpsc,
+    uuid::Uuid,
 };
 
 pub type IssueId = String;
@@ -339,6 +340,8 @@ pub struct Task {
     pub id: TaskId,
     pub movement_id: MovementId,
     pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub category: TaskCategory,
     pub status: TaskStatus,
     pub ordinal: u32,
@@ -351,6 +354,53 @@ pub struct Task {
     pub error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelinePlan {
+    pub tasks: Vec<PlannedTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedTask {
+    pub title: String,
+    pub category: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+impl PlannedTask {
+    pub fn to_task(&self, movement_id: &str, ordinal: u32) -> Task {
+        let now = Utc::now();
+        let category = match self.category.to_ascii_lowercase().as_str() {
+            "research" => TaskCategory::Research,
+            "coding" => TaskCategory::Coding,
+            "testing" => TaskCategory::Testing,
+            "documentation" => TaskCategory::Documentation,
+            "review" => TaskCategory::Review,
+            _ => TaskCategory::Coding,
+        };
+        Task {
+            id: format!("task-{}", Uuid::new_v4()),
+            movement_id: movement_id.to_string(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            category,
+            status: TaskStatus::Pending,
+            ordinal,
+            parent_id: None,
+            agent_name: self.agent.clone(),
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1020,6 +1070,10 @@ impl LoadingState {
             || self.fetching_models
             || self.reconciling
     }
+}
+
+pub fn new_movement_id() -> MovementId {
+    format!("mov-{}", Uuid::new_v4())
 }
 
 pub fn sanitize_workspace_key(identifier: &str) -> String {
