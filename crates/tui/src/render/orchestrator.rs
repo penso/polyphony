@@ -5,7 +5,7 @@ use {
         layout::{Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Table},
+        widgets::{Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Table, Wrap},
     },
 };
 
@@ -293,18 +293,20 @@ fn draw_events_panel(
         .collect();
 
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .title(Line::from(Span::styled(
-                    " Events ",
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                )))
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.border)),
-        ),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(Line::from(Span::styled(
+                        " Events ",
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    )))
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme.border)),
+            ),
         area,
     );
 }

@@ -10,7 +10,7 @@ use {
         WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
     },
     thiserror::Error,
-    tracing::{debug, info},
+    tracing::{debug, info, warn},
 };
 
 #[derive(Debug, Error)]
@@ -239,7 +239,9 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
                 let source_repo = git2::Repository::open(source_repo_path).map_err(|error| {
                     CoreError::Adapter(format!("open source repo failed: {error}"))
                 })?;
-                fetch_origin(&source_repo)?;
+                if let Err(error) = fetch_origin(&source_repo) {
+                    warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
+                }
             }
             sync_existing_repo_checkout(
                 &request.workspace_path,
@@ -251,7 +253,9 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
             let repo = git2::Repository::open(&request.workspace_path).map_err(|error| {
                 CoreError::Adapter(format!("open existing clone failed: {error}"))
             })?;
-            fetch_origin(&repo)?;
+            if let Err(error) = fetch_origin(&repo) {
+                warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
+            }
             sync_existing_repo_checkout(
                 &request.workspace_path,
                 request.branch_name.as_deref(),
@@ -329,8 +333,18 @@ fn fetch_origin(repo: &git2::Repository) -> Result<(), CoreError> {
         return Ok(());
     };
     debug!("fetching origin for existing workspace");
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed| {
+        resolve_remote_credentials(repo, url, username_from_url, allowed, None)
+    });
+    let mut fetch_options = git2::FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
     remote
-        .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
+        .fetch(
+            &["refs/heads/*:refs/remotes/origin/*"],
+            Some(&mut fetch_options),
+            None,
+        )
         .map_err(|error| CoreError::Adapter(format!("fetch origin failed: {error}")))?;
     Ok(())
 }
