@@ -577,7 +577,8 @@ fn draw_leaving_modal(frame: &mut ratatui::Frame<'_>, frame_count: u64, theme: T
             .block(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border)),
+                    .border_style(Style::default().fg(theme.border))
+                    .style(Style::default().bg(theme.background)),
             ),
         area,
     );
