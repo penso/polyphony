@@ -475,10 +475,10 @@ pub fn prompt_workflow_initialization(workflow_path: &Path) -> Result<bool, Erro
     };
 
     drain_pending_input();
-    disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     drain_tty();
+    disable_raw_mode()?;
     result
 }
 
@@ -536,10 +536,10 @@ pub async fn run(
     };
 
     drain_pending_input();
-    disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     drain_tty();
+    disable_raw_mode()?;
     result
 }
 
@@ -2424,7 +2424,18 @@ fn drain_tty() {
             return;
         };
         let mut scratch = [0u8; 256];
-        while poll_tty_readable(tty.as_raw_fd(), Duration::from_millis(20)).unwrap_or(false) {
+        // First poll with a longer timeout to catch responses triggered by
+        // LeaveAlternateScreen, then loop with short polls to drain any
+        // remaining bytes.
+        let mut first = true;
+        loop {
+            let timeout = if first { 50 } else { 5 };
+            first = false;
+            if !poll_tty_readable(tty.as_raw_fd(), Duration::from_millis(timeout))
+                .unwrap_or(false)
+            {
+                break;
+            }
             match tty.read(&mut scratch) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {}
