@@ -88,6 +88,7 @@ Guidelines:
 pub enum RuntimeCommand {
     Refresh,
     Shutdown,
+    SetMode(polyphony_core::DispatchMode),
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +209,7 @@ struct RuntimeState {
     loading: LoadingState,
     from_cache: bool,
     cached_at: Option<DateTime<Utc>>,
+    dispatch_mode: polyphony_core::DispatchMode,
     movements: HashMap<MovementId, Movement>,
     tasks: HashMap<MovementId, Vec<Task>>,
 }
@@ -234,6 +236,7 @@ impl Default for RuntimeState {
             loading: LoadingState::default(),
             from_cache: false,
             cached_at: None,
+            dispatch_mode: polyphony_core::DispatchMode::default(),
             movements: HashMap::new(),
             tasks: HashMap::new(),
         }
@@ -370,6 +373,15 @@ impl RuntimeService {
                             self.emit_snapshot().await?;
                             return Ok(());
                         }
+                        RuntimeCommand::SetMode(mode) => {
+                            info!(?mode, "dispatch mode changed (event loop)");
+                            self.push_event(
+                                EventScope::Dispatch,
+                                format!("dispatch mode set to {mode}"),
+                            );
+                            self.state.dispatch_mode = mode;
+                            let _ = self.emit_snapshot().await;
+                        }
                     }
                 }
                 Some(message) = self.command_rx.recv() => {
@@ -461,6 +473,14 @@ impl RuntimeService {
                 Ok(RuntimeCommand::Shutdown) => return true,
                 Ok(RuntimeCommand::Refresh) => {
                     self.pending_refresh = true;
+                },
+                Ok(RuntimeCommand::SetMode(mode)) => {
+                    info!(?mode, "dispatch mode changed");
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("dispatch mode set to {mode}"),
+                    );
+                    self.state.dispatch_mode = mode;
                 },
                 Err(_) => return false,
             }
@@ -559,6 +579,11 @@ impl RuntimeService {
         self.state.visible_issues = issues.iter().map(summarize_issue).collect();
         self.save_cache().await;
         if !workflow.config.has_dispatch_agents() {
+            let _ = self.emit_snapshot().await;
+            return false;
+        }
+        if self.state.dispatch_mode == polyphony_core::DispatchMode::Manual {
+            debug!("tick: dispatch skipped (manual mode)");
             let _ = self.emit_snapshot().await;
             return false;
         }
@@ -2222,6 +2247,8 @@ impl RuntimeService {
                 })
                 .collect(),
             loading: self.state.loading.clone(),
+            dispatch_mode: self.state.dispatch_mode,
+            tracker_kind: self.workflow_rx.borrow().config.tracker.kind,
             from_cache: self.state.from_cache,
             cached_at: self.state.cached_at,
         }
@@ -3301,6 +3328,8 @@ fn empty_snapshot() -> RuntimeSnapshot {
         movements: Vec::new(),
         tasks: Vec::new(),
         loading: LoadingState::default(),
+        dispatch_mode: polyphony_core::DispatchMode::default(),
+        tracker_kind: polyphony_core::TrackerKind::default(),
         from_cache: false,
         cached_at: None,
     }

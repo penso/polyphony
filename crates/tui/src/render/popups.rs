@@ -1,6 +1,6 @@
 use {
     chrono::{DateTime, Utc},
-    polyphony_core::VisibleIssueRow,
+    polyphony_core::{DispatchMode, RuntimeSnapshot, TrackerKind, VisibleIssueRow},
     ratatui::{
         layout::{Constraint, Direction, Layout, Margin, Rect},
         style::{Color, Modifier, Style},
@@ -17,6 +17,7 @@ use crate::{app::AppState, theme::Theme};
 pub fn draw_issue_detail_modal(
     frame: &mut ratatui::Frame<'_>,
     issue: &VisibleIssueRow,
+    tracker_kind: TrackerKind,
     app: &mut AppState,
 ) {
     let theme = app.theme;
@@ -25,19 +26,14 @@ pub fn draw_issue_detail_modal(
     let area = centered_rect(frame.area(), max_w, max_h);
     frame.render_widget(Clear, area);
 
-    let source_label =
-        if issue.issue_identifier.starts_with("GH-") || issue.issue_identifier.contains('#') {
-            " GitHub"
-        } else {
-            "◆ Linear"
-        };
+    let source_label = format!("{tracker_kind:?}");
 
     // Border title: source + identifier
     let block = Block::default()
         .title(Line::from(vec![
             Span::styled(format!(" {source_label} "), Style::default().fg(theme.info)),
             Span::styled(
-                format!("{} ", issue.issue_identifier),
+                format!("{} ", issue.issue_id),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -292,6 +288,101 @@ fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 2;
     Rect::new(x, y, width, height)
+}
+
+const MODE_OPTIONS: [(DispatchMode, &str, &str); 3] = [
+    (DispatchMode::Manual, "Manual", "You choose which issues to dispatch"),
+    (DispatchMode::Automatic, "Automatic", "Issues are dispatched automatically"),
+    (DispatchMode::Nightshift, "Nightshift", "Auto + code improvements when idle"),
+];
+
+pub fn draw_mode_modal(
+    frame: &mut ratatui::Frame<'_>,
+    snapshot: &RuntimeSnapshot,
+    app: &AppState,
+) {
+    let theme = app.theme;
+    let area = centered_rect(frame.area(), 52, 11);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " Dispatch Mode ",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(
+            Line::from(vec![
+                Span::styled(" j/k", Style::default().fg(theme.highlight)),
+                Span::styled(":navigate  ", Style::default().fg(theme.muted)),
+                Span::styled("Enter", Style::default().fg(theme.highlight)),
+                Span::styled(":select  ", Style::default().fg(theme.muted)),
+                Span::styled("Esc", Style::default().fg(theme.highlight)),
+                Span::styled(":close ", Style::default().fg(theme.muted)),
+            ])
+            .right_aligned(),
+        )
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.highlight))
+        .style(Style::default().bg(theme.background));
+
+    frame.render_widget(block, area);
+
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // spacer
+            Constraint::Length(2), // option 0
+            Constraint::Length(1), // spacer
+            Constraint::Length(2), // option 1
+            Constraint::Length(1), // spacer
+            Constraint::Length(2), // option 2
+            Constraint::Min(0),   // remainder
+        ])
+        .split(inner);
+
+    for (i, (mode, label, desc)) in MODE_OPTIONS.iter().enumerate() {
+        let is_selected = i == app.mode_modal_selected;
+        let is_active = *mode == snapshot.dispatch_mode;
+
+        let marker = if is_active { "● " } else { "  " };
+        let marker_color = if is_active { theme.success } else { theme.muted };
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+
+        let row_area = rows[1 + i * 2];
+        let row_lines = vec![
+            Line::from(vec![
+                Span::styled(marker, Style::default().fg(marker_color)),
+                Span::styled(*label, label_style),
+            ]),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(*desc, Style::default().fg(theme.muted)),
+            ]),
+        ];
+
+        let bg = if is_selected {
+            Style::default().bg(theme.panel_alt)
+        } else {
+            Style::default()
+        };
+
+        frame.render_widget(Paragraph::new(row_lines).style(bg), row_area);
+    }
 }
 
 /// Strip HTML tags from text, preserving content between tags.

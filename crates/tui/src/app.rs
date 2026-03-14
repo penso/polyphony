@@ -121,6 +121,16 @@ pub struct AppState {
     pub prev_credits_used: f64,
     /// Inner area of the tab bar block, set each frame by draw_header.
     pub tab_inner_area: Rect,
+    /// Content area (areas[1]), set each frame for mouse click row mapping.
+    pub content_area: Rect,
+    pub show_mode_modal: bool,
+    pub mode_modal_selected: usize,
+    /// Last left-click time for double-click detection.
+    pub last_click_at: Option<Instant>,
+    /// Column/row of last click for double-click detection.
+    pub last_click_pos: (u16, u16),
+    /// Last scroll event time for debouncing.
+    pub last_scroll_at: Option<Instant>,
 }
 
 impl AppState {
@@ -155,6 +165,12 @@ impl AppState {
             rps_history: VecDeque::with_capacity(RPS_HISTORY_CAP),
             prev_credits_used: 0.0,
             tab_inner_area: Rect::default(),
+            content_area: Rect::default(),
+            show_mode_modal: false,
+            mode_modal_selected: 0,
+            last_click_at: None,
+            last_click_pos: (0, 0),
+            last_scroll_at: None,
         }
     }
 
@@ -395,6 +411,22 @@ impl AppState {
         move_selection_back(self.active_table_state_mut(), len, amount);
     }
 
+    /// Return the issue table row index for a click position, if valid.
+    /// The table has: 1 border + 1 header row before data rows.
+    pub fn issue_row_at_position(&self, row: u16) -> Option<usize> {
+        let area = self.content_area;
+        if area.height == 0 || row < area.y + 2 || row >= area.y + area.height - 1 {
+            return None;
+        }
+        let clicked_row = (row - area.y - 2) as usize;
+        let index = clicked_row + self.issues_state.offset();
+        if index < self.sorted_issue_indices.len() {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
     /// Return the tab that was clicked, if the position falls within a tab label.
     pub fn tab_at_position(&self, column: u16, row: u16) -> Option<ActiveTab> {
         let area = self.tab_inner_area;
@@ -404,15 +436,22 @@ impl AppState {
         if column < area.x || column >= area.x + area.width {
             return None;
         }
-        // Walk tab titles with 2-char divider spacing (matches divider(Span::raw("  ")))
+        // Ratatui Tabs renders: [pad_left][title][pad_right][divider] for each tab.
+        // Default padding is 1 space on each side; our divider is "  " (2 chars).
         let rel = (column - area.x) as usize;
+        let pad_left = 1_usize;
+        let pad_right = 1_usize;
+        let divider_len = 2_usize;
         let mut pos = 0;
-        for tab in ActiveTab::ALL {
+        let tab_count = ActiveTab::ALL.len();
+        for (i, tab) in ActiveTab::ALL.iter().enumerate() {
             let title_len = tab.title().len();
-            if rel >= pos && rel < pos + title_len {
-                return Some(tab);
+            let clickable = pad_left + title_len + pad_right;
+            if rel >= pos && rel < pos + clickable {
+                return Some(*tab);
             }
-            pos += title_len + 2; // title + "  " divider
+            // After the last tab there's no divider.
+            pos += clickable + if i < tab_count - 1 { divider_len } else { 0 };
         }
         None
     }

@@ -1,5 +1,5 @@
 use {
-    polyphony_core::RuntimeSnapshot,
+    polyphony_core::{DispatchMode, RuntimeSnapshot},
     ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
@@ -87,24 +87,35 @@ pub fn draw_header(
         ),
     ])];
 
-    let (status_dot, status_label, status_color) = if snapshot.from_cache {
-        ("●", "cached", theme.warning)
-    } else {
-        ("●", "online", theme.success)
+    let (mode_label, mode_color) = match snapshot.dispatch_mode {
+        DispatchMode::Manual => ("manual", theme.info),
+        DispatchMode::Automatic => ("auto", theme.success),
+        DispatchMode::Nightshift => ("nightshift", theme.highlight),
     };
+
+    let mut status_spans = vec![
+        Span::styled("● ", Style::default().fg(mode_color)),
+        Span::styled(
+            mode_label,
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    if snapshot.from_cache {
+        status_spans.push(Span::styled(
+            " (cached)",
+            Style::default().fg(theme.warning),
+        ));
+    }
+
+    status_spans.push(Span::styled(" ", Style::default()));
 
     frame.render_widget(
         Paragraph::new(summary).block(
             Block::default()
-                .title(Line::from(vec![
-                    Span::styled(format!(" {status_dot} "), Style::default().fg(status_color)),
-                    Span::styled(
-                        format!("{status_label} "),
-                        Style::default()
-                            .fg(theme.foreground)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]))
+                .title(Line::from(status_spans))
                 .borders(ratatui::widgets::Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.border)),

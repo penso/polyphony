@@ -710,6 +710,8 @@ pub struct RuntimeSnapshot {
     #[serde(default)]
     pub dispatch_mode: DispatchMode,
     #[serde(default)]
+    pub tracker_kind: TrackerKind,
+    #[serde(default)]
     pub from_cache: bool,
     #[serde(default)]
     pub cached_at: Option<DateTime<Utc>>,

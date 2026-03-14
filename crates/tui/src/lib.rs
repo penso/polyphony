@@ -14,7 +14,7 @@ use {
         event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
-    polyphony_core::RuntimeSnapshot,
+    polyphony_core::{DispatchMode, RuntimeSnapshot},
     polyphony_orchestrator::RuntimeCommand,
     ratatui::{
         Terminal,
@@ -218,18 +218,102 @@ pub async fn run(
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Mouse(mouse) => {
-                    if !app.leaving
-                        && !app.show_issue_detail
-                        && mouse.kind == MouseEventKind::Down(event::MouseButton::Left)
-                        && let Some(tab) = app.tab_at_position(mouse.column, mouse.row)
-                    {
-                        app.active_tab = tab;
+                    if !app.leaving {
+                        if app.show_issue_detail {
+                            // Click outside modal closes it
+                            if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                                app.show_issue_detail = false;
+                                app.detail_scroll = 0;
+                            }
+                        } else {
+                            match mouse.kind {
+                                MouseEventKind::Down(event::MouseButton::Left) => {
+                                    if let Some(tab) =
+                                        app.tab_at_position(mouse.column, mouse.row)
+                                    {
+                                        app.active_tab = tab;
+                                    } else if app.active_tab == app::ActiveTab::Issues {
+                                        // Single click selects issue row
+                                        if let Some(idx) =
+                                            app.issue_row_at_position(mouse.row)
+                                        {
+                                            app.issues_state.select(Some(idx));
+                                        }
+                                        // Double-click opens detail modal
+                                        let now = Instant::now();
+                                        let is_double =
+                                            app.last_click_at.is_some_and(|prev| {
+                                                now.duration_since(prev)
+                                                    < Duration::from_millis(400)
+                                                    && app.last_click_pos.1 == mouse.row
+                                            });
+                                        if is_double
+                                            && app.selected_issue(&snapshot).is_some()
+                                        {
+                                            app.show_issue_detail = true;
+                                            app.detail_scroll = 0;
+                                            app.last_click_at = None;
+                                        } else {
+                                            app.last_click_at = Some(now);
+                                            app.last_click_pos =
+                                                (mouse.column, mouse.row);
+                                        }
+                                    }
+                                },
+                                MouseEventKind::ScrollDown => {
+                                    let now = Instant::now();
+                                    let skip = app.last_scroll_at.is_some_and(|prev| {
+                                        now.duration_since(prev) < Duration::from_millis(50)
+                                    });
+                                    if !skip {
+                                        app.last_scroll_at = Some(now);
+                                        let len = app.active_table_len(&snapshot);
+                                        app.move_down(len, 1);
+                                    }
+                                },
+                                MouseEventKind::ScrollUp => {
+                                    let now = Instant::now();
+                                    let skip = app.last_scroll_at.is_some_and(|prev| {
+                                        now.duration_since(prev) < Duration::from_millis(50)
+                                    });
+                                    if !skip {
+                                        app.last_scroll_at = Some(now);
+                                        let len = app.active_table_len(&snapshot);
+                                        app.move_up(len, 1);
+                                    }
+                                },
+                                _ => {},
+                            }
+                        }
                     }
                     key_handled = true;
                 },
                 Event::Key(key) => {
             if app.leaving {
                 // Ignore keys while leaving
+            } else if app.show_mode_modal {
+                match key.code {
+                    KeyCode::Esc => {
+                        app.show_mode_modal = false;
+                    },
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        app.mode_modal_selected = (app.mode_modal_selected + 1) % 3;
+                    },
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.mode_modal_selected = (app.mode_modal_selected + 2) % 3;
+                    },
+                    KeyCode::Enter => {
+                        let modes = [
+                            DispatchMode::Manual,
+                            DispatchMode::Automatic,
+                            DispatchMode::Nightshift,
+                        ];
+                        let selected = modes[app.mode_modal_selected];
+                        app.show_mode_modal = false;
+                        let _ = command_tx.send(RuntimeCommand::SetMode(selected));
+                    },
+                    _ => {},
+                }
             } else if app.show_issue_detail {
                 // Modal is open — handle modal keys
                 match key.code {
@@ -452,6 +536,17 @@ fn handle_key(
             }
         },
 
+        // Mode modal
+        KeyCode::Char('m') => {
+            app.show_mode_modal = true;
+            // Pre-select current mode
+            app.mode_modal_selected = match snapshot.dispatch_mode {
+                DispatchMode::Manual => 0,
+                DispatchMode::Automatic => 1,
+                DispatchMode::Nightshift => 2,
+            };
+        },
+
         // Clear search filter
         KeyCode::Esc => {
             if !app.search_query.is_empty() {
@@ -625,6 +720,8 @@ mod tests {
             movements: vec![],
             tasks: vec![],
             loading: Default::default(),
+            dispatch_mode: Default::default(),
+            tracker_kind: Default::default(),
             from_cache: false,
             cached_at: None,
         }

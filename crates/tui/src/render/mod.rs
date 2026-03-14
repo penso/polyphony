@@ -24,6 +24,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         .split(frame.area());
 
     header::draw_header(frame, areas[0], snapshot, app);
+    app.content_area = areas[1];
 
     match app.active_tab {
         ActiveTab::Issues => issues::draw_issues_tab(frame, areas[1], snapshot, app),
@@ -43,7 +44,11 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
     if app.show_issue_detail
         && let Some(issue) = app.selected_issue(snapshot).cloned()
     {
-        popups::draw_issue_detail_modal(frame, &issue, app);
+        popups::draw_issue_detail_modal(frame, &issue, snapshot.tracker_kind, app);
+    }
+
+    if app.show_mode_modal {
+        popups::draw_mode_modal(frame, snapshot, app);
     }
 
     if app.leaving {
