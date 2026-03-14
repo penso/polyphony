@@ -642,6 +642,21 @@ fn spinner_char(frame: u64) -> char {
     BRAILLE_SPINNER[(frame / 4) as usize % BRAILLE_SPINNER.len()]
 }
 
+fn format_countdown(until: &DateTime<Utc>) -> String {
+    let remaining = until.signed_duration_since(Utc::now());
+    let secs = remaining.num_seconds();
+    if secs <= 0 {
+        return "expiring".into();
+    }
+    let mins = secs / 60;
+    let s = secs % 60;
+    if mins > 0 {
+        format!("{mins}m{s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 fn draw(
     frame: &mut ratatui::Frame<'_>,
     snapshot: &RuntimeSnapshot,
@@ -1056,6 +1071,21 @@ fn loading_status_line(
     frame_count: u64,
     theme: Theme,
 ) -> Line<'static> {
+    // Show throttle countdown prominently in status bar
+    if let Some(throttle) = snapshot.throttles.first() {
+        let countdown = format_countdown(&throttle.until);
+        return Line::from(vec![
+            Span::styled(
+                format!("{} ", spinner_char(frame_count)),
+                Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("rate limited: {countdown}"),
+                Style::default().fg(theme.warning),
+            ),
+        ]);
+    }
+
     let loading = &snapshot.loading;
     if !loading.any_active() && !snapshot.from_cache {
         return Line::from(Span::styled("ready", Style::default().fg(theme.success)));
@@ -1640,6 +1670,7 @@ fn draw_budget_throttle_panel(
         .collect::<Vec<_>>();
 
     lines.extend(snapshot.throttles.iter().map(|throttle| {
+        let countdown = format_countdown(&throttle.until);
         Line::from(vec![
             Span::styled(
                 "throttle",
@@ -1649,12 +1680,7 @@ fn draw_budget_throttle_panel(
             ),
             Span::raw("  "),
             Span::styled(
-                format!(
-                    "{} until {} ({})",
-                    throttle.component,
-                    throttle.until.format("%H:%M:%S"),
-                    throttle.reason
-                ),
+                format!("{} — {} ({})", throttle.component, countdown, throttle.reason),
                 Style::default().fg(theme.muted),
             ),
         ])
