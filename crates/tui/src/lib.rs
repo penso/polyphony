@@ -198,20 +198,9 @@ pub async fn run(
     let mut snapshot = snapshot_rx.borrow().clone();
     app.on_snapshot(&snapshot);
 
-    // Auto-refresh if starting from stale cache (older than 5 minutes)
+    // Always refresh on startup when starting from cache
     if snapshot.from_cache {
-        let stale = snapshot
-            .cached_at
-            .map(|at| {
-                chrono::Utc::now()
-                    .signed_duration_since(at)
-                    .num_seconds()
-                    > 300
-            })
-            .unwrap_or(true); // no timestamp = definitely stale
-        if stale {
-            let _ = command_tx.send(RuntimeCommand::Refresh);
-        }
+        let _ = command_tx.send(RuntimeCommand::Refresh);
     }
 
     let result = loop {

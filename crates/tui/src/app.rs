@@ -114,6 +114,7 @@ pub struct AppState {
     pub logs_search_query: String,
     pub logs_auto_scroll: bool,
     pub rps_history: VecDeque<u64>,
+    pub prev_credits_used: f64,
 }
 
 impl AppState {
@@ -144,6 +145,7 @@ impl AppState {
             logs_search_query: String::new(),
             logs_auto_scroll: true,
             rps_history: VecDeque::with_capacity(RPS_HISTORY_CAP),
+            prev_credits_used: 0.0,
         }
     }
 
@@ -193,9 +195,20 @@ impl AppState {
             }
         }
 
-        // Record for sparkline
-        self.rps_history
-            .push_back((self.requests_per_sec * 10.0) as u64);
+        // Sparkline: track credit consumption deltas
+        let credits_used: f64 = snapshot
+            .budgets
+            .iter()
+            .map(|b| {
+                let total = b.credits_total.unwrap_or(0.0);
+                let remaining = b.credits_remaining.unwrap_or(total);
+                (total - remaining).max(0.0)
+            })
+            .sum();
+        let credit_delta = (credits_used - self.prev_credits_used).max(0.0);
+        self.prev_credits_used = credits_used;
+        // Scale up for sparkline visibility (1 credit = 10 units)
+        self.rps_history.push_back((credit_delta * 10.0) as u64);
         if self.rps_history.len() > RPS_HISTORY_CAP {
             self.rps_history.pop_front();
         }
@@ -214,8 +227,8 @@ impl AppState {
         match self.issue_sort {
             IssueSortKey::Newest => {
                 indices.sort_by(|&a, &b| {
-                    let ta = issues[a].updated_at.as_ref();
-                    let tb = issues[b].updated_at.as_ref();
+                    let ta = issues[a].created_at.as_ref();
+                    let tb = issues[b].created_at.as_ref();
                     match (ta, tb) {
                         (Some(a_t), Some(b_t)) => b_t.cmp(a_t),
                         (Some(_), None) => std::cmp::Ordering::Less,
@@ -230,8 +243,8 @@ impl AppState {
             },
             IssueSortKey::Oldest => {
                 indices.sort_by(|&a, &b| {
-                    let ta = issues[a].updated_at.as_ref();
-                    let tb = issues[b].updated_at.as_ref();
+                    let ta = issues[a].created_at.as_ref();
+                    let tb = issues[b].created_at.as_ref();
                     match (ta, tb) {
                         (Some(a_t), Some(b_t)) => a_t.cmp(b_t),
                         (Some(_), None) => std::cmp::Ordering::Less,
