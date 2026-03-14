@@ -291,10 +291,9 @@ impl RuntimeService {
             }
         }
         self.emit_snapshot().await?;
-        if !self.drain_commands() {
-            self.startup_cleanup().await;
-            self.emit_snapshot().await?;
-        }
+        // startup_cleanup is deferred to the first tick so the select loop
+        // starts immediately and can process Refresh/Shutdown commands.
+        let mut startup_cleanup_done = false;
         let mut next_tick = Instant::now();
 
         loop {
@@ -340,6 +339,11 @@ impl RuntimeService {
                 _ = &mut sleep => {
                     let now = Instant::now();
                     if now >= next_tick {
+                        if !startup_cleanup_done {
+                            startup_cleanup_done = true;
+                            self.startup_cleanup().await;
+                            let _ = self.emit_snapshot().await;
+                        }
                         let shutdown = self.tick().await;
                         if shutdown {
                             self.abort_all().await;
