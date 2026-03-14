@@ -175,13 +175,8 @@ pub enum TrackerKind {
 
 impl fmt::Display for TrackerKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            Self::None => "none",
-            Self::Linear => "linear",
-            Self::Github => "github",
-            Self::Mock => "mock",
-        };
-        f.write_str(label)
+        // Variants are single PascalCase words; lowercasing Debug matches serde rename_all.
+        write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
 
@@ -371,20 +366,7 @@ pub enum EventScope {
 
 impl fmt::Display for EventScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            Self::Workflow => "workflow",
-            Self::Throttle => "throttle",
-            Self::Dispatch => "dispatch",
-            Self::Handoff => "handoff",
-            Self::Agent => "agent",
-            Self::Retry => "retry",
-            Self::Worker => "worker",
-            Self::Reconcile => "reconcile",
-            Self::Tracker => "tracker",
-            Self::Startup => "startup",
-            Self::Feedback => "feedback",
-        };
-        f.write_str(label)
+        write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
 
