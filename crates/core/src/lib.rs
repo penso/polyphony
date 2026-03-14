@@ -584,6 +584,8 @@ pub struct VisibleIssueRow {
     pub url: Option<String>,
     #[serde(default)]
     pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

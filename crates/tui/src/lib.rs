@@ -445,6 +445,7 @@ mod tests {
                     description: None,
                     url: None,
                     updated_at: None,
+                    created_at: None,
                 })
                 .collect(),
             running: vec![],

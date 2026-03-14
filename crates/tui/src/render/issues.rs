@@ -1,4 +1,5 @@
 use {
+    chrono::{DateTime, Utc},
     polyphony_core::RuntimeSnapshot,
     ratatui::{
         layout::{Alignment, Constraint, Rect},
@@ -22,20 +23,23 @@ pub fn draw_issues_tab(
     let theme = app.theme;
     let indices = &app.sorted_issue_indices;
 
-    // Precompute types so we can measure column width
+    let now = Utc::now();
+
+    // Precompute types and age so we can measure column widths
     let issue_data: Vec<_> = indices
         .iter()
         .filter_map(|&i| snapshot.visible_issues.get(i))
         .map(|issue| {
             let (issue_type, clean_title) = extract_type_and_title(&issue.title);
-            (issue, issue_type, clean_title)
+            let age = issue.created_at.map(|c| format_relative_time(c, now));
+            (issue, issue_type, clean_title, age)
         })
         .collect();
 
     // Compute ID column width from actual identifiers (icon + id + padding)
     let max_id_len = issue_data
         .iter()
-        .map(|(issue, _, _)| issue.issue_identifier.len() + 1) // +1 for source icon
+        .map(|(issue, _, _, _)| issue.issue_identifier.len() + 1) // +1 for source icon
         .max()
         .unwrap_or(4) as u16
         + 1; // +1 right padding
@@ -43,21 +47,35 @@ pub fn draw_issues_tab(
     // Compute Type column width from actual types + 1 padding
     let max_type_len = issue_data
         .iter()
-        .map(|(_, t, _)| t.len())
+        .map(|(_, t, _, _)| t.len())
         .max()
-        .unwrap_or(4) as u16
+        .unwrap_or(4)
+        .max(4) as u16 // min width = "Type" header
         + 1;
 
-    // Compute Status column width from actual states + 1 trailing space
+    // Compute Status column width: max of data and "Status" header + 1 trailing space
     let max_status_len = issue_data
         .iter()
-        .map(|(issue, _, _)| issue.state.len())
+        .map(|(issue, _, _, _)| issue.state.len())
         .max()
-        .unwrap_or(4) as u16
+        .unwrap_or(6)
+        .max(6) as u16 // min width = "Status" header
+        + 1;
+
+    // Age column: max of data and "Age" header + 1 padding
+    let max_age_len = issue_data
+        .iter()
+        .filter_map(|(_, _, _, age)| age.as_ref().map(|a| a.len()))
+        .max()
+        .unwrap_or(3)
+        .max(3) as u16 // min width = "Age" header
         + 1;
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("ID", Style::default().fg(theme.muted))),
+        Cell::from(
+            Line::from(Span::styled("ID", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Center),
+        ),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(
             Line::from(Span::styled("Type", Style::default().fg(theme.muted)))
@@ -67,33 +85,42 @@ pub fn draw_issues_tab(
             Line::from(Span::styled("Status", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
         ),
+        Cell::from(
+            Line::from(Span::styled("Age", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     // Available width for the title column
-    let title_max_width = (area.width as usize)
-        .saturating_sub(2 + 2 + max_id_len as usize + max_type_len as usize + max_status_len as usize + 3);
+    // area.width - borders(2) - highlight_symbol(2) - id - type - status - age - column_gaps(4)
+    let title_max_width = (area.width as usize).saturating_sub(
+        2 + 2 + max_id_len as usize + max_type_len as usize + max_status_len as usize + max_age_len as usize + 4,
+    );
 
     let rows: Vec<Row> = issue_data
         .iter()
-        .map(|(issue, issue_type, clean_title)| {
+        .map(|(issue, issue_type, clean_title, age)| {
             let state_color = state_color(&issue.state, theme);
             let source_icon = infer_source_icon(&issue.issue_identifier);
             let display_title = truncate_with_ellipsis(clean_title, title_max_width);
             let type_color = type_color(issue_type, theme);
 
             Row::new(vec![
-                Cell::from(Line::from(vec![
-                    Span::styled(
-                        format!("{source_icon}"),
-                        Style::default().fg(theme.muted),
-                    ),
-                    Span::styled(
-                        issue.issue_identifier.clone(),
-                        Style::default().fg(theme.info),
-                    ),
-                ])),
+                Cell::from(
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{source_icon}"),
+                            Style::default().fg(theme.muted),
+                        ),
+                        Span::styled(
+                            issue.issue_identifier.clone(),
+                            Style::default().fg(theme.info),
+                        ),
+                    ])
+                    .alignment(Alignment::Center),
+                ),
                 Cell::from(Span::styled(
                     display_title,
                     Style::default().fg(theme.foreground),
@@ -113,6 +140,13 @@ pub fn draw_issues_tab(
                         ),
                         Span::raw(" "),
                     ])
+                    .alignment(Alignment::Right),
+                ),
+                Cell::from(
+                    Line::from(Span::styled(
+                        age.clone().unwrap_or_default(),
+                        Style::default().fg(theme.muted),
+                    ))
                     .alignment(Alignment::Right),
                 ),
             ])
@@ -135,6 +169,7 @@ pub fn draw_issues_tab(
             Constraint::Fill(1),
             Constraint::Length(max_type_len),
             Constraint::Length(max_status_len),
+            Constraint::Length(max_age_len),
         ],
     )
     .header(header)
@@ -263,6 +298,25 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     // Find a valid char boundary
     let end = s.floor_char_boundary(end);
     format!("{}…", &s[..end])
+}
+
+fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let secs = now.signed_duration_since(dt).num_seconds().max(0) as u64;
+    if secs < 60 {
+        "now".into()
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else if secs < 604800 {
+        format!("{}d", secs / 86400)
+    } else if secs < 2_592_000 {
+        format!("{}w", secs / 604800)
+    } else if secs < 31_536_000 {
+        format!("{}mo", secs / 2_592_000)
+    } else {
+        format!("{}y", secs / 31_536_000)
+    }
 }
 
 fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, position: usize) {
