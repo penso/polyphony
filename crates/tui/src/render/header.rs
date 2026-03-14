@@ -10,8 +10,6 @@ use {
 
 use crate::app::{ActiveTab, AppState};
 
-const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
 pub fn draw_header(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -88,24 +86,27 @@ pub fn draw_header(
         ),
     ])];
 
-    let live_title = if snapshot.loading.any_active() {
-        let spinner = BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
-        format!("{spinner} syncing")
-    } else if snapshot.from_cache {
-        "Cached".into()
+    let (status_dot, status_label, status_color) = if snapshot.from_cache {
+        ("●", "cached", theme.warning)
     } else {
-        "Live".into()
+        ("●", "online", theme.success)
     };
 
     frame.render_widget(
         Paragraph::new(summary).block(
             Block::default()
-                .title(Line::from(Span::styled(
-                    format!(" {live_title} "),
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                )))
+                .title(Line::from(vec![
+                    Span::styled(
+                        format!(" {status_dot} "),
+                        Style::default().fg(status_color),
+                    ),
+                    Span::styled(
+                        format!("{status_label} "),
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]))
                 .borders(ratatui::widgets::Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.border)),

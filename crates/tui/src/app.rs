@@ -1,9 +1,11 @@
-use std::time::Instant;
+use std::{collections::VecDeque, time::Instant};
 
 use {
     polyphony_core::{RuntimeSnapshot, VisibleIssueRow},
     ratatui::widgets::TableState,
 };
+
+const RPS_HISTORY_CAP: usize = 120;
 
 use crate::{LogBuffer, theme::Theme};
 
@@ -107,6 +109,11 @@ pub struct AppState {
     pub search_active: bool,
     pub search_query: String,
     pub refresh_requested: bool,
+    pub logs_state: TableState,
+    pub logs_search_active: bool,
+    pub logs_search_query: String,
+    pub logs_auto_scroll: bool,
+    pub rps_history: VecDeque<u64>,
 }
 
 impl AppState {
@@ -132,6 +139,11 @@ impl AppState {
             search_active: false,
             search_query: String::new(),
             refresh_requested: false,
+            logs_state: TableState::default(),
+            logs_search_active: false,
+            logs_search_query: String::new(),
+            logs_auto_scroll: true,
+            rps_history: VecDeque::with_capacity(RPS_HISTORY_CAP),
         }
     }
 
@@ -179,6 +191,13 @@ impl AppState {
                 self.prev_request_count = Some(total_requests);
                 self.prev_request_count_at = Some(now);
             }
+        }
+
+        // Record for sparkline
+        self.rps_history
+            .push_back((self.requests_per_sec * 10.0) as u64);
+        if self.rps_history.len() > RPS_HISTORY_CAP {
+            self.rps_history.pop_front();
         }
     }
 
@@ -270,7 +289,7 @@ impl AppState {
                 .iter()
                 .filter(|m| m.has_deliverable)
                 .count(),
-            ActiveTab::Logs => 0,
+            ActiveTab::Logs => self.filtered_log_count(),
         }
     }
 
@@ -279,7 +298,21 @@ impl AppState {
             ActiveTab::Issues => &mut self.issues_state,
             ActiveTab::Orchestrator => &mut self.movements_state,
             ActiveTab::Tasks => &mut self.tasks_state,
-            ActiveTab::Deliverables | ActiveTab::Logs => &mut self.deliverables_state,
+            ActiveTab::Deliverables => &mut self.deliverables_state,
+            ActiveTab::Logs => &mut self.logs_state,
+        }
+    }
+
+    pub fn filtered_log_count(&self) -> usize {
+        let lines = self.log_buffer.recent_lines(500);
+        if self.logs_search_query.is_empty() {
+            lines.len()
+        } else {
+            let q = self.logs_search_query.to_lowercase();
+            lines
+                .iter()
+                .filter(|l| l.to_lowercase().contains(&q))
+                .count()
         }
     }
 

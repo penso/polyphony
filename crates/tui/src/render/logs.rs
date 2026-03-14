@@ -1,17 +1,35 @@
 use chrono::Utc;
 use polyphony_core::RuntimeSnapshot;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Wrap,
+        Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph, RenderDirection,
+        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table,
     },
 };
 
 use crate::app::AppState;
 use crate::theme::Theme;
+
+struct LogEntry {
+    time: String,
+    level: String,
+    target: String,
+    message: String,
+    extras: String,
+}
+
+impl LogEntry {
+    fn matches(&self, query: &str) -> bool {
+        self.time.to_lowercase().contains(query)
+            || self.level.to_lowercase().contains(query)
+            || self.target.to_lowercase().contains(query)
+            || self.message.to_lowercase().contains(query)
+            || self.extras.to_lowercase().contains(query)
+    }
+}
 
 pub fn draw_logs_tab(
     frame: &mut ratatui::Frame<'_>,
@@ -30,126 +48,169 @@ pub fn draw_logs_tab(
 
 fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppState) {
     let theme = app.theme;
-    let inner_width = area.width.saturating_sub(3) as usize; // borders + scrollbar
-
     let raw_lines = app.log_buffer.recent_lines(500);
 
-    let display_lines: Vec<Line<'_>> = raw_lines
+    let entries: Vec<LogEntry> = raw_lines.iter().map(|l| parse_log_entry(l)).collect();
+
+    let filtered: Vec<&LogEntry> = if app.logs_search_query.is_empty() {
+        entries.iter().collect()
+    } else {
+        let q = app.logs_search_query.to_lowercase();
+        entries.iter().filter(|e| e.matches(&q)).collect()
+    };
+
+    let count = filtered.len();
+
+    // Auto-scroll: keep selection at bottom when enabled
+    if app.logs_auto_scroll && count > 0 {
+        app.logs_state.select(Some(count - 1));
+    }
+
+    // Clamp selection to valid range
+    if count == 0 {
+        app.logs_state.select(None);
+    } else if let Some(sel) = app.logs_state.selected() {
+        if sel >= count {
+            app.logs_state.select(Some(count - 1));
+        }
+    } else {
+        app.logs_state.select(Some(count - 1));
+    }
+
+    // Compute max target width (capped at 20, min 6 for header)
+    let max_target_len = filtered
         .iter()
-        .map(|line| parse_log_line(line, theme))
+        .map(|e| e.target.len())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 20) as u16;
+
+    // Compute available message column width for wrapping
+    // area.width - 2 (borders) - 2 (L+R padding) - 9 - 6 - target - 3 (column gaps)
+    let msg_width = (area.width as usize)
+        .saturating_sub(2 + 2 + 9 + 6 + max_target_len as usize + 3);
+
+    let header = Row::new(vec![
+        Cell::from(
+            Line::from(Span::styled("Time", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Center),
+        ),
+        Cell::from(Span::styled("Level", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Target", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Message", Style::default().fg(theme.muted))),
+    ])
+    .height(1)
+    .style(Style::default().add_modifier(Modifier::BOLD));
+
+    let rows: Vec<Row> = filtered
+        .iter()
+        .map(|entry| {
+            let (level_color, msg_style) = level_styles(&entry.level, theme);
+            let (msg_cell, row_height) =
+                wrap_message_cell(&entry.message, &entry.extras, msg_width, theme, msg_style);
+            Row::new(vec![
+                Cell::from(Span::styled(
+                    entry.time.clone(),
+                    Style::default().fg(theme.muted),
+                )),
+                Cell::from(Span::styled(
+                    format_level_tag(&entry.level),
+                    Style::default()
+                        .fg(level_color)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Cell::from(Span::styled(
+                    entry.target.clone(),
+                    Style::default().fg(Color::Blue),
+                )),
+                msg_cell,
+            ])
+            .height(row_height)
+        })
         .collect();
 
-    let visible_height = area.height.saturating_sub(2) as usize;
+    let title = build_logs_title(&app.logs_search_query, app.logs_search_active, theme);
 
-    // Estimate total wrapped lines for scroll offset
-    let total_wrapped: usize = display_lines
-        .iter()
-        .map(|line| {
-            let line_len: usize = line.spans.iter().map(|s| s.content.len()).sum();
-            if inner_width > 0 {
-                (line_len / inner_width) + 1
-            } else {
-                1
-            }
-        })
-        .sum();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(9),
+            Constraint::Length(6),
+            Constraint::Length(max_target_len),
+            Constraint::Fill(1),
+        ],
+    )
+    .header(header)
+    .highlight_spacing(HighlightSpacing::Always)
+    .block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border))
+            .padding(Padding::new(1, 1, 0, 0)),
+    );
 
-    let scroll_offset = total_wrapped.saturating_sub(visible_height);
-
-    let block = Block::default()
-        .title(Span::styled(
-            " Logs ",
-            Style::default().fg(theme.highlight),
-        ))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border));
-
-    let paragraph = Paragraph::new(display_lines)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset as u16, 0));
-
-    frame.render_widget(paragraph, area);
-
-    if total_wrapped > visible_height {
-        let mut scrollbar_state =
-            ScrollbarState::new(total_wrapped.saturating_sub(visible_height))
-                .position(scroll_offset);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            area,
-            &mut scrollbar_state,
-        );
-    }
+    frame.render_stateful_widget(table, area, &mut app.logs_state);
+    draw_scrollbar(frame, area, count, app.logs_state.selected().unwrap_or(0));
 }
 
-/// Parse a log line (JSON from tracing_subscriber or plain text) into a colorized Line.
-fn parse_log_line<'a>(raw: &str, theme: Theme) -> Line<'a> {
-    // Try JSON parse first (tracing_subscriber json format)
+// ─── Log parsing ─────────────────────────────────────────────────────
+
+fn parse_log_entry(raw: &str) -> LogEntry {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-        return format_json_log(&v, theme);
+        return parse_json_log_entry(&v);
     }
-
     // Fallback: plain text with simple level detection
-    let style = if raw.contains(" WARN ") || raw.contains(" WARN:") {
-        Style::default().fg(Color::Yellow)
-    } else if raw.contains(" ERROR ") || raw.contains(" ERROR:") {
-        Style::default().fg(Color::Red)
+    let level = if raw.contains(" ERROR ") || raw.contains(" ERROR:") {
+        "ERROR"
+    } else if raw.contains(" WARN ") || raw.contains(" WARN:") {
+        "WARN"
     } else {
-        Style::default().fg(theme.muted)
+        "INFO"
     };
-    Line::from(Span::styled(raw.to_string(), style))
+    LogEntry {
+        time: String::new(),
+        level: level.to_string(),
+        target: String::new(),
+        message: raw.to_string(),
+        extras: String::new(),
+    }
 }
 
-/// Format a JSON tracing log entry into a colorized Line.
-fn format_json_log<'a>(v: &serde_json::Value, theme: Theme) -> Line<'a> {
+fn parse_json_log_entry(v: &serde_json::Value) -> LogEntry {
     let level = v
         .get("level")
         .and_then(|l| l.as_str())
-        .unwrap_or("INFO");
+        .unwrap_or("INFO")
+        .to_string();
 
-    let target = v
-        .get("target")
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
+    let target = v.get("target").and_then(|t| t.as_str()).unwrap_or("");
+    let short_target = target
+        .strip_prefix("polyphony_")
+        .or_else(|| target.strip_prefix("polyphony"))
+        .unwrap_or(target)
+        .rsplit("::")
+        .next()
+        .unwrap_or(target)
+        .to_string();
 
-    // tracing_subscriber puts message in fields.message
     let message = v
         .get("fields")
         .and_then(|f| f.get("message"))
         .and_then(|m| m.as_str())
         .or_else(|| v.get("message").and_then(|m| m.as_str()))
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
 
-    // Extract timestamp - just show HH:MM:SS
-    let time_str = v
+    let time = v
         .get("timestamp")
         .and_then(|t| t.as_str())
-        .and_then(|t| {
-            // "2024-01-01T12:34:56.789Z" -> "12:34:56"
-            t.find('T')
-                .and_then(|pos| t.get(pos + 1..pos + 9))
-        })
-        .unwrap_or("");
+        .and_then(|t| t.find('T').and_then(|pos| t.get(pos + 1..pos + 9)))
+        .unwrap_or("")
+        .to_string();
 
-    let (level_color, level_tag) = match level.to_uppercase().as_str() {
-        "ERROR" => (Color::Red, "ERROR"),
-        "WARN" => (Color::Yellow, " WARN"),
-        "INFO" => (Color::Green, " INFO"),
-        "DEBUG" => (Color::Cyan, "DEBUG"),
-        "TRACE" => (Color::Magenta, "TRACE"),
-        _ => (theme.muted, "  ???"),
-    };
-
-    // Shorten target: "polyphony_orchestrator::runtime" -> "runtime"
-    let short_target = target
-        .rsplit("::")
-        .next()
-        .unwrap_or(target);
-
-    // Collect extra fields (skip timestamp, level, target, fields.message, span, spans)
-    let mut extras: Vec<String> = Vec::new();
+    let mut extras_parts: Vec<String> = Vec::new();
     if let Some(fields) = v.get("fields").and_then(|f| f.as_object()) {
         for (k, val) in fields {
             if k == "message" {
@@ -161,45 +222,143 @@ fn format_json_log<'a>(v: &serde_json::Value, theme: Theme) -> Line<'a> {
                 serde_json::Value::Number(n) => n.to_string(),
                 _ => continue,
             };
-            extras.push(format!("{k}={val_str}"));
+            extras_parts.push(format!("{k}={val_str}"));
         }
     }
 
-    let mut spans = vec![
-        Span::styled(
-            format!("{time_str} "),
-            Style::default().fg(theme.muted),
-        ),
-        Span::styled(
-            format!("{level_tag} "),
-            Style::default()
-                .fg(level_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    LogEntry {
+        time,
+        level,
+        target: short_target,
+        message,
+        extras: extras_parts.join(" "),
+    }
+}
 
-    if !short_target.is_empty() {
-        spans.push(Span::styled(
-            format!("{short_target}: "),
-            Style::default().fg(Color::Blue),
-        ));
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+fn wrap_message_cell<'a>(
+    message: &str,
+    extras: &str,
+    width: usize,
+    theme: Theme,
+    msg_style: Style,
+) -> (Cell<'a>, u16) {
+    if width == 0 {
+        return (Cell::from(""), 1);
     }
 
-    let msg_style = match level.to_uppercase().as_str() {
-        "ERROR" => Style::default().fg(Color::Red),
-        "WARN" => Style::default().fg(Color::Yellow),
-        _ => Style::default().fg(theme.foreground),
+    let extras_style = Style::default().fg(theme.muted);
+    let msg_chars: Vec<char> = message.chars().collect();
+    let extras_chars: Vec<char> = if extras.is_empty() {
+        Vec::new()
+    } else {
+        format!(" {extras}").chars().collect()
     };
-    spans.push(Span::styled(message.to_string(), msg_style));
 
-    if !extras.is_empty() {
-        spans.push(Span::styled(
-            format!(" {}", extras.join(" ")),
-            Style::default().fg(theme.muted),
-        ));
+    // Combine all chars; msg_chars.len() is the boundary
+    let all_chars: Vec<char> = msg_chars.iter().chain(extras_chars.iter()).copied().collect();
+    let msg_boundary = msg_chars.len();
+
+    if all_chars.is_empty() {
+        return (Cell::from(""), 1);
     }
 
-    Line::from(spans)
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    let mut pos = 0;
+    while pos < all_chars.len() {
+        let end = (pos + width).min(all_chars.len());
+        let mut spans: Vec<Span<'a>> = Vec::new();
+
+        if pos < msg_boundary {
+            let msg_end = end.min(msg_boundary);
+            spans.push(Span::styled(
+                all_chars[pos..msg_end].iter().collect::<String>(),
+                msg_style,
+            ));
+            if msg_end < end {
+                spans.push(Span::styled(
+                    all_chars[msg_end..end].iter().collect::<String>(),
+                    extras_style,
+                ));
+            }
+        } else {
+            spans.push(Span::styled(
+                all_chars[pos..end].iter().collect::<String>(),
+                extras_style,
+            ));
+        }
+
+        lines.push(Line::from(spans));
+        pos = end;
+    }
+
+    let height = lines.len().max(1) as u16;
+    (Cell::from(Text::from(lines)), height)
+}
+
+fn level_styles(level: &str, theme: Theme) -> (Color, Style) {
+    match level.to_uppercase().as_str() {
+        "ERROR" => (Color::Red, Style::default().fg(Color::Red)),
+        "WARN" => (Color::Yellow, Style::default().fg(Color::Yellow)),
+        "INFO" => (Color::Green, Style::default().fg(theme.foreground)),
+        "DEBUG" => (Color::Cyan, Style::default().fg(theme.foreground)),
+        "TRACE" => (Color::Magenta, Style::default().fg(theme.foreground)),
+        _ => (theme.muted, Style::default().fg(theme.foreground)),
+    }
+}
+
+fn format_level_tag(level: &str) -> String {
+    match level.to_uppercase().as_str() {
+        "ERROR" => "ERROR".to_string(),
+        "WARN" => " WARN".to_string(),
+        "INFO" => " INFO".to_string(),
+        "DEBUG" => "DEBUG".to_string(),
+        "TRACE" => "TRACE".to_string(),
+        _ => "  ???".to_string(),
+    }
+}
+
+fn build_logs_title<'a>(query: &str, typing: bool, theme: Theme) -> Line<'a> {
+    if typing {
+        Line::from(vec![
+            Span::styled(" Logs ", Style::default().fg(theme.highlight)),
+            Span::styled(
+                format!("/{query}\u{258F}"),
+                Style::default().fg(theme.foreground),
+            ),
+        ])
+    } else if !query.is_empty() {
+        Line::from(vec![
+            Span::styled(" Logs ", Style::default().fg(theme.highlight)),
+            Span::styled(format!("[{query}] "), Style::default().fg(theme.info)),
+        ])
+    } else {
+        Line::from(Span::styled(
+            " Logs ",
+            Style::default().fg(theme.highlight),
+        ))
+    }
+}
+
+fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, position: usize) {
+    let content_height = area.height.saturating_sub(3) as usize;
+    if count > content_height {
+        let mut scrollbar_state = ScrollbarState::new(count)
+            .position(position)
+            .viewport_content_length(content_height);
+        let scrollbar_area = Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height.saturating_sub(2),
+        };
+        frame.render_stateful_widget(
+            Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
+            scrollbar_area,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 // ─── Network panel ───────────────────────────────────────────────────
@@ -212,7 +371,13 @@ fn draw_network_panel(
 ) {
     let theme = app.theme;
 
-    // Row 1: Req/sec and pending count
+    // Split: stats left, sparkline right
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(38), Constraint::Min(10)])
+        .split(area);
+
+    // ── Left: stats ──
     let pending = pending_count(snapshot);
     let req_sec = format!("{:.1}", app.requests_per_sec);
 
@@ -230,17 +395,14 @@ fn draw_network_panel(
         ),
     ]);
 
-    // Row 2: Per-component rate limits
     let budget_lines = budget_spans(snapshot, theme);
-
-    // Row 3: Throttles with remaining time
     let throttle_line = throttle_spans(snapshot, theme);
 
     let mut lines = vec![row1];
     lines.extend(budget_lines);
     lines.push(throttle_line);
 
-    let block = Block::default()
+    let stats_block = Block::default()
         .title(Span::styled(
             " Network ",
             Style::default().fg(theme.highlight),
@@ -249,7 +411,24 @@ fn draw_network_panel(
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border));
 
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(Paragraph::new(lines).block(stats_block), chunks[0]);
+
+    // ── Right: sparkline ──
+    let data: Vec<u64> = app.rps_history.iter().rev().copied().collect();
+
+    let sparkline_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border));
+
+    let sparkline = Sparkline::default()
+        .block(sparkline_block)
+        .data(&data)
+        .max(data.iter().copied().max().unwrap_or(1).max(1))
+        .direction(RenderDirection::RightToLeft)
+        .style(Style::default().fg(Color::Cyan));
+
+    frame.render_widget(sparkline, chunks[1]);
 }
 
 fn pending_count(snapshot: &RuntimeSnapshot) -> usize {
@@ -301,7 +480,6 @@ fn budget_spans<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Vec<Line<'a>> {
             let remaining_str = format_number(remaining as u64);
             let total_str = format_number(total as u64);
 
-            // Show reset countdown inline if available
             let mut spans = vec![
                 Span::styled(
                     format!("{}: ", short_component(&b.component)),
@@ -368,10 +546,7 @@ fn throttle_spans<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Line<'a> {
 
 /// Shorten component names like "tracker:github" -> "github"
 fn short_component(component: &str) -> &str {
-    component
-        .rsplit(':')
-        .next()
-        .unwrap_or(component)
+    component.rsplit(':').next().unwrap_or(component)
 }
 
 fn format_number(n: u64) -> String {

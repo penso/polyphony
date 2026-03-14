@@ -284,6 +284,23 @@ pub async fn run(
                         },
                         _ => {},
                     }
+                } else if app.logs_search_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.logs_search_active = false;
+                            app.logs_search_query.clear();
+                        },
+                        KeyCode::Enter => {
+                            app.logs_search_active = false;
+                        },
+                        KeyCode::Backspace => {
+                            app.logs_search_query.pop();
+                        },
+                        KeyCode::Char(c) => {
+                            app.logs_search_query.push(c);
+                        },
+                        _ => {},
+                    }
                 } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
                     let shutdown = matches!(command, RuntimeCommand::Shutdown);
                     if matches!(command, RuntimeCommand::Refresh) {
@@ -345,20 +362,54 @@ fn handle_key(
 
         // Navigation (works on active tab's table)
         KeyCode::Char('j') | KeyCode::Down => {
+            if app.active_tab == app::ActiveTab::Logs {
+                app.logs_auto_scroll = false;
+            }
             let len = app.active_table_len(snapshot);
             app.move_down(len, 1);
         },
         KeyCode::Char('k') | KeyCode::Up => {
+            if app.active_tab == app::ActiveTab::Logs {
+                app.logs_auto_scroll = false;
+            }
             let len = app.active_table_len(snapshot);
             app.move_up(len, 1);
         },
         KeyCode::PageDown => {
+            if app.active_tab == app::ActiveTab::Logs {
+                app.logs_auto_scroll = false;
+            }
             let len = app.active_table_len(snapshot);
             app.move_down(len, 8);
         },
         KeyCode::PageUp => {
+            if app.active_tab == app::ActiveTab::Logs {
+                app.logs_auto_scroll = false;
+            }
             let len = app.active_table_len(snapshot);
             app.move_up(len, 8);
+        },
+
+        // Jump to bottom (Logs: re-enable auto-scroll)
+        KeyCode::Char('G') | KeyCode::End => {
+            if app.active_tab == app::ActiveTab::Logs {
+                app.logs_auto_scroll = true;
+                let len = app.active_table_len(snapshot);
+                if len > 0 {
+                    app.logs_state.select(Some(len - 1));
+                }
+            }
+        },
+
+        // Jump to top (Logs: disable auto-scroll)
+        KeyCode::Char('g') | KeyCode::Home => {
+            if app.active_tab == app::ActiveTab::Logs {
+                app.logs_auto_scroll = false;
+                let len = app.active_table_len(snapshot);
+                if len > 0 {
+                    app.logs_state.select(Some(0));
+                }
+            }
         },
 
         // Sort cycling (Issues tab)
@@ -396,6 +447,9 @@ fn handle_key(
             if app.active_tab == app::ActiveTab::Issues {
                 app.search_active = true;
                 app.search_query.clear();
+            } else if app.active_tab == app::ActiveTab::Logs {
+                app.logs_search_active = true;
+                app.logs_search_query.clear();
             }
         },
 
@@ -405,6 +459,8 @@ fn handle_key(
                 app.search_query.clear();
                 app.rebuild_sorted_indices(snapshot);
                 sync_selection_after_search(app, snapshot);
+            } else if !app.logs_search_query.is_empty() {
+                app.logs_search_query.clear();
             }
         },
 
