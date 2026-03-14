@@ -287,8 +287,10 @@ impl RuntimeService {
             }
         }
         self.emit_snapshot().await?;
-        self.startup_cleanup().await;
-        self.emit_snapshot().await?;
+        if !self.shutdown_requested() {
+            self.startup_cleanup().await;
+            self.emit_snapshot().await?;
+        }
         let mut next_tick = Instant::now();
 
         loop {
@@ -303,7 +305,12 @@ impl RuntimeService {
                 _ = &mut sleep => {
                     let now = Instant::now();
                     if now >= next_tick {
-                        self.tick().await;
+                        let shutdown = self.tick().await;
+                        if shutdown {
+                            self.abort_all().await;
+                            let _ = self.emit_snapshot().await;
+                            return Ok(());
+                        }
                         let interval = Duration::from_millis(self.workflow_rx.borrow().config.polling.interval_ms);
                         next_tick = Instant::now() + interval;
                     }
@@ -382,32 +389,55 @@ impl RuntimeService {
             })
     }
 
-    async fn tick(&mut self) {
+    fn shutdown_requested(&mut self) -> bool {
+        match self.external_command_rx.try_recv() {
+            Ok(RuntimeCommand::Shutdown) => true,
+            _ => false,
+        }
+    }
+
+    async fn tick(&mut self) -> bool {
         self.reload_workflow_from_disk(false, "poll_tick").await;
+
+        if self.shutdown_requested() {
+            return true;
+        }
 
         self.state.loading.reconciling = true;
         let _ = self.emit_snapshot().await;
         self.reconcile_running().await;
         self.state.loading.reconciling = false;
 
+        if self.shutdown_requested() {
+            return true;
+        }
+
         self.state.loading.fetching_budgets = true;
         self.poll_budgets().await;
         self.state.loading.fetching_budgets = false;
+
+        if self.shutdown_requested() {
+            return true;
+        }
 
         self.state.loading.fetching_models = true;
         self.refresh_agent_catalogs().await;
         self.state.loading.fetching_models = false;
 
+        if self.shutdown_requested() {
+            return true;
+        }
+
         if self.workflow_reload_error().is_some() {
             let _ = self.emit_snapshot().await;
-            return;
+            return false;
         }
         let workflow = self.workflow();
         if let Err(error) = workflow.config.validate() {
             self.push_event(EventScope::Workflow, format!("validation failed: {error}"));
             error!(%error, "workflow validation failed");
             let _ = self.emit_snapshot().await;
-            return;
+            return false;
         }
         if self.is_throttled(&self.tracker.component_key())
             || self.is_throttled(&self.agent.component_key())
@@ -417,7 +447,7 @@ impl RuntimeService {
                 "dispatch skipped while a component is throttled".into(),
             );
             let _ = self.emit_snapshot().await;
-            return;
+            return false;
         }
         let query = workflow.config.tracker_query();
         self.state.last_tracker_poll_at = Some(Utc::now());
@@ -429,14 +459,14 @@ impl RuntimeService {
                 self.state.loading.fetching_issues = false;
                 self.register_throttle(*signal);
                 let _ = self.emit_snapshot().await;
-                return;
+                return false;
             },
             Err(error) => {
                 self.state.loading.fetching_issues = false;
                 self.push_event(EventScope::Tracker, format!("candidate fetch failed: {error}"));
                 error!(%error, "candidate fetch failed");
                 let _ = self.emit_snapshot().await;
-                return;
+                return false;
             },
         };
         self.state.loading.fetching_issues = false;
@@ -448,7 +478,7 @@ impl RuntimeService {
         self.save_cache().await;
         if !workflow.config.has_dispatch_agents() {
             let _ = self.emit_snapshot().await;
-            return;
+            return false;
         }
         for issue in issues {
             if !self.should_dispatch(&workflow, &issue) {
@@ -466,6 +496,7 @@ impl RuntimeService {
             }
         }
         let _ = self.emit_snapshot().await;
+        false
     }
 
     async fn reconcile_running(&mut self) {
