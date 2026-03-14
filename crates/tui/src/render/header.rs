@@ -105,9 +105,13 @@ pub fn draw_header(
         ),
     ])];
 
-    let live_title = if snapshot.loading.any_active() {
+    let live_title = if app.refresh_requested || snapshot.loading.any_active() {
         let spinner = BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
-        format!("{spinner} syncing")
+        if app.refresh_requested {
+            format!("{spinner} Refreshing…")
+        } else {
+            format!("{spinner} syncing")
+        }
     } else if snapshot.from_cache {
         "Cached".into()
     } else {

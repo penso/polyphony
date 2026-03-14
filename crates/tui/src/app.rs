@@ -106,6 +106,7 @@ pub struct AppState {
     pub requests_per_sec: f64,
     pub search_active: bool,
     pub search_query: String,
+    pub refresh_requested: bool,
 }
 
 impl AppState {
@@ -130,10 +131,15 @@ impl AppState {
             requests_per_sec: 0.0,
             search_active: false,
             search_query: String::new(),
+            refresh_requested: false,
         }
     }
 
     pub fn on_snapshot(&mut self, snapshot: &RuntimeSnapshot) {
+        // Clear refresh indicator once we get a live (non-cached) snapshot
+        if self.refresh_requested && !snapshot.from_cache {
+            self.refresh_requested = false;
+        }
         self.rebuild_sorted_indices(snapshot);
         sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());
         sync_selection(&mut self.tasks_state, snapshot.tasks.len());
