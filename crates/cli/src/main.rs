@@ -179,14 +179,14 @@ async fn try_main() -> Result<(), Error> {
     )
     .await?;
 
-    // Give the service a brief window to shut down gracefully, then abort.
-    // Network calls in tick() or startup_cleanup() can block for seconds;
-    // the user should not have to wait.
+    // The TUI shows a "Leaving..." modal and waits up to 3 seconds for the
+    // service to finish. By the time we get here, the service is either done
+    // or we should just exit.
     tokio::select! {
         result = service_task => {
             result.map_err(|error| Error::Config(error.to_string()))??;
         }
-        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
     }
     Ok(())
 }

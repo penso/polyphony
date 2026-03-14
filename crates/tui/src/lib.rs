@@ -245,6 +245,8 @@ struct AppState {
     last_total_tokens: u64,
     last_event_marker: Option<EventMarker>,
     frame_count: u64,
+    leaving: bool,
+    leaving_since: Option<Instant>,
 }
 
 impl Default for AppState {
@@ -263,6 +265,8 @@ impl Default for AppState {
             last_total_tokens: 0,
             last_event_marker: None,
             frame_count: 0,
+            leaving: false,
+            leaving_since: None,
         }
     }
 }
@@ -501,17 +505,32 @@ pub async fn run(
     app.on_snapshot(&snapshot);
 
     let result = loop {
-        terminal.draw(|frame| draw(frame, &snapshot, &log_buffer, &mut app))?;
+        terminal.draw(|frame| {
+            draw(frame, &snapshot, &log_buffer, &mut app);
+            if app.leaving {
+                draw_leaving_modal(frame, app.frame_count, app.theme);
+            }
+        })?;
+
+        // Force exit after timeout so the user never waits indefinitely.
+        if let Some(since) = app.leaving_since {
+            if since.elapsed() > Duration::from_secs(3) {
+                break Ok(());
+            }
+        }
 
         let mut key_handled = false;
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
         {
-            if let Some(command) = app.handle_key(key.code, &snapshot) {
+            if app.leaving {
+                // Ignore keys while leaving
+            } else if let Some(command) = app.handle_key(key.code, &snapshot) {
                 let shutdown = matches!(command, RuntimeCommand::Shutdown);
                 let _ = command_tx.send(command);
                 if shutdown {
-                    break Ok(());
+                    app.leaving = true;
+                    app.leaving_since = Some(Instant::now());
                 }
             }
             key_handled = true;
@@ -539,6 +558,29 @@ pub async fn run(
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     result
+}
+
+fn draw_leaving_modal(frame: &mut ratatui::Frame<'_>, frame_count: u64, theme: Theme) {
+    let area = centered_rect(frame.area(), 24, 3);
+    frame.render_widget(Clear, area);
+    let spinner = spinner_char(frame_count);
+    let text = Line::from(vec![
+        Span::styled(
+            format!("{spinner} "),
+            Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("Leaving...", Style::default().fg(theme.foreground)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(text)
+            .alignment(Alignment::Center)
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme.border)),
+            ),
+        area,
+    );
 }
 
 fn draw_workflow_bootstrap(
