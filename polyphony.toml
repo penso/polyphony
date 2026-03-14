@@ -28,3 +28,16 @@ checkout_kind = "linked_worktree"
 source_repo_path = "/Users/penso/code/polyphony"
 sync_on_reuse = true
 # default_branch = "main"
+
+# ── Agent routing for this repo ─────────────────────────────────────────────
+# Profiles (opus, codex, kimi) are defined in ~/.config/polyphony/config.toml.
+# This section controls which agent handles which kind of issue.
+[agents]
+default = "opus"
+
+[agents.by_label]
+research = "kimi"
+investigation = "kimi"
+testing = "codex"
+validation = "codex"
+review = "codex"
