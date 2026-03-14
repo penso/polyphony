@@ -58,6 +58,30 @@ When `WORKFLOW.md` changes successfully, future dispatch, retry handling, model 
 polling, and feedback/automation surfaces use the rebuilt runtime components. In-flight agent
 sessions are not restarted automatically.
 
+## Pipeline execution
+
+When `pipeline.enabled = true`, `dispatch_issue()` branches into the pipeline path instead
+of the single-agent path. The flow becomes:
+
+1. The orchestrator creates a Movement record for the issue
+2. If a `planner_agent` is configured:
+   - The planner agent is dispatched to the workspace
+   - On completion, the orchestrator reads `.polyphony/plan.json`
+   - Tasks are created from the plan and saved to the state store
+3. If no planner is configured (static stages):
+   - Tasks are created directly from the `pipeline.stages` config
+4. Tasks execute sequentially by ordinal:
+   - The orchestrator selects the agent for each task (task hint → stage config → default)
+   - Each task's prompt includes the plan, completed task summaries, and task description
+   - On success, the next task is dispatched
+   - On failure, the task retries with backoff or re-plans if `replan_on_failure` is set
+5. After all tasks complete:
+   - The Movement status is updated to Review or Delivered
+   - The standard `run_success_handoff()` runs (commit, PR, review, feedback)
+
+Movements and tasks are persisted via the state store and restored on startup. The TUI
+Movements and Tasks tabs display pipeline progress from the runtime snapshot.
+
 ## Completion and recovery
 
 After an attempt finishes, the orchestrator:

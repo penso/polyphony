@@ -29,6 +29,7 @@ The workflow loader also supports defaults, environment overlays, and template r
 - claiming and scheduling work
 - retry and backoff handling
 - budget and throttle bookkeeping
+- pipeline dispatch and multi-task sequencing
 - publishing snapshots for consumers such as the TUI
 
 ## Execution

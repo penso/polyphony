@@ -435,11 +435,48 @@ graph LR
         SC --> HC[HooksConfig]
         SC --> AUC[AutomationConfig]
         SC --> FBC[FeedbackConfig]
+        SC --> PLC[PipelineConfig]
 
         ASC --> APC[AgentProfileConfig]
+        PLC --> PSC[PipelineStageConfig]
     end
 
     APC -->|infer_agent_transport + agent_definition| AD[AgentDefinition]
+```
+
+## Pipeline Dispatch Flow
+
+How the orchestrator routes issues through pipeline stages.
+
+```mermaid
+flowchart TD
+    ISSUE[Issue arrives]
+    ISSUE --> CHECK{pipeline.enabled?}
+    CHECK -->|false| SINGLE[Single-agent dispatch<br><i>existing behavior</i>]
+    CHECK -->|true| PLANNER{planner_agent<br>configured?}
+
+    PLANNER -->|yes| PLAN_DISPATCH[Dispatch planner agent]
+    PLAN_DISPATCH --> PLAN_WRITE[Planner writes<br>.polyphony/plan.json]
+    PLAN_WRITE --> PARSE[Orchestrator reads plan.json<br>creates Tasks from plan]
+
+    PLANNER -->|no| STATIC[Create Tasks from<br>pipeline.stages config]
+
+    PARSE --> LOOP
+    STATIC --> LOOP
+
+    LOOP[Dispatch next Task]
+    LOOP --> SELECT[Select agent:<br>task hint → stage config → default]
+    SELECT --> RUN[Run agent in workspace]
+    RUN --> RESULT{Task result}
+
+    RESULT -->|success| MORE{More tasks?}
+    MORE -->|yes| LOOP
+    MORE -->|no| HANDOFF[run_success_handoff<br>commit / PR / review / feedback]
+
+    RESULT -->|failure| REPLAN{replan_on_failure?}
+    REPLAN -->|yes| PLAN_DISPATCH
+    REPLAN -->|no| RETRY[Retry with backoff]
+    RETRY --> RUN
 ```
 
 ## Config to Runtime Flow

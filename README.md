@@ -72,6 +72,7 @@ This repository already provides:
 - a `tracker.kind: none` startup mode so the real runtime can boot before any tracker or agent is configured
 - optional post-run GitHub handoff automation that can commit, push, open a draft PR, and post a review summary
 - generic outbound feedback sinks for human handoff notifications, with Telegram and webhook implementations today
+- multi-stage pipeline orchestration with planner-driven or static stage-based task decomposition, sequential agent handoff through workspace artifacts, and per-task agent/model selection
 
 Git and GitHub implementation choices:
 
@@ -283,6 +284,14 @@ For automated PR handoff and feedback sinks, copy
 [templates/examples/WORKFLOW.automation-feedback.md](templates/examples/WORKFLOW.automation-feedback.md)
 into `WORKFLOW.md`.
 
+For a planner-driven pipeline that decomposes issues into sequential tasks, copy
+[templates/examples/WORKFLOW.pipeline-planner.md](templates/examples/WORKFLOW.pipeline-planner.md)
+into `WORKFLOW.md`.
+
+For a static pipeline with fixed stages and no planner agent, copy
+[templates/examples/WORKFLOW.pipeline-static.md](templates/examples/WORKFLOW.pipeline-static.md)
+into `WORKFLOW.md`.
+
 When `fetch_models` is enabled:
 
 - `openai_chat` agents query the provider’s `/models` endpoint automatically
@@ -290,6 +299,39 @@ When `fetch_models` is enabled:
 - `local_cli` and `app_server` agents can run `models_command` and parse either JSON model lists or newline-delimited model IDs
 - interactive `local_cli` agents default to `stdin` prompt injection, or `tmux_paste` when `use_tmux: true`
 - `kimi` / `moonshotai` profiles default to `https://api.moonshot.ai/v1` and resolve `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+
+## Pipeline orchestration
+
+When `pipeline.enabled = true`, Polyphony decomposes each issue into a sequence of tasks
+(a Movement) instead of dispatching a single agent. Tasks execute sequentially, sharing
+the same workspace so each agent can build on the previous agent's output.
+
+There are two modes:
+
+**Planner-driven pipeline** — a planner agent analyzes the issue and writes a structured
+`.polyphony/plan.json` file. The orchestrator reads the plan, creates tasks from it, and
+dispatches agents in order. The planner can suggest which agent to use for each task.
+
+**Static pipeline** — stages are defined in config. Every issue gets the same sequence
+of tasks (e.g. research → coding → review) without a planner agent.
+
+Tasks communicate through workspace artifacts:
+
+- `.polyphony/plan.json` — structured plan from the planner agent
+- `.polyphony/workpad.md` — free-form notes any agent can read and extend
+- `.polyphony/review.md` — review output (already used by the review pass)
+
+Each task's prompt includes the original issue data, the plan, completed task summaries,
+and the current task description. After all tasks complete, the standard automation
+handoff (commit, PR, review, feedback) runs as usual.
+
+Pipeline configuration lives in `[pipeline]` in any config layer. See
+[templates/examples/WORKFLOW.pipeline-planner.md](templates/examples/WORKFLOW.pipeline-planner.md)
+and [templates/examples/WORKFLOW.pipeline-static.md](templates/examples/WORKFLOW.pipeline-static.md)
+for complete examples.
+
+When `pipeline.enabled = false` (the default), the existing single-agent dispatch path
+is used unchanged.
 
 Saved context and handoff behavior:
 

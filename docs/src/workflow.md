@@ -38,6 +38,7 @@ The current workspace configuration covers:
 - `agents`: named agent profiles and routing rules
 - `automation`: optional post-run git and PR handoff settings
 - `feedback`: outbound notification sink configuration
+- `pipeline`: multi-stage pipeline orchestration settings
 - `server`: optional server settings
 
 ## Example
@@ -138,6 +139,121 @@ relevant.
 Use
 [`templates/examples/WORKFLOW.automation-feedback.md`](../../templates/examples/WORKFLOW.automation-feedback.md)
 as a full-file example that wires automation and feedback together.
+
+## Pipeline Orchestration
+
+When `pipeline.enabled = true`, Polyphony breaks each issue into a sequence of tasks instead
+of dispatching a single agent. This creates a Movement that tracks overall progress and
+individual Task records that execute sequentially.
+
+### Planner-Driven Pipeline
+
+Set `pipeline.planner_agent` to the name of an agent profile that will analyze each issue
+and write a structured plan:
+
+```yaml
+pipeline:
+  enabled: true
+  planner_agent: planner
+  replan_on_failure: true
+```
+
+The planner agent receives the issue and writes `.polyphony/plan.json` to the workspace:
+
+```json
+{
+  "tasks": [
+    {
+      "title": "Research existing auth patterns",
+      "category": "research",
+      "description": "Investigate current auth middleware and session management",
+      "agent": "researcher"
+    },
+    {
+      "title": "Implement OAuth2 flow",
+      "category": "coding",
+      "description": "Add OAuth2 login, callback, and token refresh endpoints"
+    },
+    {
+      "title": "Write integration tests",
+      "category": "testing",
+      "description": "Cover login, token refresh, and error scenarios"
+    }
+  ]
+}
+```
+
+Valid categories are `research`, `coding`, `testing`, `documentation`, and `review`.
+The `agent` field is optional — when omitted, the orchestrator falls back to the
+stage config or the default agent.
+
+When `replan_on_failure` is true and a task fails, the planner agent is re-invoked
+with error context to produce a revised plan.
+
+### Static Pipeline
+
+Define fixed stages that apply to every issue:
+
+```yaml
+pipeline:
+  enabled: true
+  stages:
+    - category: research
+      agent: researcher
+      max_turns: 4
+    - category: coding
+      agent: coder
+      max_turns: 10
+    - category: review
+      agent: reviewer
+      max_turns: 4
+```
+
+Each stage becomes a task. Tasks execute in the order listed.
+
+### Workspace Artifacts
+
+Pipeline tasks share the same workspace directory and communicate through files:
+
+| Artifact | Purpose |
+|---|---|
+| `.polyphony/plan.json` | Structured plan from the planner agent |
+| `.polyphony/workpad.md` | Free-form notes any agent can read and extend |
+| `.polyphony/review.md` | Review output from the review pass |
+
+Each task's prompt automatically includes:
+
+- The original issue data
+- The full plan (when a planner was used)
+- Summaries of completed tasks
+- The current task title and description
+
+### Pipeline Configuration Reference
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `pipeline.enabled` | bool | `false` | Enable pipeline dispatch |
+| `pipeline.planner_agent` | string | — | Agent profile that generates `plan.json` |
+| `pipeline.planner_prompt` | string | — | Custom Liquid template for the planner (uses built-in default) |
+| `pipeline.stages` | array | `[]` | Static stage definitions (used when no planner) |
+| `pipeline.replan_on_failure` | bool | `false` | Re-run planner if a task fails |
+| `pipeline.validation_agent` | string | — | Agent that validates after all tasks |
+
+Stage fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `stages[].category` | string | Task category: `research`, `coding`, `testing`, `documentation`, `review` |
+| `stages[].agent` | string | Agent profile name (falls back to `agents.default`) |
+| `stages[].prompt` | string | Custom Liquid prompt template for this stage |
+| `stages[].max_turns` | int | Override `agent.max_turns` for this stage |
+
+### Pipeline Examples
+
+- [`templates/examples/WORKFLOW.pipeline-planner.md`](../../templates/examples/WORKFLOW.pipeline-planner.md) —
+  planner-driven pipeline with research, coding, and review agents
+- [`templates/examples/WORKFLOW.pipeline-static.md`](../../templates/examples/WORKFLOW.pipeline-static.md) —
+  static three-stage pipeline without a planner
 
 ## Prompt Rendering
 
