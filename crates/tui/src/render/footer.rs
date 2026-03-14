@@ -17,6 +17,7 @@ pub fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
         ("s", "sort"),
         ("/", "search"),
         ("Enter", "details"),
+        ("d", "dispatch"),
         ("o", "open"),
         ("m", "mode"),
         ("r", "refresh"),

@@ -715,6 +715,8 @@ pub struct RuntimeSnapshot {
     pub from_cache: bool,
     #[serde(default)]
     pub cached_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub agent_profile_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

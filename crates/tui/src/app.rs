@@ -125,6 +125,9 @@ pub struct AppState {
     pub content_area: Rect,
     pub show_mode_modal: bool,
     pub mode_modal_selected: usize,
+    pub show_agent_picker: bool,
+    pub agent_picker_selected: usize,
+    pub agent_picker_issue_id: Option<String>,
     /// Last left-click time for double-click detection.
     pub last_click_at: Option<Instant>,
     /// Column/row of last click for double-click detection.
@@ -168,6 +171,9 @@ impl AppState {
             content_area: Rect::default(),
             show_mode_modal: false,
             mode_modal_selected: 0,
+            show_agent_picker: false,
+            agent_picker_selected: 0,
+            agent_picker_issue_id: None,
             last_click_at: None,
             last_click_pos: (0, 0),
             last_scroll_at: None,

@@ -1124,7 +1124,7 @@ impl ServiceConfig {
         Ok(Some(agent_definition(agent_name, profile)))
     }
 
-    fn expand_agent_candidates(&self, selected_name: &str) -> Result<Vec<AgentDefinition>, Error> {
+    pub fn expand_agent_candidates(&self, selected_name: &str) -> Result<Vec<AgentDefinition>, Error> {
         let mut seen = std::collections::HashSet::new();
         let mut stack = vec![selected_name.to_string()];
         let mut candidates = Vec::new();

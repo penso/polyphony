@@ -385,6 +385,87 @@ pub fn draw_mode_modal(
     }
 }
 
+pub fn draw_agent_picker_modal(
+    frame: &mut ratatui::Frame<'_>,
+    snapshot: &RuntimeSnapshot,
+    app: &AppState,
+) {
+    let theme = app.theme;
+    let profile_count = snapshot.agent_profile_names.len();
+    // Height: 1 border top + 1 spacer + (profile_count * 1) + 1 spacer + 1 border bottom
+    let content_height = (profile_count as u16).clamp(1, 10);
+    let total_height = content_height + 4; // borders + spacers
+    let area = centered_rect(frame.area(), 48, total_height);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " Dispatch to Agent ",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(
+            Line::from(vec![
+                Span::styled(" j/k", Style::default().fg(theme.highlight)),
+                Span::styled(":navigate  ", Style::default().fg(theme.muted)),
+                Span::styled("Enter", Style::default().fg(theme.highlight)),
+                Span::styled(":dispatch  ", Style::default().fg(theme.muted)),
+                Span::styled("Esc", Style::default().fg(theme.highlight)),
+                Span::styled(":close ", Style::default().fg(theme.muted)),
+            ])
+            .right_aligned(),
+        )
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.highlight))
+        .style(Style::default().bg(theme.background));
+
+    frame.render_widget(block, area);
+
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+
+    for (i, name) in snapshot.agent_profile_names.iter().enumerate() {
+        if i as u16 >= inner.height {
+            break;
+        }
+        let is_selected = i == app.agent_picker_selected;
+        let row_area = Rect {
+            x: inner.x,
+            y: inner.y + i as u16,
+            width: inner.width,
+            height: 1,
+        };
+
+        let marker = if is_selected { "▸ " } else { "  " };
+        let label_style = if is_selected {
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.foreground)
+        };
+
+        let bg = if is_selected {
+            Style::default().bg(theme.panel_alt)
+        } else {
+            Style::default()
+        };
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(theme.highlight)),
+                Span::styled(name.clone(), label_style),
+            ]))
+            .style(bg),
+            row_area,
+        );
+    }
+}
+
 /// Strip HTML tags from text, preserving content between tags.
 fn strip_html_tags(input: &str) -> String {
     let mut out = String::with_capacity(input.len());

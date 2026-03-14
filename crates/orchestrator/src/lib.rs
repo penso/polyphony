@@ -89,6 +89,10 @@ pub enum RuntimeCommand {
     Refresh,
     Shutdown,
     SetMode(polyphony_core::DispatchMode),
+    DispatchIssue {
+        issue_id: String,
+        agent_name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +129,7 @@ pub struct RuntimeService {
     command_rx: mpsc::UnboundedReceiver<OrchestratorMessage>,
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     pending_refresh: bool,
+    pending_manual_dispatches: Vec<(String, Option<String>)>,
     state: RuntimeState,
     reload_support: Option<WorkflowReloadSupport>,
 }
@@ -294,6 +299,7 @@ impl RuntimeService {
                 command_rx,
                 external_command_rx,
                 pending_refresh: false,
+                pending_manual_dispatches: Vec::new(),
                 reload_support: None,
                 state: RuntimeState::default(),
             },
@@ -381,6 +387,11 @@ impl RuntimeService {
                             );
                             self.state.dispatch_mode = mode;
                             let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::DispatchIssue { issue_id, agent_name } => {
+                            info!(%issue_id, ?agent_name, "manual dispatch queued (event loop)");
+                            self.pending_manual_dispatches.push((issue_id, agent_name));
+                            next_tick = Instant::now();
                         }
                     }
                 }
@@ -482,7 +493,78 @@ impl RuntimeService {
                     );
                     self.state.dispatch_mode = mode;
                 },
+                Ok(RuntimeCommand::DispatchIssue { issue_id, agent_name }) => {
+                    info!(%issue_id, ?agent_name, "manual dispatch queued");
+                    self.pending_manual_dispatches.push((issue_id, agent_name));
+                },
                 Err(_) => return false,
+            }
+        }
+    }
+
+    async fn process_manual_dispatches(&mut self) {
+        let dispatches = std::mem::take(&mut self.pending_manual_dispatches);
+        if dispatches.is_empty() {
+            return;
+        }
+        let workflow = self.workflow();
+        for (issue_id, agent_name) in dispatches {
+            let issues = match self.tracker.fetch_issues_by_ids(std::slice::from_ref(&issue_id)).await {
+                Ok(issues) => issues,
+                Err(error) => {
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("manual dispatch fetch failed for {issue_id}: {error}"),
+                    );
+                    warn!(%error, %issue_id, "failed to fetch issue for manual dispatch");
+                    continue;
+                },
+            };
+            let Some(issue) = issues.into_iter().next() else {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("manual dispatch: issue {issue_id} not found"),
+                );
+                warn!(%issue_id, "issue not found for manual dispatch");
+                continue;
+            };
+            if self.state.running.contains_key(&issue.id) {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("manual dispatch skipped: {} already running", issue.identifier),
+                );
+                continue;
+            }
+            if !self.has_available_slot(&workflow, &issue.state) {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("manual dispatch skipped: no slot for {}", issue.identifier),
+                );
+                continue;
+            }
+            self.push_event(
+                EventScope::Dispatch,
+                format!(
+                    "manual dispatch: {} → {}",
+                    issue.identifier,
+                    agent_name.as_deref().unwrap_or("default")
+                ),
+            );
+            if let Err(error) = self
+                .dispatch_issue(
+                    workflow.clone(),
+                    issue,
+                    None,
+                    false,
+                    agent_name.as_deref(),
+                )
+                .await
+            {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("manual dispatch failed: {error}"),
+                );
+                error!(%error, "manual dispatch failed");
             }
         }
     }
@@ -493,6 +575,8 @@ impl RuntimeService {
         if self.drain_commands() {
             return true;
         }
+
+        self.process_manual_dispatches().await;
 
         debug!("tick: reconciling running sessions");
         self.state.loading.reconciling = true;
@@ -595,7 +679,7 @@ impl RuntimeService {
                 break;
             }
             if let Err(error) = self
-                .dispatch_issue(workflow.clone(), issue, None, false)
+                .dispatch_issue(workflow.clone(), issue, None, false, None)
                 .await
             {
                 self.push_event(EventScope::Dispatch, format!("dispatch failed: {error}"));
@@ -685,6 +769,7 @@ impl RuntimeService {
         issue: Issue,
         attempt: Option<u32>,
         prefer_alternate_agent: bool,
+        agent_override: Option<&str>,
     ) -> Result<(), Error> {
         if workflow.config.pipeline.enabled {
             return self
@@ -692,13 +777,23 @@ impl RuntimeService {
                 .await;
         }
         let saved_context = self.state.saved_contexts.get(&issue.id).cloned();
-        let candidate_agents = workflow.config.candidate_agents_for_issue(&issue)?;
-        let selected_agent = self.select_dispatch_agent(
-            &issue,
-            &candidate_agents,
-            saved_context.as_ref(),
-            prefer_alternate_agent,
-        )?;
+        let selected_agent = if let Some(name) = agent_override {
+            let candidates = workflow.config.expand_agent_candidates(name)?;
+            self.select_dispatch_agent(
+                &issue,
+                &candidates,
+                saved_context.as_ref(),
+                false,
+            )?
+        } else {
+            let candidate_agents = workflow.config.candidate_agents_for_issue(&issue)?;
+            self.select_dispatch_agent(
+                &issue,
+                &candidate_agents,
+                saved_context.as_ref(),
+                prefer_alternate_agent,
+            )?
+        };
         let workspace_manager = self.build_workspace_manager(&workflow);
         let workspace = workspace_manager
             .ensure_workspace(
@@ -1614,6 +1709,7 @@ impl RuntimeService {
                 issue,
                 Some(retry.row.attempt),
                 retry.row.error.is_some(),
+                None,
             )
             .await
         {
@@ -2251,6 +2347,15 @@ impl RuntimeService {
             tracker_kind: self.workflow_rx.borrow().config.tracker.kind,
             from_cache: self.state.from_cache,
             cached_at: self.state.cached_at,
+            agent_profile_names: self
+                .workflow_rx
+                .borrow()
+                .config
+                .agents
+                .profiles
+                .keys()
+                .cloned()
+                .collect(),
         }
     }
 
@@ -3332,6 +3437,7 @@ fn empty_snapshot() -> RuntimeSnapshot {
         tracker_kind: polyphony_core::TrackerKind::default(),
         from_cache: false,
         cached_at: None,
+        agent_profile_names: Vec::new(),
     }
 }
 
@@ -4384,7 +4490,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
             });
 
         service
-            .dispatch_issue(workflow, issue.clone(), Some(2), true)
+            .dispatch_issue(workflow, issue.clone(), Some(2), true, None)
             .await
             .unwrap();
 

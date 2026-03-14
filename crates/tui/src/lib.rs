@@ -291,6 +291,39 @@ pub async fn run(
                 Event::Key(key) => {
             if app.leaving {
                 // Ignore keys while leaving
+            } else if app.show_agent_picker {
+                match key.code {
+                    KeyCode::Esc => {
+                        app.show_agent_picker = false;
+                        app.agent_picker_issue_id = None;
+                    },
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let count = snapshot.agent_profile_names.len();
+                        if count > 0 {
+                            app.agent_picker_selected = (app.agent_picker_selected + 1) % count;
+                        }
+                    },
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        let count = snapshot.agent_profile_names.len();
+                        if count > 0 {
+                            app.agent_picker_selected = (app.agent_picker_selected + count - 1) % count;
+                        }
+                    },
+                    KeyCode::Enter => {
+                        if let Some(issue_id) = app.agent_picker_issue_id.take() {
+                            let agent_name = snapshot
+                                .agent_profile_names
+                                .get(app.agent_picker_selected)
+                                .cloned();
+                            app.show_agent_picker = false;
+                            let _ = command_tx.send(RuntimeCommand::DispatchIssue {
+                                issue_id,
+                                agent_name,
+                            });
+                        }
+                    },
+                    _ => {},
+                }
             } else if app.show_mode_modal {
                 match key.code {
                     KeyCode::Esc => {
@@ -536,6 +569,30 @@ fn handle_key(
             }
         },
 
+        // Dispatch issue (default agent)
+        KeyCode::Char('d') => {
+            if app.active_tab == app::ActiveTab::Issues
+                && let Some(issue) = app.selected_issue(snapshot)
+            {
+                return Some(RuntimeCommand::DispatchIssue {
+                    issue_id: issue.issue_id.clone(),
+                    agent_name: None,
+                });
+            }
+        },
+
+        // Dispatch issue (pick agent)
+        KeyCode::Char('D') => {
+            if app.active_tab == app::ActiveTab::Issues
+                && let Some(issue) = app.selected_issue(snapshot)
+                && !snapshot.agent_profile_names.is_empty()
+            {
+                app.show_agent_picker = true;
+                app.agent_picker_selected = 0;
+                app.agent_picker_issue_id = Some(issue.issue_id.clone());
+            }
+        },
+
         // Mode modal
         KeyCode::Char('m') => {
             app.show_mode_modal = true;
@@ -724,6 +781,7 @@ mod tests {
             tracker_kind: Default::default(),
             from_cache: false,
             cached_at: None,
+            agent_profile_names: vec![],
         }
     }
 

@@ -51,6 +51,10 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         popups::draw_mode_modal(frame, snapshot, app);
     }
 
+    if app.show_agent_picker {
+        popups::draw_agent_picker_modal(frame, snapshot, app);
+    }
+
     if app.leaving {
         popups::draw_leaving_modal(frame, app.theme);
     }
