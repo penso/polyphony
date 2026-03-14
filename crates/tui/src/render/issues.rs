@@ -6,8 +6,8 @@ use {
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
-            ScrollbarState, Table,
+            Block, BorderType, Cell, HighlightSpacing, Padding, Row, Scrollbar,
+            ScrollbarOrientation, ScrollbarState, Table,
         },
     },
 };
@@ -97,9 +97,9 @@ pub fn draw_issues_tab(
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     // Available width for the title column
-    // area.width - borders(2) - highlight_symbol(2) - id - type - status - age - column_gaps(4)
+    // area.width - borders(2) - right_padding(1) - highlight_symbol(2) - id - type - status - age - column_gaps(4)
     let title_max_width = (area.width as usize).saturating_sub(
-        2 + 2 + max_id_len as usize + max_type_len as usize + max_status_len as usize + max_age_len as usize + 4,
+        2 + 1 + 2 + max_id_len as usize + max_type_len as usize + max_status_len as usize + max_age_len as usize + 4,
     );
 
     let rows: Vec<Row> = issue_data
@@ -222,6 +222,7 @@ pub fn draw_issues_tab(
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border))
+            .padding(Padding::right(1))
             .style(Style::default().bg(theme.panel)),
     );
 
