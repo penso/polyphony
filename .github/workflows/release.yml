@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
@@ -51,7 +51,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
@@ -68,7 +68,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
@@ -84,7 +84,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
@@ -101,7 +101,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -115,7 +115,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: ./scripts/ci/generate-release-changelog.sh "$TAG" release-metadata
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-metadata
           path: |
@@ -130,7 +130,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -144,7 +144,7 @@ jobs:
         run: |
           cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target aarch64-apple-darwin
           cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target x86_64-apple-darwin
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-metadata
           path: release-metadata
@@ -160,7 +160,7 @@ jobs:
             target/x86_64-apple-darwin/release/polyphony \
             -output dist/polyphony
           ./scripts/ci/package-unix.sh "$TAG" "universal2-apple-darwin" "dist/polyphony" "dist"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-macos
           path: dist/*.tar.gz
@@ -179,7 +179,7 @@ jobs:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -207,7 +207,7 @@ jobs:
             export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
           fi
           cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target "$TARGET"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-metadata
           path: release-metadata
@@ -220,7 +220,7 @@ jobs:
         run: |
           mkdir -p dist
           ./scripts/ci/package-unix.sh "$TAG" "$TARGET" "target/${TARGET}/release/polyphony" "dist"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-linux-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -233,7 +233,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
@@ -243,7 +243,7 @@ jobs:
         run: rustup target add x86_64-pc-windows-msvc
       - name: Build Windows binary
         run: cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target x86_64-pc-windows-msvc
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-metadata
           path: release-metadata
@@ -254,7 +254,7 @@ jobs:
         run: |
           New-Item -Path dist -ItemType Directory -Force | Out-Null
           .\scripts\ci\package-windows.ps1 -Tag "$env:TAG" -TargetTriple "x86_64-pc-windows-msvc" -BinaryPath "target\x86_64-pc-windows-msvc\release\polyphony.exe" -OutputDir "dist"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-windows
           path: dist/*.zip
@@ -267,15 +267,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           pattern: release-*
           merge-multiple: true
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-metadata
           path: release-metadata
@@ -308,10 +308,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-macos
           path: dist
