@@ -2,6 +2,7 @@
 
 - [Introduction](./introduction.md)
 - [Getting Started](./getting-started.md)
+- [Releases](./releases.md)
 - [Runtime Flow](./runtime-flow.md)
 - [Architecture](./architecture.md)
   - [Architecture Diagrams](./architecture-diagrams.md)

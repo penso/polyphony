@@ -46,4 +46,11 @@ changelog-unreleased:
     git-cliff --config cliff.toml --unreleased
 
 changelog-release version:
-    git-cliff --config cliff.toml --unreleased --tag "v{{version}}" --strip all
+    git-cliff --config cliff.toml --unreleased --tag "{{version}}" --strip all
+
+release push='false':
+    if [ "{{push}}" = "true" ]; then \
+        ./scripts/ci/release-tag.sh --push; \
+    else \
+        ./scripts/ci/release-tag.sh; \
+    fi

@@ -1,0 +1,347 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9]'
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY_TOOLCHAIN: nightly-2025-11-30
+  HOMEBREW_TAP_REPOSITORY: penso/homebrew-polyphony
+
+jobs:
+  validate-tag:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tag format
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^[0-9]{8}\.[0-9]{2}$ ]]; then
+            echo "tag must match YYYYMMDD.NN (example: 20260315.01)"
+            exit 1
+          fi
+
+  fmt:
+    name: Format
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+          components: rustfmt
+      - run: just format-check
+
+  clippy:
+    name: Clippy
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+          components: clippy
+      - run: just lint
+
+  test:
+    name: Test
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+      - run: just test
+
+  docs:
+    name: Docs
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # just
+      - name: Install mdBook
+        run: cargo install --locked --version 0.4.49 mdbook
+      - name: Install mdbook-mermaid
+        run: cargo install --locked --version 0.15.1 mdbook-mermaid
+      - run: just docs-build
+
+  release-metadata:
+    name: Generate Release Metadata
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: stable
+      - name: Install git-cliff
+        run: cargo install --locked --version 2.12.0 git-cliff
+      - name: Generate changelog and release notes
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ./scripts/ci/generate-release-changelog.sh "$TAG" release-metadata
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-metadata
+          path: |
+            release-metadata/CHANGELOG.md
+            release-metadata/RELEASE_NOTES.md
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS archive
+    needs: [fmt, clippy, test, docs, release-metadata]
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+      - name: Add Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+      - name: Build macOS binaries
+        run: |
+          cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target aarch64-apple-darwin
+          cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target x86_64-apple-darwin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-metadata
+          path: release-metadata
+      - name: Package macOS archive
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          POLYPHONY_CHANGELOG_PATH: ${{ github.workspace }}/release-metadata/CHANGELOG.md
+        run: |
+          mkdir -p dist
+          lipo -create \
+            target/aarch64-apple-darwin/release/polyphony \
+            target/x86_64-apple-darwin/release/polyphony \
+            -output dist/polyphony
+          ./scripts/ci/package-unix.sh "$TAG" "universal2-apple-darwin" "dist/polyphony" "dist"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-macos
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux archive (${{ matrix.target }})
+    needs: [fmt, clippy, test, docs, release-metadata]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+      - name: Install Linux ARM64 toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+      - name: Add Rust target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - name: Build Linux binary
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [[ "$TARGET" == "aarch64-unknown-linux-gnu" ]]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+          fi
+          cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target "$TARGET"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-metadata
+          path: release-metadata
+      - name: Package Linux archive
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+          POLYPHONY_CHANGELOG_PATH: ${{ github.workspace }}/release-metadata/CHANGELOG.md
+        run: |
+          mkdir -p dist
+          ./scripts/ci/package-unix.sh "$TAG" "$TARGET" "target/${TARGET}/release/polyphony" "dist"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows archive
+    needs: [fmt, clippy, test, docs, release-metadata]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+      - name: Add Rust target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Build Windows binary
+        run: cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target x86_64-pc-windows-msvc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-metadata
+          path: release-metadata
+      - name: Package Windows archive
+        env:
+          TAG: ${{ github.ref_name }}
+          POLYPHONY_CHANGELOG_PATH: ${{ github.workspace }}\release-metadata\CHANGELOG.md
+        run: |
+          New-Item -Path dist -ItemType Directory -Force | Out-Null
+          .\scripts\ci\package-windows.ps1 -Tag "$env:TAG" -TargetTriple "x86_64-pc-windows-msvc" -BinaryPath "target\x86_64-pc-windows-msvc\release\polyphony.exe" -OutputDir "dist"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-metadata
+          path: release-metadata
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cp release-metadata/CHANGELOG.md dist/CHANGELOG.md
+          (
+            cd dist
+            sha256sum *.tar.gz *.zip CHANGELOG.md > SHA256SUMS.txt
+          )
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          ls -lah dist
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" dist/* --clobber
+            gh release edit "${tag}" --title "${tag}" --notes-file release-metadata/RELEASE_NOTES.md
+          else
+            gh release create "${tag}" dist/* --title "${tag}" --notes-file release-metadata/RELEASE_NOTES.md --verify-tag
+          fi
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: publish-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-macos
+          path: dist
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPOSITORY: ${{ env.HOMEBREW_TAP_REPOSITORY }}
+        shell: bash
+        run: |
+          if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
+            echo "HOMEBREW_TAP_TOKEN is not configured, skipping tap update"
+            exit 0
+          fi
+
+          tag="${GITHUB_REF_NAME}"
+          macos_archive="dist/polyphony-${tag}-universal2-apple-darwin.tar.gz"
+          sha256=$(sha256sum "${macos_archive}" | awk '{print $1}')
+          formula_content=$(./scripts/ci/update-homebrew-formula.sh "${tag}" "${sha256}")
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPOSITORY}.git" tap
+          mkdir -p tap/Formula
+          printf '%s\n' "${formula_content}" > tap/Formula/polyphony.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/polyphony.rb
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update polyphony to ${tag}"
+            git push
+          fi
