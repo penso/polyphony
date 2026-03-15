@@ -5,23 +5,29 @@ version.workspace = true
 license.workspace = true
 
 [features]
-default = ["codex", "claude", "copilot", "openai", "local"]
+default = ["codex", "claude", "copilot", "openai", "local", "pi", "acp", "acpx"]
+acp = ["dep:polyphony-agent-acp"]
+acpx = ["dep:polyphony-agent-acpx"]
 codex = ["dep:polyphony-agent-codex"]
 claude = ["dep:polyphony-agent-claude"]
 copilot = ["dep:polyphony-agent-copilot"]
 openai = ["dep:polyphony-agent-openai"]
 local = ["dep:polyphony-agent-local"]
+pi = ["dep:polyphony-agent-pi"]
 
 [dependencies]
 async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 polyphony-core = { path = "../core" }
+polyphony-agent-acp = { path = "../agent-acp", optional = true }
+polyphony-agent-acpx = { path = "../agent-acpx", optional = true }
 polyphony-agent-codex = { path = "../agent-codex", optional = true }
 polyphony-agent-claude = { path = "../agent-claude", optional = true }
 polyphony-agent-copilot = { path = "../agent-copilot", optional = true }
 polyphony-agent-openai = { path = "../agent-openai", optional = true }
 polyphony-agent-local = { path = "../agent-local", optional = true }
+polyphony-agent-pi = { path = "../agent-pi", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "polyphony-agent-acp"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-client-protocol.workspace = true
+async-trait.workspace = true
+portable-pty.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+polyphony-core = { path = "../core" }
+polyphony-agent-common = { path = "../agent-common" }
+
+[dev-dependencies]
+tempfile.workspace = true

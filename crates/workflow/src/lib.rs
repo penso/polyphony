@@ -899,7 +899,7 @@ impl ServiceConfig {
         for (agent_name, profile) in &self.agents.profiles {
             if matches!(
                 infer_agent_transport(profile),
-                AgentTransport::AppServer | AgentTransport::LocalCli
+                AgentTransport::AppServer | AgentTransport::LocalCli | AgentTransport::Acp
             ) && profile
                 .command
                 .as_deref()
@@ -1507,11 +1507,17 @@ fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransport {
     match profile.transport.as_deref() {
         Some("mock") => AgentTransport::Mock,
         Some("app_server") => AgentTransport::AppServer,
+        Some("rpc") => AgentTransport::Rpc,
         Some("local_cli") => AgentTransport::LocalCli,
+        Some("acp") => AgentTransport::Acp,
+        Some("acpx") => AgentTransport::Acpx,
         Some("openai_chat") => AgentTransport::OpenAiChat,
         _ => match profile.kind.as_str() {
             "mock" => AgentTransport::Mock,
             "codex" => AgentTransport::AppServer,
+            "pi" => AgentTransport::Rpc,
+            "acp" => AgentTransport::Acp,
+            "acpx" => AgentTransport::Acpx,
             "openai" | "openai-compatible" | "openrouter" | "kimi" | "kimi-2.5" | "kimi-k2"
             | "moonshot" | "moonshotai" | "mistral" | "deepseek" | "cerebras" | "gemini"
             | "zai" | "minimax" | "venice" | "groq" => AgentTransport::OpenAiChat,
@@ -1521,11 +1527,14 @@ fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransport {
 }
 
 pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition {
+    let transport = infer_agent_transport(profile);
     AgentDefinition {
         name: name.to_string(),
         kind: profile.kind.clone(),
-        transport: infer_agent_transport(profile),
-        command: profile.command.clone(),
+        transport,
+        command: normalize_optional_string(profile.command.clone())
+            .or_else(|| matches!(transport, AgentTransport::Rpc).then(|| "pi".to_string()))
+            .or_else(|| matches!(transport, AgentTransport::Acpx).then(|| "acpx".to_string())),
         fallback_agents: profile.fallbacks.clone(),
         model: profile.model.clone(),
         models: profile.models.clone(),
@@ -2157,6 +2166,102 @@ agents:
         assert!(matches!(kimi.transport, AgentTransport::OpenAiChat));
         assert_eq!(kimi.base_url.as_deref(), Some("https://api.moonshot.ai/v1"));
         assert_eq!(kimi.model.as_deref(), Some("kimi-2.5"));
+    }
+
+    #[test]
+    fn acp_profiles_infer_acp_transport() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: claude_acp
+  profiles:
+    claude_acp:
+      kind: claude
+      transport: acp
+      command: openclaw acp
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+        let selected = config
+            .select_agent_for_issue(&Issue {
+                id: "1".into(),
+                identifier: "ISSUE-1".into(),
+                title: "Title".into(),
+                state: "Todo".into(),
+                ..Issue::default()
+            })
+            .unwrap();
+
+        assert!(matches!(selected.transport, AgentTransport::Acp));
+        assert_eq!(selected.command.as_deref(), Some("openclaw acp"));
+    }
+
+    #[test]
+    fn acpx_profiles_infer_acpx_transport_and_default_command() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: claude_acpx
+  profiles:
+    claude_acpx:
+      kind: claude
+      transport: acpx
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+        let selected = config
+            .select_agent_for_issue(&Issue {
+                id: "1".into(),
+                identifier: "ISSUE-1".into(),
+                title: "Title".into(),
+                state: "Todo".into(),
+                ..Issue::default()
+            })
+            .unwrap();
+
+        assert!(matches!(selected.transport, AgentTransport::Acpx));
+        assert_eq!(selected.command.as_deref(), Some("acpx"));
+    }
+
+    #[test]
+    fn pi_profiles_infer_rpc_transport_and_default_command() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: pi
+  profiles:
+    pi:
+      kind: pi
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+        let selected = config
+            .select_agent_for_issue(&Issue {
+                id: "1".into(),
+                identifier: "ISSUE-1".into(),
+                title: "Title".into(),
+                state: "Todo".into(),
+                ..Issue::default()
+            })
+            .unwrap();
+
+        assert!(matches!(selected.transport, AgentTransport::Rpc));
+        assert_eq!(selected.command.as_deref(), Some("pi"));
     }
 
     #[test]

@@ -513,7 +513,10 @@ pub enum AgentTransport {
     #[default]
     Mock,
     AppServer,
+    Rpc,
     LocalCli,
+    Acp,
+    Acpx,
     OpenAiChat,
 }
 

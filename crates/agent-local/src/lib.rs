@@ -7,18 +7,16 @@ use std::{
 
 use {
     async_trait::async_trait,
-    chrono::{Local, TimeZone, Utc},
     polyphony_agent_common::{
-        base_agent_env, discover_models_from_command, emit, fetch_budget_for_agent,
-        prepare_context_file, prepare_prompt_file, sanitize_session_fragment, selected_model_hint,
-        shell_escape, status_to_result,
+        base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
+        fetch_budget_for_agent, prepare_context_file, prepare_prompt_file,
+        sanitize_session_fragment, selected_model_hint, shell_escape, status_to_result,
     },
     polyphony_core::{
         AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
         AgentRunResult, AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal,
     },
     portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system},
-    serde_json::json,
     tokio::{fs, process::Command, sync::mpsc, time::Instant},
     tracing::{debug, info, warn},
 };
@@ -890,140 +888,7 @@ fn tmux_wrapped_command(
 }
 
 fn extract_local_rate_limit_signal(spec: &AgentRunSpec, text: &str) -> Option<RateLimitSignal> {
-    let lowered = text.to_ascii_lowercase();
-    let matched = lowered.contains("usage limit")
-        || lowered.contains("rate limit")
-        || lowered.contains("rate-limited")
-        || lowered.contains("hit your limit")
-        || lowered.contains("try again later")
-        || lowered.contains("quota exhausted")
-        || lowered.contains("out of tokens")
-        || lowered.contains("no more tokens");
-    if !matched {
-        return None;
-    }
-
-    let reset_at = extract_reset_at(&lowered);
-    let retry_after_ms = extract_retry_after_ms(&lowered)
-        .or_else(|| reset_at.and_then(duration_until_reset_ms))
-        .or_else(|| {
-            if spec.agent.kind.eq_ignore_ascii_case("claude") {
-                Some(5 * 60 * 60 * 1000)
-            } else {
-                None
-            }
-        });
-    let reset_at = reset_at.or_else(|| {
-        retry_after_ms.map(|ms| Utc::now() + chrono::Duration::milliseconds(ms as i64))
-    });
-    let reason = first_non_empty_line(text)
-        .unwrap_or("agent rate limited")
-        .trim()
-        .to_string();
-
-    Some(RateLimitSignal {
-        component: format!("agent:{}", spec.agent.name),
-        reason,
-        limited_at: Utc::now(),
-        retry_after_ms,
-        reset_at,
-        status_code: Some(429),
-        raw: Some(json!({
-            "kind": spec.agent.kind,
-            "agent": spec.agent.name,
-            "text": text,
-        })),
-    })
-}
-
-fn extract_retry_after_ms(text: &str) -> Option<u64> {
-    let tokens: Vec<&str> = text
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    for window in tokens.windows(2) {
-        let Some(number) = window[0].parse::<u64>().ok() else {
-            continue;
-        };
-        let multiplier = match window[1] {
-            "second" | "seconds" | "sec" | "secs" => 1_000,
-            "minute" | "minutes" | "min" | "mins" => 60_000,
-            "hour" | "hours" | "hr" | "hrs" => 3_600_000,
-            _ => continue,
-        };
-        return Some(number.saturating_mul(multiplier));
-    }
-
-    None
-}
-
-fn extract_reset_at(text: &str) -> Option<chrono::DateTime<Utc>> {
-    let tokens: Vec<&str> = text
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    for window in tokens.windows(2) {
-        if window[0] != "resets" && window[0] != "reset" {
-            continue;
-        }
-        if let Some(reset_at) = parse_clock_token(window[1]) {
-            return Some(reset_at);
-        }
-    }
-
-    None
-}
-
-fn parse_clock_token(token: &str) -> Option<chrono::DateTime<Utc>> {
-    let (hour_12, is_pm) = if let Some(value) = token.strip_suffix("am") {
-        (value.parse::<u32>().ok()?, false)
-    } else if let Some(value) = token.strip_suffix("pm") {
-        (value.parse::<u32>().ok()?, true)
-    } else {
-        return None;
-    };
-
-    if !(1..=12).contains(&hour_12) {
-        return None;
-    }
-
-    let hour_24 = match (hour_12, is_pm) {
-        (12, false) => 0,
-        (12, true) => 12,
-        (hour, true) => hour + 12,
-        (hour, false) => hour,
-    };
-
-    let now_local = Local::now();
-    let today = now_local.date_naive();
-    let naive_time = chrono::NaiveTime::from_hms_opt(hour_24, 0, 0)?;
-    let naive_dt = today.and_time(naive_time);
-    let mut local_dt = Local.from_local_datetime(&naive_dt).single()?;
-    if local_dt <= now_local {
-        local_dt += chrono::Duration::days(1);
-    }
-    Some(local_dt.with_timezone(&Utc))
-}
-
-fn duration_until_reset_ms(reset_at: chrono::DateTime<Utc>) -> Option<u64> {
-    reset_at
-        .signed_duration_since(Utc::now())
-        .to_std()
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
-}
-
-fn first_non_empty_line(text: &str) -> Option<&str> {
-    text.lines().find_map(|line| {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    })
+    extract_text_rate_limit_signal(spec, text)
 }
 
 fn emit_terminal_snapshot_delta(

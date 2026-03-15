@@ -3,7 +3,10 @@ members = [
   "crates/core",
   "crates/workflow",
   "crates/agent-common",
+  "crates/agent-acp",
+  "crates/agent-acpx",
   "crates/agent-local",
+  "crates/agent-pi",
   "crates/agent-codex",
   "crates/agent-openai",
   "crates/agent-claude",
@@ -29,6 +32,7 @@ version = "0.1.0"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+agent-client-protocol = "0.10.2"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -56,6 +60,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono"] }
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }

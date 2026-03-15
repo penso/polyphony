@@ -9,17 +9,19 @@ name = "polyphony"
 path = "src/main.rs"
 
 [features]
-default = ["linear", "github", "beads", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local"]
+default = ["linear", "github", "beads", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local", "agent-pi", "agent-acpx"]
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
 github = ["dep:polyphony-github"]
 beads = ["dep:polyphony-beads"]
 sqlite = ["polyphony-sqlite/sqlite"]
+agent-acpx = ["polyphony-agents/acpx"]
 agent-codex = ["polyphony-agents/codex"]
 agent-claude = ["polyphony-agents/claude"]
 agent-copilot = ["polyphony-agents/copilot"]
 agent-openai = ["polyphony-agents/openai"]
 agent-local = ["polyphony-agents/local"]
+agent-pi = ["polyphony-agents/pi"]
 
 [dependencies]
 async-trait.workspace = true

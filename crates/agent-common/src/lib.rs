@@ -4,12 +4,12 @@ use std::{
 };
 
 use {
-    chrono::Utc,
+    chrono::{Local, TimeZone, Utc},
     polyphony_core::{
         AgentDefinition, AgentEvent, AgentEventKind, AgentModel, AgentModelCatalog, AgentRunResult,
-        AgentRunSpec, BudgetSnapshot, Error as CoreError, TokenUsage,
+        AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal, TokenUsage,
     },
-    serde_json::Value,
+    serde_json::{Value, json},
     tokio::{
         fs,
         io::{AsyncBufReadExt, BufReader},
@@ -261,6 +261,143 @@ pub fn status_to_result(
     }
 }
 
+pub fn extract_text_rate_limit_signal(spec: &AgentRunSpec, text: &str) -> Option<RateLimitSignal> {
+    let lowered = text.to_ascii_lowercase();
+    let matched = lowered.contains("usage limit")
+        || lowered.contains("rate limit")
+        || lowered.contains("rate-limited")
+        || lowered.contains("hit your limit")
+        || lowered.contains("try again later")
+        || lowered.contains("quota exhausted")
+        || lowered.contains("out of tokens")
+        || lowered.contains("no more tokens");
+    if !matched {
+        return None;
+    }
+
+    let reset_at = extract_reset_at(&lowered);
+    let retry_after_ms = extract_retry_after_ms(&lowered)
+        .or_else(|| reset_at.and_then(duration_until_reset_ms))
+        .or_else(|| {
+            if spec.agent.kind.eq_ignore_ascii_case("claude") {
+                Some(5 * 60 * 60 * 1000)
+            } else {
+                None
+            }
+        });
+    let reset_at = reset_at.or_else(|| {
+        retry_after_ms.map(|ms| Utc::now() + chrono::Duration::milliseconds(ms as i64))
+    });
+    let reason = first_non_empty_line(text)
+        .unwrap_or("agent rate limited")
+        .trim()
+        .to_string();
+
+    Some(RateLimitSignal {
+        component: format!("agent:{}", spec.agent.name),
+        reason,
+        limited_at: Utc::now(),
+        retry_after_ms,
+        reset_at,
+        status_code: Some(429),
+        raw: Some(json!({
+            "kind": spec.agent.kind,
+            "agent": spec.agent.name,
+            "text": text,
+        })),
+    })
+}
+
+fn extract_retry_after_ms(text: &str) -> Option<u64> {
+    let tokens: Vec<&str> = text
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    for window in tokens.windows(2) {
+        let Some(number) = window[0].parse::<u64>().ok() else {
+            continue;
+        };
+        let multiplier = match window[1] {
+            "second" | "seconds" | "sec" | "secs" => 1_000,
+            "minute" | "minutes" | "min" | "mins" => 60_000,
+            "hour" | "hours" | "hr" | "hrs" => 3_600_000,
+            _ => continue,
+        };
+        return Some(number.saturating_mul(multiplier));
+    }
+
+    None
+}
+
+fn extract_reset_at(text: &str) -> Option<chrono::DateTime<Utc>> {
+    let tokens: Vec<&str> = text
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    for window in tokens.windows(2) {
+        if window[0] != "resets" && window[0] != "reset" {
+            continue;
+        }
+        if let Some(reset_at) = parse_clock_token(window[1]) {
+            return Some(reset_at);
+        }
+    }
+
+    None
+}
+
+fn parse_clock_token(token: &str) -> Option<chrono::DateTime<Utc>> {
+    let (hour_12, is_pm) = if let Some(value) = token.strip_suffix("am") {
+        (value.parse::<u32>().ok()?, false)
+    } else if let Some(value) = token.strip_suffix("pm") {
+        (value.parse::<u32>().ok()?, true)
+    } else {
+        return None;
+    };
+
+    if !(1..=12).contains(&hour_12) {
+        return None;
+    }
+
+    let hour_24 = match (hour_12, is_pm) {
+        (12, false) => 0,
+        (12, true) => 12,
+        (hour, true) => hour + 12,
+        (hour, false) => hour,
+    };
+
+    let now_local = Local::now();
+    let today = now_local.date_naive();
+    let naive_time = chrono::NaiveTime::from_hms_opt(hour_24, 0, 0)?;
+    let naive_dt = today.and_time(naive_time);
+    let mut local_dt = Local.from_local_datetime(&naive_dt).single()?;
+    if local_dt <= now_local {
+        local_dt += chrono::Duration::days(1);
+    }
+    Some(local_dt.with_timezone(&Utc))
+}
+
+fn duration_until_reset_ms(reset_at: chrono::DateTime<Utc>) -> Option<u64> {
+    reset_at
+        .signed_duration_since(Utc::now())
+        .to_std()
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+}
+
+fn first_non_empty_line(text: &str) -> Option<&str> {
+    text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
 pub fn parse_model_list(output: &str) -> Result<Vec<AgentModel>, CoreError> {
     let trimmed = output.trim();
     if trimmed.is_empty() {
@@ -461,7 +598,10 @@ pub fn selected_model_hint(agent: &AgentDefinition) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use {
-        super::{BudgetField, apply_budget_probe, base_agent_env, parse_model_list},
+        super::{
+            BudgetField, apply_budget_probe, base_agent_env, extract_text_rate_limit_signal,
+            parse_model_list,
+        },
         polyphony_core::{AgentContextSnapshot, AgentDefinition, AgentRunSpec, Issue, TokenUsage},
     };
 
@@ -554,5 +694,39 @@ mod tests {
             env.get("POLYPHONY_CONTEXT_JSON")
                 .is_some_and(|payload| payload.contains("\"agent_name\":\"codex\""))
         );
+    }
+
+    #[test]
+    fn detects_claude_limit_messages_from_text() {
+        let spec = AgentRunSpec {
+            issue: Issue {
+                id: "1".into(),
+                identifier: "TEST-1".into(),
+                title: "Test".into(),
+                state: "Todo".into(),
+                ..Issue::default()
+            },
+            attempt: Some(0),
+            workspace_path: std::env::temp_dir(),
+            prompt: "Prompt".into(),
+            max_turns: 1,
+            prior_context: None,
+            agent: AgentDefinition {
+                name: "opus".into(),
+                kind: "claude".into(),
+                ..AgentDefinition::default()
+            },
+        };
+
+        let signal = extract_text_rate_limit_signal(
+            &spec,
+            "You've hit your limit · resets 2am (Europe/Lisbon)",
+        )
+        .unwrap();
+
+        assert_eq!(signal.component, "agent:opus");
+        assert_eq!(signal.status_code, Some(429));
+        assert!(signal.retry_after_ms.is_some());
+        assert!(signal.reset_at.is_some());
     }
 }

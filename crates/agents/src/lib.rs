@@ -17,6 +17,12 @@ pub struct AgentRegistryRuntime {
 impl AgentRegistryRuntime {
     pub fn new() -> Self {
         let providers: Vec<Arc<dyn AgentProviderRuntime>> = [
+            #[cfg(feature = "acp")]
+            Some(Arc::new(polyphony_agent_acp::AcpRuntime) as Arc<dyn AgentProviderRuntime>),
+            #[cfg(feature = "acpx")]
+            Some(Arc::new(polyphony_agent_acpx::AcpxRuntime) as Arc<dyn AgentProviderRuntime>),
+            #[cfg(feature = "pi")]
+            Some(Arc::new(polyphony_agent_pi::PiRuntime) as Arc<dyn AgentProviderRuntime>),
             #[cfg(feature = "codex")]
             Some(Arc::new(polyphony_agent_codex::CodexRuntime) as Arc<dyn AgentProviderRuntime>),
             #[cfg(feature = "claude")]
