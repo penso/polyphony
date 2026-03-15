@@ -16,6 +16,13 @@ use {
     uuid::Uuid,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TmuxPromptDelivery {
+    None,
+    PasteAfterLaunch,
+    RedirectStdinAtLaunch,
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalCliRuntime {
     supported_kinds: Vec<String>,
@@ -243,6 +250,8 @@ async fn run_tmux(
         .await
         .map_err(|error| CoreError::Adapter(error.to_string()))?;
     let exit_path = run_dir.join(format!("{}-exit.txt", spec.agent.name));
+    let prompt_delivery = tmux_prompt_delivery(&spec.agent);
+    let launch_command = tmux_launch_command(&command, &prompt_file, prompt_delivery);
     let session_name = format!(
         "{}-{}-{}",
         spec.agent
@@ -255,7 +264,7 @@ async fn run_tmux(
     let wrapped = format!(
         "cd {} && {} ; code=$?; printf '%s' \"$code\" > {}",
         shell_escape(spec.workspace_path.to_string_lossy().as_ref()),
-        command,
+        launch_command,
         shell_escape(exit_path.to_string_lossy().as_ref()),
     );
     info!(
@@ -318,11 +327,7 @@ async fn run_tmux(
     );
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    if matches!(
-        spec.agent.interaction_mode,
-        AgentInteractionMode::Interactive
-    ) || matches!(spec.agent.prompt_mode, AgentPromptMode::TmuxPaste)
-    {
+    if matches!(prompt_delivery, TmuxPromptDelivery::PasteAfterLaunch) {
         send_prompt_to_tmux(&session_name, &prompt_file).await?;
     }
 
@@ -343,21 +348,63 @@ async fn run_tmux(
             return Err(CoreError::Adapter("turn_timeout".into()));
         }
 
-        let pane = capture_tmux_pane(&session_name).await?;
+        if let Some(code) = read_tmux_exit_code(&exit_path).await {
+            let pane = capture_tmux_pane(&session_name).await.unwrap_or_default();
+            emit_tmux_pane_delta(
+                &event_tx,
+                &spec,
+                &session_name,
+                &mut last_pane,
+                &mut last_change,
+                pane,
+            );
+            kill_tmux_session(&session_name).await;
+            debug!(
+                issue_identifier = %spec.issue.identifier,
+                agent_name = %spec.agent.name,
+                session_name = %session_name,
+                exit_code = ?code,
+                "tmux-backed agent turn completed"
+            );
+            return Ok(status_to_result(
+                &spec,
+                &event_tx,
+                Some(session_name.clone()),
+                code,
+            ));
+        }
+
+        let pane = match capture_tmux_pane(&session_name).await {
+            Ok(pane) => pane,
+            Err(error) => {
+                if let Some(code) = read_tmux_exit_code(&exit_path).await {
+                    kill_tmux_session(&session_name).await;
+                    debug!(
+                        issue_identifier = %spec.issue.identifier,
+                        agent_name = %spec.agent.name,
+                        session_name = %session_name,
+                        exit_code = ?code,
+                        "tmux-backed agent turn completed after pane capture race"
+                    );
+                    return Ok(status_to_result(
+                        &spec,
+                        &event_tx,
+                        Some(session_name.clone()),
+                        code,
+                    ));
+                }
+                return Err(error);
+            },
+        };
         if pane != last_pane {
-            let delta = diff_tail(&last_pane, &pane);
-            if !delta.trim().is_empty() {
-                emit(
-                    &event_tx,
-                    &spec,
-                    AgentEventKind::Notification,
-                    Some(delta.trim().to_string()),
-                    Some(session_name.clone()),
-                    None,
-                    None,
-                    None,
-                );
-            }
+            emit_tmux_pane_delta(
+                &event_tx,
+                &spec,
+                &session_name,
+                &mut last_pane,
+                &mut last_change,
+                pane.clone(),
+            );
             if spec
                 .agent
                 .completion_sentinel
@@ -378,26 +425,6 @@ async fn run_tmux(
                     Some(0),
                 ));
             }
-            last_change = Instant::now();
-            last_pane = pane;
-        }
-
-        if let Ok(exit_code) = fs::read_to_string(&exit_path).await {
-            let code = exit_code.trim().parse::<i32>().ok();
-            kill_tmux_session(&session_name).await;
-            debug!(
-                issue_identifier = %spec.issue.identifier,
-                agent_name = %spec.agent.name,
-                session_name = %session_name,
-                exit_code = ?code,
-                "tmux-backed agent turn completed"
-            );
-            return Ok(status_to_result(
-                &spec,
-                &event_tx,
-                Some(session_name.clone()),
-                code,
-            ));
         }
 
         if matches!(
@@ -510,6 +537,86 @@ async fn capture_tmux_pane(session_name: &str) -> Result<String, CoreError> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn tmux_prompt_delivery(agent: &polyphony_core::AgentDefinition) -> TmuxPromptDelivery {
+    match agent.prompt_mode {
+        AgentPromptMode::Stdin => TmuxPromptDelivery::RedirectStdinAtLaunch,
+        AgentPromptMode::TmuxPaste => {
+            if command_requires_launch_stdin(agent) {
+                TmuxPromptDelivery::RedirectStdinAtLaunch
+            } else {
+                TmuxPromptDelivery::PasteAfterLaunch
+            }
+        },
+        AgentPromptMode::Env => {
+            if matches!(agent.interaction_mode, AgentInteractionMode::Interactive) {
+                TmuxPromptDelivery::PasteAfterLaunch
+            } else {
+                TmuxPromptDelivery::None
+            }
+        },
+    }
+}
+
+fn command_requires_launch_stdin(agent: &polyphony_core::AgentDefinition) -> bool {
+    agent.kind.eq_ignore_ascii_case("claude")
+        && agent
+            .command
+            .as_deref()
+            .is_some_and(claude_command_uses_print_mode)
+}
+
+fn claude_command_uses_print_mode(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .any(|token| token == "-p" || token == "--print")
+}
+
+fn tmux_launch_command(
+    command: &str,
+    prompt_file: &std::path::Path,
+    prompt_delivery: TmuxPromptDelivery,
+) -> String {
+    match prompt_delivery {
+        TmuxPromptDelivery::RedirectStdinAtLaunch => format!(
+            "({command}) < {}",
+            shell_escape(prompt_file.to_string_lossy().as_ref())
+        ),
+        TmuxPromptDelivery::None | TmuxPromptDelivery::PasteAfterLaunch => command.to_string(),
+    }
+}
+
+fn emit_tmux_pane_delta(
+    event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    spec: &AgentRunSpec,
+    session_name: &str,
+    last_pane: &mut String,
+    last_change: &mut Instant,
+    pane: String,
+) {
+    let delta = diff_tail(last_pane, &pane);
+    if !delta.trim().is_empty() {
+        emit(
+            event_tx,
+            spec,
+            AgentEventKind::Notification,
+            Some(delta.trim().to_string()),
+            Some(session_name.to_string()),
+            None,
+            None,
+            None,
+        );
+    }
+    *last_change = Instant::now();
+    *last_pane = pane;
+}
+
+async fn read_tmux_exit_code(exit_path: &std::path::Path) -> Option<Option<i32>> {
+    fs::read_to_string(exit_path)
+        .await
+        .ok()
+        .map(|exit_code| exit_code.trim().parse::<i32>().ok())
+}
+
 async fn kill_tmux_session(session_name: &str) {
     let _ = Command::new("tmux")
         .arg("kill-session")
@@ -534,6 +641,7 @@ mod tests {
             AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
             AgentRunSpec, AgentTransport, Issue,
         },
+        std::os::unix::fs::PermissionsExt,
         tempfile::tempdir,
         tokio::sync::mpsc,
     };
@@ -579,10 +687,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(matches!(
-            result.status,
-            polyphony_core::AttemptStatus::Succeeded
-        ));
+        assert!(
+            matches!(result.status, polyphony_core::AttemptStatus::Succeeded),
+            "{result:?}"
+        );
         let mut saw_stdout = false;
         while let Ok(event) = rx.try_recv() {
             if event.message.as_deref() == Some("first line") {
@@ -597,7 +705,7 @@ mod tests {
         let runtime = LocalCliRuntime::fallback_transport();
         let dir = tempdir().unwrap();
         let output = dir.path().join("prompt.txt");
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::unbounded_channel();
         let result = runtime
             .run(
                 AgentRunSpec {
@@ -626,11 +734,99 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(matches!(
-            result.status,
-            polyphony_core::AttemptStatus::Succeeded
-        ));
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            matches!(result.status, polyphony_core::AttemptStatus::Succeeded),
+            "result={result:?} events={events:?}"
+        );
         let captured = tokio::fs::read_to_string(output).await.unwrap();
         assert!(captured.contains("hello from stdin"));
+    }
+
+    #[test]
+    fn claude_print_tmux_uses_launch_stdin() {
+        let agent = AgentDefinition {
+            name: "opus".into(),
+            kind: "claude".into(),
+            command: Some("claude -p --verbose".into()),
+            interaction_mode: AgentInteractionMode::Interactive,
+            prompt_mode: AgentPromptMode::TmuxPaste,
+            ..AgentDefinition::default()
+        };
+
+        assert_eq!(
+            super::tmux_prompt_delivery(&agent),
+            super::TmuxPromptDelivery::RedirectStdinAtLaunch
+        );
+        assert!(super::claude_command_uses_print_mode(
+            agent.command.as_deref().unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn tmux_claude_print_mode_reads_prompt_before_launch() {
+        let tmux_available = tokio::process::Command::new("tmux")
+            .arg("-V")
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !tmux_available {
+            return;
+        }
+
+        let runtime = LocalCliRuntime::fallback_transport();
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        tokio::fs::create_dir_all(&bin_dir).await.unwrap();
+        let output = dir.path().join("captured.txt");
+        let claude = bin_dir.join("claude");
+        let script = format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \" $* \" == *\" -p \"* || \" $* \" == *\" --print \"* ]]; then\n  line=$(cat)\n  if [[ -z \"$line\" ]]; then\n    echo \"Error: Input must be provided either through stdin or as a prompt argument when using --print\" >&2\n    exit 2\n  fi\n  printf '%s\\n' \"$line\" > {}\n  exit 0\nfi\nexit 3\n",
+            output.display()
+        );
+        tokio::fs::write(&claude, script).await.unwrap();
+        let mut perms = tokio::fs::metadata(&claude).await.unwrap().permissions();
+        perms.set_mode(0o755);
+        tokio::fs::set_permissions(&claude, perms).await.unwrap();
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: test_issue(),
+                    attempt: Some(0),
+                    workspace_path: dir.path().to_path_buf(),
+                    prompt: "hello from tmux".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "opus".into(),
+                        kind: "claude".into(),
+                        transport: AgentTransport::LocalCli,
+                        command: Some(format!("{} -p --verbose", claude.display())),
+                        interaction_mode: AgentInteractionMode::Interactive,
+                        prompt_mode: AgentPromptMode::TmuxPaste,
+                        use_tmux: true,
+                        tmux_session_prefix: Some("test-opus".into()),
+                        turn_timeout_ms: 5_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            matches!(result.status, polyphony_core::AttemptStatus::Succeeded),
+            "result={result:?} events={events:?}"
+        );
+        let captured = tokio::fs::read_to_string(output).await.unwrap();
+        assert_eq!(captured.trim(), "hello from tmux");
     }
 }

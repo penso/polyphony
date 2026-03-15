@@ -1,7 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use {
@@ -107,6 +107,15 @@ impl WorkspaceManager {
     ) -> Result<Workspace, Error> {
         tokio::fs::create_dir_all(&self.root).await?;
         let request = self.workspace_request(issue_identifier, branch_name)?;
+        let started_at = Instant::now();
+        info!(
+            issue_identifier,
+            workspace_path = %request.workspace_path.display(),
+            checkout_kind = ?request.checkout_kind,
+            sync_on_reuse = request.sync_on_reuse,
+            branch_name = ?request.branch_name,
+            "ensuring workspace"
+        );
         let workspace = self.provisioner.ensure_workspace(request.clone()).await?;
         self.cleanup_transient_artifacts(&workspace.path).await?;
         if workspace.created_now
@@ -128,6 +137,7 @@ impl WorkspaceManager {
             issue_identifier,
             workspace_path = %workspace.path.display(),
             created_now = workspace.created_now,
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
             "workspace ready"
         );
         Ok(workspace)

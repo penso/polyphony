@@ -538,44 +538,64 @@ impl RuntimeService {
                 warn!(%issue_id, "issue not found for manual dispatch");
                 continue;
             };
-            if self.state.running.contains_key(&issue.id) {
-                let msg = format!(
-                    "manual dispatch skipped: {} already running",
-                    issue.identifier
-                );
-                info!(%issue_id, "{msg}");
-                self.push_event(EventScope::Dispatch, msg);
-                continue;
-            }
-            if !self.has_available_slot(&workflow, &issue.state) {
-                let msg = format!("manual dispatch skipped: no slot for {}", issue.identifier);
-                warn!(%issue_id, "{msg}");
-                self.push_event(EventScope::Dispatch, msg);
-                continue;
-            }
-            info!(
-                issue_identifier = %issue.identifier,
-                agent = agent_name.as_deref().unwrap_or("default"),
-                "manual dispatch: dispatching issue"
-            );
-            self.push_event(
-                EventScope::Dispatch,
-                format!(
-                    "manual dispatch: {} → {}",
-                    issue.identifier,
-                    agent_name.as_deref().unwrap_or("default")
-                ),
-            );
-            if let Err(error) = self
-                .dispatch_issue(workflow.clone(), issue, None, false, agent_name.as_deref())
-                .await
-            {
-                self.push_event(
-                    EventScope::Dispatch,
-                    format!("manual dispatch failed: {error}"),
-                );
-                error!(%error, "manual dispatch failed");
-            }
+            self.dispatch_requested_issue(
+                workflow.clone(),
+                issue,
+                agent_name.as_deref(),
+                "manual dispatch",
+            )
+            .await;
+        }
+    }
+
+    async fn dispatch_requested_issue(
+        &mut self,
+        workflow: LoadedWorkflow,
+        issue: Issue,
+        agent_name: Option<&str>,
+        source: &'static str,
+    ) {
+        let skip_workspace_sync = source == "orphan auto-dispatch";
+        if self.state.running.contains_key(&issue.id) {
+            let msg = format!("{source} skipped: {} already running", issue.identifier);
+            info!(issue_id = %issue.id, "{msg}");
+            self.push_event(EventScope::Dispatch, msg);
+            return;
+        }
+        if !self.has_available_slot(&workflow, &issue.state) {
+            let msg = format!("{source} skipped: no slot for {}", issue.identifier);
+            warn!(issue_id = %issue.id, "{msg}");
+            self.push_event(EventScope::Dispatch, msg);
+            return;
+        }
+        info!(
+            issue_identifier = %issue.identifier,
+            issue_id = %issue.id,
+            agent = agent_name.unwrap_or("default"),
+            dispatch_source = source,
+            "dispatching requested issue"
+        );
+        self.push_event(
+            EventScope::Dispatch,
+            format!(
+                "{source}: {} → {}",
+                issue.identifier,
+                agent_name.unwrap_or("default")
+            ),
+        );
+        if let Err(error) = self
+            .dispatch_issue(
+                workflow,
+                issue,
+                None,
+                false,
+                agent_name,
+                skip_workspace_sync,
+            )
+            .await
+        {
+            self.push_event(EventScope::Dispatch, format!("{source} failed: {error}"));
+            error!(%error, dispatch_source = source, "requested dispatch failed");
         }
     }
 
@@ -688,14 +708,17 @@ impl RuntimeService {
                         EventScope::Dispatch,
                         format!("auto-dispatch orphaned: {}", issue.identifier),
                     );
-                    self.pending_manual_dispatches
-                        .push((issue.id.clone(), None));
+                    self.dispatch_requested_issue(
+                        workflow.clone(),
+                        issue.clone(),
+                        None,
+                        "orphan auto-dispatch",
+                    )
+                    .await;
                 }
             }
-            // Emit snapshot so the event is visible before dispatch (which may block on SSH).
+            // Emit snapshot so orphan events and dispatch state updates become visible immediately.
             let _ = self.emit_snapshot().await;
-            // Process orphan dispatches immediately rather than waiting for next tick.
-            self.process_manual_dispatches().await;
         }
 
         if !workflow.config.has_dispatch_agents() {
@@ -715,7 +738,7 @@ impl RuntimeService {
                 break;
             }
             if let Err(error) = self
-                .dispatch_issue(workflow.clone(), issue, None, false, None)
+                .dispatch_issue(workflow.clone(), issue, None, false, None, false)
                 .await
             {
                 self.push_event(EventScope::Dispatch, format!("dispatch failed: {error}"));
@@ -806,10 +829,17 @@ impl RuntimeService {
         attempt: Option<u32>,
         prefer_alternate_agent: bool,
         agent_override: Option<&str>,
+        skip_workspace_sync: bool,
     ) -> Result<(), Error> {
         if workflow.config.pipeline.enabled {
             return self
-                .dispatch_pipeline(workflow, issue, attempt, prefer_alternate_agent)
+                .dispatch_pipeline(
+                    workflow,
+                    issue,
+                    attempt,
+                    prefer_alternate_agent,
+                    skip_workspace_sync,
+                )
                 .await;
         }
         let saved_context = self.state.saved_contexts.get(&issue.id).cloned();
@@ -825,7 +855,24 @@ impl RuntimeService {
                 prefer_alternate_agent,
             )?
         };
-        let workspace_manager = self.build_workspace_manager(&workflow);
+        let workspace_manager = if skip_workspace_sync {
+            info!(
+                issue_identifier = %issue.identifier,
+                "resuming orphaned workspace without sync_on_reuse"
+            );
+            WorkspaceManager::new(
+                workflow.config.workspace.root.clone(),
+                self.provisioner.clone(),
+                workflow.config.workspace.checkout_kind,
+                false,
+                workflow.config.workspace.transient_paths.clone(),
+                workflow.config.workspace.source_repo_path.clone(),
+                workflow.config.workspace.clone_url.clone(),
+                workflow.config.workspace.default_branch.clone(),
+            )
+        } else {
+            self.build_workspace_manager(&workflow)
+        };
         let workspace = workspace_manager
             .ensure_workspace(
                 &issue.identifier,
@@ -1017,8 +1064,26 @@ impl RuntimeService {
         issue: Issue,
         attempt: Option<u32>,
         prefer_alternate_agent: bool,
+        skip_workspace_sync: bool,
     ) -> Result<(), Error> {
-        let workspace_manager = self.build_workspace_manager(&workflow);
+        let workspace_manager = if skip_workspace_sync {
+            info!(
+                issue_identifier = %issue.identifier,
+                "resuming orphaned workspace without sync_on_reuse"
+            );
+            WorkspaceManager::new(
+                workflow.config.workspace.root.clone(),
+                self.provisioner.clone(),
+                workflow.config.workspace.checkout_kind,
+                false,
+                workflow.config.workspace.transient_paths.clone(),
+                workflow.config.workspace.source_repo_path.clone(),
+                workflow.config.workspace.clone_url.clone(),
+                workflow.config.workspace.default_branch.clone(),
+            )
+        } else {
+            self.build_workspace_manager(&workflow)
+        };
         let workspace = workspace_manager
             .ensure_workspace(
                 &issue.identifier,
@@ -1768,6 +1833,7 @@ impl RuntimeService {
                 Some(retry.row.attempt),
                 retry.row.error.is_some(),
                 None,
+                false,
             )
             .await
         {
@@ -3679,6 +3745,7 @@ mod tests {
     struct TestTracker {
         issues: Arc<Mutex<HashMap<String, Issue>>>,
         workflow_updates: Arc<Mutex<Vec<String>>>,
+        fetch_by_ids_calls: Arc<Mutex<u32>>,
     }
 
     impl TestTracker {
@@ -3691,11 +3758,16 @@ mod tests {
                         .collect(),
                 )),
                 workflow_updates: Arc::new(Mutex::new(Vec::new())),
+                fetch_by_ids_calls: Arc::new(Mutex::new(0)),
             }
         }
 
         fn recorded_workflow_updates(&self) -> Vec<String> {
             self.workflow_updates.lock().unwrap().clone()
+        }
+
+        fn fetch_by_ids_calls(&self) -> u32 {
+            *self.fetch_by_ids_calls.lock().unwrap()
         }
     }
 
@@ -3735,6 +3807,7 @@ mod tests {
             &self,
             issue_ids: &[String],
         ) -> Result<Vec<Issue>, polyphony_core::Error> {
+            *self.fetch_by_ids_calls.lock().unwrap() += 1;
             let issues = self.issues.lock().unwrap();
             Ok(issue_ids
                 .iter()
@@ -4253,6 +4326,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn orphan_auto_dispatch_uses_loaded_issue_without_refetch_by_id() {
+        let workspace_root = unique_workspace_root("orphan-direct-dispatch");
+        let issue = sample_issue("issue-1", "FAC-1", "Todo", "First");
+        let tracker = TestTracker::new(vec![issue.clone()]);
+        let tracker_handle = tracker.clone();
+        let provisioner = RecordingProvisioner::default();
+        let mut service = test_service(tracker, provisioner, &workspace_root);
+        service
+            .state
+            .orphan_dispatch_keys
+            .insert(sanitize_workspace_key(&issue.identifier));
+
+        service.tick().await;
+
+        assert_eq!(tracker_handle.fetch_by_ids_calls(), 0);
+        assert!(service.state.running.contains_key(&issue.id));
+    }
+
+    #[tokio::test]
     async fn reconcile_running_cleans_workspace_for_terminal_issue() {
         let workspace_root = unique_workspace_root("terminal");
         let provisioner = RecordingProvisioner::default();
@@ -4615,7 +4707,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
             });
 
         service
-            .dispatch_issue(workflow, issue.clone(), Some(2), true, None)
+            .dispatch_issue(workflow, issue.clone(), Some(2), true, None, false)
             .await
             .unwrap();
 

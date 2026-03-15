@@ -233,6 +233,12 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
     if !request.sync_on_reuse {
         return Ok(());
     }
+    info!(
+        workspace_path = %request.workspace_path.display(),
+        checkout_kind = ?request.checkout_kind,
+        branch_name = ?request.branch_name,
+        "syncing existing workspace before reuse"
+    );
     match request.checkout_kind {
         CheckoutKind::Directory => Ok(()),
         CheckoutKind::LinkedWorktree => {
@@ -329,6 +335,11 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 /// agent (e.g. YubiKey not tapped) doesn't block the orchestrator.
 fn fetch_origin_with_timeout(repo_path: &Path) -> Result<(), CoreError> {
     let path = repo_path.to_path_buf();
+    info!(
+        repo_path = %path.display(),
+        timeout_secs = FETCH_TIMEOUT.as_secs(),
+        "fetching origin for workspace reuse"
+    );
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| {

@@ -1,11 +1,13 @@
 use std::{
     env,
+    fs::{self, File, OpenOptions},
     future::Future,
     io::{self, Write as _},
     path::{Path, PathBuf},
     pin::Pin,
     process::Command,
     sync::{Arc, Mutex, MutexGuard},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use {
@@ -624,11 +626,18 @@ async fn try_main() -> Result<(), Error> {
         return handle_issue_command(action, &workflow).await;
     }
 
+    let log_file_sink = match init_run_log_sink(&workflow_path) {
+        Ok(sink) => Some(sink),
+        Err(error) => {
+            eprintln!("polyphony: failed to initialize persistent log file: {error}");
+            None
+        },
+    };
     let tui_logs = LogBuffer::default();
     let tracing_output = if cli.no_tui {
-        TracingOutput::stderr()
+        TracingOutput::stderr(log_file_sink)
     } else {
-        TracingOutput::tui(tui_logs.clone())
+        TracingOutput::tui(tui_logs.clone(), log_file_sink)
     };
     let _telemetry = init_tracing(cli.log_json, !cli.no_tui, tracing_output.clone());
     tracing::info!(
@@ -952,6 +961,7 @@ struct TelemetryGuard {
 #[derive(Clone)]
 struct TracingOutput {
     mode: Arc<Mutex<TracingOutputMode>>,
+    file_sink: Option<FileLogSink>,
 }
 
 #[derive(Clone)]
@@ -961,16 +971,22 @@ enum TracingOutputMode {
 }
 
 impl TracingOutput {
-    fn stderr() -> Self {
+    fn stderr(file_sink: Option<FileLogSink>) -> Self {
         Self {
             mode: Arc::new(Mutex::new(TracingOutputMode::Stderr)),
+            file_sink,
         }
     }
 
-    fn tui(log_buffer: LogBuffer) -> Self {
+    fn tui(log_buffer: LogBuffer, file_sink: Option<FileLogSink>) -> Self {
         Self {
             mode: Arc::new(Mutex::new(TracingOutputMode::Tui(log_buffer))),
+            file_sink,
         }
+    }
+
+    fn log_path(&self) -> Option<PathBuf> {
+        self.file_sink.as_ref().map(FileLogSink::path)
     }
 
     fn switch_to_stderr(&self) {
@@ -1002,6 +1018,9 @@ impl TracingOutput {
         if line.trim().is_empty() {
             return;
         }
+        if let Some(file_sink) = &self.file_sink {
+            file_sink.record_line(line);
+        }
         match lock_or_recover(&self.mode).clone() {
             TracingOutputMode::Stderr => {
                 let _ = writeln!(io::stderr().lock(), "{line}");
@@ -1014,6 +1033,53 @@ impl TracingOutput {
 struct TracingOutputWriter {
     output: TracingOutput,
     buffer: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct FileLogSink {
+    path: PathBuf,
+    state: Arc<Mutex<FileLogSinkState>>,
+}
+
+struct FileLogSinkState {
+    file: File,
+    write_failed: bool,
+}
+
+impl FileLogSink {
+    fn new(path: PathBuf) -> Result<Self, Error> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(Error::Io)?;
+        Ok(Self {
+            path,
+            state: Arc::new(Mutex::new(FileLogSinkState {
+                file,
+                write_failed: false,
+            })),
+        })
+    }
+
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    fn record_line(&self, line: &str) {
+        let mut state = lock_or_recover(&self.state);
+        if state.write_failed {
+            return;
+        }
+        if let Err(error) = writeln!(state.file, "{line}") {
+            state.write_failed = true;
+            let _ = writeln!(
+                io::stderr().lock(),
+                "polyphony: failed to append to log file {}: {error}",
+                self.path.display()
+            );
+        }
+    }
 }
 
 impl io::Write for TracingOutputWriter {
@@ -1077,16 +1143,42 @@ fn init_tracing(log_json: bool, tui_mode: bool, tracing_output: TracingOutput) -
         tracer_provider.clone(),
         log_json,
         tui_mode,
-        tracing_output,
+        tracing_output.clone(),
     ) {
         eprintln!("polyphony: tracing subscriber setup failed: {error}");
     }
-    tracing::info!(
-        otel_enabled = tracer_provider.is_some(),
-        log_json,
-        "tracing initialized"
-    );
+    if let Some(log_path) = tracing_output.log_path() {
+        tracing::info!(
+            log_path = %log_path.display(),
+            otel_enabled = tracer_provider.is_some(),
+            log_json,
+            "tracing initialized"
+        );
+    } else {
+        tracing::info!(
+            otel_enabled = tracer_provider.is_some(),
+            log_json,
+            "tracing initialized"
+        );
+    }
     TelemetryGuard { tracer_provider }
+}
+
+fn init_run_log_sink(workflow_path: &Path) -> Result<FileLogSink, Error> {
+    let log_dir = workflow_root_dir(workflow_path)?
+        .join(".polyphony")
+        .join("logs");
+    fs::create_dir_all(&log_dir).map_err(Error::Io)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let file_name = format!(
+        "polyphony-{}-{:09}-pid{}.log",
+        now.as_secs(),
+        now.subsec_nanos(),
+        std::process::id()
+    );
+    FileLogSink::new(log_dir.join(file_name))
 }
 
 fn install_tracing_subscriber(
@@ -1413,7 +1505,7 @@ mod tests {
             snapshot_rx,
             command_tx,
             LogBuffer::default(),
-            TracingOutput::stderr(),
+            TracingOutput::stderr(None),
             |_snapshot_rx, _command_tx, _tui_logs| {
                 Box::pin(async { Err(polyphony_tui::Error::Io(io::Error::other("boom"))) })
             },
@@ -1438,7 +1530,7 @@ mod tests {
             snapshot_rx,
             command_tx,
             LogBuffer::default(),
-            TracingOutput::stderr(),
+            TracingOutput::stderr(None),
             |_snapshot_rx, _command_tx, _tui_logs| Box::pin(async { Ok(()) }),
             Box::pin(async { Ok(()) }),
         )
@@ -1461,7 +1553,7 @@ mod tests {
             snapshot_rx,
             command_tx,
             LogBuffer::default(),
-            TracingOutput::stderr(),
+            TracingOutput::stderr(None),
             |_snapshot_rx, _command_tx, _tui_logs| Box::pin(async { Ok(()) }),
             Box::pin(async { Err(io::Error::other("ctrl-c failed")) }),
         )
@@ -1638,16 +1730,27 @@ workspace:
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tracing_tests {
-    use std::io::Write as _;
+    use std::{fs, io::Write as _, path::PathBuf};
 
     use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
-    use crate::{LogBuffer, TracingOutput, TracingOutputWriter};
+    use crate::{LogBuffer, TracingOutput, TracingOutputWriter, init_run_log_sink};
+
+    fn unique_temp_path(name: &str, extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "polyphony-cli-{name}-{}.{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ))
+    }
 
     #[test]
     fn tracing_writer_flushes_into_tui_buffer() {
         let buffer = LogBuffer::default();
-        let output = TracingOutput::tui(buffer.clone());
+        let output = TracingOutput::tui(buffer.clone(), None);
         let mut writer = TracingOutputWriter {
             output,
             buffer: Vec::new(),
@@ -1665,7 +1768,7 @@ mod tracing_tests {
     #[test]
     fn tracing_subscriber_routes_events_into_tui_buffer() {
         let buffer = LogBuffer::default();
-        let output = TracingOutput::tui(buffer.clone());
+        let output = TracingOutput::tui(buffer.clone(), None);
         let subscriber = tracing_subscriber::registry()
             .with(EnvFilter::new("info"))
             .with(
@@ -1684,5 +1787,28 @@ mod tracing_tests {
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("subscriber log path works"));
         assert!(lines[0].contains("INFO"));
+    }
+
+    #[test]
+    fn tracing_writer_persists_lines_under_polyphony_logs() {
+        let repo_root = unique_temp_path("tracing-log-file", "d");
+        fs::create_dir_all(&repo_root).unwrap();
+        let workflow_path = repo_root.join("WORKFLOW.md");
+        let buffer = LogBuffer::default();
+        let output = TracingOutput::tui(buffer, Some(init_run_log_sink(&workflow_path).unwrap()));
+        let log_path = output.log_path().unwrap();
+        let mut writer = TracingOutputWriter {
+            output,
+            buffer: Vec::new(),
+        };
+
+        writer.write_all(b"persist this line\n").unwrap();
+        writer.flush().unwrap();
+
+        let contents = fs::read_to_string(&log_path).unwrap();
+        let _ = fs::remove_dir_all(&repo_root);
+
+        assert!(log_path.starts_with(repo_root.join(".polyphony").join("logs")));
+        assert!(contents.contains("persist this line"));
     }
 }
