@@ -291,16 +291,24 @@ fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
 }
 
 const MODE_OPTIONS: [(DispatchMode, &str, &str); 3] = [
-    (DispatchMode::Manual, "Manual", "You choose which issues to dispatch"),
-    (DispatchMode::Automatic, "Automatic", "Issues are dispatched automatically"),
-    (DispatchMode::Nightshift, "Nightshift", "Auto + code improvements when idle"),
+    (
+        DispatchMode::Manual,
+        "Manual",
+        "You choose which issues to dispatch",
+    ),
+    (
+        DispatchMode::Automatic,
+        "Automatic",
+        "Issues are dispatched automatically",
+    ),
+    (
+        DispatchMode::Nightshift,
+        "Nightshift",
+        "Auto + code improvements when idle",
+    ),
 ];
 
-pub fn draw_mode_modal(
-    frame: &mut ratatui::Frame<'_>,
-    snapshot: &RuntimeSnapshot,
-    app: &AppState,
-) {
+pub fn draw_mode_modal(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &AppState) {
     let theme = app.theme;
     let area = centered_rect(frame.area(), 52, 11);
     frame.render_widget(Clear, area);
@@ -344,7 +352,7 @@ pub fn draw_mode_modal(
             Constraint::Length(2), // option 1
             Constraint::Length(1), // spacer
             Constraint::Length(2), // option 2
-            Constraint::Min(0),   // remainder
+            Constraint::Min(0),    // remainder
         ])
         .split(inner);
 
@@ -352,8 +360,16 @@ pub fn draw_mode_modal(
         let is_selected = i == app.mode_modal_selected;
         let is_active = *mode == snapshot.dispatch_mode;
 
-        let marker = if is_active { "● " } else { "  " };
-        let marker_color = if is_active { theme.success } else { theme.muted };
+        let marker = if is_active {
+            "● "
+        } else {
+            "  "
+        };
+        let marker_color = if is_active {
+            theme.success
+        } else {
+            theme.muted
+        };
 
         let label_style = if is_selected {
             Style::default()
@@ -440,7 +456,11 @@ pub fn draw_agent_picker_modal(
             height: 1,
         };
 
-        let marker = if is_selected { "▸ " } else { "  " };
+        let marker = if is_selected {
+            "▸ "
+        } else {
+            "  "
+        };
         let label_style = if is_selected {
             Style::default()
                 .fg(theme.highlight)

@@ -23,8 +23,8 @@ pub fn draw_orchestrator_tab(
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // Status panel
-            Constraint::Length(8),  // Movements table (compact)
+            Constraint::Length(5), // Status panel
+            Constraint::Length(8), // Movements table (compact)
             Constraint::Min(8),    // Recent events (gets remaining space)
         ])
         .split(area);
@@ -284,7 +284,7 @@ fn draw_events_panel(
                 polyphony_core::EventScope::Handoff => theme.highlight,
                 polyphony_core::EventScope::Worker | polyphony_core::EventScope::Agent => {
                     theme.success
-                }
+                },
                 polyphony_core::EventScope::Retry => theme.warning,
                 polyphony_core::EventScope::Throttle => theme.danger,
                 _ => theme.muted,
@@ -327,11 +327,8 @@ fn draw_events_panel(
                             .add_modifier(Modifier::BOLD),
                     )))
                     .title(
-                        Line::from(Span::styled(
-                            count_label,
-                            Style::default().fg(theme.muted),
-                        ))
-                        .right_aligned(),
+                        Line::from(Span::styled(count_label, Style::default().fg(theme.muted)))
+                            .right_aligned(),
                     )
                     .borders(ratatui::widgets::Borders::ALL)
                     .border_type(BorderType::Rounded)

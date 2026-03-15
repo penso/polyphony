@@ -492,13 +492,13 @@ impl RuntimeService {
                 },
                 Ok(RuntimeCommand::SetMode(mode)) => {
                     info!(?mode, "dispatch mode changed");
-                    self.push_event(
-                        EventScope::Dispatch,
-                        format!("dispatch mode set to {mode}"),
-                    );
+                    self.push_event(EventScope::Dispatch, format!("dispatch mode set to {mode}"));
                     self.state.dispatch_mode = mode;
                 },
-                Ok(RuntimeCommand::DispatchIssue { issue_id, agent_name }) => {
+                Ok(RuntimeCommand::DispatchIssue {
+                    issue_id,
+                    agent_name,
+                }) => {
                     info!(%issue_id, ?agent_name, "manual dispatch queued");
                     self.pending_manual_dispatches.push((issue_id, agent_name));
                 },
@@ -515,7 +515,11 @@ impl RuntimeService {
         info!(count = dispatches.len(), "processing manual dispatches");
         let workflow = self.workflow();
         for (issue_id, agent_name) in dispatches {
-            let issues = match self.tracker.fetch_issues_by_ids(std::slice::from_ref(&issue_id)).await {
+            let issues = match self
+                .tracker
+                .fetch_issues_by_ids(std::slice::from_ref(&issue_id))
+                .await
+            {
                 Ok(issues) => issues,
                 Err(error) => {
                     self.push_event(
@@ -535,7 +539,10 @@ impl RuntimeService {
                 continue;
             };
             if self.state.running.contains_key(&issue.id) {
-                let msg = format!("manual dispatch skipped: {} already running", issue.identifier);
+                let msg = format!(
+                    "manual dispatch skipped: {} already running",
+                    issue.identifier
+                );
                 info!(%issue_id, "{msg}");
                 self.push_event(EventScope::Dispatch, msg);
                 continue;
@@ -560,13 +567,7 @@ impl RuntimeService {
                 ),
             );
             if let Err(error) = self
-                .dispatch_issue(
-                    workflow.clone(),
-                    issue,
-                    None,
-                    false,
-                    agent_name.as_deref(),
-                )
+                .dispatch_issue(workflow.clone(), issue, None, false, agent_name.as_deref())
                 .await
             {
                 self.push_event(
@@ -814,12 +815,7 @@ impl RuntimeService {
         let saved_context = self.state.saved_contexts.get(&issue.id).cloned();
         let selected_agent = if let Some(name) = agent_override {
             let candidates = workflow.config.expand_agent_candidates(name)?;
-            self.select_dispatch_agent(
-                &issue,
-                &candidates,
-                saved_context.as_ref(),
-                false,
-            )?
+            self.select_dispatch_agent(&issue, &candidates, saved_context.as_ref(), false)?
         } else {
             let candidate_agents = workflow.config.candidate_agents_for_issue(&issue)?;
             self.select_dispatch_agent(
@@ -2006,14 +2002,14 @@ impl RuntimeService {
             AttemptStatus::Succeeded => MovementStatus::Delivered,
             AttemptStatus::Failed | AttemptStatus::TimedOut | AttemptStatus::Stalled => {
                 MovementStatus::Failed
-            }
+            },
             AttemptStatus::CancelledByReconciliation => MovementStatus::Cancelled,
         };
         if let Some(movement) = self
-                .state
-                .movements
-                .values_mut()
-                .find(|m| m.issue_id.as_deref() == Some(&issue_id))
+            .state
+            .movements
+            .values_mut()
+            .find(|m| m.issue_id.as_deref() == Some(&issue_id))
         {
             movement.status = movement_status;
             movement.updated_at = Utc::now();

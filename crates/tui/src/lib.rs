@@ -228,35 +228,27 @@ pub async fn run(
                         } else {
                             match mouse.kind {
                                 MouseEventKind::Down(event::MouseButton::Left) => {
-                                    if let Some(tab) =
-                                        app.tab_at_position(mouse.column, mouse.row)
+                                    if let Some(tab) = app.tab_at_position(mouse.column, mouse.row)
                                     {
                                         app.active_tab = tab;
                                     } else if app.active_tab == app::ActiveTab::Issues {
                                         // Single click selects issue row
-                                        if let Some(idx) =
-                                            app.issue_row_at_position(mouse.row)
-                                        {
+                                        if let Some(idx) = app.issue_row_at_position(mouse.row) {
                                             app.issues_state.select(Some(idx));
                                         }
                                         // Double-click opens detail modal
                                         let now = Instant::now();
-                                        let is_double =
-                                            app.last_click_at.is_some_and(|prev| {
-                                                now.duration_since(prev)
-                                                    < Duration::from_millis(400)
-                                                    && app.last_click_pos.1 == mouse.row
-                                            });
-                                        if is_double
-                                            && app.selected_issue(&snapshot).is_some()
-                                        {
+                                        let is_double = app.last_click_at.is_some_and(|prev| {
+                                            now.duration_since(prev) < Duration::from_millis(400)
+                                                && app.last_click_pos.1 == mouse.row
+                                        });
+                                        if is_double && app.selected_issue(&snapshot).is_some() {
                                             app.show_issue_detail = true;
                                             app.detail_scroll = 0;
                                             app.last_click_at = None;
                                         } else {
                                             app.last_click_at = Some(now);
-                                            app.last_click_pos =
-                                                (mouse.column, mouse.row);
+                                            app.last_click_pos = (mouse.column, mouse.row);
                                         }
                                     }
                                 },
@@ -268,9 +260,22 @@ pub async fn run(
                                     if !skip {
                                         app.last_scroll_at = Some(now);
                                         if app.active_tab == app::ActiveTab::Orchestrator
-                                            && mouse_in_rect(mouse.column, mouse.row, app.events_area)
+                                            && mouse_in_rect(
+                                                mouse.column,
+                                                mouse.row,
+                                                app.events_area,
+                                            )
                                         {
                                             app.events_scroll = app.events_scroll.saturating_add(1);
+                                        } else if app.active_tab == app::ActiveTab::Agents
+                                            && mouse_in_rect(
+                                                mouse.column,
+                                                mouse.row,
+                                                app.agents_detail_area,
+                                            )
+                                        {
+                                            app.agents_detail_scroll =
+                                                app.agents_detail_scroll.saturating_add(1);
                                         } else {
                                             let len = app.active_table_len(&snapshot);
                                             app.move_down(len, 1);
@@ -285,9 +290,22 @@ pub async fn run(
                                     if !skip {
                                         app.last_scroll_at = Some(now);
                                         if app.active_tab == app::ActiveTab::Orchestrator
-                                            && mouse_in_rect(mouse.column, mouse.row, app.events_area)
+                                            && mouse_in_rect(
+                                                mouse.column,
+                                                mouse.row,
+                                                app.events_area,
+                                            )
                                         {
                                             app.events_scroll = app.events_scroll.saturating_sub(1);
+                                        } else if app.active_tab == app::ActiveTab::Agents
+                                            && mouse_in_rect(
+                                                mouse.column,
+                                                mouse.row,
+                                                app.agents_detail_area,
+                                            )
+                                        {
+                                            app.agents_detail_scroll =
+                                                app.agents_detail_scroll.saturating_sub(1);
                                         } else {
                                             let len = app.active_table_len(&snapshot);
                                             app.move_up(len, 1);
@@ -301,146 +319,148 @@ pub async fn run(
                     key_handled = true;
                 },
                 Event::Key(key) => {
-            if app.leaving {
-                // Ignore keys while leaving
-            } else if app.show_agent_picker {
-                match key.code {
-                    KeyCode::Esc => {
-                        app.show_agent_picker = false;
-                        app.agent_picker_issue_id = None;
-                    },
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        let count = snapshot.agent_profile_names.len();
-                        if count > 0 {
-                            app.agent_picker_selected = (app.agent_picker_selected + 1) % count;
+                    if app.leaving {
+                        // Ignore keys while leaving
+                    } else if app.show_agent_picker {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.show_agent_picker = false;
+                                app.agent_picker_issue_id = None;
+                            },
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                let count = snapshot.agent_profile_names.len();
+                                if count > 0 {
+                                    app.agent_picker_selected =
+                                        (app.agent_picker_selected + 1) % count;
+                                }
+                            },
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                let count = snapshot.agent_profile_names.len();
+                                if count > 0 {
+                                    app.agent_picker_selected =
+                                        (app.agent_picker_selected + count - 1) % count;
+                                }
+                            },
+                            KeyCode::Enter => {
+                                if let Some(issue_id) = app.agent_picker_issue_id.take() {
+                                    let agent_name = snapshot
+                                        .agent_profile_names
+                                        .get(app.agent_picker_selected)
+                                        .cloned();
+                                    app.show_agent_picker = false;
+                                    let _ = command_tx.send(RuntimeCommand::DispatchIssue {
+                                        issue_id,
+                                        agent_name,
+                                    });
+                                }
+                            },
+                            _ => {},
                         }
-                    },
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        let count = snapshot.agent_profile_names.len();
-                        if count > 0 {
-                            app.agent_picker_selected = (app.agent_picker_selected + count - 1) % count;
+                    } else if app.show_mode_modal {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.show_mode_modal = false;
+                            },
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                app.mode_modal_selected = (app.mode_modal_selected + 1) % 3;
+                            },
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                app.mode_modal_selected = (app.mode_modal_selected + 2) % 3;
+                            },
+                            KeyCode::Enter => {
+                                let modes = [
+                                    DispatchMode::Manual,
+                                    DispatchMode::Automatic,
+                                    DispatchMode::Nightshift,
+                                ];
+                                let selected = modes[app.mode_modal_selected];
+                                app.show_mode_modal = false;
+                                let _ = command_tx.send(RuntimeCommand::SetMode(selected));
+                            },
+                            _ => {},
                         }
-                    },
-                    KeyCode::Enter => {
-                        if let Some(issue_id) = app.agent_picker_issue_id.take() {
-                            let agent_name = snapshot
-                                .agent_profile_names
-                                .get(app.agent_picker_selected)
-                                .cloned();
-                            app.show_agent_picker = false;
-                            let _ = command_tx.send(RuntimeCommand::DispatchIssue {
-                                issue_id,
-                                agent_name,
-                            });
+                    } else if app.show_issue_detail {
+                        // Modal is open — handle modal keys
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                                app.show_issue_detail = false;
+                                app.detail_scroll = 0;
+                            },
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                app.detail_scroll = app.detail_scroll.saturating_add(1);
+                            },
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                app.detail_scroll = app.detail_scroll.saturating_sub(1);
+                            },
+                            KeyCode::PageDown => {
+                                app.detail_scroll = app.detail_scroll.saturating_add(8);
+                            },
+                            KeyCode::PageUp => {
+                                app.detail_scroll = app.detail_scroll.saturating_sub(8);
+                            },
+                            KeyCode::Char('o') => {
+                                if let Some(issue) = app.selected_issue(&snapshot)
+                                    && let Some(url) = &issue.url
+                                {
+                                    let _ = std::process::Command::new("open").arg(url).spawn();
+                                }
+                            },
+                            _ => {},
                         }
-                    },
-                    _ => {},
-                }
-            } else if app.show_mode_modal {
-                match key.code {
-                    KeyCode::Esc => {
-                        app.show_mode_modal = false;
-                    },
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        app.mode_modal_selected = (app.mode_modal_selected + 1) % 3;
-                    },
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        app.mode_modal_selected = (app.mode_modal_selected + 2) % 3;
-                    },
-                    KeyCode::Enter => {
-                        let modes = [
-                            DispatchMode::Manual,
-                            DispatchMode::Automatic,
-                            DispatchMode::Nightshift,
-                        ];
-                        let selected = modes[app.mode_modal_selected];
-                        app.show_mode_modal = false;
-                        let _ = command_tx.send(RuntimeCommand::SetMode(selected));
-                    },
-                    _ => {},
-                }
-            } else if app.show_issue_detail {
-                // Modal is open — handle modal keys
-                match key.code {
-                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
-                        app.show_issue_detail = false;
-                        app.detail_scroll = 0;
-                    },
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        app.detail_scroll = app.detail_scroll.saturating_add(1);
-                    },
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        app.detail_scroll = app.detail_scroll.saturating_sub(1);
-                    },
-                    KeyCode::PageDown => {
-                        app.detail_scroll = app.detail_scroll.saturating_add(8);
-                    },
-                    KeyCode::PageUp => {
-                        app.detail_scroll = app.detail_scroll.saturating_sub(8);
-                    },
-                    KeyCode::Char('o') => {
-                        if let Some(issue) = app.selected_issue(&snapshot)
-                            && let Some(url) = &issue.url
-                        {
-                            let _ = std::process::Command::new("open").arg(url).spawn();
+                    } else if app.search_active {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.search_active = false;
+                                app.search_query.clear();
+                                app.rebuild_sorted_indices(&snapshot);
+                                sync_selection_after_search(&mut app, &snapshot);
+                            },
+                            KeyCode::Enter => {
+                                app.search_active = false;
+                                // Keep filter active, just exit input mode
+                            },
+                            KeyCode::Backspace => {
+                                app.search_query.pop();
+                                app.rebuild_sorted_indices(&snapshot);
+                                sync_selection_after_search(&mut app, &snapshot);
+                            },
+                            KeyCode::Char(c) => {
+                                app.search_query.push(c);
+                                app.rebuild_sorted_indices(&snapshot);
+                                sync_selection_after_search(&mut app, &snapshot);
+                            },
+                            _ => {},
                         }
-                    },
-                    _ => {},
-                }
-            } else if app.search_active {
-                match key.code {
-                    KeyCode::Esc => {
-                        app.search_active = false;
-                        app.search_query.clear();
-                        app.rebuild_sorted_indices(&snapshot);
-                        sync_selection_after_search(&mut app, &snapshot);
-                    },
-                    KeyCode::Enter => {
-                        app.search_active = false;
-                        // Keep filter active, just exit input mode
-                    },
-                    KeyCode::Backspace => {
-                        app.search_query.pop();
-                        app.rebuild_sorted_indices(&snapshot);
-                        sync_selection_after_search(&mut app, &snapshot);
-                    },
-                    KeyCode::Char(c) => {
-                        app.search_query.push(c);
-                        app.rebuild_sorted_indices(&snapshot);
-                        sync_selection_after_search(&mut app, &snapshot);
-                    },
-                    _ => {},
-                }
-            } else if app.logs_search_active {
-                match key.code {
-                    KeyCode::Esc => {
-                        app.logs_search_active = false;
-                        app.logs_search_query.clear();
-                    },
-                    KeyCode::Enter => {
-                        app.logs_search_active = false;
-                    },
-                    KeyCode::Backspace => {
-                        app.logs_search_query.pop();
-                    },
-                    KeyCode::Char(c) => {
-                        app.logs_search_query.push(c);
-                    },
-                    _ => {},
-                }
-            } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
-                let shutdown = matches!(command, RuntimeCommand::Shutdown);
-                if matches!(command, RuntimeCommand::Refresh) {
-                    app.refresh_requested = true;
-                }
-                tracing::info!(?command, "TUI sending command");
-                let _ = command_tx.send(command);
-                if shutdown {
-                    app.leaving = true;
-                    app.leaving_since = Some(Instant::now());
-                }
-            }
-            key_handled = true;
+                    } else if app.logs_search_active {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.logs_search_active = false;
+                                app.logs_search_query.clear();
+                            },
+                            KeyCode::Enter => {
+                                app.logs_search_active = false;
+                            },
+                            KeyCode::Backspace => {
+                                app.logs_search_query.pop();
+                            },
+                            KeyCode::Char(c) => {
+                                app.logs_search_query.push(c);
+                            },
+                            _ => {},
+                        }
+                    } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
+                        let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                        if matches!(command, RuntimeCommand::Refresh) {
+                            app.refresh_requested = true;
+                        }
+                        tracing::info!(?command, "TUI sending command");
+                        let _ = command_tx.send(command);
+                        if shutdown {
+                            app.leaving = true;
+                            app.leaving_since = Some(Instant::now());
+                        }
+                    }
+                    key_handled = true;
                 },
                 _ => {},
             }
@@ -488,10 +508,21 @@ fn handle_key(
             app.active_tab = app.active_tab.previous();
         },
         KeyCode::Char('1') => app.active_tab = app::ActiveTab::Issues,
-        KeyCode::Char('2') => app.active_tab = app::ActiveTab::Orchestrator,
-        KeyCode::Char('3') => app.active_tab = app::ActiveTab::Tasks,
-        KeyCode::Char('4') => app.active_tab = app::ActiveTab::Deliverables,
-        KeyCode::Char('5') => app.active_tab = app::ActiveTab::Logs,
+        KeyCode::Char('2') => app.active_tab = app::ActiveTab::Agents,
+        KeyCode::Char('3') => app.active_tab = app::ActiveTab::Orchestrator,
+        KeyCode::Char('4') => app.active_tab = app::ActiveTab::Tasks,
+        KeyCode::Char('5') => app.active_tab = app::ActiveTab::Deliverables,
+        KeyCode::Char('6') => app.active_tab = app::ActiveTab::Logs,
+        KeyCode::Char('J') => {
+            if app.active_tab == app::ActiveTab::Agents {
+                app.agents_detail_scroll = app.agents_detail_scroll.saturating_add(1);
+            }
+        },
+        KeyCode::Char('K') => {
+            if app.active_tab == app::ActiveTab::Agents {
+                app.agents_detail_scroll = app.agents_detail_scroll.saturating_sub(1);
+            }
+        },
 
         // Navigation (works on active tab's table)
         KeyCode::Char('j') | KeyCode::Down => {
@@ -655,10 +686,7 @@ fn drain_pending_input() {
 }
 
 fn mouse_in_rect(col: u16, row: u16, rect: Rect) -> bool {
-    col >= rect.x
-        && col < rect.x + rect.width
-        && row >= rect.y
-        && row < rect.y + rect.height
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
 fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
@@ -842,6 +870,9 @@ mod tests {
         assert_eq!(app.active_tab, app::ActiveTab::Issues);
 
         app.active_tab = app.active_tab.next();
+        assert_eq!(app.active_tab, app::ActiveTab::Agents);
+
+        app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Orchestrator);
 
         app.active_tab = app.active_tab.next();
@@ -855,6 +886,64 @@ mod tests {
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Issues);
+    }
+
+    #[test]
+    fn agent_detail_scroll_resets_when_agent_selection_changes() {
+        let mut app = AppState::new(default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot(0);
+        snapshot.running = vec![
+            polyphony_core::RunningRow {
+                issue_id: "issue-1".into(),
+                issue_identifier: "GH-1".into(),
+                agent_name: "opus".into(),
+                model: Some("claude".into()),
+                state: "running".into(),
+                max_turns: 20,
+                session_id: Some("opus-gh-1-0".into()),
+                thread_id: None,
+                turn_id: None,
+                codex_app_server_pid: None,
+                turn_count: 1,
+                last_event: Some("TurnStarted".into()),
+                last_message: Some("hello".into()),
+                started_at: Utc::now(),
+                last_event_at: None,
+                tokens: Default::default(),
+                workspace_path: std::path::PathBuf::from("."),
+                attempt: Some(0),
+            },
+            polyphony_core::RunningRow {
+                issue_id: "issue-2".into(),
+                issue_identifier: "GH-2".into(),
+                agent_name: "codex".into(),
+                model: Some("gpt-5".into()),
+                state: "running".into(),
+                max_turns: 20,
+                session_id: Some("codex-gh-2-0".into()),
+                thread_id: None,
+                turn_id: None,
+                codex_app_server_pid: None,
+                turn_count: 2,
+                last_event: Some("TurnStarted".into()),
+                last_message: Some("world".into()),
+                started_at: Utc::now(),
+                last_event_at: None,
+                tokens: Default::default(),
+                workspace_path: std::path::PathBuf::from("."),
+                attempt: Some(0),
+            },
+        ];
+        snapshot.counts.running = snapshot.running.len();
+
+        app.on_snapshot(&snapshot);
+        app.active_tab = app::ActiveTab::Agents;
+        app.agents_detail_scroll = 5;
+
+        app.move_down(snapshot.running.len(), 1);
+
+        assert_eq!(app.agents_state.selected(), Some(1));
+        assert_eq!(app.agents_detail_scroll, 0);
     }
 
     #[test]

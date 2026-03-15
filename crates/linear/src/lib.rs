@@ -295,10 +295,9 @@ impl IssueTracker for LinearTracker {
     }
 
     async fn create_issue(&self, request: &CreateIssueRequest) -> Result<Issue, CoreError> {
-        let team_id = self
-            .team_id
-            .clone()
-            .ok_or_else(|| CoreError::Adapter("tracker.team_id is required for Linear issue creation".into()))?;
+        let team_id = self.team_id.clone().ok_or_else(|| {
+            CoreError::Adapter("tracker.team_id is required for Linear issue creation".into())
+        })?;
         debug!(title = %request.title, "creating Linear issue");
         let variables = linear_create_issue::Variables {
             team_id,

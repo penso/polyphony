@@ -1,3 +1,4 @@
+mod agents;
 mod deliverables;
 mod footer;
 mod header;
@@ -28,6 +29,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     match app.active_tab {
         ActiveTab::Issues => issues::draw_issues_tab(frame, areas[1], snapshot, app),
+        ActiveTab::Agents => agents::draw_agents_tab(frame, areas[1], snapshot, app),
         ActiveTab::Orchestrator => {
             orchestrator::draw_orchestrator_tab(frame, areas[1], snapshot, app);
         },

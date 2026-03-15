@@ -157,9 +157,10 @@ fn build_tracker(
         TrackerKind::None => Arc::new(EmptyTracker),
         #[cfg(feature = "linear")]
         TrackerKind::Linear => {
-            let api_key = workflow.config.tracker.api_key.clone().ok_or_else(|| {
-                Error::Config("tracker.api_key is required for linear".into())
-            })?;
+            let api_key =
+                workflow.config.tracker.api_key.clone().ok_or_else(|| {
+                    Error::Config("tracker.api_key is required for linear".into())
+                })?;
             Arc::new(polyphony_linear::LinearTracker::new(
                 workflow.config.tracker.endpoint.clone(),
                 api_key,
@@ -216,8 +217,7 @@ async fn handle_issue_command(
             let issue = tracker.create_issue(&request).await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&issue)
-                    .map_err(|e| Error::Config(e.to_string()))?
+                serde_json::to_string_pretty(&issue).map_err(|e| Error::Config(e.to_string()))?
             );
         },
         IssueAction::Update {
@@ -239,8 +239,7 @@ async fn handle_issue_command(
             let issue = tracker.update_issue(&request).await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&issue)
-                    .map_err(|e| Error::Config(e.to_string()))?
+                serde_json::to_string_pretty(&issue).map_err(|e| Error::Config(e.to_string()))?
             );
         },
         IssueAction::List { state, all } => {
@@ -252,15 +251,11 @@ async fn handle_issue_command(
                 state.unwrap_or_else(|| workflow.config.tracker.active_states.clone())
             };
             let issues = tracker
-                .fetch_issues_by_states(
-                    workflow.config.tracker.project_slug.as_deref(),
-                    &states,
-                )
+                .fetch_issues_by_states(workflow.config.tracker.project_slug.as_deref(), &states)
                 .await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&issues)
-                    .map_err(|e| Error::Config(e.to_string()))?
+                serde_json::to_string_pretty(&issues).map_err(|e| Error::Config(e.to_string()))?
             );
         },
         IssueAction::Show { identifier } => {
@@ -295,8 +290,7 @@ fn handle_config_command(
 }
 
 fn print_config_json(config: &ServiceConfig) -> Result<(), Error> {
-    let mut value =
-        serde_json::to_value(config).map_err(|e| Error::Config(e.to_string()))?;
+    let mut value = serde_json::to_value(config).map_err(|e| Error::Config(e.to_string()))?;
     redact_api_keys(&mut value);
     println!(
         "{}",
@@ -349,7 +343,10 @@ fn print_config_summary(
     println!("Tracker:");
     println!("  kind: {}", config.tracker.kind);
     if !config.tracker.active_states.is_empty() {
-        println!("  active states: {}", config.tracker.active_states.join(", "));
+        println!(
+            "  active states: {}",
+            config.tracker.active_states.join(", ")
+        );
     }
     if !config.tracker.terminal_states.is_empty() {
         println!(
@@ -376,10 +373,7 @@ fn print_config_summary(
     if !config.agents.profiles.is_empty() {
         println!("  profiles:");
         for (name, profile) in &config.agents.profiles {
-            let transport = profile
-                .transport
-                .as_deref()
-                .unwrap_or(&profile.kind);
+            let transport = profile.transport.as_deref().unwrap_or(&profile.kind);
             let mut extra = Vec::new();
             if let Some(model) = &profile.model {
                 extra.push(format!("model: {model}"));
@@ -446,9 +440,7 @@ fn print_source_line(path: &Path) {
     }
 }
 
-fn handle_doctor_command(
-    workflow: &polyphony_workflow::LoadedWorkflow,
-) -> Result<(), Error> {
+fn handle_doctor_command(workflow: &polyphony_workflow::LoadedWorkflow) -> Result<(), Error> {
     let config = &workflow.config;
     let mut failures = 0u32;
 
@@ -553,9 +545,7 @@ fn handle_doctor_command(
         // Check fallbacks reference valid profiles
         for fallback in &profile.fallbacks {
             if !config.agents.profiles.contains_key(fallback) {
-                println!(
-                    "  fallback `{fallback}` ... \u{2717} profile not defined"
-                );
+                println!("  fallback `{fallback}` ... \u{2717} profile not defined");
                 failures += 1;
             }
         }
@@ -593,16 +583,17 @@ fn which_binary(name: &str) -> Option<PathBuf> {
     env::var_os("PATH").and_then(|paths| {
         env::split_paths(&paths).find_map(|dir| {
             let full = dir.join(name);
-            if full.is_file() { Some(full) } else { None }
+            if full.is_file() {
+                Some(full)
+            } else {
+                None
+            }
         })
     })
 }
 
 fn run_shell_command(cmd: &str) -> Result<std::process::Output, std::io::Error> {
-    Command::new("bash")
-        .arg("-c")
-        .arg(cmd)
-        .output()
+    Command::new("bash").arg("-c").arg(cmd).output()
 }
 
 async fn try_main() -> Result<(), Error> {
@@ -619,20 +610,17 @@ async fn try_main() -> Result<(), Error> {
     // For issue/config subcommands, skip TUI/tracing setup — just load the workflow and dispatch.
     if let Some(Commands::Config { json }) = &cli.command {
         let user_config_path = user_config_path()?;
-        let workflow =
-            load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
+        let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
         return handle_config_command(&workflow, &workflow_path, *json);
     }
     if let Some(Commands::Doctor) = &cli.command {
         let user_config_path = user_config_path()?;
-        let workflow =
-            load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
+        let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
         return handle_doctor_command(&workflow);
     }
     if let Some(Commands::Issue { action }) = cli.command {
         let user_config_path = user_config_path()?;
-        let workflow =
-            load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
+        let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
         return handle_issue_command(action, &workflow).await;
     }
 

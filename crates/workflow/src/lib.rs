@@ -1124,7 +1124,10 @@ impl ServiceConfig {
         Ok(Some(agent_definition(agent_name, profile)))
     }
 
-    pub fn expand_agent_candidates(&self, selected_name: &str) -> Result<Vec<AgentDefinition>, Error> {
+    pub fn expand_agent_candidates(
+        &self,
+        selected_name: &str,
+    ) -> Result<Vec<AgentDefinition>, Error> {
         let mut seen = std::collections::HashSet::new();
         let mut stack = vec![selected_name.to_string()];
         let mut candidates = Vec::new();
@@ -1557,9 +1560,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
 
 fn default_agent_base_url(kind: &str) -> Option<String> {
     let url = match kind {
-        "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => {
-            "https://api.moonshot.ai/v1"
-        },
+        "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => "https://api.moonshot.ai/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
         "mistral" => "https://api.mistral.ai/v1",
         "deepseek" => "https://api.deepseek.com",

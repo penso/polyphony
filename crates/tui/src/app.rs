@@ -1,7 +1,10 @@
-use std::{collections::{HashMap, VecDeque}, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::Instant,
+};
 
 use {
-    polyphony_core::{RuntimeSnapshot, VisibleIssueRow},
+    polyphony_core::{RunningRow, RuntimeSnapshot, VisibleIssueRow},
     ratatui::{layout::Rect, widgets::TableState},
 };
 
@@ -12,6 +15,7 @@ use crate::{LogBuffer, theme::Theme};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Issues,
+    Agents,
     Orchestrator,
     Tasks,
     Deliverables,
@@ -19,8 +23,9 @@ pub enum ActiveTab {
 }
 
 impl ActiveTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Issues,
+        Self::Agents,
         Self::Orchestrator,
         Self::Tasks,
         Self::Deliverables,
@@ -30,6 +35,7 @@ impl ActiveTab {
     pub const fn title(self) -> &'static str {
         match self {
             Self::Issues => "Issues",
+            Self::Agents => "Agents",
             Self::Orchestrator => "Orchestrator",
             Self::Tasks => "Tasks",
             Self::Deliverables => "PR/MR",
@@ -40,10 +46,11 @@ impl ActiveTab {
     pub const fn index(self) -> usize {
         match self {
             Self::Issues => 0,
-            Self::Orchestrator => 1,
-            Self::Tasks => 2,
-            Self::Deliverables => 3,
-            Self::Logs => 4,
+            Self::Agents => 1,
+            Self::Orchestrator => 2,
+            Self::Tasks => 3,
+            Self::Deliverables => 4,
+            Self::Logs => 5,
         }
     }
 
@@ -91,11 +98,13 @@ pub struct AppState {
     pub theme: Theme,
     pub active_tab: ActiveTab,
     pub issues_state: TableState,
+    pub agents_state: TableState,
     pub tasks_state: TableState,
     pub deliverables_state: TableState,
     pub movements_state: TableState,
     pub show_issue_detail: bool,
     pub detail_scroll: u16,
+    pub agents_detail_scroll: u16,
     pub issue_sort: IssueSortKey,
     /// Sorted index mapping: sorted_issues[display_index] = original snapshot index
     pub sorted_issue_indices: Vec<usize>,
@@ -138,6 +147,8 @@ pub struct AppState {
     pub events_scroll: u16,
     /// Bounding rect of the events panel (set each frame by draw_events_panel).
     pub events_area: Rect,
+    /// Bounding rect of the agent detail panel (set each frame by draw_agent_detail).
+    pub agents_detail_area: Rect,
 }
 
 impl AppState {
@@ -146,11 +157,13 @@ impl AppState {
             theme,
             active_tab: ActiveTab::Issues,
             issues_state: TableState::default(),
+            agents_state: TableState::default(),
             tasks_state: TableState::default(),
             deliverables_state: TableState::default(),
             movements_state: TableState::default(),
             show_issue_detail: false,
             detail_scroll: 0,
+            agents_detail_scroll: 0,
             issue_sort: IssueSortKey::Newest,
             sorted_issue_indices: Vec::new(),
             tree_depth: Vec::new(),
@@ -183,6 +196,7 @@ impl AppState {
             last_scroll_at: None,
             events_scroll: 0,
             events_area: Rect::default(),
+            agents_detail_area: Rect::default(),
         }
     }
 
@@ -193,6 +207,11 @@ impl AppState {
         }
         self.rebuild_sorted_indices(snapshot);
         sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());
+        let previous_agent_selection = self.agents_state.selected();
+        sync_selection(&mut self.agents_state, snapshot.running.len());
+        if self.agents_state.selected() != previous_agent_selection {
+            self.agents_detail_scroll = 0;
+        }
         sync_selection(&mut self.tasks_state, snapshot.tasks.len());
         let deliverable_count = snapshot
             .movements
@@ -309,7 +328,10 @@ impl AppState {
         let mut children_by_parent: HashMap<&str, Vec<usize>> = HashMap::new();
         for &idx in &indices {
             if let Some(ref pid) = issues[idx].parent_id {
-                children_by_parent.entry(pid.as_str()).or_default().push(idx);
+                children_by_parent
+                    .entry(pid.as_str())
+                    .or_default()
+                    .push(idx);
             }
         }
         // Only group if there are any parent-child relationships
@@ -378,9 +400,16 @@ impl AppState {
             .and_then(|display_idx| self.sorted_issue(snapshot, display_idx))
     }
 
+    pub fn selected_agent<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a RunningRow> {
+        self.agents_state
+            .selected()
+            .and_then(|index| snapshot.running.get(index))
+    }
+
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {
         match self.active_tab {
             ActiveTab::Issues => self.sorted_issue_indices.len(),
+            ActiveTab::Agents => snapshot.running.len(),
             ActiveTab::Orchestrator => snapshot.movements.len(),
             ActiveTab::Tasks => snapshot.tasks.len(),
             ActiveTab::Deliverables => snapshot
@@ -395,6 +424,7 @@ impl AppState {
     pub fn active_table_state_mut(&mut self) -> &mut TableState {
         match self.active_tab {
             ActiveTab::Issues => &mut self.issues_state,
+            ActiveTab::Agents => &mut self.agents_state,
             ActiveTab::Orchestrator => &mut self.movements_state,
             ActiveTab::Tasks => &mut self.tasks_state,
             ActiveTab::Deliverables => &mut self.deliverables_state,
@@ -416,11 +446,25 @@ impl AppState {
     }
 
     pub fn move_down(&mut self, len: usize, amount: usize) {
+        let previous = matches!(self.active_tab, ActiveTab::Agents)
+            .then(|| self.agents_state.selected())
+            .flatten();
         move_selection(self.active_table_state_mut(), len, amount);
+        if matches!(self.active_tab, ActiveTab::Agents) && self.agents_state.selected() != previous
+        {
+            self.agents_detail_scroll = 0;
+        }
     }
 
     pub fn move_up(&mut self, len: usize, amount: usize) {
+        let previous = matches!(self.active_tab, ActiveTab::Agents)
+            .then(|| self.agents_state.selected())
+            .flatten();
         move_selection_back(self.active_table_state_mut(), len, amount);
+        if matches!(self.active_tab, ActiveTab::Agents) && self.agents_state.selected() != previous
+        {
+            self.agents_detail_scroll = 0;
+        }
     }
 
     /// Return the issue table row index for a click position, if valid.
@@ -463,7 +507,12 @@ impl AppState {
                 return Some(*tab);
             }
             // After the last tab there's no divider.
-            pos += clickable + if i < tab_count - 1 { divider_len } else { 0 };
+            pos += clickable
+                + if i < tab_count - 1 {
+                    divider_len
+                } else {
+                    0
+                };
         }
         None
     }

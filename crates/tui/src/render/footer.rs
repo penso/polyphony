@@ -12,8 +12,9 @@ pub fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
 
     let version = env!("CARGO_PKG_VERSION");
     let shortcuts = [
-        ("1-5", "tabs"),
+        ("1-6", "tabs"),
         ("j/k", "navigate"),
+        ("J/K", "detail"),
         ("s", "sort"),
         ("/", "search"),
         ("Enter", "details"),

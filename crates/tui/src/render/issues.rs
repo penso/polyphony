@@ -50,7 +50,7 @@ pub fn draw_issues_tab(
     // Compute ID column width from actual identifiers (icon + id + padding)
     let max_id_len = issue_data
         .iter()
-        .map(|(issue, _, _, _, _, _)| issue.issue_identifier.len())
+        .map(|(issue, ..)| issue.issue_identifier.len())
         .max()
         .unwrap_or(4) as u16
         + 1; // +1 right padding
@@ -65,10 +65,12 @@ pub fn draw_issues_tab(
         + 1;
 
     // Compute Status column width: max of data and "Status" header + 1 trailing space
-    let any_has_workspace = issue_data
-        .iter()
-        .any(|(issue, _, _, _, _, _)| issue.has_workspace);
-    let workspace_indicator_width: u16 = if any_has_workspace { 2 } else { 0 };
+    let any_has_workspace = issue_data.iter().any(|(issue, ..)| issue.has_workspace);
+    let workspace_indicator_width: u16 = if any_has_workspace {
+        2
+    } else {
+        0
+    };
     let max_status_len = issue_data
         .iter()
         .map(|(issue, _, _, _, _, _)| issue.state.len())
@@ -131,7 +133,11 @@ pub fn draw_issues_tab(
 
             // Tree prefix for child issues
             let (tree_prefix, tree_prefix_width) = if *depth > 0 {
-                let connector = if *is_last { "└── " } else { "├── " };
+                let connector = if *is_last {
+                    "└── "
+                } else {
+                    "├── "
+                };
                 (connector, 4)
             } else {
                 ("", 0)

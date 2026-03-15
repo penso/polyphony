@@ -1,14 +1,16 @@
 use std::path::PathBuf;
 
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use polyphony_core::{
-    BlockerRef, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueStateUpdate,
-    IssueTracker, TrackerQuery, UpdateIssueRequest,
+use {
+    async_trait::async_trait,
+    chrono::{DateTime, Utc},
+    polyphony_core::{
+        BlockerRef, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueStateUpdate,
+        IssueTracker, TrackerQuery, UpdateIssueRequest,
+    },
+    serde::Deserialize,
+    tokio::process::Command,
+    tracing::debug,
 };
-use serde::Deserialize;
-use tokio::process::Command;
-use tracing::debug;
 
 /// A beads JSON record from `bd list --json`.
 #[derive(Debug, Deserialize)]
@@ -109,23 +111,22 @@ impl BeadsTracker {
             )));
         }
 
-        String::from_utf8(output.stdout).map_err(|e| {
-            CoreError::Adapter(format!("invalid UTF-8 in bd output: {e}"))
-        })
+        String::from_utf8(output.stdout)
+            .map_err(|e| CoreError::Adapter(format!("invalid UTF-8 in bd output: {e}")))
     }
 
     async fn list_all(&self) -> Result<Vec<BeadsIssue>, CoreError> {
-        let json = self.run_bd(&["list", "--json", "--all", "--limit", "0"]).await?;
-        serde_json::from_str(&json).map_err(|e| {
-            CoreError::Adapter(format!("failed to parse bd list JSON: {e}"))
-        })
+        let json = self
+            .run_bd(&["list", "--json", "--all", "--limit", "0"])
+            .await?;
+        serde_json::from_str(&json)
+            .map_err(|e| CoreError::Adapter(format!("failed to parse bd list JSON: {e}")))
     }
 
     async fn show_issue(&self, id: &str) -> Result<Vec<BeadsIssueDetail>, CoreError> {
         let json = self.run_bd(&["show", id, "--long", "--json"]).await?;
-        serde_json::from_str(&json).map_err(|e| {
-            CoreError::Adapter(format!("failed to parse bd show JSON for {id}: {e}"))
-        })
+        serde_json::from_str(&json)
+            .map_err(|e| CoreError::Adapter(format!("failed to parse bd show JSON for {id}: {e}")))
     }
 }
 
@@ -143,10 +144,10 @@ fn normalize_status(status: &str) -> String {
                 Some(first) => {
                     let upper: String = first.to_uppercase().collect();
                     format!("{upper}{rest}", rest = chars.as_str())
-                }
+                },
                 None => String::new(),
             }
-        }
+        },
     }
 }
 
@@ -237,10 +238,7 @@ impl IssueTracker for BeadsTracker {
         "tracker:beads".to_string()
     }
 
-    async fn fetch_candidate_issues(
-        &self,
-        query: &TrackerQuery,
-    ) -> Result<Vec<Issue>, CoreError> {
+    async fn fetch_candidate_issues(&self, query: &TrackerQuery) -> Result<Vec<Issue>, CoreError> {
         let all = self.list_all().await?;
         debug!(total = all.len(), "fetched beads issues");
 
@@ -248,7 +246,10 @@ impl IssueTracker for BeadsTracker {
             .iter()
             .filter(|b| {
                 let state = normalize_status(&b.status);
-                query.active_states.iter().any(|s| s.eq_ignore_ascii_case(&state))
+                query
+                    .active_states
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case(&state))
             })
             .map(beads_to_issue)
             .collect();
@@ -261,7 +262,7 @@ impl IssueTracker for BeadsTracker {
                 match self.show_issue(&issue.id).await {
                     Ok(details) if !details.is_empty() => {
                         result.push(detail_to_issue(&details[0]));
-                    }
+                    },
                     _ => result.push(issue.clone()),
                 }
             } else {
@@ -289,22 +290,19 @@ impl IssueTracker for BeadsTracker {
             .collect())
     }
 
-    async fn fetch_issues_by_ids(
-        &self,
-        issue_ids: &[String],
-    ) -> Result<Vec<Issue>, CoreError> {
+    async fn fetch_issues_by_ids(&self, issue_ids: &[String]) -> Result<Vec<Issue>, CoreError> {
         let mut issues = Vec::with_capacity(issue_ids.len());
         for id in issue_ids {
             match self.show_issue(id).await {
                 Ok(details) if !details.is_empty() => {
                     issues.push(detail_to_issue(&details[0]));
-                }
+                },
                 Ok(_) => {
                     debug!(id, "beads show returned empty array, skipping");
-                }
+                },
                 Err(e) => {
                     debug!(id, error = %e, "failed to fetch beads issue, skipping");
-                }
+                },
             }
         }
         Ok(issues)
@@ -346,9 +344,8 @@ impl IssueTracker for BeadsTracker {
         let json = self.run_bd(&args).await?;
 
         // bd create --json returns the created issue; parse for the ID.
-        let created: serde_json::Value = serde_json::from_str(&json).map_err(|e| {
-            CoreError::Adapter(format!("failed to parse bd create JSON: {e}"))
-        })?;
+        let created: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| CoreError::Adapter(format!("failed to parse bd create JSON: {e}")))?;
         let id = created
             .get("id")
             .and_then(|v| v.as_str())
