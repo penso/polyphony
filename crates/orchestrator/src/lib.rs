@@ -691,6 +691,8 @@ impl RuntimeService {
                         .push((issue.id.clone(), None));
                 }
             }
+            // Emit snapshot so the event is visible before dispatch (which may block on SSH).
+            let _ = self.emit_snapshot().await;
             // Process orphan dispatches immediately rather than waiting for next tick.
             self.process_manual_dispatches().await;
         }
