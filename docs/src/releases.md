@@ -30,7 +30,7 @@ just release
 Create and push the next release tag:
 
 ```bash
-just release push=true
+just release-push
 ```
 
 ## Release Packages
