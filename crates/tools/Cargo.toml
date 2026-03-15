@@ -1,0 +1,16 @@
+[package]
+name = "polyphony-tools"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+polyphony-core = { path = "../core" }
+polyphony-linear = { path = "../linear" }
+polyphony-workflow = { path = "../workflow" }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

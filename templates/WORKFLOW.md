@@ -34,6 +34,22 @@ agent:
   max_concurrent_agents: 3
   max_turns: 4
   max_retry_backoff_ms: 60000
+tools:
+  enabled: false
+  # allow:
+  #   - workspace_list_files
+  #   - workspace_read_file
+  #   - workspace_search
+  #   - issue_update
+  #   - issue_comment
+  #   - linear_graphql
+  # by_agent:
+  #   reviewer:
+  #     allow:
+  #       - workspace_read_file
+  #       - workspace_search
+  #       - pr_comment
+  #       - linear_graphql
 orchestration:
   router_agent: router
   mode: advisory

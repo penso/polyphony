@@ -1,4 +1,4 @@
-use std::{process::Stdio, time::Duration};
+use std::{process::Stdio, sync::Arc, time::Duration};
 
 use {
     async_trait::async_trait,
@@ -9,7 +9,8 @@ use {
     },
     polyphony_core::{
         AgentEventKind, AgentProviderRuntime, AgentRunResult, AgentRunSpec, AgentSession,
-        BudgetSnapshot, Error as CoreError, RateLimitSignal, TokenUsage,
+        BudgetSnapshot, Error as CoreError, RateLimitSignal, TokenUsage, ToolCallRequest,
+        ToolCallResult, ToolExecutor, ToolSpec,
     },
     serde_json::{Value, json},
     tokio::{
@@ -21,8 +22,27 @@ use {
     tracing::{debug, info, warn},
 };
 
-#[derive(Debug, Default, Clone)]
-pub struct CodexRuntime;
+#[derive(Clone, Default)]
+pub struct CodexRuntime {
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
+}
+
+impl std::fmt::Debug for CodexRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodexRuntime")
+            .field(
+                "tool_executor",
+                &self.tool_executor.as_ref().map(|_| "configured"),
+            )
+            .finish()
+    }
+}
+
+impl CodexRuntime {
+    pub fn new(tool_executor: Option<Arc<dyn ToolExecutor>>) -> Self {
+        Self { tool_executor }
+    }
+}
 
 #[async_trait]
 impl AgentProviderRuntime for CodexRuntime {
@@ -40,7 +60,9 @@ impl AgentProviderRuntime for CodexRuntime {
         spec: AgentRunSpec,
         event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
     ) -> Result<Option<Box<dyn AgentSession>>, CoreError> {
-        Ok(Some(Box::new(launch_codex_session(spec, event_tx).await?)))
+        Ok(Some(Box::new(
+            launch_codex_session(spec, event_tx, self.tool_executor.clone()).await?,
+        )))
     }
 
     async fn run(
@@ -48,7 +70,7 @@ impl AgentProviderRuntime for CodexRuntime {
         spec: AgentRunSpec,
         event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
     ) -> Result<AgentRunResult, CoreError> {
-        run_codex_app_server(spec, event_tx).await
+        run_codex_app_server(spec, event_tx, self.tool_executor.clone()).await
     }
 
     async fn fetch_budget(
@@ -69,9 +91,10 @@ impl AgentProviderRuntime for CodexRuntime {
 async fn run_codex_app_server(
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
 ) -> Result<AgentRunResult, CoreError> {
     let prompt = spec.prompt.clone();
-    let mut session = launch_codex_session(spec, event_tx).await?;
+    let mut session = launch_codex_session(spec, event_tx, tool_executor).await?;
     let result = session.run_turn(prompt).await;
     let _ = session.stop().await;
     result
@@ -84,6 +107,7 @@ fn adapter_error(kind: &'static str) -> CoreError {
 struct CodexAppServerSession {
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
     child: Child,
     stdin: ChildStdin,
     lines: tokio::io::Lines<BufReader<ChildStdout>>,
@@ -148,6 +172,7 @@ impl AgentSession for CodexAppServerSession {
             &mut self.lines,
             request_id,
             &request_metadata,
+            self.tool_executor.as_ref(),
         )
         .await?;
         let turn_id = turn_response["result"]["turn"]["id"]
@@ -238,7 +263,16 @@ impl CodexAppServerSession {
                     continue;
                 },
             };
-            if maybe_auto_respond(&mut self.stdin, &value).await? {
+            if maybe_auto_respond(
+                &mut self.stdin,
+                &value,
+                &self.spec,
+                &self.event_tx,
+                &event_metadata,
+                self.tool_executor.as_ref(),
+            )
+            .await?
+            {
                 continue;
             }
             if let Some(signal) = extract_rate_limit_signal(&self.spec, &value) {
@@ -340,6 +374,7 @@ impl CodexAppServerSession {
 async fn launch_codex_session(
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
 ) -> Result<CodexAppServerSession, CoreError> {
     let workspace_is_dir = tokio::fs::metadata(&spec.workspace_path)
         .await
@@ -396,6 +431,7 @@ async fn launch_codex_session(
         codex_app_server_pid: codex_app_server_pid.clone(),
         ..CodexEventMetadata::default()
     };
+    let dynamic_tools = tool_specs_for(&spec, tool_executor.as_ref());
 
     let handshake = async {
         write_json_line(
@@ -405,7 +441,9 @@ async fn launch_codex_session(
                 "method": "initialize",
                 "params": {
                     "clientInfo": {"name": "polyphony", "version": "0.1.0"},
-                    "capabilities": {}
+                    "capabilities": {
+                        "experimentalApi": true
+                    }
                 }
             }),
         )
@@ -418,6 +456,7 @@ async fn launch_codex_session(
             &mut lines,
             1,
             &startup_metadata,
+            tool_executor.as_ref(),
         )
         .await?;
         write_json_line(&mut stdin, &json!({"method": "initialized", "params": {}})).await?;
@@ -431,6 +470,7 @@ async fn launch_codex_session(
                     "approvalPolicy": spec.agent.approval_policy,
                     "sandbox": spec.agent.thread_sandbox,
                     "cwd": spec.workspace_path,
+                    "dynamicTools": dynamic_tools,
                 }
             }),
         )
@@ -443,6 +483,7 @@ async fn launch_codex_session(
             &mut lines,
             2,
             &startup_metadata,
+            tool_executor.as_ref(),
         )
         .await?;
         let thread_id = thread_response["result"]["thread"]["id"]
@@ -479,6 +520,7 @@ async fn launch_codex_session(
     Ok(CodexAppServerSession {
         spec,
         event_tx,
+        tool_executor,
         child,
         stdin,
         lines,
@@ -510,6 +552,7 @@ async fn wait_for_response(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     id: u64,
     event_metadata: &CodexEventMetadata,
+    tool_executor: Option<&Arc<dyn ToolExecutor>>,
 ) -> Result<Value, CoreError> {
     loop {
         let next_line = tokio::time::timeout(
@@ -523,7 +566,7 @@ async fn wait_for_response(
         };
         let value: Value =
             serde_json::from_str(&line).map_err(|_| adapter_error("response_error"))?;
-        if maybe_auto_respond(stdin, &value).await? {
+        if maybe_auto_respond(stdin, &value, spec, event_tx, event_metadata, tool_executor).await? {
             continue;
         }
         if value["id"].as_u64() == Some(id) {
@@ -646,6 +689,10 @@ async fn forward_codex_stderr<R>(
 async fn maybe_auto_respond(
     stdin: &mut tokio::process::ChildStdin,
     value: &Value,
+    spec: &AgentRunSpec,
+    event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    event_metadata: &CodexEventMetadata,
+    tool_executor: Option<&Arc<dyn ToolExecutor>>,
 ) -> Result<bool, CoreError> {
     let Some(method) = value["method"].as_str() else {
         return Ok(false);
@@ -658,14 +705,196 @@ async fn maybe_auto_respond(
         return Ok(true);
     }
     if method.contains("item/tool/call") {
-        write_json_line(
-            stdin,
-            &json!({"id": id, "result": {"success": false, "error": "unsupported_tool_call"}}),
-        )
-        .await?;
+        let result = execute_tool_call(value, spec, tool_executor, event_tx, event_metadata).await;
+        write_json_line(stdin, &json!({"id": id, "result": result})).await?;
         return Ok(true);
     }
     Ok(false)
+}
+
+async fn execute_tool_call(
+    value: &Value,
+    spec: &AgentRunSpec,
+    tool_executor: Option<&Arc<dyn ToolExecutor>>,
+    event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    event_metadata: &CodexEventMetadata,
+) -> Value {
+    let params = value["params"].as_object().cloned().unwrap_or_default();
+    let tool_name = tool_call_name(&params);
+    let arguments = tool_call_arguments(&params);
+    let call_id = params
+        .get("callId")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    emit_codex(
+        event_tx,
+        spec,
+        AgentEventKind::ToolCallStarted,
+        Some(format!(
+            "dynamic tool call requested ({})",
+            tool_name.as_deref().unwrap_or("unknown")
+        )),
+        event_metadata,
+        None,
+        None,
+        Some(value.clone()),
+    );
+
+    let Some(tool_name) = tool_name else {
+        emit_codex(
+            event_tx,
+            spec,
+            AgentEventKind::ToolCallFailed,
+            Some("dynamic tool call missing tool name".into()),
+            event_metadata,
+            None,
+            None,
+            Some(value.clone()),
+        );
+        return json!({"success": false, "error": "unsupported_tool_call"});
+    };
+    let Some(executor) = tool_executor else {
+        emit_codex(
+            event_tx,
+            spec,
+            AgentEventKind::ToolCallFailed,
+            Some(format!("unsupported tool call requested: {tool_name}")),
+            event_metadata,
+            None,
+            None,
+            Some(value.clone()),
+        );
+        return json!({"success": false, "error": "unsupported_tool_call"});
+    };
+
+    let tool_names = executor
+        .list_tools(&spec.agent.name)
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+    if !tool_names.iter().any(|candidate| candidate == &tool_name) {
+        emit_codex(
+            event_tx,
+            spec,
+            AgentEventKind::ToolCallFailed,
+            Some(format!("unsupported tool call requested: {tool_name}")),
+            event_metadata,
+            None,
+            None,
+            Some(value.clone()),
+        );
+        return json!({"success": false, "error": "unsupported_tool_call"});
+    }
+
+    let request = ToolCallRequest {
+        name: tool_name.clone(),
+        arguments,
+        issue: spec.issue.clone(),
+        workspace_path: spec.workspace_path.clone(),
+        agent_name: spec.agent.name.clone(),
+        call_id,
+        thread_id: event_metadata.thread_id.clone(),
+        turn_id: event_metadata.turn_id.clone(),
+    };
+    match executor.execute(request).await {
+        Ok(result) => {
+            let kind = if result.success {
+                AgentEventKind::ToolCallCompleted
+            } else {
+                AgentEventKind::ToolCallFailed
+            };
+            emit_codex(
+                event_tx,
+                spec,
+                kind,
+                Some(format!(
+                    "dynamic tool call {} ({tool_name})",
+                    if result.success {
+                        "completed"
+                    } else {
+                        "failed"
+                    }
+                )),
+                event_metadata,
+                None,
+                None,
+                Some(json!({
+                    "tool": tool_name,
+                    "result": result,
+                })),
+            );
+            dynamic_tool_result_payload(result)
+        },
+        Err(error) => {
+            emit_codex(
+                event_tx,
+                spec,
+                AgentEventKind::ToolCallFailed,
+                Some(format!("dynamic tool call failed ({tool_name})")),
+                event_metadata,
+                None,
+                None,
+                Some(json!({
+                    "tool": tool_name,
+                    "error": error.to_string(),
+                })),
+            );
+            json!({
+                "success": false,
+                "output": error.to_string(),
+                "contentItems": [{
+                    "type": "inputText",
+                    "text": error.to_string(),
+                }]
+            })
+        },
+    }
+}
+
+fn dynamic_tool_result_payload(result: ToolCallResult) -> Value {
+    json!({
+        "success": result.success,
+        "output": result.output,
+        "contentItems": result.content_items,
+    })
+}
+
+fn tool_specs_for(
+    spec: &AgentRunSpec,
+    tool_executor: Option<&Arc<dyn ToolExecutor>>,
+) -> Vec<Value> {
+    tool_executor
+        .map(|executor| executor.list_tools(&spec.agent.name))
+        .unwrap_or_default()
+        .into_iter()
+        .map(tool_spec_value)
+        .collect()
+}
+
+fn tool_spec_value(tool: ToolSpec) -> Value {
+    json!({
+        "name": tool.name,
+        "description": tool.description,
+        "inputSchema": tool.input_schema,
+    })
+}
+
+fn tool_call_name(params: &serde_json::Map<String, Value>) -> Option<String> {
+    params
+        .get("tool")
+        .or_else(|| params.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tool_call_arguments(params: &serde_json::Map<String, Value>) -> Value {
+    params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}))
 }
 
 async fn write_json_line(
@@ -830,14 +1059,41 @@ fn extract_message(value: &Value) -> Option<String> {
 mod tests {
     use {
         super::{CodexRuntime, extract_usage},
+        async_trait::async_trait,
         polyphony_core::{
             AgentDefinition, AgentEventKind, AgentProviderRuntime, AgentRunSpec, AgentTransport,
-            Error as CoreError, Issue,
+            Error as CoreError, Issue, ToolCallRequest, ToolCallResult, ToolExecutor, ToolSpec,
         },
         serde_json::json,
+        std::sync::Arc,
         tempfile::tempdir,
         tokio::sync::mpsc,
     };
+
+    struct MockToolExecutor;
+
+    #[async_trait]
+    impl ToolExecutor for MockToolExecutor {
+        fn list_tools(&self, _agent_name: &str) -> Vec<ToolSpec> {
+            vec![ToolSpec {
+                name: "linear_graphql".into(),
+                description: "test".into(),
+                input_schema: json!({}),
+            }]
+        }
+
+        async fn execute(&self, request: ToolCallRequest) -> Result<ToolCallResult, CoreError> {
+            assert_eq!(request.name, "linear_graphql");
+            Ok(ToolCallResult::new(
+                true,
+                "{\"data\":{\"viewer\":{\"id\":\"usr_123\"}}}",
+                vec![json!({
+                    "type": "inputText",
+                    "text": "{\"data\":{\"viewer\":{\"id\":\"usr_123\"}}}",
+                })],
+            ))
+        }
+    }
 
     fn test_issue() -> Issue {
         Issue {
@@ -851,7 +1107,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_server_runner_completes_handshake_and_tool_rejection() {
-        let runtime = CodexRuntime;
+        let runtime = CodexRuntime::default();
         let dir = tempdir().unwrap();
         let script = dir.path().join("mock-app-server.sh");
         std::fs::write(
@@ -918,8 +1174,80 @@ done
     }
 
     #[tokio::test]
+    async fn app_server_runner_executes_supported_tool_calls() {
+        let runtime = CodexRuntime::new(Some(Arc::new(MockToolExecutor)));
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("mock-app-server.sh");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r line; do
+  if [[ "$line" == *'"id":1'* ]]; then
+    echo '{"id":1,"result":{"ok":true}}'
+  elif [[ "$line" == *'"method":"thread/start"'* ]]; then
+    echo '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+  elif [[ "$line" == *'"method":"turn/start"'* ]]; then
+    echo '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+    echo '{"id":4,"method":"item/tool/call","params":{"name":"linear_graphql","callId":"call-1","arguments":{}}}'
+    read -r tool_result
+    echo '{"method":"turn/completed","params":{"message":"done"}}'
+    exit 0
+  fi
+done
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: test_issue(),
+                    attempt: None,
+                    workspace_path: dir.path().to_path_buf(),
+                    prompt: "hello".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "codex".into(),
+                        kind: "codex".into(),
+                        transport: AgentTransport::AppServer,
+                        command: Some(script.display().to_string()),
+                        turn_timeout_ms: 2_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            result.status,
+            polyphony_core::AttemptStatus::Succeeded
+        ));
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, AgentEventKind::ToolCallCompleted))
+        );
+    }
+
+    #[tokio::test]
     async fn app_server_session_reuses_same_thread_across_turns() {
-        let runtime = CodexRuntime;
+        let runtime = CodexRuntime::default();
         let dir = tempdir().unwrap();
         let script = dir.path().join("mock-app-server.sh");
         let thread_count = dir.path().join("thread-count.txt");
@@ -1045,7 +1373,7 @@ done
 
     #[tokio::test]
     async fn app_server_runner_normalizes_missing_codex_binary() {
-        let runtime = CodexRuntime;
+        let runtime = CodexRuntime::default();
         let dir = tempdir().unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let result = runtime
@@ -1088,7 +1416,7 @@ done
 
     #[tokio::test]
     async fn app_server_runner_normalizes_invalid_handshake_json() {
-        let runtime = CodexRuntime;
+        let runtime = CodexRuntime::default();
         let dir = tempdir().unwrap();
         let script = dir.path().join("mock-app-server.sh");
         std::fs::write(

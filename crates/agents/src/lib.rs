@@ -4,7 +4,7 @@ use {
     async_trait::async_trait,
     polyphony_core::{
         AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
-        AgentRuntime, AgentSession, BudgetSnapshot, Error as CoreError,
+        AgentRuntime, AgentSession, BudgetSnapshot, Error as CoreError, ToolExecutor,
     },
     tokio::sync::mpsc,
 };
@@ -17,6 +17,11 @@ pub struct AgentRegistryRuntime {
 impl AgentRegistryRuntime {
     #[allow(clippy::vec_init_then_push)]
     pub fn new() -> Self {
+        Self::new_with_tools(None)
+    }
+
+    #[allow(clippy::vec_init_then_push)]
+    pub fn new_with_tools(tool_executor: Option<Arc<dyn ToolExecutor>>) -> Self {
         #[allow(unused_mut)]
         let mut providers = Vec::new();
         #[cfg(feature = "acp")]
@@ -27,8 +32,9 @@ impl AgentRegistryRuntime {
         #[cfg(feature = "pi")]
         providers.push(Arc::new(polyphony_agent_pi::PiRuntime) as Arc<dyn AgentProviderRuntime>);
         #[cfg(feature = "codex")]
-        providers
-            .push(Arc::new(polyphony_agent_codex::CodexRuntime) as Arc<dyn AgentProviderRuntime>);
+        providers.push(Arc::new(polyphony_agent_codex::CodexRuntime::new(
+            tool_executor.clone(),
+        )) as Arc<dyn AgentProviderRuntime>);
         #[cfg(feature = "claude")]
         providers.push(Arc::new(polyphony_agent_claude::ClaudeRuntime::default())
             as Arc<dyn AgentProviderRuntime>);
@@ -36,9 +42,9 @@ impl AgentRegistryRuntime {
         providers.push(Arc::new(polyphony_agent_copilot::CopilotRuntime::default())
             as Arc<dyn AgentProviderRuntime>);
         #[cfg(feature = "openai")]
-        providers
-            .push(Arc::new(polyphony_agent_openai::OpenAiRuntime::new())
-                as Arc<dyn AgentProviderRuntime>);
+        providers.push(Arc::new(polyphony_agent_openai::OpenAiRuntime::new(
+            tool_executor.clone(),
+        )) as Arc<dyn AgentProviderRuntime>);
         #[cfg(feature = "local")]
         providers.push(
             Arc::new(polyphony_agent_local::LocalCliRuntime::fallback_transport())

@@ -15,8 +15,9 @@ use {
         models::issues::{Comment as GithubComment, Issue as GithubIssue},
     },
     polyphony_core::{
-        BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue, IssueStateUpdate,
-        IssueTracker, TrackerConnectionStatus, TrackerQuery, UpdateIssueRequest,
+        AddIssueCommentRequest, BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue,
+        IssueComment, IssueStateUpdate, IssueTracker, TrackerConnectionStatus, TrackerQuery,
+        UpdateIssueRequest,
     },
     reqwest::{StatusCode, header::HeaderMap},
     serde::{Deserialize, de::DeserializeOwned},
@@ -722,5 +723,23 @@ impl IssueTracker for GithubIssueTracker {
         }
         let updated = builder.send().await.map_err(map_github_error)?;
         Ok(to_issue(updated, Vec::new()))
+    }
+
+    async fn comment_on_issue(
+        &self,
+        request: &AddIssueCommentRequest,
+    ) -> Result<IssueComment, CoreError> {
+        let number = request
+            .id
+            .parse::<u64>()
+            .map_err(|error| CoreError::Adapter(format!("invalid issue number: {error}")))?;
+        self.track_request();
+        let comment = self
+            .crab
+            .issues(&self.owner, &self.repo)
+            .create_comment(number, &request.body)
+            .await
+            .map_err(map_github_error)?;
+        Ok(github_comment(comment))
     }
 }

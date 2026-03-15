@@ -1,5 +1,7 @@
 use crate::{prelude::*, tracker_factory::EmptyTracker, *};
 
+const SNAPSHOT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn build_tracker(
     workflow: &polyphony_workflow::LoadedWorkflow,
 ) -> Result<Arc<dyn IssueTracker>, Error> {
@@ -122,6 +124,117 @@ pub(crate) async fn handle_issue_command(
             } else {
                 return Err(Error::Config(format!("issue not found: {identifier}")));
             }
+        },
+        IssueAction::Comment { identifier, body } => {
+            let comment = tracker
+                .comment_on_issue(&polyphony_core::AddIssueCommentRequest {
+                    id: identifier,
+                    body,
+                })
+                .await?;
+            print_json(&comment)?;
+        },
+    }
+    Ok(())
+}
+
+pub(crate) async fn handle_data_command(
+    action: DataAction,
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_path: &Path,
+    sqlite_url: Option<&str>,
+) -> Result<(), Error> {
+    let snapshot = load_runtime_snapshot(workflow, workflow_path, sqlite_url).await?;
+    match action {
+        DataAction::Workspaces => {
+            let workspaces = list_workspace_entries(workflow, &snapshot).await?;
+            print_json(&workspaces)?;
+        },
+        DataAction::Snapshot => {
+            print_json(&snapshot)?;
+        },
+        DataAction::Counts => {
+            print_json(&snapshot.counts)?;
+        },
+        DataAction::Cadence => {
+            print_json(&snapshot.cadence)?;
+        },
+        DataAction::Issues => {
+            print_json(&snapshot.visible_issues)?;
+        },
+        DataAction::Triggers => {
+            print_json(&snapshot.visible_triggers)?;
+        },
+        DataAction::Running => {
+            print_json(&snapshot.running)?;
+        },
+        DataAction::History => {
+            print_json(&snapshot.agent_history)?;
+        },
+        DataAction::Retrying => {
+            print_json(&snapshot.retrying)?;
+        },
+        DataAction::Catalogs => {
+            print_json(&snapshot.agent_catalogs)?;
+        },
+        DataAction::Events { limit } => {
+            let events = snapshot
+                .recent_events
+                .into_iter()
+                .rev()
+                .take(limit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>();
+            print_json(&events)?;
+        },
+        DataAction::Agents => {
+            let value = serde_json::json!({
+                "running": snapshot.running,
+                "history": snapshot.agent_history,
+                "retrying": snapshot.retrying,
+                "catalogs": snapshot.agent_catalogs,
+            });
+            print_json_value(&value)?;
+        },
+        DataAction::Tasks => {
+            print_json(&snapshot.tasks)?;
+        },
+        DataAction::Movements => {
+            print_json(&snapshot.movements)?;
+        },
+        DataAction::Budgets => {
+            print_json(&snapshot.budgets)?;
+        },
+        DataAction::CodexTotals => {
+            print_json(&snapshot.codex_totals)?;
+        },
+        DataAction::RateLimits => {
+            print_json_value(&snapshot.rate_limits.unwrap_or(serde_json::Value::Null))?;
+        },
+        DataAction::Throttles => {
+            print_json(&snapshot.throttles)?;
+        },
+        DataAction::Contexts => {
+            print_json(&snapshot.saved_contexts)?;
+        },
+        DataAction::Loading => {
+            print_json(&snapshot.loading)?;
+        },
+        DataAction::Tracker => {
+            let value = serde_json::json!({
+                "tracker_kind": snapshot.tracker_kind,
+                "tracker_connection": snapshot.tracker_connection,
+                "dispatch_mode": snapshot.dispatch_mode,
+                "generated_at": snapshot.generated_at,
+                "from_cache": snapshot.from_cache,
+                "cached_at": snapshot.cached_at,
+            });
+            print_json_value(&value)?;
+        },
+        DataAction::Profiles => {
+            print_json(&snapshot.agent_profile_names)?;
         },
     }
     Ok(())
@@ -429,6 +542,167 @@ pub(crate) fn handle_doctor_command(
         println!("{failures} check(s) failed.");
         std::process::exit(1);
     }
+    Ok(())
+}
+
+async fn load_runtime_snapshot(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_path: &Path,
+    sqlite_url: Option<&str>,
+) -> Result<RuntimeSnapshot, Error> {
+    let components = build_runtime_components(workflow)?;
+    let provisioner: Arc<dyn WorkspaceProvisioner> =
+        Arc::new(polyphony_git::GitWorkspaceProvisioner);
+    let store = build_store(workflow_path, sqlite_url).await?;
+    let cache_path = workflow_root_dir(workflow_path)?
+        .join(".polyphony")
+        .join("cache.json");
+    let cache: Option<Arc<dyn NetworkCache>> = Some(Arc::new(
+        polyphony_core::file_cache::FileNetworkCache::new(cache_path),
+    ));
+    let (_workflow_tx, workflow_rx) = watch::channel(workflow.clone());
+    let (service, handle) = RuntimeService::new(
+        components.tracker,
+        components.pull_request_trigger_source,
+        components.agent,
+        provisioner,
+        components.committer,
+        components.pull_request_manager,
+        components.pull_request_commenter,
+        components.feedback,
+        store,
+        cache,
+        workflow_rx,
+    );
+    let mut snapshot_rx = handle.snapshot_rx.clone();
+    let command_tx = handle.command_tx.clone();
+    let service_task = tokio::spawn(service.run());
+
+    let snapshot_result = wait_for_runtime_snapshot(&mut snapshot_rx).await;
+    let _ = command_tx.send(RuntimeCommand::Shutdown);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        if let Ok(result) = service_task.await {
+            let _ = result;
+        }
+    })
+    .await;
+
+    snapshot_result
+}
+
+async fn wait_for_runtime_snapshot(
+    snapshot_rx: &mut watch::Receiver<RuntimeSnapshot>,
+) -> Result<RuntimeSnapshot, Error> {
+    let initial = snapshot_rx.borrow().clone();
+    if snapshot_is_ready(&initial) {
+        return Ok(initial);
+    }
+
+    let started = tokio::time::Instant::now();
+    loop {
+        let remaining = SNAPSHOT_WAIT_TIMEOUT.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            let snapshot = snapshot_rx.borrow().clone();
+            return Err(Error::Config(format!(
+                "timed out waiting for runtime snapshot; last generated_at={}",
+                snapshot.generated_at
+            )));
+        }
+        tokio::time::timeout(remaining, snapshot_rx.changed())
+            .await
+            .map_err(|_| Error::Config("timed out waiting for runtime snapshot".into()))?
+            .map_err(|error| Error::Config(format!("runtime snapshot channel closed: {error}")))?;
+        let snapshot = snapshot_rx.borrow().clone();
+        if snapshot_is_ready(&snapshot) {
+            return Ok(snapshot);
+        }
+    }
+}
+
+fn snapshot_is_ready(snapshot: &RuntimeSnapshot) -> bool {
+    snapshot.cadence.last_tracker_poll_at.is_some()
+        && !snapshot.loading.fetching_issues
+        && !snapshot.loading.fetching_budgets
+        && !snapshot.loading.fetching_models
+        && !snapshot.loading.reconciling
+}
+
+async fn list_workspace_entries(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    snapshot: &RuntimeSnapshot,
+) -> Result<serde_json::Value, Error> {
+    let manager = polyphony_workspace::WorkspaceManager::new(
+        workflow.config.workspace.root.clone(),
+        Arc::new(polyphony_git::GitWorkspaceProvisioner),
+        workflow.config.workspace.checkout_kind,
+        workflow.config.workspace.sync_on_reuse,
+        workflow.config.workspace.transient_paths.clone(),
+        workflow.config.workspace.source_repo_path.clone(),
+        workflow.config.workspace.clone_url.clone(),
+        workflow.config.workspace.default_branch.clone(),
+    );
+    let mut known = manager.list_workspaces().await;
+    known.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let movement_by_workspace = snapshot
+        .movements
+        .iter()
+        .filter_map(|movement| {
+            movement
+                .workspace_key
+                .as_ref()
+                .map(|key| (key.clone(), movement))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let running_by_workspace = snapshot
+        .running
+        .iter()
+        .map(|running| {
+            (
+                running.workspace_path.clone(),
+                serde_json::json!({
+                    "issue_identifier": running.issue_identifier,
+                    "agent_name": running.agent_name,
+                    "state": running.state,
+                }),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    Ok(serde_json::Value::Array(
+        known
+            .into_iter()
+            .map(|(workspace_key, path)| {
+                let movement = movement_by_workspace.get(&workspace_key);
+                serde_json::json!({
+                    "workspace_key": workspace_key,
+                    "path": path,
+                    "movement": movement.map(|movement| serde_json::json!({
+                        "id": movement.id,
+                        "title": movement.title,
+                        "status": movement.status,
+                        "issue_identifier": movement.issue_identifier,
+                    })),
+                    "running": running_by_workspace.get(&path).cloned(),
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn print_json(value: &impl serde::Serialize) -> Result<(), Error> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).map_err(|error| Error::Config(error.to_string()))?
+    );
+    Ok(())
+}
+
+fn print_json_value(value: &serde_json::Value) -> Result<(), Error> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).map_err(|error| Error::Config(error.to_string()))?
+    );
     Ok(())
 }
 

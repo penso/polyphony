@@ -11,10 +11,14 @@ including:
 - thread creation
 - live session startup
 - repeated turn creation on the same thread
-- approval and unsupported-tool auto-responses
+- approval auto-responses and optional built-in tool execution
 - event forwarding
 - usage and rate-limit extraction, including absolute thread totals and `total_token_usage` wrapper payloads
 - budget and model discovery helpers
+
+When built-in tools are enabled in workflow config, the runtime advertises the allowed tool specs
+on `thread/start` and executes supported `item/tool/call` requests through the shared tool
+executor.
 
 When the orchestrator chooses to continue work after a successful turn, the Codex runtime keeps the
 same app-server process and `threadId` alive and issues another `turn/start` instead of starting a

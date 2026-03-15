@@ -172,6 +172,94 @@ mod error_tests {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+mod command_parse_tests {
+    use clap::Parser;
+
+    use crate::{Cli, Commands, DataAction, IssueAction};
+
+    #[test]
+    fn parses_data_events_command() {
+        let cli = Cli::try_parse_from([
+            "polyphony",
+            "--directory",
+            "/tmp/repo",
+            "data",
+            "events",
+            "--limit",
+            "12",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Data {
+                action: DataAction::Events { limit },
+            }) => assert_eq!(limit, 12),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_data_counts_command() {
+        let cli = Cli::try_parse_from(["polyphony", "data", "counts"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Data {
+                action: DataAction::Counts,
+            }) => {},
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_data_workspaces_command() {
+        let cli = Cli::try_parse_from(["polyphony", "data", "workspaces"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Data {
+                action: DataAction::Workspaces,
+            }) => {},
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_data_rate_limits_command() {
+        let cli = Cli::try_parse_from(["polyphony", "data", "rate-limits"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Data {
+                action: DataAction::RateLimits,
+            }) => {},
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_issue_comment_command() {
+        let cli = Cli::try_parse_from([
+            "polyphony",
+            "issue",
+            "comment",
+            "GH-42",
+            "--body",
+            "hello world",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Issue {
+                action: IssueAction::Comment { identifier, body },
+            }) => {
+                assert_eq!(identifier, "GH-42");
+                assert_eq!(body, "hello world");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod bootstrap_tests {
     use std::{fs, io};
 

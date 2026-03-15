@@ -11,7 +11,7 @@ for them.
 - `polyphony-agent-local` implements local CLI and tmux-backed execution
 - `polyphony-agent-pi` implements Pi's native RPC transport
 - `polyphony-agent-codex` implements the Codex app-server transport over stdio
-- `polyphony-agent-openai` implements OpenAI-compatible HTTP chat and model discovery
+- `polyphony-agent-openai` implements OpenAI-compatible HTTP chat, model discovery, and built-in tool execution
 - `polyphony-agent-claude` wraps `polyphony-agent-local` for Claude-family CLIs
 - `polyphony-agent-copilot` wraps `polyphony-agent-local` for Copilot-family CLIs
 
@@ -28,3 +28,7 @@ In practice, the current transport families are:
 - `acp` for stdio ACP agents
 - `acpx` for bridge-backed agents routed through the `acpx` CLI
 - `openai_chat` for HTTP providers that expose an OpenAI-compatible API
+
+Tool-capable runtimes can also advertise built-in tools from `polyphony-tools` when the workflow
+enables them. Today that path is implemented for the Codex app-server runtime and the
+OpenAI-compatible runtime.

@@ -58,6 +58,15 @@ timeout_ms = 60000
 # after_run = "just lint"
 # before_remove = "rm -rf node_modules/.cache"
 
+[tools]
+enabled = false
+# allow = ["workspace_list_files", "workspace_read_file", "workspace_search", "issue_update", "issue_comment", "linear_graphql"]
+# deny = []
+
+[tools.by_agent]
+# [tools.by_agent.reviewer]
+# allow = ["workspace_read_file", "workspace_search", "pr_comment", "linear_graphql"]
+
 [agent]
 max_concurrent_agents = 10
 max_retry_backoff_ms = 300000

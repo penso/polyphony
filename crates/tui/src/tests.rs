@@ -291,6 +291,63 @@ fn render_triggers_uses_compact_child_identifiers() {
 }
 
 #[test]
+fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.dispatch_mode = DispatchMode::Manual;
+    snapshot.visible_triggers = vec![
+        VisibleTriggerRow {
+            trigger_id: "github-74".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "github".into(),
+            identifier: "penso/arbor#74".into(),
+            title: "Trigger title".into(),
+            status: "Todo".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+        VisibleTriggerRow {
+            trigger_id: "beads-1".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "8k9".into(),
+            title: "Beads title".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+    ];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains(" #74"), "{screen}");
+    assert!(!screen.contains("penso/arbor#74"), "{screen}");
+    assert!(!screen.contains("Source"), "{screen}");
+}
+
+#[test]
 fn render_shows_connected_github_login_in_header() {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();

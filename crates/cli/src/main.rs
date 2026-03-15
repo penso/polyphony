@@ -42,12 +42,17 @@ struct Cli {
     sqlite_url: Option<String>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 enum Commands {
     /// Manage tracker issues
     Issue {
         #[command(subcommand)]
         action: IssueAction,
+    },
+    /// Read Polyphony runtime data as JSON
+    Data {
+        #[command(subcommand)]
+        action: DataAction,
     },
     /// Show and validate the merged configuration
     Config {
@@ -59,7 +64,7 @@ enum Commands {
     Doctor,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 enum IssueAction {
     /// Create a new issue
     Create {
@@ -101,6 +106,64 @@ enum IssueAction {
         /// Issue identifier
         identifier: String,
     },
+    /// Post a comment to an issue
+    Comment {
+        /// Issue identifier
+        identifier: String,
+        #[arg(long)]
+        body: String,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum DataAction {
+    /// Emit the full runtime snapshot
+    Snapshot,
+    /// Emit snapshot counts
+    Counts,
+    /// Emit runtime cadence information
+    Cadence,
+    /// Emit visible issues
+    Issues,
+    /// Emit visible triggers
+    Triggers,
+    /// Emit running agents
+    Running,
+    /// Emit historical agent runs
+    History,
+    /// Emit retrying agents
+    Retrying,
+    /// Emit agent model catalogs
+    Catalogs,
+    /// Emit recent runtime events
+    Events {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Emit running agents, history, retries, and model catalogs
+    Agents,
+    /// Emit pipeline tasks
+    Tasks,
+    /// Emit movements
+    Movements,
+    /// Emit workspace directories with runtime annotations
+    Workspaces,
+    /// Emit budget snapshots
+    Budgets,
+    /// Emit Codex aggregate totals
+    CodexTotals,
+    /// Emit provider rate limit state
+    RateLimits,
+    /// Emit active throttle windows
+    Throttles,
+    /// Emit saved contexts
+    Contexts,
+    /// Emit runtime loading state
+    Loading,
+    /// Emit tracker status and dispatch metadata
+    Tracker,
+    /// Emit configured agent profile names
+    Profiles,
 }
 
 #[derive(Debug, Error)]
@@ -182,10 +245,21 @@ async fn try_main() -> Result<(), Error> {
         let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
         return handle_doctor_command(&workflow);
     }
-    if let Some(Commands::Issue { action }) = cli.command {
+    if let Some(Commands::Data { action }) = &cli.command {
         let user_config_path = user_config_path()?;
         let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
-        return handle_issue_command(action, &workflow).await;
+        return commands::handle_data_command(
+            action.clone(),
+            &workflow,
+            &workflow_path,
+            cli.sqlite_url.as_deref(),
+        )
+        .await;
+    }
+    if let Some(Commands::Issue { action }) = &cli.command {
+        let user_config_path = user_config_path()?;
+        let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
+        return handle_issue_command(action.clone(), &workflow).await;
     }
 
     let historical_logs = if !tui_mode {

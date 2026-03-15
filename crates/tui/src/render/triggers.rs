@@ -15,6 +15,7 @@ use {
 use crate::app::AppState;
 
 const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const GITHUB_ICON: &str = "";
 
 pub fn draw_triggers_tab(
     frame: &mut ratatui::Frame<'_>,
@@ -44,7 +45,7 @@ pub fn draw_triggers_tab(
                     .unwrap_or(false);
                 let display_identifier = if depth == 0 {
                     current_parent_identifier.replace(trigger.identifier.clone());
-                    trigger.identifier.clone()
+                    compact_root_identifier(&trigger.source, &trigger.identifier)
                 } else {
                     compact_child_identifier(
                         current_parent_identifier.as_deref(),
@@ -58,17 +59,17 @@ pub fn draw_triggers_tab(
 
     let max_id_len = trigger_data
         .iter()
-        .map(|(.., display_identifier)| display_identifier.len())
+        .map(|(trigger, .., display_identifier)| {
+            display_identifier.len()
+                + if trigger.source == "github" {
+                    GITHUB_ICON.len() + 1
+                } else {
+                    0
+                }
+        })
         .max()
         .unwrap_or(2)
         .max(2) as u16
-        + 1;
-    let max_source_len = trigger_data
-        .iter()
-        .map(|(trigger, ..)| trigger.source.len())
-        .max()
-        .unwrap_or(6)
-        .max(6) as u16
         + 1;
     let max_kind_len = trigger_data
         .iter()
@@ -104,13 +105,9 @@ pub fn draw_triggers_tab(
     let header = Row::new(vec![
         Cell::from(
             Line::from(Span::styled("ID", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Center),
+                .alignment(Alignment::Left),
         ),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-        Cell::from(
-            Line::from(Span::styled("Source", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
-        ),
         Cell::from(
             Line::from(Span::styled("Kind", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
@@ -134,19 +131,29 @@ pub fn draw_triggers_tab(
         2 + 1
             + 2
             + max_id_len as usize
-            + max_source_len as usize
             + max_kind_len as usize
             + max_status_len as usize
             + max_age_len as usize
-            + 5,
+            + 4,
     );
 
     let rows: Vec<Row> = trigger_data
         .iter()
         .map(|(trigger, age, depth, is_last, display_identifier)| {
             let state_color = state_color(&trigger.status, theme);
-            let source_color = source_color(&trigger.source, theme);
             let kind_color = kind_color(trigger.kind, theme);
+            let id_spans = if trigger.source == "github" {
+                vec![
+                    Span::styled(GITHUB_ICON, Style::default().fg(theme.info)),
+                    Span::raw(" "),
+                    Span::styled(display_identifier.clone(), Style::default().fg(theme.info)),
+                ]
+            } else {
+                vec![Span::styled(
+                    display_identifier.clone(),
+                    Style::default().fg(theme.info),
+                )]
+            };
 
             let (tree_prefix, tree_prefix_width) = if *depth > 0 {
                 let connector = if *is_last {
@@ -174,21 +181,8 @@ pub fn draw_triggers_tab(
             };
 
             Row::new(vec![
-                Cell::from(
-                    Line::from(Span::styled(
-                        display_identifier.clone(),
-                        Style::default().fg(theme.info),
-                    ))
-                    .alignment(Alignment::Right),
-                ),
+                Cell::from(Line::from(id_spans)),
                 Cell::from(Line::from(title_spans)),
-                Cell::from(
-                    Line::from(Span::styled(
-                        trigger.source.clone(),
-                        Style::default().fg(source_color),
-                    ))
-                    .alignment(Alignment::Right),
-                ),
                 Cell::from(
                     Line::from(Span::styled(
                         trigger.kind.to_string(),
@@ -271,7 +265,6 @@ pub fn draw_triggers_tab(
     let table = Table::new(rows, [
         Constraint::Length(max_id_len),
         Constraint::Fill(1),
-        Constraint::Length(max_source_len),
         Constraint::Length(max_kind_len),
         Constraint::Length(max_status_len),
         Constraint::Length(max_age_len),
@@ -326,13 +319,13 @@ fn compact_child_identifier(parent_identifier: Option<&str>, identifier: &str) -
     identifier.to_string()
 }
 
-fn source_color(source: &str, theme: crate::theme::Theme) -> ratatui::style::Color {
-    match source {
-        "github" => theme.info,
-        "linear" => theme.success,
-        "beads" => theme.highlight,
-        _ => theme.muted,
+fn compact_root_identifier(source: &str, identifier: &str) -> String {
+    if source == "github"
+        && let Some((_, suffix)) = identifier.split_once('#')
+    {
+        return format!("#{suffix}");
     }
+    identifier.to_string()
 }
 
 fn kind_color(kind: VisibleTriggerKind, theme: crate::theme::Theme) -> ratatui::style::Color {

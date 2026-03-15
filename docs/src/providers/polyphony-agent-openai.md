@@ -11,7 +11,7 @@ It implements `AgentProviderRuntime` for `transport: openai_chat` profiles and s
 - skipping `/models` discovery when no `api_key` is configured yet, so optional profiles can stay dormant until selected
 - streamed `/chat/completions` requests
 - usage and rate-limit extraction
-- a basic tool-call loop that rejects unsupported tool requests and continues the turn
+- a tool-call loop that executes supported built-in tools and rejects unsupported requests
 
 ## Relationship to the registry
 

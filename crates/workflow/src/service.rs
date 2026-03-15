@@ -153,6 +153,8 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("hooks.timeout_ms", 60_000)
             .map_err(config_error)?
+            .set_default("tools", HashMap::<String, i64>::new())
+            .map_err(config_error)?
             .set_default("agent.max_concurrent_agents", 10)
             .map_err(config_error)?
             .set_default(
@@ -210,6 +212,7 @@ impl ServiceConfig {
             polling: raw.polling,
             workspace: raw.workspace,
             hooks: raw.hooks,
+            tools: raw.tools,
             agent: raw.agent,
             orchestration: raw.orchestration,
             agents: raw.agents,
@@ -319,6 +322,12 @@ impl ServiceConfig {
         self.automation.git.author.email =
             resolve_env_token(self.automation.git.author.email.take());
         self.feedback.action_base_url = resolve_env_token(self.feedback.action_base_url.take());
+        normalize_tool_names(&mut self.tools.allow);
+        normalize_tool_names(&mut self.tools.deny);
+        for policy in self.tools.by_agent.values_mut() {
+            normalize_tool_names(&mut policy.allow);
+            normalize_tool_names(&mut policy.deny);
+        }
         for config in self.feedback.telegram.values_mut() {
             config.bot_token = resolve_env_token(config.bot_token.take())
                 .or_else(|| env::var("TELEGRAM_BOT_TOKEN").ok());
@@ -469,6 +478,13 @@ impl ServiceConfig {
     }
 
     pub fn validate(&self) -> Result<(), Error> {
+        for agent_name in self.tools.by_agent.keys() {
+            if !self.agents.profiles.contains_key(agent_name) {
+                return Err(Error::InvalidConfig(format!(
+                    "tools.by_agent.{agent_name} references unknown agent `{agent_name}`"
+                )));
+            }
+        }
         if self.tracker.kind == TrackerKind::Linear {
             if self
                 .tracker
@@ -887,6 +903,14 @@ impl ServiceConfig {
         }
         Ok(candidates)
     }
+}
+
+fn normalize_tool_names(entries: &mut Vec<String>) {
+    *entries = entries
+        .drain(..)
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect();
 }
 
 impl AgentsConfig {

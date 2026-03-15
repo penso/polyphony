@@ -298,6 +298,59 @@ impl IssueTracker for CompositeTracker {
             .update_issue_workflow_status(issue, status)
             .await
     }
+
+    async fn create_issue(
+        &self,
+        request: &polyphony_core::CreateIssueRequest,
+    ) -> Result<polyphony_core::Issue, polyphony_core::Error> {
+        self.primary.create_issue(request).await
+    }
+
+    async fn update_issue(
+        &self,
+        request: &polyphony_core::UpdateIssueRequest,
+    ) -> Result<polyphony_core::Issue, polyphony_core::Error> {
+        if let Some(supplemental) = self
+            .supplements
+            .iter()
+            .find(|supplemental| supplemental.matches_issue_id(&request.id))
+        {
+            let mut request = request.clone();
+            request.id = supplemental
+                .strip_issue_id(&request.id)
+                .ok_or_else(|| {
+                    polyphony_core::Error::Adapter("invalid supplemental issue id".into())
+                })?
+                .to_string();
+            return supplemental
+                .tracker
+                .update_issue(&request)
+                .await
+                .map(|issue| supplemental.namespace_issue(issue));
+        }
+        self.primary.update_issue(request).await
+    }
+
+    async fn comment_on_issue(
+        &self,
+        request: &polyphony_core::AddIssueCommentRequest,
+    ) -> Result<polyphony_core::IssueComment, polyphony_core::Error> {
+        if let Some(supplemental) = self
+            .supplements
+            .iter()
+            .find(|supplemental| supplemental.matches_issue_id(&request.id))
+        {
+            let mut request = request.clone();
+            request.id = supplemental
+                .strip_issue_id(&request.id)
+                .ok_or_else(|| {
+                    polyphony_core::Error::Adapter("invalid supplemental issue id".into())
+                })?
+                .to_string();
+            return supplemental.tracker.comment_on_issue(&request).await;
+        }
+        self.primary.comment_on_issue(request).await
+    }
 }
 
 fn namespace_issue_identifier(prefix: Option<&str>, identifier: &str) -> String {
@@ -383,25 +436,28 @@ pub(crate) fn build_runtime_components(
             Arc::new(polyphony_git::GitWorkspaceCommitter) as Arc<dyn WorkspaceCommitter>,
         );
     #[cfg(feature = "github")]
-    let (pull_request_manager, pull_request_commenter) = if workflow.config.automation.enabled
-        && workflow.config.tracker.kind == TrackerKind::Github
+    let (pull_request_manager, pull_request_commenter) = if workflow.config.tracker.kind
+        == TrackerKind::Github
     {
         let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
-            Error::Config("tracker.repository is required for github automation".into())
+            Error::Config(
+                "tracker.repository is required for github pull request integrations".into(),
+            )
         })?;
         let token = workflow.config.tracker.api_key.clone().ok_or_else(|| {
-            Error::Config("tracker.api_key is required for github automation".into())
+            Error::Config("tracker.api_key is required for github pull request integrations".into())
         })?;
-        (
-            Some(Arc::new(polyphony_github::GithubPullRequestManager::new(
-                repository.clone(),
-                token.clone(),
-            )?) as Arc<dyn PullRequestManager>),
-            Some(
-                Arc::new(polyphony_github::GithubPullRequestCommenter::new(token))
-                    as Arc<dyn PullRequestCommenter>,
-            ),
-        )
+        let commenter = Some(Arc::new(polyphony_github::GithubPullRequestCommenter::new(
+            token.clone(),
+        )) as Arc<dyn PullRequestCommenter>);
+        let manager = workflow
+            .config
+            .automation
+            .enabled
+            .then_some(Arc::new(polyphony_github::GithubPullRequestManager::new(
+                repository, token,
+            )?) as Arc<dyn PullRequestManager>);
+        (manager, commenter)
     } else {
         (None, None)
     };
@@ -410,11 +466,18 @@ pub(crate) fn build_runtime_components(
         Option<Arc<dyn PullRequestManager>>,
         Option<Arc<dyn PullRequestCommenter>>,
     ) = (None, None);
+    let tool_executor = polyphony_tools::RegistryToolExecutor::from_runtime_components(
+        workflow,
+        tracker.clone(),
+        pull_request_commenter.clone(),
+    )?;
 
     Ok(RuntimeComponents {
         tracker,
         pull_request_trigger_source,
-        agent: Arc::new(polyphony_agents::AgentRegistryRuntime::new()),
+        agent: Arc::new(polyphony_agents::AgentRegistryRuntime::new_with_tools(
+            tool_executor,
+        )),
         committer,
         pull_request_manager,
         pull_request_commenter,

@@ -212,6 +212,22 @@ pub struct AgentPromptConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
+pub struct ToolPolicyConfig {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct ToolsConfig {
+    pub enabled: bool,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub by_agent: HashMap<String, ToolPolicyConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
 pub struct AgentsConfig {
     pub default: Option<String>,
     pub reviewer: Option<String>,
@@ -323,6 +339,7 @@ pub struct ServiceConfig {
     pub polling: PollingConfig,
     pub workspace: WorkspaceConfig,
     pub hooks: HooksConfig,
+    pub tools: ToolsConfig,
     pub agent: AgentConfig,
     pub orchestration: OrchestrationConfig,
     pub agents: AgentsConfig,
@@ -341,6 +358,8 @@ struct RawServiceConfig {
     pub polling: PollingConfig,
     pub workspace: WorkspaceConfig,
     pub hooks: HooksConfig,
+    #[serde(default)]
+    pub tools: ToolsConfig,
     pub agent: AgentConfig,
     #[serde(default)]
     pub orchestration: OrchestrationConfig,

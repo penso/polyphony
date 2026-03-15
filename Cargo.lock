@@ -2699,8 +2699,11 @@ dependencies = [
  "polyphony-linear",
  "polyphony-orchestrator",
  "polyphony-sqlite",
+ "polyphony-tools",
  "polyphony-tui",
  "polyphony-workflow",
+ "polyphony-workspace",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -2821,6 +2824,19 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "polyphony-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "polyphony-core",
+ "polyphony-linear",
+ "polyphony-workflow",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 

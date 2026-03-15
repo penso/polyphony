@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use {
     async_trait::async_trait,
@@ -10,7 +10,7 @@ use {
     polyphony_core::{
         AgentDefinition, AgentEventKind, AgentModel, AgentModelCatalog, AgentProviderRuntime,
         AgentRunResult, AgentRunSpec, AgentTransport, BudgetSnapshot, Error as CoreError,
-        RateLimitSignal, TokenUsage,
+        RateLimitSignal, TokenUsage, ToolCallRequest, ToolExecutor,
     },
     reqwest::header::CONTENT_TYPE,
     serde_json::{Value, json},
@@ -36,16 +36,35 @@ fn resolve_base_url(agent: &AgentDefinition) -> String {
         .unwrap_or_else(|| "https://api.openai.com/v1".into())
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct OpenAiRuntime {
     http: reqwest::Client,
+    tool_executor: Option<Arc<dyn ToolExecutor>>,
 }
 
 impl OpenAiRuntime {
-    pub fn new() -> Self {
+    pub fn new(tool_executor: Option<Arc<dyn ToolExecutor>>) -> Self {
         Self {
             http: reqwest::Client::new(),
+            tool_executor,
         }
+    }
+}
+
+impl Default for OpenAiRuntime {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl std::fmt::Debug for OpenAiRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiRuntime")
+            .field(
+                "tool_executor",
+                &self.tool_executor.as_ref().map(|_| "configured"),
+            )
+            .finish()
     }
 }
 
@@ -68,7 +87,7 @@ impl AgentProviderRuntime for OpenAiRuntime {
         spec: AgentRunSpec,
         event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
     ) -> Result<AgentRunResult, CoreError> {
-        run_openai_chat(&self.http, spec, event_tx).await
+        run_openai_chat(&self.http, spec, event_tx, self.tool_executor.as_ref()).await
     }
 
     async fn fetch_budget(
@@ -199,6 +218,7 @@ async fn run_openai_chat(
     client: &reqwest::Client,
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    tool_executor: Option<&Arc<dyn ToolExecutor>>,
 ) -> Result<AgentRunResult, CoreError> {
     let api_key = spec
         .agent
@@ -375,13 +395,6 @@ async fn run_openai_chat(
             "content": turn.text,
             "tool_calls": turn.tool_calls,
         }));
-        debug!(
-            issue_identifier = %spec.issue.identifier,
-            agent_name = %spec.agent.name,
-            session_id = %session_id,
-            tool_calls = turn.tool_calls.len(),
-            "OpenAI-compatible response requested unsupported tool calls"
-        );
         for call in turn.tool_calls {
             let call_id = call
                 .get("id")
@@ -394,17 +407,30 @@ async fn run_openai_chat(
             polyphony_agent_common::emit(
                 &event_tx,
                 &spec,
-                AgentEventKind::OtherMessage,
-                Some(format!("unsupported tool call requested: {call_name}")),
+                AgentEventKind::ToolCallStarted,
+                Some(format!("dynamic tool call requested ({call_name})")),
                 Some(session_id.clone()),
                 None,
                 None,
                 Some(call.clone()),
             );
+            let result = execute_openai_tool_call(
+                tool_executor,
+                &spec,
+                call_name,
+                call_id,
+                call.pointer("/function/arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}"),
+                &event_tx,
+                &session_id,
+                &call,
+            )
+            .await;
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": call_id,
-                "content": "{\"success\":false,\"error\":\"unsupported_tool_call\"}",
+                "content": result,
             }));
         }
     }
@@ -418,6 +444,119 @@ async fn run_openai_chat(
     Err(CoreError::Adapter(
         "openai tool loop exhausted without a terminal response".into(),
     ))
+}
+
+async fn execute_openai_tool_call(
+    tool_executor: Option<&Arc<dyn ToolExecutor>>,
+    spec: &AgentRunSpec,
+    call_name: &str,
+    call_id: &str,
+    raw_arguments: &str,
+    event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+    session_id: &str,
+    raw_call: &Value,
+) -> String {
+    let Some(executor) = tool_executor else {
+        polyphony_agent_common::emit(
+            event_tx,
+            spec,
+            AgentEventKind::ToolCallFailed,
+            Some(format!("unsupported tool call requested: {call_name}")),
+            Some(session_id.to_string()),
+            None,
+            None,
+            Some(raw_call.clone()),
+        );
+        return "{\"success\":false,\"error\":\"unsupported_tool_call\"}".into();
+    };
+    let arguments = serde_json::from_str::<Value>(raw_arguments).unwrap_or_else(|_| json!({}));
+    let supported = executor
+        .list_tools(&spec.agent.name)
+        .into_iter()
+        .any(|tool| tool.name == call_name);
+    if !supported {
+        polyphony_agent_common::emit(
+            event_tx,
+            spec,
+            AgentEventKind::ToolCallFailed,
+            Some(format!("unsupported tool call requested: {call_name}")),
+            Some(session_id.to_string()),
+            None,
+            None,
+            Some(raw_call.clone()),
+        );
+        return "{\"success\":false,\"error\":\"unsupported_tool_call\"}".into();
+    }
+    match executor
+        .execute(ToolCallRequest {
+            name: call_name.to_string(),
+            arguments,
+            issue: spec.issue.clone(),
+            workspace_path: spec.workspace_path.clone(),
+            agent_name: spec.agent.name.clone(),
+            call_id: Some(call_id.to_string()),
+            thread_id: None,
+            turn_id: None,
+        })
+        .await
+    {
+        Ok(result) => {
+            polyphony_agent_common::emit(
+                event_tx,
+                spec,
+                if result.success {
+                    AgentEventKind::ToolCallCompleted
+                } else {
+                    AgentEventKind::ToolCallFailed
+                },
+                Some(format!(
+                    "dynamic tool call {} ({call_name})",
+                    if result.success {
+                        "completed"
+                    } else {
+                        "failed"
+                    }
+                )),
+                Some(session_id.to_string()),
+                None,
+                None,
+                Some(json!({
+                    "tool": call_name,
+                    "result": result,
+                })),
+            );
+            json!({
+                "success": result.success,
+                "output": result.output,
+                "contentItems": result.content_items,
+            })
+            .to_string()
+        },
+        Err(error) => {
+            polyphony_agent_common::emit(
+                event_tx,
+                spec,
+                AgentEventKind::ToolCallFailed,
+                Some(format!("dynamic tool call failed ({call_name})")),
+                Some(session_id.to_string()),
+                None,
+                None,
+                Some(json!({
+                    "tool": call_name,
+                    "error": error.to_string(),
+                })),
+            );
+            json!({
+                "success": false,
+                "output": error.to_string(),
+                "contentItems": [{
+                    "type": "inputText",
+                    "text": error.to_string(),
+                }]
+            })
+            .to_string()
+        },
+    }
 }
 
 #[derive(Default)]
@@ -557,15 +696,43 @@ fn parse_openai_usage(payload: &Value) -> Option<TokenUsage> {
 mod tests {
     use {
         super::{OpenAiRuntime, parse_openai_usage},
+        async_trait::async_trait,
         polyphony_core::{
-            AgentDefinition, AgentProviderRuntime, AgentRunSpec, AgentTransport, Issue,
+            AgentDefinition, AgentEventKind, AgentProviderRuntime, AgentRunSpec, AgentTransport,
+            Error as CoreError, Issue, ToolCallRequest, ToolCallResult, ToolExecutor, ToolSpec,
         },
+        std::sync::Arc,
         tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::TcpListener,
             sync::mpsc,
         },
     };
+
+    struct MockToolExecutor;
+
+    #[async_trait]
+    impl ToolExecutor for MockToolExecutor {
+        fn list_tools(&self, _agent_name: &str) -> Vec<ToolSpec> {
+            vec![ToolSpec {
+                name: "linear_graphql".into(),
+                description: "test".into(),
+                input_schema: serde_json::json!({}),
+            }]
+        }
+
+        async fn execute(&self, request: ToolCallRequest) -> Result<ToolCallResult, CoreError> {
+            assert_eq!(request.name, "linear_graphql");
+            Ok(ToolCallResult::new(
+                true,
+                "{\"data\":{\"viewer\":{\"id\":\"usr_123\"}}}",
+                vec![serde_json::json!({
+                    "type": "inputText",
+                    "text": "{\"data\":{\"viewer\":{\"id\":\"usr_123\"}}}",
+                })],
+            ))
+        }
+    }
 
     #[test]
     fn parses_openai_usage_payload() {
@@ -580,7 +747,7 @@ mod tests {
 
     #[tokio::test]
     async fn discovers_models_from_command() {
-        let runtime = OpenAiRuntime::new();
+        let runtime = OpenAiRuntime::default();
         let catalogs = runtime
             .discover_models(&AgentDefinition {
                 name: "openai".into(),
@@ -600,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_api_key_skips_http_model_discovery_when_model_is_configured() {
-        let runtime = OpenAiRuntime::new();
+        let runtime = OpenAiRuntime::default();
         let catalog = runtime
             .discover_models(&AgentDefinition {
                 name: "kimi_fast".into(),
@@ -659,7 +826,7 @@ mod tests {
             }
         });
 
-        let runtime = OpenAiRuntime::new();
+        let runtime = OpenAiRuntime::default();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let result = runtime
             .run(
@@ -711,5 +878,96 @@ mod tests {
             }
         }
         assert!(saw_tool_warning);
+    }
+
+    #[tokio::test]
+    async fn openai_runner_executes_supported_tools() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for body in [
+                serde_json::json!({
+                    "choices": [{
+                        "message": {
+                            "content": "",
+                            "tool_calls": [{
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "linear_graphql",
+                                    "arguments": "{\"query\":\"query Viewer { viewer { id } }\"}"
+                                }
+                            }]
+                        }
+                    }]
+                }),
+                serde_json::json!({
+                    "choices": [{
+                        "message": {
+                            "content": "done"
+                        }
+                    }]
+                }),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0u8; 8192];
+                let _ = socket.read(&mut request).await.unwrap();
+                let payload = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let runtime = OpenAiRuntime::new(Some(Arc::new(MockToolExecutor)));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: Issue {
+                        id: "1".into(),
+                        identifier: "TEST-1".into(),
+                        title: "Test".into(),
+                        state: "Todo".into(),
+                        ..Issue::default()
+                    },
+                    attempt: None,
+                    workspace_path: std::env::temp_dir(),
+                    prompt: "hello".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "openai".into(),
+                        kind: "openai".into(),
+                        transport: AgentTransport::OpenAiChat,
+                        base_url: Some(format!("http://{addr}/v1")),
+                        api_key: Some("test-key".into()),
+                        model: Some("gpt-4.1".into()),
+                        fetch_models: false,
+                        turn_timeout_ms: 5_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            result.status,
+            polyphony_core::AttemptStatus::Succeeded
+        ));
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, AgentEventKind::ToolCallCompleted))
+        );
     }
 }

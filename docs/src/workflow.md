@@ -33,6 +33,7 @@ The current workspace configuration covers:
 - `polling`: tracker polling interval, default `60000` ms (60 seconds)
 - `workspace`: root path, checkout strategy, reuse behavior, and transient cleanup paths
 - `hooks`: optional shell hooks around workspace lifecycle events, with captured stdout/stderr logged in truncated form
+- `tools`: optional built-in LLM tool allow/deny policy, with per-agent overrides
 - `agent`: global concurrency, turn, and retry limits
 - `codex`: optional single-agent shorthand for one Codex app-server profile
 - `agents`: named agent profiles and routing rules
@@ -105,6 +106,52 @@ Each agent profile can also control:
 - `completion_sentinel` for explicit interactive completion detection
 - `use_tmux` and `tmux_session_prefix` for local CLI automation under tmux
 - `env` for provider-specific environment injection
+
+## Built-In Tools
+
+The optional `tools` section enables a small built-in tool registry that provider runtimes can
+advertise to tool-capable models.
+
+Current built-in tools:
+
+- `workspace_list_files`
+- `workspace_read_file`
+- `workspace_search`
+- `issue_update`
+- `issue_comment`
+- `pr_comment`
+- `linear_graphql` for raw Linear GraphQL access using the configured tracker auth
+
+The policy shape is:
+
+- `tools.enabled`
+- `tools.allow`
+- `tools.deny`
+- `tools.by_agent.<name>.allow`
+- `tools.by_agent.<name>.deny`
+
+Example:
+
+```yaml
+tools:
+  enabled: true
+  allow:
+    - workspace_list_files
+    - workspace_read_file
+    - workspace_search
+    - issue_update
+    - issue_comment
+    - linear_graphql
+  by_agent:
+    reviewer:
+      allow:
+        - workspace_read_file
+        - workspace_search
+        - pr_comment
+        - linear_graphql
+```
+
+See [Built-In Tools](./tools.md) for the runtime model and design constraints.
 
 ## Workspace Provisioning
 

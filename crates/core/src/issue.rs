@@ -23,6 +23,12 @@ pub struct UpdateIssueRequest {
     pub labels: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AddIssueCommentRequest {
+    pub id: String,
+    pub body: String,
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid issue: {0}")]

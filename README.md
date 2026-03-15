@@ -21,6 +21,7 @@ providers like `acpx`, this is what the project is for.
 - provisions per-issue workspaces with directory, linked-worktree, or clone strategies
 - dispatches agents with retries, fallback chains, throttling, and saved context handoff
 - runs local CLI agents inside managed terminal sessions, with a PTY backend by default and optional `tmux` sessions when you want manual attach
+- exposes an allowlisted built-in tool registry to tool-capable runtimes for workspace reads, tracker updates, PR comments, and GraphQL escape hatches
 - exposes terminal-aware ACP client capabilities, including `terminal/*` operations for compatible ACP agents
 - renders the current state in a `ratatui` dashboard
 
@@ -124,6 +125,42 @@ For local CLI agents, `use_tmux` is the switch you want. Leave it `false` to use
 built-in PTY terminal backend, or set it to `true` to run the agent inside a tmux session you can
 attach to manually.
 
+## Built-In Tools
+
+Polyphony can expose a small built-in tool registry to tool-capable models. The first built-in
+tool set now includes:
+
+- workspace read tools: `workspace_list_files`, `workspace_read_file`, `workspace_search`
+- tracker mutation tools: `issue_update`, `issue_comment`
+- PR feedback tool: `pr_comment`
+- Linear escape hatch: `linear_graphql`
+
+Tool exposure is explicit and allowlisted:
+
+```yaml
+tools:
+  enabled: true
+  allow:
+    - workspace_list_files
+    - workspace_read_file
+    - workspace_search
+    - issue_update
+    - issue_comment
+    - linear_graphql
+  by_agent:
+    reviewer:
+      allow:
+        - workspace_read_file
+        - workspace_search
+        - pr_comment
+        - linear_graphql
+```
+
+The orchestrator does not execute tools itself. The registry is shared runtime state, while
+provider runtimes such as Codex app-server and OpenAI-compatible chat handle the actual tool call
+loop. See [docs/src/tools.md](docs/src/tools.md) for the feature overview and
+[docs/src/workflow.md](docs/src/workflow.md) for config details.
+
 Polyphony can also create review-only work when new commits land on open GitHub pull requests.
 Enable `review_triggers.pr_reviews` to poll PR heads, debounce fresh pushes, run a review agent in
 the PR workspace, and post the result back as a PR comment instead of opening another PR.
@@ -200,6 +237,7 @@ The README is intentionally short. The reference material lives in `docs/`.
 - [Getting Started](docs/src/getting-started.md)
 - [Releases](docs/src/releases.md)
 - [Workflow Configuration](docs/src/workflow.md)
+- [Built-In Tools](docs/src/tools.md)
 - [Provider Runtimes](docs/src/providers.md)
 - [Architecture](docs/src/architecture.md)
 - [Runtime Flow](docs/src/runtime-flow.md)

@@ -58,6 +58,7 @@ agent-pi = ["pi"]
 [dependencies]
 async-trait.workspace = true
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -78,4 +79,6 @@ polyphony-linear = { path = "../linear", optional = true }
 polyphony-orchestrator = { path = "../orchestrator" }
 polyphony-sqlite = { path = "../sqlite", optional = true }
 polyphony-tui = { path = "../tui", optional = true }
+polyphony-tools = { path = "../tools" }
+polyphony-workspace = { path = "../workspace" }
 polyphony-workflow = { path = "../workflow" }

@@ -20,6 +20,7 @@ members = [
   "crates/git",
   "crates/github",
   "crates/feedback",
+  "crates/tools",
   "crates/sqlite",
   "crates/tui",
   "crates/cli",

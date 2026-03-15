@@ -3,13 +3,15 @@ use {
     chrono::Utc,
     graphql_client::GraphQLQuery,
     polyphony_core::{
-        BlockerRef, BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor,
-        IssueComment, IssueStateUpdate, IssueTracker, RateLimitSignal, TrackerQuery,
-        UpdateIssueRequest,
+        AddIssueCommentRequest, BlockerRef, BudgetSnapshot, CreateIssueRequest, Error as CoreError,
+        Issue, IssueAuthor, IssueComment, IssueStateUpdate, IssueTracker, RateLimitSignal,
+        TrackerQuery, UpdateIssueRequest,
     },
     std::time::Duration,
     tracing::debug,
 };
+
+use serde_json::{Value, json};
 
 const LINEAR_HTTP_TIMEOUT: Duration = Duration::from_millis(30_000);
 
@@ -113,6 +115,18 @@ impl LinearTracker {
             )));
         }
         Ok(payload)
+    }
+
+    pub async fn execute_raw_graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value, CoreError> {
+        self.graphql(json!({
+            "query": query,
+            "variables": variables,
+        }))
+        .await
     }
 
     async fn fetch_issues_for_states(
@@ -357,6 +371,48 @@ impl IssueTracker for LinearTracker {
             .issue
             .ok_or_else(|| CoreError::Adapter("linear_update_issue: missing issue".into()))?;
         Ok(linear_issue_from_update_node(&node))
+    }
+
+    async fn comment_on_issue(
+        &self,
+        request: &AddIssueCommentRequest,
+    ) -> Result<IssueComment, CoreError> {
+        debug!(id = %request.id, "creating Linear issue comment");
+        let payload = self
+            .execute_raw_graphql(
+                r#"
+mutation CommentCreate($issueId: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
+    comment {
+      id
+      body
+      url
+      createdAt
+      updatedAt
+      user {
+        id
+        name
+        displayName
+        url
+        guest
+        admin
+        owner
+      }
+    }
+  }
+}
+"#,
+                json!({
+                    "issueId": request.id,
+                    "body": request.body,
+                }),
+            )
+            .await?;
+        let comment = payload
+            .pointer("/data/commentCreate/comment")
+            .ok_or_else(|| CoreError::Adapter("linear_comment_create: missing comment".into()))?;
+        linear_comment_from_value(comment)
     }
 }
 
@@ -605,6 +661,67 @@ fn linear_issue_from_update_node(
         created_at: parse_rfc3339(&node.created_at),
         updated_at: parse_rfc3339(&node.updated_at),
     }
+}
+
+fn linear_comment_from_value(value: &Value) -> Result<IssueComment, CoreError> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| CoreError::Adapter("linear_comment_create: missing comment id".into()))?;
+    let body = value
+        .get("body")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::Adapter("linear_comment_create: missing comment body".into()))?;
+    Ok(IssueComment {
+        id: id.to_string(),
+        body: body.to_string(),
+        author: value
+            .get("user")
+            .map(linear_author_from_value)
+            .transpose()?,
+        url: value
+            .get("url")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        created_at: value
+            .get("createdAt")
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339),
+        updated_at: value
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339),
+    })
+}
+
+fn linear_author_from_value(value: &Value) -> Result<IssueAuthor, CoreError> {
+    let owner = value.get("owner").and_then(Value::as_bool).unwrap_or(false);
+    let admin = value.get("admin").and_then(Value::as_bool).unwrap_or(false);
+    let guest = value.get("guest").and_then(Value::as_bool).unwrap_or(false);
+    let username = value
+        .get("name")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let display_name = value
+        .get("displayName")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| username.clone());
+    Ok(IssueAuthor {
+        id: value
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        username,
+        display_name,
+        role: Some(linear_role(owner, admin, guest)),
+        trust_level: Some(linear_trust_level(owner, admin, guest)),
+        url: value
+            .get("url")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    })
 }
 
 fn parse_linear_priority(priority: f64) -> Option<i32> {

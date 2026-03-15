@@ -36,6 +36,12 @@ pub trait IssueTracker: Send + Sync {
     async fn update_issue(&self, _request: &UpdateIssueRequest) -> Result<Issue, Error> {
         Err(Error::Adapter("update_issue not supported".into()))
     }
+    async fn comment_on_issue(
+        &self,
+        _request: &AddIssueCommentRequest,
+    ) -> Result<IssueComment, Error> {
+        Err(Error::Adapter("comment_on_issue not supported".into()))
+    }
 }
 
 #[async_trait]
