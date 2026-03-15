@@ -845,6 +845,27 @@ impl RuntimeService {
         self.state
             .worktree_keys
             .insert(workspace.workspace_key.clone());
+
+        // Create a movement so the issue appears in the Movements table immediately.
+        let movement_id = new_movement_id();
+        let now = Utc::now();
+        let movement = Movement {
+            id: movement_id.clone(),
+            issue_id: Some(issue.id.clone()),
+            issue_identifier: Some(issue.identifier.clone()),
+            title: issue.title.clone(),
+            status: MovementStatus::InProgress,
+            workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
+            workspace_path: Some(workspace.path.clone()),
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        };
+        if let Some(store) = &self.store {
+            store.save_movement(&movement).await?;
+        }
+        self.state.movements.insert(movement_id.clone(), movement);
+
         let issue_id = issue.id.clone();
         let issue_identifier = issue.identifier.clone();
         let issue_identifier_for_task = issue_identifier.clone();
@@ -1980,6 +2001,27 @@ impl RuntimeService {
         }
 
         // Non-pipeline (existing behavior)
+        // Update the movement status to reflect the outcome.
+        let movement_status = match outcome.status {
+            AttemptStatus::Succeeded => MovementStatus::Delivered,
+            AttemptStatus::Failed | AttemptStatus::TimedOut | AttemptStatus::Stalled => {
+                MovementStatus::Failed
+            }
+            AttemptStatus::CancelledByReconciliation => MovementStatus::Cancelled,
+        };
+        if let Some(movement) = self
+                .state
+                .movements
+                .values_mut()
+                .find(|m| m.issue_id.as_deref() == Some(&issue_id))
+        {
+            movement.status = movement_status;
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+
         let workflow = self.workflow();
         match outcome.status {
             AttemptStatus::Succeeded => {
@@ -2110,6 +2152,16 @@ impl RuntimeService {
                 } else {
                     self.state.worktree_keys.remove(&workspace_key);
                 }
+            }
+            // Mark the associated movement as cancelled.
+            if let Some(movement) = self
+                .state
+                .movements
+                .values_mut()
+                .find(|m| m.issue_id.as_deref() == Some(issue_id))
+            {
+                movement.status = MovementStatus::Cancelled;
+                movement.updated_at = Utc::now();
             }
             self.push_event(
                 EventScope::Reconcile,
