@@ -526,10 +526,10 @@ fn handle_key(
             app.active_tab = app.active_tab.previous();
         },
         KeyCode::Char('1') => app.active_tab = app::ActiveTab::Triggers,
-        KeyCode::Char('2') => app.active_tab = app::ActiveTab::Agents,
-        KeyCode::Char('3') => app.active_tab = app::ActiveTab::Orchestrator,
-        KeyCode::Char('4') => app.active_tab = app::ActiveTab::Tasks,
-        KeyCode::Char('5') => app.active_tab = app::ActiveTab::Deliverables,
+        KeyCode::Char('2') => app.active_tab = app::ActiveTab::Orchestrator,
+        KeyCode::Char('3') => app.active_tab = app::ActiveTab::Tasks,
+        KeyCode::Char('4') => app.active_tab = app::ActiveTab::Deliverables,
+        KeyCode::Char('5') => app.active_tab = app::ActiveTab::Agents,
         KeyCode::Char('6') => app.active_tab = app::ActiveTab::Logs,
         KeyCode::Char('J') => {
             if app.active_tab == app::ActiveTab::Agents {
@@ -816,10 +816,10 @@ mod tests {
         super::*,
         chrono::Utc,
         polyphony_core::{
-            CodexTotals, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, VisibleIssueRow,
-            VisibleTriggerKind, VisibleTriggerRow,
+            CodexTotals, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, TrackerConnectionStatus,
+            VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
         },
-        ratatui::{Terminal, backend::TestBackend},
+        ratatui::{Terminal, backend::TestBackend, buffer::Buffer},
     };
 
     fn test_snapshot(visible: usize) -> RuntimeSnapshot {
@@ -881,10 +881,21 @@ mod tests {
             loading: Default::default(),
             dispatch_mode: Default::default(),
             tracker_kind: Default::default(),
+            tracker_connection: None,
             from_cache: false,
             cached_at: None,
             agent_profile_names: vec![],
         }
+    }
+
+    fn buffer_text(buffer: &Buffer) -> String {
+        let width = buffer.area.width as usize;
+        buffer
+            .content
+            .chunks(width)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -919,12 +930,28 @@ mod tests {
     }
 
     #[test]
+    fn render_shows_connected_github_login_in_header() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut snapshot = test_snapshot(3);
+        snapshot.tracker_connection = Some(TrackerConnectionStatus::connected("penso"));
+        let mut app = AppState::new(default_theme(), LogBuffer::default());
+        app.on_snapshot(&snapshot);
+
+        terminal
+            .draw(|frame| {
+                render::render(frame, &snapshot, &mut app);
+            })
+            .unwrap();
+
+        let screen = buffer_text(terminal.backend().buffer());
+        assert!(screen.contains("penso"), "{screen}");
+    }
+
+    #[test]
     fn tab_switching() {
         let mut app = AppState::new(default_theme(), LogBuffer::default());
         assert_eq!(app.active_tab, app::ActiveTab::Triggers);
-
-        app.active_tab = app.active_tab.next();
-        assert_eq!(app.active_tab, app::ActiveTab::Agents);
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Orchestrator);
@@ -934,6 +961,9 @@ mod tests {
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Deliverables);
+
+        app.active_tab = app.active_tab.next();
+        assert_eq!(app.active_tab, app::ActiveTab::Agents);
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Logs);

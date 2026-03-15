@@ -1,14 +1,16 @@
 use {
-    polyphony_core::{DispatchMode, RuntimeSnapshot},
+    polyphony_core::{DispatchMode, RuntimeSnapshot, TrackerConnectionState},
     ratatui::{
-        layout::{Constraint, Direction, Layout, Rect},
-        style::{Modifier, Style},
+        layout::{Alignment, Constraint, Direction, Layout, Rect},
+        style::{Color, Modifier, Style},
         text::{Line, Span},
         widgets::{Block, BorderType, Paragraph, Tabs},
     },
 };
 
 use crate::app::{ActiveTab, AppState};
+
+const GITHUB_MARK: &str = "";
 
 pub fn draw_header(
     frame: &mut ratatui::Frame<'_>,
@@ -24,6 +26,29 @@ pub fn draw_header(
         .split(area);
 
     // Tab bar
+    let mut tab_block = Block::default()
+        .title(Line::from(Span::styled(
+            " Polyphony ",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border));
+
+    if let Some((github_label, github_color)) = github_connection_label(snapshot, theme.success) {
+        tab_block = tab_block.title(
+            Line::from(Span::styled(
+                format!(" {github_label} "),
+                Style::default()
+                    .fg(github_color)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Right),
+        );
+    }
+
     let tabs = Tabs::new(
         ActiveTab::ALL
             .into_iter()
@@ -37,18 +62,7 @@ pub fn draw_header(
             .fg(theme.highlight)
             .add_modifier(Modifier::BOLD),
     )
-    .block(
-        Block::default()
-            .title(Line::from(Span::styled(
-                " Polyphony ",
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            )))
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border)),
-    );
+    .block(tab_block);
     // Store the inner area of the tab block for mouse click hit-testing.
     app.tab_inner_area = sections[0].inner(ratatui::layout::Margin {
         vertical: 1,
@@ -137,4 +151,23 @@ pub fn draw_header(
         ),
         sections[1],
     );
+}
+
+fn github_connection_label(
+    snapshot: &RuntimeSnapshot,
+    success_color: Color,
+) -> Option<(String, Color)> {
+    let status = snapshot.tracker_connection.as_ref()?;
+    match status.state {
+        TrackerConnectionState::Connected => status
+            .label
+            .as_deref()
+            .filter(|label| !label.is_empty())
+            .map(|label| (format!("{GITHUB_MARK} {label}"), success_color)),
+        TrackerConnectionState::Disconnected => Some((
+            format!("{GITHUB_MARK} {}", status.detail.as_deref().unwrap_or("disconnected")),
+            Color::Yellow,
+        )),
+        TrackerConnectionState::Unknown => Some((format!("{GITHUB_MARK} checking"), Color::DarkGray)),
+    }
 }

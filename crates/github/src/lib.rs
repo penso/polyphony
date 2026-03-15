@@ -22,8 +22,8 @@ use {
         IssueStateUpdate, IssueTracker, PullRequestCommentTrigger, PullRequestCommenter,
         PullRequestConflictTrigger, PullRequestManager, PullRequestRef, PullRequestRequest,
         PullRequestReviewComment, PullRequestReviewTrigger, PullRequestTrigger,
-        PullRequestTriggerSource, RateLimitSignal, ReviewProviderKind, TrackerQuery,
-        UpdateIssueRequest,
+        PullRequestTriggerSource, RateLimitSignal, ReviewProviderKind, TrackerConnectionStatus,
+        TrackerQuery, UpdateIssueRequest,
     },
     reqwest::{
         Response, StatusCode,
@@ -114,6 +114,7 @@ pub struct GithubIssueTracker {
     project: Option<GithubProjectConfig>,
     request_count: AtomicU64,
     last_rate_limit: Mutex<Option<CapturedRateLimit>>,
+    viewer_login: Mutex<ViewerLoginCache>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +129,25 @@ struct GithubProjectConfig {
     owner: String,
     number: u32,
     status_field_name: String,
+}
+
+#[derive(Debug, Clone, Default)]
+enum ViewerLoginCache {
+    #[default]
+    Unknown,
+    Unavailable,
+    Known(String),
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubViewerResponse {
+    login: String,
+}
+
+enum ViewerLoginFetch {
+    RetryLater,
+    Unavailable,
+    Known(String),
 }
 
 impl GithubIssueTracker {
@@ -160,6 +180,7 @@ impl GithubIssueTracker {
             project,
             request_count: AtomicU64::new(0),
             last_rate_limit: Mutex::new(None),
+            viewer_login: Mutex::new(ViewerLoginCache::Unknown),
         })
     }
 
@@ -255,6 +276,73 @@ impl GithubIssueTracker {
                     reset_at,
                 });
             }
+        }
+    }
+
+    async fn connection_status(&self) -> TrackerConnectionStatus {
+        let Some(token) = &self.token else {
+            return TrackerConnectionStatus::disconnected("no token");
+        };
+
+        let cached = self
+            .viewer_login
+            .lock()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        match cached {
+            ViewerLoginCache::Known(login) => return TrackerConnectionStatus::connected(login),
+            ViewerLoginCache::Unavailable => {
+                return TrackerConnectionStatus::disconnected("invalid token");
+            },
+            ViewerLoginCache::Unknown => {},
+        }
+
+        match self.fetch_viewer_login(token).await {
+            ViewerLoginFetch::Known(login) => {
+                if let Ok(mut guard) = self.viewer_login.lock() {
+                    *guard = ViewerLoginCache::Known(login.clone());
+                }
+                TrackerConnectionStatus::connected(login)
+            },
+            ViewerLoginFetch::Unavailable => {
+                if let Ok(mut guard) = self.viewer_login.lock() {
+                    *guard = ViewerLoginCache::Unavailable;
+                }
+                TrackerConnectionStatus::disconnected("invalid token")
+            },
+            ViewerLoginFetch::RetryLater => TrackerConnectionStatus::unknown(),
+        }
+    }
+
+    async fn fetch_viewer_login(&self, token: &str) -> ViewerLoginFetch {
+        self.track_request();
+        let response = match self
+            .http
+            .get("https://api.github.com/user")
+            .bearer_auth(token)
+            .header("User-Agent", "polyphony")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return ViewerLoginFetch::RetryLater,
+        };
+        self.capture_rate_limit_headers(response.headers());
+        if github_rate_limit_signal_from_response("tracker:github", &response).is_some() {
+            return ViewerLoginFetch::RetryLater;
+        }
+        let status = response.status();
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            return ViewerLoginFetch::Unavailable;
+        }
+        if !status.is_success() {
+            return ViewerLoginFetch::RetryLater;
+        }
+        match response.json::<GithubViewerResponse>().await {
+            Ok(viewer) if !viewer.login.is_empty() => ViewerLoginFetch::Known(viewer.login),
+            Ok(_) => ViewerLoginFetch::Unavailable,
+            Err(_) => ViewerLoginFetch::RetryLater,
         }
     }
 
@@ -533,6 +621,10 @@ impl IssueTracker for GithubIssueTracker {
             reset_at,
             raw: Some(raw),
         }))
+    }
+
+    async fn fetch_connection_status(&self) -> Result<Option<TrackerConnectionStatus>, CoreError> {
+        Ok(Some(self.connection_status().await))
     }
 
     async fn ensure_issue_workflow_tracking(&self, issue: &Issue) -> Result<(), CoreError> {

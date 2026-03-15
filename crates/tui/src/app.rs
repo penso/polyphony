@@ -15,30 +15,30 @@ use crate::{LogBuffer, theme::Theme};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Triggers,
-    Agents,
     Orchestrator,
     Tasks,
     Deliverables,
+    Agents,
     Logs,
 }
 
 impl ActiveTab {
     pub const ALL: [Self; 6] = [
         Self::Triggers,
-        Self::Agents,
         Self::Orchestrator,
         Self::Tasks,
         Self::Deliverables,
+        Self::Agents,
         Self::Logs,
     ];
 
     pub const fn title(self) -> &'static str {
         match self {
             Self::Triggers => "Triggers",
-            Self::Agents => "Agents",
-            Self::Orchestrator => "Orchestrator",
+            Self::Orchestrator => "Flow",
             Self::Tasks => "Tasks",
-            Self::Deliverables => "PR/MR",
+            Self::Deliverables => "Output",
+            Self::Agents => "Agents",
             Self::Logs => "Logs",
         }
     }
@@ -46,10 +46,10 @@ impl ActiveTab {
     pub const fn index(self) -> usize {
         match self {
             Self::Triggers => 0,
-            Self::Agents => 1,
-            Self::Orchestrator => 2,
-            Self::Tasks => 3,
-            Self::Deliverables => 4,
+            Self::Orchestrator => 1,
+            Self::Tasks => 2,
+            Self::Deliverables => 3,
+            Self::Agents => 4,
             Self::Logs => 5,
         }
     }

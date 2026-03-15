@@ -84,7 +84,7 @@ pub fn draw_deliverables_tab(
     .block(
         Block::default()
             .title(Line::from(Span::styled(
-                " PR/MR ",
+                " Output ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),

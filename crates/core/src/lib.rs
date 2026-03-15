@@ -1041,6 +1041,8 @@ pub struct RuntimeSnapshot {
     #[serde(default)]
     pub tracker_kind: TrackerKind,
     #[serde(default)]
+    pub tracker_connection: Option<TrackerConnectionStatus>,
+    #[serde(default)]
     pub from_cache: bool,
     #[serde(default)]
     pub cached_at: Option<DateTime<Utc>>,
@@ -1062,6 +1064,49 @@ pub struct SnapshotCounts {
     pub tasks_completed: usize,
     #[serde(default)]
     pub worktrees: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackerConnectionState {
+    #[default]
+    Unknown,
+    Connected,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct TrackerConnectionStatus {
+    pub state: TrackerConnectionState,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl TrackerConnectionStatus {
+    #[must_use]
+    pub fn connected(label: impl Into<String>) -> Self {
+        Self {
+            state: TrackerConnectionState::Connected,
+            label: Some(label.into()),
+            detail: None,
+        }
+    }
+
+    #[must_use]
+    pub fn disconnected(detail: impl Into<String>) -> Self {
+        Self {
+            state: TrackerConnectionState::Disconnected,
+            label: None,
+            detail: Some(detail.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn unknown() -> Self {
+        Self::default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1292,6 +1337,9 @@ pub trait IssueTracker: Send + Sync {
     async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, Error> {
         Ok(None)
     }
+    async fn fetch_connection_status(&self) -> Result<Option<TrackerConnectionStatus>, Error> {
+        Ok(None)
+    }
     async fn ensure_issue_workflow_tracking(&self, _issue: &Issue) -> Result<(), Error> {
         Ok(())
     }
@@ -1484,6 +1532,8 @@ pub struct CachedSnapshot {
     pub visible_triggers: Vec<VisibleTriggerRow>,
     pub budgets: Vec<BudgetSnapshot>,
     pub agent_catalogs: Vec<AgentModelCatalog>,
+    #[serde(default)]
+    pub tracker_connection: Option<TrackerConnectionStatus>,
 }
 
 #[async_trait]

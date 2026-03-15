@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime},
@@ -20,9 +20,9 @@ use {
         PullRequestReviewTrigger, PullRequestTrigger, PullRequestTriggerSource, RateLimitSignal,
         RetryRow, ReviewTarget, ReviewedPullRequestHead, RunningRow, RuntimeCadence, RuntimeEvent,
         RuntimeSnapshot, SnapshotCounts, StateStore, Task, TaskId, TaskRow, TaskStatus,
-        ThrottleWindow, TokenUsage, VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
-        WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner, new_movement_id,
-        sanitize_workspace_key,
+        ThrottleWindow, TokenUsage, TrackerConnectionStatus, TrackerKind, VisibleIssueRow,
+        VisibleTriggerKind, VisibleTriggerRow, WorkspaceCommitRequest, WorkspaceCommitter,
+        WorkspaceProvisioner, new_movement_id, sanitize_workspace_key,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
@@ -30,6 +30,8 @@ use {
         render_issue_template_with_strings, render_turn_prompt, render_turn_template,
     },
     polyphony_workspace::WorkspaceManager,
+    reqwest::StatusCode,
+    serde::Deserialize,
     serde_json::Value,
     thiserror::Error,
     tokio::{
@@ -91,6 +93,11 @@ Guidelines:
 - Keep the plan focused — 2-5 tasks is typical
 - Write the plan file, then stop
 "#;
+
+#[derive(Debug, Deserialize)]
+struct GithubViewerIdentity {
+    login: String,
+}
 
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
@@ -246,7 +253,9 @@ struct RuntimeState {
     ended_runtime_seconds: f64,
     totals: CodexTotals,
     rate_limits: Option<Value>,
+    tracker_connection: Option<TrackerConnectionStatus>,
     last_tracker_poll_at: Option<DateTime<Utc>>,
+    last_tracker_connection_poll_at: Option<DateTime<Utc>>,
     last_budget_poll_at: Option<DateTime<Utc>>,
     last_model_discovery_at: Option<DateTime<Utc>>,
     loading: LoadingState,
@@ -283,7 +292,9 @@ impl Default for RuntimeState {
             ended_runtime_seconds: 0.0,
             totals: CodexTotals::default(),
             rate_limits: None,
+            tracker_connection: None,
             last_tracker_poll_at: None,
+            last_tracker_connection_poll_at: None,
             last_budget_poll_at: None,
             last_model_discovery_at: None,
             loading: LoadingState::default(),
@@ -394,6 +405,7 @@ impl RuntimeService {
         {
             self.restore_cache(cached);
         }
+        self.refresh_tracker_connection(true).await;
         self.emit_snapshot().await?;
         // startup_cleanup is deferred to the first tick so the select loop
         // starts immediately and can process Refresh/Shutdown commands.
@@ -649,7 +661,7 @@ impl RuntimeService {
         VisibleTriggerRow {
             trigger_id: row.issue_id.clone(),
             kind: VisibleTriggerKind::Issue,
-            source: tracker_kind.to_string(),
+            source: issue_trigger_source(tracker_kind, &row),
             identifier: row.issue_identifier.clone(),
             title: row.title.clone(),
             status: row.state.clone(),
@@ -925,6 +937,12 @@ impl RuntimeService {
         let _ = self.emit_snapshot().await;
         self.reconcile_running().await;
         self.state.loading.reconciling = false;
+
+        if self.drain_commands() {
+            return true;
+        }
+
+        self.refresh_tracker_connection(false).await;
 
         if self.drain_commands() {
             return true;
@@ -3881,6 +3899,9 @@ impl RuntimeService {
             loading: self.state.loading.clone(),
             dispatch_mode: self.state.dispatch_mode,
             tracker_kind,
+            tracker_connection: self.state.tracker_connection.clone().or_else(|| {
+                (tracker_kind == TrackerKind::Github).then(TrackerConnectionStatus::unknown)
+            }),
             from_cache: self.state.from_cache,
             cached_at: self.state.cached_at,
             agent_profile_names: self
@@ -3926,6 +3947,9 @@ impl RuntimeService {
                 self.state.budgets.insert(budget.component.clone(), budget);
             }
         }
+        if self.state.tracker_connection.is_none() {
+            self.state.tracker_connection = cached.tracker_connection;
+        }
         if self.state.agent_catalogs.is_empty() {
             for catalog in cached.agent_catalogs {
                 self.state
@@ -3945,6 +3969,7 @@ impl RuntimeService {
                 visible_triggers: self.snapshot().visible_triggers,
                 budgets: self.state.budgets.values().cloned().collect(),
                 agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
+                tracker_connection: self.state.tracker_connection.clone(),
             };
             if let Err(e) = cache.save(&cached).await {
                 warn!(%e, "cache save failed");
@@ -4067,6 +4092,71 @@ impl RuntimeService {
             },
             Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
             Err(error) => warn!(%error, "agent budget poll failed"),
+        }
+    }
+
+    async fn refresh_tracker_connection(&mut self, force: bool) {
+        let due = force
+            || self
+                .state
+                .last_tracker_connection_poll_at
+                .map(|at| Utc::now().signed_duration_since(at).num_seconds() >= 3_600)
+                .unwrap_or(true);
+        if !due {
+            return;
+        }
+        self.state.last_tracker_connection_poll_at = Some(Utc::now());
+        let workflow = self.workflow();
+        let tracker_token = (workflow.config.tracker.kind == TrackerKind::Github)
+            .then(|| workflow.config.tracker.api_key.clone())
+            .flatten();
+        let github_token = tracker_token
+            .or_else(|| env::var("GITHUB_TOKEN").ok())
+            .or_else(|| env::var("GH_TOKEN").ok());
+
+        self.state.tracker_connection = Some(match github_token {
+            Some(token) => self.fetch_github_connection_status(&token).await,
+            None => TrackerConnectionStatus::disconnected("no token"),
+        });
+    }
+
+    async fn fetch_github_connection_status(&self, token: &str) -> TrackerConnectionStatus {
+        debug!("checking github viewer identity");
+        let client = reqwest::Client::new();
+        let response = match client
+            .get("https://api.github.com/user")
+            .bearer_auth(token)
+            .header("User-Agent", "polyphony")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(%error, "github viewer identity request failed");
+                return TrackerConnectionStatus::unknown();
+            },
+        };
+
+        match response.status() {
+            StatusCode::OK => match response.json::<GithubViewerIdentity>().await {
+                Ok(viewer) if !viewer.login.is_empty() => {
+                    info!(login = %viewer.login, "github viewer identity resolved");
+                    TrackerConnectionStatus::connected(viewer.login)
+                },
+                Ok(_) => TrackerConnectionStatus::unknown(),
+                Err(error) => {
+                    warn!(%error, "github viewer identity decode failed");
+                    TrackerConnectionStatus::unknown()
+                },
+            },
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                warn!("github viewer identity rejected token");
+                TrackerConnectionStatus::disconnected("invalid token")
+            },
+            status => {
+                warn!(%status, "github viewer identity returned unexpected status");
+                TrackerConnectionStatus::unknown()
+            },
         }
     }
 
@@ -4284,6 +4374,7 @@ impl RuntimeService {
         if old_tracker_key != new_tracker_key {
             self.state.throttles.remove(&old_tracker_key);
             self.state.budgets.remove(&old_tracker_key);
+            self.state.tracker_connection = None;
         }
         if old_review_source_key != new_review_source_key
             && let Some(component_key) = old_review_source_key
@@ -4303,6 +4394,7 @@ impl RuntimeService {
             .retain(|component, _| !affected_agent_budgets.contains(component));
         self.state.agent_catalogs.clear();
         self.state.last_tracker_poll_at = None;
+        self.state.last_tracker_connection_poll_at = None;
         self.state.last_budget_poll_at = None;
         self.state.last_model_discovery_at = None;
     }
@@ -5198,10 +5290,23 @@ fn empty_snapshot() -> RuntimeSnapshot {
         loading: LoadingState::default(),
         dispatch_mode: polyphony_core::DispatchMode::default(),
         tracker_kind: polyphony_core::TrackerKind::default(),
+        tracker_connection: None,
         from_cache: false,
         cached_at: None,
         agent_profile_names: Vec::new(),
     }
+}
+
+fn issue_trigger_source(
+    tracker_kind: polyphony_core::TrackerKind,
+    row: &VisibleIssueRow,
+) -> String {
+    row.issue_id
+        .split(':')
+        .next()
+        .filter(|prefix| matches!(*prefix, "github" | "beads" | "gitlab"))
+        .map(str::to_string)
+        .unwrap_or_else(|| tracker_kind.to_string())
 }
 
 fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
