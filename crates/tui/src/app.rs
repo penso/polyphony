@@ -354,6 +354,15 @@ impl AppState {
                     .push(idx);
             }
         }
+        for child_indices in children_by_parent.values_mut() {
+            child_indices.sort_by(|&a, &b| {
+                let na = extract_issue_number(&issues[a].identifier);
+                let nb = extract_issue_number(&issues[b].identifier);
+                na.cmp(&nb)
+                    .then_with(|| issues[a].identifier.cmp(&issues[b].identifier))
+                    .then_with(|| issues[a].title.cmp(&issues[b].title))
+            });
+        }
         // Only group if there are any parent-child relationships
         if !children_by_parent.is_empty() {
             let child_set: std::collections::HashSet<usize> = children_by_parent

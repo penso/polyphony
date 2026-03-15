@@ -425,6 +425,74 @@ pub struct BudgetSnapshot {
     pub raw: Option<Value>,
 }
 
+impl BudgetSnapshot {
+    #[must_use]
+    pub fn has_credit_headroom(&self) -> bool {
+        self.credits_remaining
+            .is_some_and(|remaining| remaining > 0.0)
+            || self
+                .hard_limit_usd
+                .zip(self.spent_usd)
+                .is_some_and(|(limit, spent)| limit > spent)
+            || self
+                .soft_limit_usd
+                .zip(self.spent_usd)
+                .is_some_and(|(limit, spent)| limit > spent)
+            || self
+                .raw
+                .as_ref()
+                .and_then(Self::raw_credit_headroom)
+                .is_some_and(|remaining| remaining > 0.0)
+    }
+
+    #[must_use]
+    pub fn has_weekly_credit_deficit(&self) -> bool {
+        let Some(raw) = self.raw.as_ref() else {
+            return false;
+        };
+
+        Self::raw_bool(raw, &["weekly_deficit"])
+            .or_else(|| Self::raw_bool(raw, &["has_weekly_deficit"]))
+            .or_else(|| Self::raw_bool(raw, &["weekly", "deficit"]))
+            .or_else(|| Self::raw_bool(raw, &["weekly", "has_deficit"]))
+            .unwrap_or(false)
+            || Self::raw_number(raw, &["weekly_deficit"])
+                .or_else(|| Self::raw_number(raw, &["weekly_credit_deficit"]))
+                .or_else(|| Self::raw_number(raw, &["weekly", "deficit"]))
+                .or_else(|| Self::raw_number(raw, &["weekly", "credit_deficit"]))
+                .is_some_and(|deficit| deficit > 0.0)
+            || Self::raw_number(raw, &["weekly_remaining"])
+                .or_else(|| Self::raw_number(raw, &["weekly_credits_remaining"]))
+                .or_else(|| Self::raw_number(raw, &["weekly", "remaining"]))
+                .or_else(|| Self::raw_number(raw, &["weekly", "credits_remaining"]))
+                .is_some_and(|remaining| remaining < 0.0)
+    }
+
+    fn raw_credit_headroom(raw: &Value) -> Option<f64> {
+        Self::raw_number(raw, &["credits_remaining"])
+            .or_else(|| Self::raw_number(raw, &["remaining_credits"]))
+            .or_else(|| Self::raw_number(raw, &["credits_leftover"]))
+            .or_else(|| Self::raw_number(raw, &["leftover_credits"]))
+            .or_else(|| Self::raw_number(raw, &["credits", "remaining"]))
+    }
+
+    fn raw_number(raw: &Value, path: &[&str]) -> Option<f64> {
+        let mut current = raw;
+        for segment in path {
+            current = current.get(*segment)?;
+        }
+        current.as_f64()
+    }
+
+    fn raw_bool(raw: &Value, path: &[&str]) -> Option<bool> {
+        let mut current = raw;
+        for segment in path {
+            current = current.get(*segment)?;
+        }
+        current.as_bool()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequestRef {
     pub repository: String,

@@ -602,6 +602,55 @@ impl RuntimeService {
         }
     }
 
+    pub(crate) fn idle_dispatch_allowed_for_agents(
+        &self,
+        candidate_agents: &[polyphony_core::AgentDefinition],
+    ) -> bool {
+        if !self.state.running.is_empty() {
+            return false;
+        }
+
+        let budgets = candidate_agents
+            .iter()
+            .filter_map(|agent| self.state.budgets.get(&format!("agent:{}", agent.name)))
+            .collect::<Vec<_>>();
+
+        if budgets.is_empty() {
+            return false;
+        }
+
+        if budgets
+            .iter()
+            .any(|budget| budget.has_weekly_credit_deficit())
+        {
+            return false;
+        }
+
+        budgets.iter().any(|budget| budget.has_credit_headroom())
+    }
+
+    pub(crate) fn idle_dispatch_allowed_for_issue(
+        &self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+    ) -> Result<bool, Error> {
+        let candidate_agents = workflow.config.candidate_agents_for_issue(issue)?;
+        Ok(self.idle_dispatch_allowed_for_agents(&candidate_agents))
+    }
+
+    pub(crate) fn idle_dispatch_allowed_for_pr_reviews(
+        &self,
+        workflow: &LoadedWorkflow,
+    ) -> Result<bool, Error> {
+        let Some(review_agent) = workflow.config.pr_review_agent()? else {
+            return Ok(false);
+        };
+        let candidate_agents = workflow
+            .config
+            .expand_agent_candidates(&review_agent.name)?;
+        Ok(self.idle_dispatch_allowed_for_agents(&candidate_agents))
+    }
+
     pub(crate) async fn tick(&mut self) -> bool {
         self.reload_workflow_from_disk(false, "poll_tick").await;
 
@@ -752,11 +801,25 @@ impl RuntimeService {
         }
 
         if self.pull_request_trigger_source.is_some() {
-            self.poll_pull_request_triggers(
-                workflow.clone(),
-                self.state.dispatch_mode != polyphony_core::DispatchMode::Manual,
-            )
-            .await;
+            let allow_pull_request_dispatch = match self.state.dispatch_mode {
+                polyphony_core::DispatchMode::Manual => false,
+                polyphony_core::DispatchMode::Automatic
+                | polyphony_core::DispatchMode::Nightshift => true,
+                polyphony_core::DispatchMode::Idle => {
+                    match self.idle_dispatch_allowed_for_pr_reviews(&workflow) {
+                        Ok(allowed) => allowed,
+                        Err(error) => {
+                            self.push_event(
+                                EventScope::Dispatch,
+                                format!("idle PR review gate failed: {error}"),
+                            );
+                            false
+                        },
+                    }
+                },
+            };
+            self.poll_pull_request_triggers(workflow.clone(), allow_pull_request_dispatch)
+                .await;
         }
         if !workflow.config.has_dispatch_agents() {
             let _ = self.emit_snapshot().await;
@@ -770,6 +833,22 @@ impl RuntimeService {
         for issue in issues {
             if !self.should_dispatch(&workflow, &issue) {
                 continue;
+            }
+            if self.state.dispatch_mode == polyphony_core::DispatchMode::Idle {
+                match self.idle_dispatch_allowed_for_issue(&workflow, &issue) {
+                    Ok(true) => {},
+                    Ok(false) => continue,
+                    Err(error) => {
+                        self.push_event(
+                            EventScope::Dispatch,
+                            format!(
+                                "idle dispatch gate failed for {}: {error}",
+                                issue.identifier
+                            ),
+                        );
+                        continue;
+                    },
+                }
             }
             if !self.has_available_slot(&workflow, &issue.state) {
                 break;

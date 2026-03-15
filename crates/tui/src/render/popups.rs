@@ -289,7 +289,7 @@ fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-const MODE_OPTIONS: [(DispatchMode, &str, &str); 3] = [
+const MODE_OPTIONS: [(DispatchMode, &str, &str); 4] = [
     (
         DispatchMode::Manual,
         "Manual",
@@ -305,11 +305,18 @@ const MODE_OPTIONS: [(DispatchMode, &str, &str); 3] = [
         "Nightshift",
         "Auto + code improvements when idle",
     ),
+    (
+        DispatchMode::Idle,
+        "Idle",
+        "Only opportunistic dispatch when idle and budgets say there is headroom",
+    ),
 ];
 
 pub fn draw_mode_modal(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &AppState) {
     let theme = app.theme;
-    let area = centered_rect(frame.area(), 52, 11);
+    let modal_height =
+        u16::try_from(MODE_OPTIONS.len().saturating_mul(4).saturating_add(2)).unwrap_or(u16::MAX);
+    let area = centered_rect(frame.area(), 52, modal_height);
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -342,17 +349,20 @@ pub fn draw_mode_modal(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapsho
         horizontal: 2,
     });
 
+    let mut constraints =
+        Vec::with_capacity(MODE_OPTIONS.len().saturating_mul(2).saturating_add(2));
+    constraints.push(Constraint::Length(1));
+    for index in 0..MODE_OPTIONS.len() {
+        constraints.push(Constraint::Length(3));
+        if index + 1 != MODE_OPTIONS.len() {
+            constraints.push(Constraint::Length(1));
+        }
+    }
+    constraints.push(Constraint::Min(0));
+
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // spacer
-            Constraint::Length(2), // option 0
-            Constraint::Length(1), // spacer
-            Constraint::Length(2), // option 1
-            Constraint::Length(1), // spacer
-            Constraint::Length(2), // option 2
-            Constraint::Min(0),    // remainder
-        ])
+        .constraints(constraints)
         .split(inner);
 
     for (i, (mode, label, desc)) in MODE_OPTIONS.iter().enumerate() {
@@ -379,24 +389,37 @@ pub fn draw_mode_modal(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapsho
         };
 
         let row_area = rows[1 + i * 2];
-        let row_lines = vec![
-            Line::from(vec![
-                Span::styled(marker, Style::default().fg(marker_color)),
-                Span::styled(*label, label_style),
-            ]),
-            Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(*desc, Style::default().fg(theme.muted)),
-            ]),
-        ];
-
-        let bg = if is_selected {
+        let row_style = if is_selected {
             Style::default().bg(theme.panel_alt)
         } else {
             Style::default()
         };
 
-        frame.render_widget(Paragraph::new(row_lines).style(bg), row_area);
+        frame.render_widget(Block::default().style(row_style), row_area);
+
+        let row_sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(row_area);
+        let desc_columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(2), Constraint::Fill(1)])
+            .split(row_sections[1]);
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(marker_color)),
+                Span::styled(*label, label_style),
+            ]))
+            .style(row_style),
+            row_sections[0],
+        );
+        frame.render_widget(
+            Paragraph::new(*desc)
+                .style(row_style.fg(theme.muted))
+                .wrap(Wrap { trim: false }),
+            desc_columns[1],
+        );
     }
 }
 

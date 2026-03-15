@@ -1,7 +1,9 @@
 # polyphony
 
+[![CI](https://github.com/penso/polyphony/actions/workflows/ci.yml/badge.svg)](https://github.com/penso/polyphony/actions/workflows/ci.yml)
 [![Rust nightly-2025-11-30](https://img.shields.io/badge/rust-nightly--2025--11--30-orange?logo=rust)](justfile)
 [![Edition 2024](https://img.shields.io/badge/edition-2024-blue)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
 `polyphony` is a repo-native AI orchestration tool.
 
@@ -27,7 +29,7 @@ providers like `acpx`, this is what the project is for.
 Install and run:
 
 ```bash
-just install
+brew install penso/polyphony/polyphony
 polyphony
 ```
 
@@ -96,6 +98,13 @@ Agent-specific prompt files live outside TOML:
 Each file may include YAML front matter to override profile fields such as `kind`, `model`, or
 `command`, plus a Markdown body that is appended as agent-specific instructions whenever that agent
 is selected.
+
+Dispatch mode now has an `idle` option in the TUI. It behaves like opportunistic auto-dispatch,
+but only when no other agent is currently running and the selected agent's budget snapshot still
+shows headroom. Polyphony treats `credits_remaining > 0` or positive spend headroom as usable
+budget. If your budget command also returns raw JSON with `weekly_deficit`, `weekly.credit_deficit`,
+`weekly_remaining`, or `weekly.credits_remaining`, `idle` mode will refuse to dispatch while the
+weekly budget is underwater.
 
 ```toml
 # ~/.config/polyphony/config.toml

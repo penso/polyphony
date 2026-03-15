@@ -29,8 +29,10 @@ pub fn draw_triggers_tab(
     let trigger_data: Vec<_> = indices
         .iter()
         .enumerate()
-        .filter_map(|(display_index, &index)| {
-            snapshot.visible_triggers.get(index).map(|trigger| {
+        .scan(
+            None::<String>,
+            |current_parent_identifier, (display_index, &index)| {
+                let trigger = snapshot.visible_triggers.get(index)?;
                 let age = trigger
                     .created_at
                     .map(|created| format_relative_time(created, now));
@@ -40,14 +42,23 @@ pub fn draw_triggers_tab(
                     .get(display_index)
                     .copied()
                     .unwrap_or(false);
-                (trigger, age, depth, is_last)
-            })
-        })
+                let display_identifier = if depth == 0 {
+                    current_parent_identifier.replace(trigger.identifier.clone());
+                    trigger.identifier.clone()
+                } else {
+                    compact_child_identifier(
+                        current_parent_identifier.as_deref(),
+                        &trigger.identifier,
+                    )
+                };
+                Some((trigger, age, depth, is_last, display_identifier))
+            },
+        )
         .collect();
 
     let max_id_len = trigger_data
         .iter()
-        .map(|(trigger, ..)| trigger.identifier.len())
+        .map(|(.., display_identifier)| display_identifier.len())
         .max()
         .unwrap_or(2)
         .max(2) as u16
@@ -132,7 +143,7 @@ pub fn draw_triggers_tab(
 
     let rows: Vec<Row> = trigger_data
         .iter()
-        .map(|(trigger, age, depth, is_last)| {
+        .map(|(trigger, age, depth, is_last, display_identifier)| {
             let state_color = state_color(&trigger.status, theme);
             let source_color = source_color(&trigger.source, theme);
             let kind_color = kind_color(trigger.kind, theme);
@@ -165,10 +176,10 @@ pub fn draw_triggers_tab(
             Row::new(vec![
                 Cell::from(
                     Line::from(Span::styled(
-                        trigger.identifier.clone(),
+                        display_identifier.clone(),
                         Style::default().fg(theme.info),
                     ))
-                    .alignment(Alignment::Center),
+                    .alignment(Alignment::Right),
                 ),
                 Cell::from(Line::from(title_spans)),
                 Cell::from(
@@ -299,6 +310,20 @@ pub fn draw_triggers_tab(
 
     frame.render_stateful_widget(table, area, &mut app.issues_state);
     draw_scrollbar(frame, area, count, app.issues_state.selected().unwrap_or(0));
+}
+
+fn compact_child_identifier(parent_identifier: Option<&str>, identifier: &str) -> String {
+    if let Some(parent_identifier) = parent_identifier {
+        for separator in ['.', '/', ':', '-'] {
+            let prefix = format!("{parent_identifier}{separator}");
+            if let Some(local_identifier) = identifier.strip_prefix(&prefix)
+                && !local_identifier.is_empty()
+            {
+                return local_identifier.to_string();
+            }
+        }
+    }
+    identifier.to_string()
 }
 
 fn source_color(source: &str, theme: crate::theme::Theme) -> ratatui::style::Color {

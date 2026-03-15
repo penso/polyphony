@@ -17,6 +17,15 @@ if [[ ! -f "${FORMULA_TEMPLATE}" ]]; then
   exit 1
 fi
 
-sed -e "s/version \"PLACEHOLDER\"/version \"${TAG}\"/" \
-    -e "s/sha256 \"PLACEHOLDER\"/sha256 \"${SHA256}\"/" \
-    "${FORMULA_TEMPLATE}"
+formula_content=$(
+  sed -e "s/TAG_PLACEHOLDER/${TAG}/g" \
+      -e "s/SHA256_PLACEHOLDER/${SHA256}/g" \
+      "${FORMULA_TEMPLATE}"
+)
+
+if grep -q 'TAG_PLACEHOLDER\|SHA256_PLACEHOLDER' <<<"${formula_content}"; then
+  echo "error: formula placeholders were not fully replaced" >&2
+  exit 1
+fi
+
+printf '%s\n' "${formula_content}"

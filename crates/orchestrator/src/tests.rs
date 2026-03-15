@@ -15,6 +15,7 @@ use {
         WorkspaceRequest,
     },
     polyphony_workflow::load_workflow,
+    serde_json::json,
     tokio::sync::watch,
 };
 
@@ -793,6 +794,97 @@ async fn disappearing_issues_become_already_fixed_triggers() {
         .expect("missing discarded issue trigger");
     assert_eq!(discarded.kind, VisibleTriggerKind::Issue);
     assert_eq!(discarded.status, "already_fixed");
+}
+
+#[tokio::test]
+async fn idle_mode_dispatches_when_budget_has_headroom() {
+    let workspace_root = unique_workspace_root("idle-budget-headroom");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Idle;
+    service
+        .state
+        .budgets
+        .insert("agent:mock".into(), BudgetSnapshot {
+            component: "agent:mock".into(),
+            captured_at: Utc::now(),
+            credits_remaining: Some(12.0),
+            credits_total: Some(20.0),
+            spent_usd: None,
+            soft_limit_usd: None,
+            hard_limit_usd: None,
+            reset_at: None,
+            raw: Some(json!({ "weekly_deficit": 0 })),
+        });
+
+    service.tick().await;
+
+    assert!(service.state.running.contains_key("issue-1"));
+}
+
+#[tokio::test]
+async fn idle_mode_skips_dispatch_when_weekly_budget_is_underwater() {
+    let workspace_root = unique_workspace_root("idle-weekly-deficit");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Idle;
+    service
+        .state
+        .budgets
+        .insert("agent:mock".into(), BudgetSnapshot {
+            component: "agent:mock".into(),
+            captured_at: Utc::now(),
+            credits_remaining: Some(12.0),
+            credits_total: Some(20.0),
+            spent_usd: None,
+            soft_limit_usd: None,
+            hard_limit_usd: None,
+            reset_at: None,
+            raw: Some(json!({ "weekly": { "deficit": 1 } })),
+        });
+
+    service.tick().await;
+
+    assert!(!service.state.running.contains_key("issue-1"));
+}
+
+#[tokio::test]
+async fn idle_mode_only_dispatches_when_no_other_work_is_running() {
+    let workspace_root = unique_workspace_root("idle-busy");
+    let tracker = TestTracker::new(vec![
+        sample_issue("issue-1", "FAC-1", "Todo", "First"),
+        sample_issue("issue-2", "FAC-2", "In Progress", "Second"),
+    ]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner.clone(), &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Idle;
+    service
+        .state
+        .budgets
+        .insert("agent:mock".into(), BudgetSnapshot {
+            component: "agent:mock".into(),
+            captured_at: Utc::now(),
+            credits_remaining: Some(12.0),
+            credits_total: Some(20.0),
+            spent_usd: None,
+            soft_limit_usd: None,
+            hard_limit_usd: None,
+            reset_at: None,
+            raw: Some(json!({ "weekly_remaining": 3 })),
+        });
+    let running_issue = sample_issue("issue-2", "FAC-2", "In Progress", "Second");
+    let workspace_path = workspace_root.join(sanitize_workspace_key(&running_issue.identifier));
+    service.state.running.insert(
+        running_issue.id.clone(),
+        make_running_task(running_issue, workspace_path),
+    );
+
+    service.tick().await;
+
+    assert!(!service.state.running.contains_key("issue-1"));
+    assert!(service.state.running.contains_key("issue-2"));
 }
 
 #[tokio::test]

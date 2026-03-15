@@ -164,6 +164,7 @@ fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
         DispatchMode::Manual => ("manual", theme.info),
         DispatchMode::Automatic => ("auto", theme.success),
         DispatchMode::Nightshift => ("nightshift", theme.highlight),
+        DispatchMode::Idle => ("idle", theme.warning),
     };
 
     let mut status_spans = vec![

@@ -201,16 +201,17 @@ pub async fn run(
                                 app.show_mode_modal = false;
                             },
                             KeyCode::Char('j') | KeyCode::Down => {
-                                app.mode_modal_selected = (app.mode_modal_selected + 1) % 3;
+                                app.mode_modal_selected = (app.mode_modal_selected + 1) % 4;
                             },
                             KeyCode::Char('k') | KeyCode::Up => {
-                                app.mode_modal_selected = (app.mode_modal_selected + 2) % 3;
+                                app.mode_modal_selected = (app.mode_modal_selected + 3) % 4;
                             },
                             KeyCode::Enter => {
                                 let modes = [
                                     DispatchMode::Manual,
                                     DispatchMode::Automatic,
                                     DispatchMode::Nightshift,
+                                    DispatchMode::Idle,
                                 ];
                                 let selected = modes[app.mode_modal_selected];
                                 app.show_mode_modal = false;
@@ -499,6 +500,7 @@ fn handle_key(
                 DispatchMode::Manual => 0,
                 DispatchMode::Automatic => 1,
                 DispatchMode::Nightshift => 2,
+                DispatchMode::Idle => 3,
             };
         },
 

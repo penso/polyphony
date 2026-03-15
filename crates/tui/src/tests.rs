@@ -5,8 +5,8 @@ use {
     },
     chrono::Utc,
     polyphony_core::{
-        CodexTotals, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, TrackerConnectionStatus,
-        VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
+        CodexTotals, DispatchMode, RuntimeCadence, RuntimeSnapshot, SnapshotCounts,
+        TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
     },
     ratatui::{Terminal, backend::TestBackend, buffer::Buffer},
 };
@@ -117,6 +117,177 @@ fn render_does_not_panic() {
             render::render(frame, &snapshot, &mut app);
         })
         .unwrap();
+}
+
+#[test]
+fn render_mode_modal_with_idle_selection_does_not_panic() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(3);
+    snapshot.dispatch_mode = polyphony_core::DispatchMode::Idle;
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.active_tab = app::ActiveTab::Orchestrator;
+    app.show_mode_modal = true;
+    app.mode_modal_selected = 3;
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(
+        screen.contains("Only opportunistic dispatch when idle"),
+        "{screen}"
+    );
+    assert!(screen.contains("budgets say there is headroom"), "{screen}");
+}
+
+#[test]
+fn child_triggers_are_sorted_by_local_number_under_parent() {
+    let mut snapshot = test_snapshot(0);
+    snapshot.visible_triggers = vec![
+        VisibleTriggerRow {
+            trigger_id: "parent".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "1ru".into(),
+            title: "Parent".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+        VisibleTriggerRow {
+            trigger_id: "child-18".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "1ru.18".into(),
+            title: "Child 18".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: Some("parent".into()),
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+        VisibleTriggerRow {
+            trigger_id: "child-2".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "1ru.2".into(),
+            title: "Child 2".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: Some("parent".into()),
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+        VisibleTriggerRow {
+            trigger_id: "child-10".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "1ru.10".into(),
+            title: "Child 10".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: Some("parent".into()),
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+    ];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.issue_sort = app::IssueSortKey::Newest;
+    app.on_snapshot(&snapshot);
+
+    let ordered_identifiers = app
+        .sorted_issue_indices
+        .iter()
+        .map(|&index| snapshot.visible_triggers[index].identifier.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(ordered_identifiers, vec![
+        "1ru", "1ru.2", "1ru.10", "1ru.18"
+    ]);
+}
+
+#[test]
+fn render_triggers_uses_compact_child_identifiers() {
+    let backend = TestBackend::new(110, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.dispatch_mode = DispatchMode::Manual;
+    snapshot.visible_triggers = vec![
+        VisibleTriggerRow {
+            trigger_id: "parent".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "1ru".into(),
+            title: "Parent".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+        VisibleTriggerRow {
+            trigger_id: "child".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "beads".into(),
+            identifier: "1ru.18".into(),
+            title: "Child".into(),
+            status: "Open".into(),
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: None,
+            parent_id: Some("parent".into()),
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        },
+    ];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("1ru"), "{screen}");
+    assert!(screen.contains("18"), "{screen}");
+    assert!(!screen.contains("1ru.18"), "{screen}");
 }
 
 #[test]
