@@ -267,8 +267,14 @@ pub async fn run(
                                     });
                                     if !skip {
                                         app.last_scroll_at = Some(now);
-                                        let len = app.active_table_len(&snapshot);
-                                        app.move_down(len, 1);
+                                        if app.active_tab == app::ActiveTab::Orchestrator
+                                            && mouse_in_rect(mouse.column, mouse.row, app.events_area)
+                                        {
+                                            app.events_scroll = app.events_scroll.saturating_add(1);
+                                        } else {
+                                            let len = app.active_table_len(&snapshot);
+                                            app.move_down(len, 1);
+                                        }
                                     }
                                 },
                                 MouseEventKind::ScrollUp => {
@@ -278,8 +284,14 @@ pub async fn run(
                                     });
                                     if !skip {
                                         app.last_scroll_at = Some(now);
-                                        let len = app.active_table_len(&snapshot);
-                                        app.move_up(len, 1);
+                                        if app.active_tab == app::ActiveTab::Orchestrator
+                                            && mouse_in_rect(mouse.column, mouse.row, app.events_area)
+                                        {
+                                            app.events_scroll = app.events_scroll.saturating_sub(1);
+                                        } else {
+                                            let len = app.active_table_len(&snapshot);
+                                            app.move_up(len, 1);
+                                        }
                                     }
                                 },
                                 _ => {},
@@ -640,6 +652,13 @@ fn drain_pending_input() {
     while event::poll(Duration::from_millis(10)).unwrap_or(false) {
         let _ = event::read();
     }
+}
+
+fn mouse_in_rect(col: u16, row: u16, rect: Rect) -> bool {
+    col >= rect.x
+        && col < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
 }
 
 fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {

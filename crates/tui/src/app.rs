@@ -134,6 +134,10 @@ pub struct AppState {
     pub last_click_pos: (u16, u16),
     /// Last scroll event time for debouncing.
     pub last_scroll_at: Option<Instant>,
+    /// Scroll offset for the orchestrator events panel.
+    pub events_scroll: u16,
+    /// Bounding rect of the events panel (set each frame by draw_events_panel).
+    pub events_area: Rect,
 }
 
 impl AppState {
@@ -177,6 +181,8 @@ impl AppState {
             last_click_at: None,
             last_click_pos: (0, 0),
             last_scroll_at: None,
+            events_scroll: 0,
+            events_area: Rect::default(),
         }
     }
 

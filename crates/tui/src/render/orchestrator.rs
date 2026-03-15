@@ -5,7 +5,10 @@ use {
         layout::{Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Table, Wrap},
+        widgets::{
+            Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar,
+            ScrollbarOrientation, ScrollbarState, Table, Wrap,
+        },
     },
 };
 
@@ -21,8 +24,8 @@ pub fn draw_orchestrator_tab(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5),  // Status panel
-            Constraint::Min(6),     // Movements table
-            Constraint::Length(8),  // Recent events
+            Constraint::Length(8),  // Movements table (compact)
+            Constraint::Min(8),    // Recent events (gets remaining space)
         ])
         .split(area);
 
@@ -261,14 +264,17 @@ fn draw_events_panel(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
-    app: &AppState,
+    app: &mut AppState,
 ) {
     let theme = app.theme;
-    let max_visible = area.height.saturating_sub(2) as usize; // border top+bottom
+    app.events_area = area;
+
+    let total = snapshot.recent_events.len();
+    let content_height = area.height.saturating_sub(2) as usize; // border top+bottom
+
     let lines: Vec<Line> = snapshot
         .recent_events
         .iter()
-        .take(max_visible)
         .map(|event| {
             let ts = event.at.format("%H:%M:%S");
             let scope_color = match event.scope {
@@ -292,8 +298,17 @@ fn draw_events_panel(
         })
         .collect();
 
+    // Clamp scroll to valid range
+    let max_scroll = total.saturating_sub(content_height) as u16;
+    if app.events_scroll > max_scroll {
+        app.events_scroll = max_scroll;
+    }
+
+    let count_label = format!(" {total} events ");
+
     frame.render_widget(
         Paragraph::new(lines)
+            .scroll((app.events_scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
@@ -303,10 +318,35 @@ fn draw_events_panel(
                             .fg(theme.foreground)
                             .add_modifier(Modifier::BOLD),
                     )))
+                    .title(
+                        Line::from(Span::styled(
+                            count_label,
+                            Style::default().fg(theme.muted),
+                        ))
+                        .right_aligned(),
+                    )
                     .borders(ratatui::widgets::Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme.border)),
             ),
         area,
     );
+
+    // Scrollbar
+    if total > content_height {
+        let mut scrollbar_state = ScrollbarState::new(total)
+            .position(app.events_scroll as usize)
+            .viewport_content_length(content_height);
+        let scrollbar_area = Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height.saturating_sub(2),
+        };
+        frame.render_stateful_widget(
+            Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
+            scrollbar_area,
+            &mut scrollbar_state,
+        );
+    }
 }
