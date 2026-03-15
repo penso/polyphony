@@ -6,8 +6,8 @@ pub(crate) use {
     polyphony_core::{
         Error as CoreError, IssueAuthor, IssueComment, PullRequestCommentTrigger,
         PullRequestCommenter, PullRequestConflictTrigger, PullRequestManager, PullRequestRef,
-        PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger,
-        PullRequestTrigger, PullRequestTriggerSource, RateLimitSignal, ReviewProviderKind,
+        PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger, PullRequestTrigger,
+        PullRequestTriggerSource, RateLimitSignal, ReviewProviderKind,
     },
     reqwest::{Response, header::RETRY_AFTER},
     serde::{Deserialize, Serialize, de::DeserializeOwned},

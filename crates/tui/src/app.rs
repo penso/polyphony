@@ -4,13 +4,18 @@ use std::{
 };
 
 use {
-    polyphony_core::{RunningRow, RuntimeSnapshot, VisibleTriggerRow},
+    polyphony_core::{AgentHistoryRow, RunningRow, RuntimeSnapshot, VisibleTriggerRow},
     ratatui::{layout::Rect, widgets::TableState},
 };
 
 const RPS_HISTORY_CAP: usize = 120;
 
 use crate::{LogBuffer, theme::Theme};
+
+pub(crate) enum SelectedAgentRow<'a> {
+    Running(&'a RunningRow),
+    History(&'a AgentHistoryRow),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
@@ -213,7 +218,10 @@ impl AppState {
         self.rebuild_sorted_indices(snapshot);
         sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());
         let previous_agent_selection = self.agents_state.selected();
-        sync_selection(&mut self.agents_state, snapshot.running.len());
+        sync_selection(
+            &mut self.agents_state,
+            snapshot.running.len() + snapshot.agent_history.len(),
+        );
         if self.agents_state.selected() != previous_agent_selection {
             self.agents_detail_scroll = 0;
         }
@@ -412,16 +420,24 @@ impl AppState {
             .and_then(|display_idx| self.sorted_trigger(snapshot, display_idx))
     }
 
-    pub fn selected_agent<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a RunningRow> {
-        self.agents_state
-            .selected()
-            .and_then(|index| snapshot.running.get(index))
+    pub fn selected_agent<'a>(
+        &self,
+        snapshot: &'a RuntimeSnapshot,
+    ) -> Option<SelectedAgentRow<'a>> {
+        let index = self.agents_state.selected()?;
+        if let Some(running) = snapshot.running.get(index) {
+            return Some(SelectedAgentRow::Running(running));
+        }
+        snapshot
+            .agent_history
+            .get(index.saturating_sub(snapshot.running.len()))
+            .map(SelectedAgentRow::History)
     }
 
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {
         match self.active_tab {
             ActiveTab::Triggers => self.sorted_issue_indices.len(),
-            ActiveTab::Agents => snapshot.running.len(),
+            ActiveTab::Agents => snapshot.running.len() + snapshot.agent_history.len(),
             ActiveTab::Orchestrator => snapshot.movements.len(),
             ActiveTab::Tasks => snapshot.tasks.len(),
             ActiveTab::Deliverables => snapshot
@@ -445,7 +461,7 @@ impl AppState {
     }
 
     pub fn filtered_log_count(&self) -> usize {
-        let lines = self.log_buffer.recent_lines(500);
+        let lines = self.log_buffer.all_lines();
         if self.logs_search_query.is_empty() {
             lines.len()
         } else {

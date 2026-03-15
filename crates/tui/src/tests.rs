@@ -1,4 +1,3 @@
-
 use {
     crate::{
         bootstrap::{BootstrapChoice, BootstrapState},
@@ -58,6 +57,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
             })
             .collect(),
         running: vec![],
+        agent_history: vec![],
         retrying: vec![],
         codex_totals: CodexTotals::default(),
         rate_limits: None,

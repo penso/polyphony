@@ -101,9 +101,6 @@ impl RuntimeService {
             scope,
             message,
         });
-        while self.state.recent_events.len() > 100 {
-            self.state.recent_events.pop_back();
-        }
     }
 
     pub(crate) async fn emit_snapshot(&mut self) -> Result<(), Error> {
@@ -131,9 +128,13 @@ impl RuntimeService {
         let mut totals = self.state.totals.clone();
         totals.seconds_running = self.state.ended_runtime_seconds + live_seconds;
         let tracker_kind = self.workflow_rx.borrow().config.tracker.kind;
-        let visible_issues = self
-            .state
-            .visible_issues
+        let issue_rows =
+            if self.state.issue_snapshot_loaded || !self.state.visible_issues.is_empty() {
+                &self.state.visible_issues
+            } else {
+                &self.state.bootstrapped_visible_issues
+            };
+        let visible_issues = issue_rows
             .iter()
             .map(|row| {
                 let mut row = row.clone();
@@ -146,36 +147,51 @@ impl RuntimeService {
             .iter()
             .map(|row| self.issue_trigger_row(tracker_kind, row))
             .collect::<Vec<_>>();
-        visible_triggers.extend(
-            self.state
-                .visible_review_triggers
-                .values()
-                .cloned()
-                .map(PullRequestTrigger::Review)
-                .map(|trigger| self.pull_request_trigger_row(&trigger)),
-        );
-        visible_triggers.extend(
-            self.state
-                .visible_comment_triggers
-                .values()
-                .cloned()
-                .map(PullRequestTrigger::Comment)
-                .map(|trigger| self.pull_request_trigger_row(&trigger)),
-        );
-        visible_triggers.extend(
-            self.state
-                .visible_conflict_triggers
-                .values()
-                .cloned()
-                .map(PullRequestTrigger::Conflict)
-                .map(|trigger| self.pull_request_trigger_row(&trigger)),
-        );
-        visible_triggers.extend(
-            self.state
-                .discarded_triggers
-                .values()
-                .map(|entry| entry.row.clone()),
-        );
+        if self.state.pull_request_snapshot_loaded
+            || !self.state.visible_review_triggers.is_empty()
+            || !self.state.visible_comment_triggers.is_empty()
+            || !self.state.visible_conflict_triggers.is_empty()
+            || !self.state.discarded_triggers.is_empty()
+        {
+            visible_triggers.extend(
+                self.state
+                    .visible_review_triggers
+                    .values()
+                    .cloned()
+                    .map(PullRequestTrigger::Review)
+                    .map(|trigger| self.pull_request_trigger_row(&trigger)),
+            );
+            visible_triggers.extend(
+                self.state
+                    .visible_comment_triggers
+                    .values()
+                    .cloned()
+                    .map(PullRequestTrigger::Comment)
+                    .map(|trigger| self.pull_request_trigger_row(&trigger)),
+            );
+            visible_triggers.extend(
+                self.state
+                    .visible_conflict_triggers
+                    .values()
+                    .cloned()
+                    .map(PullRequestTrigger::Conflict)
+                    .map(|trigger| self.pull_request_trigger_row(&trigger)),
+            );
+            visible_triggers.extend(
+                self.state
+                    .discarded_triggers
+                    .values()
+                    .map(|entry| entry.row.clone()),
+            );
+        } else {
+            visible_triggers.extend(
+                self.state
+                    .bootstrapped_visible_triggers
+                    .iter()
+                    .filter(|trigger| trigger.kind != VisibleTriggerKind::Issue)
+                    .cloned(),
+            );
+        }
         RuntimeSnapshot {
             generated_at: Utc::now(),
             counts: SnapshotCounts {
@@ -239,6 +255,12 @@ impl RuntimeService {
                     workspace_path: running.workspace_path.clone(),
                     attempt: running.attempt,
                 })
+                .collect(),
+            agent_history: self
+                .state
+                .run_history
+                .iter()
+                .map(PersistedRunRecord::to_history_row)
                 .collect(),
             retrying: self
                 .state
@@ -388,6 +410,20 @@ impl RuntimeService {
     }
 
     pub(crate) fn restore_bootstrap(&mut self, bootstrap: polyphony_core::StoreBootstrap) {
+        if let Some(snapshot) = bootstrap.snapshot {
+            self.state.bootstrapped_visible_issues = snapshot.visible_issues;
+            self.state.bootstrapped_visible_triggers = snapshot.visible_triggers;
+            self.state.agent_catalogs = snapshot
+                .agent_catalogs
+                .into_iter()
+                .map(|catalog| (catalog.agent_name.clone(), catalog))
+                .collect();
+            self.state.tracker_connection = snapshot.tracker_connection;
+            self.state.dispatch_mode = snapshot.dispatch_mode;
+            self.state.totals = snapshot.codex_totals;
+            self.state.rate_limits = snapshot.rate_limits;
+            self.state.ended_runtime_seconds = self.state.totals.seconds_running;
+        }
         self.state.recent_events = bootstrap.recent_events.into_iter().collect();
         self.state.budgets = bootstrap.budgets;
         self.state.saved_contexts = bootstrap.saved_contexts;
@@ -424,7 +460,11 @@ impl RuntimeService {
                 .or_default()
                 .push(task);
         }
+        for tasks in self.state.tasks.values_mut() {
+            tasks.sort_by_key(|task| task.ordinal);
+        }
         self.state.reviewed_pull_request_heads = bootstrap.reviewed_pull_request_heads;
+        self.state.run_history = bootstrap.run_history.into_iter().collect();
     }
 
     pub(crate) fn register_throttle(&mut self, signal: RateLimitSignal) {

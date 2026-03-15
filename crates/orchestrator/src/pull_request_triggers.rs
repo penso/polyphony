@@ -49,6 +49,7 @@ impl RuntimeService {
                     .map(PullRequestTrigger::Conflict),
             )
             .collect::<Vec<_>>();
+        self.state.pull_request_snapshot_loaded = true;
         self.state.visible_review_triggers.clear();
         self.state.visible_comment_triggers.clear();
         self.state.visible_conflict_triggers.clear();

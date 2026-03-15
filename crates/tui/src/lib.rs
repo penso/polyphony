@@ -14,8 +14,6 @@ use {
     theme::{Theme, default_theme, detect_terminal_theme},
 };
 
-const LOG_BUFFER_CAPACITY: usize = 2_000;
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("io error: {0}")]
@@ -27,12 +25,12 @@ pub enum Error {
 #[derive(Clone, Debug)]
 pub struct LogBuffer {
     lines: Arc<Mutex<VecDeque<String>>>,
-    max_lines: usize,
+    max_lines: Option<usize>,
 }
 
 impl Default for LogBuffer {
     fn default() -> Self {
-        Self::with_capacity(LOG_BUFFER_CAPACITY)
+        Self::unbounded()
     }
 }
 
@@ -40,8 +38,24 @@ impl LogBuffer {
     pub fn with_capacity(max_lines: usize) -> Self {
         Self {
             lines: Arc::new(Mutex::new(VecDeque::with_capacity(max_lines))),
-            max_lines,
+            max_lines: Some(max_lines),
         }
+    }
+
+    pub fn unbounded() -> Self {
+        Self {
+            lines: Arc::new(Mutex::new(VecDeque::new())),
+            max_lines: None,
+        }
+    }
+
+    pub fn from_lines(lines: Vec<String>) -> Self {
+        let buffer = Self::unbounded();
+        {
+            let mut stored = lock_or_recover(&buffer.lines);
+            stored.extend(lines.into_iter().filter(|line| !line.trim().is_empty()));
+        }
+        buffer
     }
 
     pub fn push_line(&self, line: impl Into<String>) {
@@ -51,8 +65,10 @@ impl LogBuffer {
         }
         let mut lines = lock_or_recover(&self.lines);
         lines.push_back(line);
-        while lines.len() > self.max_lines {
-            lines.pop_front();
+        if let Some(max_lines) = self.max_lines {
+            while lines.len() > max_lines {
+                lines.pop_front();
+            }
         }
     }
 

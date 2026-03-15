@@ -1,6 +1,6 @@
 use {
     chrono::Utc,
-    polyphony_core::{EventScope, RunningRow, RuntimeSnapshot},
+    polyphony_core::{AgentHistoryRow, EventScope, RunningRow, RuntimeSnapshot},
     ratatui::{
         layout::{Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
@@ -12,7 +12,7 @@ use {
     },
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, SelectedAgentRow};
 
 pub fn draw_agents_tab(
     frame: &mut ratatui::Frame<'_>,
@@ -32,7 +32,7 @@ pub fn draw_agents_tab(
         .constraints(constraints)
         .split(area);
 
-    draw_running_table(frame, sections[0], snapshot, app);
+    draw_agent_table(frame, sections[0], snapshot, app);
     draw_agent_detail(frame, sections[1], snapshot, app);
 
     if has_retrying {
@@ -40,7 +40,7 @@ pub fn draw_agents_tab(
     }
 }
 
-fn draw_running_table(
+fn draw_agent_table(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
@@ -52,8 +52,9 @@ fn draw_running_table(
         Cell::from(Span::styled("Issue", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Agent", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Model", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Turns", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Elapsed", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Span", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Tokens", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Last Event", Style::default().fg(theme.muted))),
     ])
@@ -61,47 +62,48 @@ fn draw_running_table(
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     let now = Utc::now();
-    let rows: Vec<Row> = snapshot
-        .running
-        .iter()
-        .map(|r| {
-            let elapsed = format_duration(now.signed_duration_since(r.started_at));
-            let tokens = format_tokens(r.tokens.total_tokens);
-            let model = r.model.as_deref().unwrap_or("-");
-            let last_event = r
+    let mut rows = Vec::with_capacity(snapshot.running.len() + snapshot.agent_history.len());
+    for running in &snapshot.running {
+        rows.push(agent_table_row(
+            running.issue_identifier.clone(),
+            running.agent_name.clone(),
+            running.model.clone(),
+            "running".into(),
+            format!("{}/{}", running.turn_count, running.max_turns),
+            format_duration(now.signed_duration_since(running.started_at)),
+            format_tokens(running.tokens.total_tokens),
+            running
                 .last_event
                 .as_deref()
-                .map(|e| truncate(e, 30))
-                .unwrap_or_default();
-            let turns = format!("{}/{}", r.turn_count, r.max_turns);
-
-            Row::new(vec![
-                Cell::from(Span::styled(
-                    r.issue_identifier.clone(),
-                    Style::default().fg(theme.info),
-                )),
-                Cell::from(Span::styled(
-                    r.agent_name.clone(),
-                    Style::default().fg(theme.foreground),
-                )),
-                Cell::from(Span::styled(
-                    model.to_string(),
-                    Style::default().fg(theme.muted),
-                )),
-                Cell::from(Span::styled(turns, Style::default().fg(theme.foreground))),
-                Cell::from(Span::styled(elapsed, Style::default().fg(theme.foreground))),
-                Cell::from(Span::styled(tokens, Style::default().fg(theme.foreground))),
-                Cell::from(Span::styled(last_event, Style::default().fg(theme.muted))),
-            ])
-        })
-        .collect();
+                .map(|event| truncate(event, 30))
+                .unwrap_or_default(),
+            theme,
+        ));
+    }
+    for history in &snapshot.agent_history {
+        rows.push(agent_table_row(
+            history.issue_identifier.clone(),
+            history.agent_name.clone(),
+            history.model.clone(),
+            history.status.to_string(),
+            format!("{}/{}", history.turn_count, history.max_turns),
+            format_history_span(history, now),
+            format_tokens(history.tokens.total_tokens),
+            history
+                .last_event
+                .as_deref()
+                .map(|event| truncate(event, 30))
+                .unwrap_or_default(),
+            theme,
+        ));
+    }
 
     let selected_style = Style::default()
         .bg(theme.selection)
         .fg(theme.foreground)
         .add_modifier(Modifier::BOLD);
 
-    let count = snapshot.running.len();
+    let count = snapshot.running.len() + snapshot.agent_history.len();
     let footer_info = if count == 0 {
         "no agents".into()
     } else {
@@ -114,7 +116,8 @@ fn draw_running_table(
     let table = Table::new(rows, [
         Constraint::Length(14),
         Constraint::Length(16),
-        Constraint::Length(20),
+        Constraint::Length(18),
+        Constraint::Length(12),
         Constraint::Length(8),
         Constraint::Length(8),
         Constraint::Length(10),
@@ -127,7 +130,7 @@ fn draw_running_table(
     .block(
         Block::default()
             .title(Line::from(Span::styled(
-                " Running Agents ",
+                " Agents ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -147,6 +150,43 @@ fn draw_running_table(
     frame.render_stateful_widget(table, area, &mut app.agents_state);
 }
 
+fn agent_table_row(
+    issue_identifier: String,
+    agent_name: String,
+    model: Option<String>,
+    status: String,
+    turns: String,
+    span: String,
+    tokens: String,
+    last_event: String,
+    theme: crate::theme::Theme,
+) -> Row<'static> {
+    Row::new(vec![
+        Cell::from(Span::styled(
+            issue_identifier,
+            Style::default().fg(theme.info),
+        )),
+        Cell::from(Span::styled(
+            agent_name,
+            Style::default().fg(theme.foreground),
+        )),
+        Cell::from(Span::styled(
+            model.unwrap_or_else(|| "-".into()),
+            Style::default().fg(theme.muted),
+        )),
+        Cell::from(Span::styled(status, Style::default().fg(theme.foreground))),
+        Cell::from(Span::styled(turns, Style::default().fg(theme.foreground))),
+        Cell::from(Span::styled(span, Style::default().fg(theme.foreground))),
+        Cell::from(Span::styled(tokens, Style::default().fg(theme.foreground))),
+        Cell::from(Span::styled(last_event, Style::default().fg(theme.muted))),
+    ])
+}
+
+fn format_history_span(agent: &AgentHistoryRow, now: chrono::DateTime<Utc>) -> String {
+    let finished_at = agent.finished_at.unwrap_or(now);
+    format_duration(finished_at.signed_duration_since(agent.started_at))
+}
+
 fn draw_agent_detail(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -162,7 +202,7 @@ fn draw_agent_detail(
         .unwrap_or_else(|| {
             vec![
                 Line::from(Span::styled(
-                    "No running agent selected.",
+                    "No agent run selected.",
                     Style::default().fg(theme.muted),
                 )),
                 Line::from(Span::styled(
@@ -299,6 +339,21 @@ fn draw_retrying_table(
 
 fn build_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
+    agent: SelectedAgentRow<'_>,
+    theme: crate::theme::Theme,
+) -> Vec<Line<'static>> {
+    match agent {
+        SelectedAgentRow::Running(agent) => {
+            build_running_agent_detail_lines(snapshot, agent, theme)
+        },
+        SelectedAgentRow::History(agent) => {
+            build_history_agent_detail_lines(snapshot, agent, theme)
+        },
+    }
+}
+
+fn build_running_agent_detail_lines(
+    snapshot: &RuntimeSnapshot,
     agent: &RunningRow,
     theme: crate::theme::Theme,
 ) -> Vec<Line<'static>> {
@@ -348,6 +403,137 @@ fn build_agent_detail_lines(
 
     lines.push(Line::default());
     append_agent_availability_lines(&mut lines, snapshot, agent, theme);
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "Recent Events",
+        Style::default()
+            .fg(theme.highlight)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    let mut event_count = 0usize;
+    for event in snapshot.recent_events.iter().rev() {
+        if !message_mentions_issue(&event.message, &agent.issue_identifier) {
+            continue;
+        }
+        event_count += 1;
+        lines.push(render_event_line(event, theme));
+    }
+
+    if event_count == 0 {
+        lines.push(Line::from(Span::styled(
+            "No recent events for this issue.",
+            Style::default().fg(theme.muted),
+        )));
+    }
+
+    lines
+}
+
+fn build_history_agent_detail_lines(
+    snapshot: &RuntimeSnapshot,
+    agent: &AgentHistoryRow,
+    theme: crate::theme::Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let model = agent.model.as_deref().unwrap_or("unknown");
+    let turns = format!("turn {}/{}", agent.turn_count, agent.max_turns);
+    let finished_at = agent.finished_at.unwrap_or(agent.started_at);
+    let span = format_history_span(agent, Utc::now());
+    let header = format!(
+        "{} - {} ({model}) - {} - {turns} - {span}",
+        agent.issue_identifier, agent.agent_name, agent.status
+    );
+
+    if let Some(session_id) = &agent.session_id {
+        lines.push(Line::from(vec![
+            Span::styled(session_id.clone(), Style::default().fg(theme.highlight)),
+            Span::styled(" | ", Style::default().fg(theme.border)),
+            Span::styled(header, Style::default().fg(theme.foreground)),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled(
+            header,
+            Style::default().fg(theme.foreground),
+        )));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("Started ", Style::default().fg(theme.muted)),
+        Span::styled(
+            agent.started_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            Style::default().fg(theme.info),
+        ),
+        Span::styled(" | Finished ", Style::default().fg(theme.muted)),
+        Span::styled(
+            finished_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            Style::default().fg(theme.info),
+        ),
+    ]));
+
+    if let Some(workspace_path) = &agent.workspace_path {
+        lines.push(Line::from(vec![
+            Span::styled("Workspace ", Style::default().fg(theme.muted)),
+            Span::styled(
+                workspace_path.display().to_string(),
+                Style::default().fg(theme.foreground),
+            ),
+        ]));
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "Last Message",
+        Style::default()
+            .fg(theme.highlight)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    if let Some(last_message) = agent.last_message.as_deref() {
+        extend_plain_lines(&mut lines, last_message, theme.foreground);
+    } else {
+        lines.push(Line::from(Span::styled(
+            "No agent output was captured.",
+            Style::default().fg(theme.muted),
+        )));
+    }
+
+    if let Some(error) = agent.error.as_deref() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Error",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )));
+        extend_plain_lines(&mut lines, error, theme.danger);
+    }
+
+    if let Some(saved_context) = &agent.saved_context
+        && !saved_context.transcript.is_empty()
+    {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Transcript",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for entry in &saved_context.transcript {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", entry.at.format("%H:%M:%S")),
+                    Style::default().fg(theme.muted),
+                ),
+                Span::styled(
+                    format!("{:?} ", entry.kind),
+                    Style::default().fg(theme.info),
+                ),
+                Span::styled(entry.message.clone(), Style::default().fg(theme.foreground)),
+            ]));
+        }
+    }
+
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         "Recent Events",

@@ -173,12 +173,27 @@ pub trait FeedbackSink: Send + Sync {
 }
 
 #[async_trait]
-pub trait StateStore: Send + Sync {
+pub trait StateBootstrapStore: Send + Sync {
     async fn bootstrap(&self) -> Result<StoreBootstrap, Error>;
-    async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error>;
-    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
-    async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error>;
+}
 
+#[async_trait]
+pub trait SnapshotPersistence: Send + Sync {
+    async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error>;
+}
+
+#[async_trait]
+pub trait RunPersistence: Send + Sync {
+    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
+}
+
+#[async_trait]
+pub trait BudgetPersistence: Send + Sync {
+    async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error>;
+}
+
+#[async_trait]
+pub trait WorkflowPersistence: Send + Sync {
     async fn save_movement(&self, _movement: &Movement) -> Result<(), Error> {
         Ok(())
     }
@@ -191,6 +206,10 @@ pub trait StateStore: Send + Sync {
     async fn load_tasks_for_movement(&self, _movement_id: &str) -> Result<Vec<Task>, Error> {
         Ok(Vec::new())
     }
+}
+
+#[async_trait]
+pub trait ReviewPersistence: Send + Sync {
     async fn save_reviewed_pull_request_head(
         &self,
         _head: &ReviewedPullRequestHead,
@@ -201,5 +220,105 @@ pub trait StateStore: Send + Sync {
         &self,
     ) -> Result<Vec<ReviewedPullRequestHead>, Error> {
         Ok(Vec::new())
+    }
+}
+
+#[async_trait]
+pub trait StateStore: Send + Sync {
+    async fn bootstrap(&self) -> Result<StoreBootstrap, Error>;
+    async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error>;
+    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
+    async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error>;
+
+    async fn save_movement(&self, movement: &Movement) -> Result<(), Error>;
+    async fn save_task(&self, task: &Task) -> Result<(), Error>;
+    async fn load_movements(&self) -> Result<Vec<Movement>, Error>;
+    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, Error>;
+    async fn save_reviewed_pull_request_head(
+        &self,
+        head: &ReviewedPullRequestHead,
+    ) -> Result<(), Error>;
+    async fn load_reviewed_pull_request_heads(&self)
+    -> Result<Vec<ReviewedPullRequestHead>, Error>;
+}
+
+#[async_trait]
+impl<T> StateBootstrapStore for T
+where
+    T: StateStore + ?Sized,
+{
+    async fn bootstrap(&self) -> Result<StoreBootstrap, Error> {
+        StateStore::bootstrap(self).await
+    }
+}
+
+#[async_trait]
+impl<T> SnapshotPersistence for T
+where
+    T: StateStore + ?Sized,
+{
+    async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error> {
+        StateStore::save_snapshot(self, snapshot).await
+    }
+}
+
+#[async_trait]
+impl<T> RunPersistence for T
+where
+    T: StateStore + ?Sized,
+{
+    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error> {
+        StateStore::record_run(self, run).await
+    }
+}
+
+#[async_trait]
+impl<T> BudgetPersistence for T
+where
+    T: StateStore + ?Sized,
+{
+    async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error> {
+        StateStore::record_budget(self, snapshot).await
+    }
+}
+
+#[async_trait]
+impl<T> WorkflowPersistence for T
+where
+    T: StateStore + ?Sized,
+{
+    async fn save_movement(&self, movement: &Movement) -> Result<(), Error> {
+        StateStore::save_movement(self, movement).await
+    }
+
+    async fn save_task(&self, task: &Task) -> Result<(), Error> {
+        StateStore::save_task(self, task).await
+    }
+
+    async fn load_movements(&self) -> Result<Vec<Movement>, Error> {
+        StateStore::load_movements(self).await
+    }
+
+    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, Error> {
+        StateStore::load_tasks_for_movement(self, movement_id).await
+    }
+}
+
+#[async_trait]
+impl<T> ReviewPersistence for T
+where
+    T: StateStore + ?Sized,
+{
+    async fn save_reviewed_pull_request_head(
+        &self,
+        head: &ReviewedPullRequestHead,
+    ) -> Result<(), Error> {
+        StateStore::save_reviewed_pull_request_head(self, head).await
+    }
+
+    async fn load_reviewed_pull_request_heads(
+        &self,
+    ) -> Result<Vec<ReviewedPullRequestHead>, Error> {
+        StateStore::load_reviewed_pull_request_heads(self).await
     }
 }

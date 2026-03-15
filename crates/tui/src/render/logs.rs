@@ -50,7 +50,7 @@ pub fn draw_logs_tab(
 
 fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppState) {
     let theme = app.theme;
-    let raw_lines = app.log_buffer.recent_lines(500);
+    let raw_lines = app.log_buffer.all_lines();
 
     let entries: Vec<LogEntry> = raw_lines.iter().map(|l| parse_log_entry(l)).collect();
 

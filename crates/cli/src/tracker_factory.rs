@@ -427,7 +427,13 @@ pub(crate) fn build_runtime_tracker(
     workflow_root: &Path,
     primary_tracker: Arc<dyn IssueTracker>,
 ) -> Result<Arc<dyn IssueTracker>, Error> {
+    #[cfg(any(feature = "github", feature = "beads"))]
     let mut supplements = Vec::new();
+    #[cfg(not(any(feature = "github", feature = "beads")))]
+    let supplements: Vec<SupplementalIssueTracker> = Vec::new();
+
+    #[cfg(not(any(feature = "github", feature = "beads")))]
+    let _ = (workflow, workflow_root);
 
     #[cfg(feature = "github")]
     if workflow.config.tracker.kind != TrackerKind::Github
@@ -467,6 +473,7 @@ pub(crate) fn build_runtime_tracker(
     }
 }
 
+#[cfg(feature = "github")]
 fn github_token_from_env() -> Option<String> {
     env::var("GITHUB_TOKEN")
         .ok()

@@ -57,7 +57,7 @@ serde_yaml = "0.9"
 tempfile = "3"
 portable-pty = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "macros", "chrono", "migrate"] }
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }

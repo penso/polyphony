@@ -1,12 +1,12 @@
-
 use {
     crate::{
         convert::{
             find_status_field_option, github_rate_limit_signal, parse_rate_limit_reset,
             parse_retry_after_ms, project_id_from_context,
         },
-        fetch_pull_request_triggers, resolve_project_issue_context, resolve_project_status_field,
+        fetch_pull_request_triggers,
         pull_requests::{GithubIssueCommentResponse, find_issue_comment_id_with_marker},
+        resolve_project_issue_context, resolve_project_status_field,
         review_triggers::{
             GithubReviewBranchRef, GithubReviewHeadRef, GithubReviewLabel,
             GithubReviewPullRequestResponse, GithubReviewUser,
@@ -14,8 +14,10 @@ use {
         },
     },
     chrono::{TimeZone, Utc},
-    reqwest::StatusCode,
-    reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER},
+    reqwest::{
+        StatusCode,
+        header::{HeaderMap, HeaderValue, RETRY_AFTER},
+    },
 };
 
 #[test]

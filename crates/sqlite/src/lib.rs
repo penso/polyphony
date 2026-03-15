@@ -1,178 +1,99 @@
-#[cfg(feature = "sqlite")]
-use async_trait::async_trait;
-#[cfg(feature = "sqlite")]
-use polyphony_core::{
-    BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, ReviewedPullRequestHead,
-    RuntimeSnapshot, StateStore, StoreBootstrap, Task,
+use {
+    async_trait::async_trait,
+    polyphony_core::{
+        BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, ReviewedPullRequestHead,
+        RuntimeSnapshot, StateStore, StoreBootstrap, Task,
+    },
+    thiserror::Error,
 };
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[cfg(feature = "sqlite")]
     #[error("sqlite error: {0}")]
     Sqlite(#[from] sqlx::Error),
-    #[error("sqlite feature is disabled")]
-    Disabled,
+    #[error("sqlite migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
 }
 
-#[cfg(feature = "sqlite")]
 #[derive(Debug, Clone)]
 pub struct SqliteStateStore {
     pool: sqlx::SqlitePool,
 }
 
-#[cfg(feature = "sqlite")]
 impl SqliteStateStore {
     pub async fn connect(database_url: &str) -> Result<Self, Error> {
+        let max_connections = if database_url.starts_with("sqlite::memory:") {
+            1
+        } else {
+            5
+        };
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .connect(database_url)
             .await?;
+        run_migrations(&pool).await?;
         let store = Self { pool };
-        store.migrate().await?;
         Ok(store)
-    }
-
-    async fn migrate(&self) -> Result<(), Error> {
-        sqlx::query(
-            r#"
-            create table if not exists runtime_snapshots (
-              id integer primary key autoincrement,
-              generated_at text not null,
-              payload text not null
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            r#"
-            create table if not exists run_records (
-              id integer primary key autoincrement,
-              issue_id text not null,
-              issue_identifier text not null,
-              session_id text,
-              status text not null,
-              attempt integer,
-              started_at text not null,
-              finished_at text,
-              payload text not null
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            r#"
-            create table if not exists budget_snapshots (
-              id integer primary key autoincrement,
-              component text not null,
-              captured_at text not null,
-              payload text not null
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            r#"
-            create table if not exists movements (
-              id integer primary key autoincrement,
-              movement_id text not null unique,
-              issue_id text,
-              status text not null,
-              created_at text not null,
-              updated_at text not null,
-              payload text not null
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            r#"
-            create table if not exists tasks (
-              id integer primary key autoincrement,
-              task_id text not null unique,
-              movement_id text not null,
-              status text not null,
-              ordinal integer not null,
-              created_at text not null,
-              updated_at text not null,
-              payload text not null
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            r#"
-            create table if not exists reviewed_pull_request_heads (
-              id integer primary key autoincrement,
-              review_key text not null unique,
-              reviewed_at text not null,
-              payload text not null
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 }
 
-#[cfg(feature = "sqlite")]
+pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), Error> {
+    sqlx::migrate!("./migrations")
+        .run(pool)
+        .await
+        .map_err(Error::from)
+}
+
 #[async_trait]
 impl StateStore for SqliteStateStore {
     async fn bootstrap(&self) -> Result<StoreBootstrap, CoreError> {
-        let row: Option<(String,)> =
-            sqlx::query_as("select payload from runtime_snapshots order by id desc limit 1")
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|error| CoreError::Store(error.to_string()))?;
-        let mut bootstrap = match row {
-            None => StoreBootstrap {
-                retrying: Default::default(),
-                throttles: Default::default(),
-                budgets: Default::default(),
-                saved_contexts: Default::default(),
-                recent_events: Vec::new(),
-                movements: Default::default(),
-                tasks: Default::default(),
-                reviewed_pull_request_heads: Default::default(),
-            },
-            Some((payload,)) => {
-                let snapshot: RuntimeSnapshot = serde_json::from_str(&payload)
-                    .map_err(|error| CoreError::Store(error.to_string()))?;
-                StoreBootstrap {
-                    retrying: snapshot
-                        .retrying
-                        .into_iter()
-                        .map(|row| (row.issue_id.clone(), row))
-                        .collect(),
-                    throttles: snapshot
-                        .throttles
-                        .into_iter()
-                        .map(|window| (window.component.clone(), window))
-                        .collect(),
-                    budgets: snapshot
-                        .budgets
-                        .into_iter()
-                        .map(|budget| (budget.component.clone(), budget))
-                        .collect(),
-                    saved_contexts: snapshot
-                        .saved_contexts
-                        .into_iter()
-                        .map(|context| (context.issue_id.clone(), context))
-                        .collect(),
-                    recent_events: snapshot.recent_events,
-                    movements: Default::default(),
-                    tasks: Default::default(),
-                    reviewed_pull_request_heads: Default::default(),
-                }
-            },
+        let snapshot: Option<RuntimeSnapshot> = sqlx::query_as(
+            "select payload from runtime_snapshots order by generated_at desc limit 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| CoreError::Store(error.to_string()))?
+        .map(|(payload,): (String,)| {
+            serde_json::from_str(&payload).map_err(|error| CoreError::Store(error.to_string()))
+        })
+        .transpose()?;
+        let run_history = self.load_run_history().await?;
+        let mut bootstrap = StoreBootstrap {
+            snapshot: snapshot.clone(),
+            retrying: Default::default(),
+            throttles: Default::default(),
+            budgets: Default::default(),
+            saved_contexts: Default::default(),
+            recent_events: Vec::new(),
+            movements: Default::default(),
+            tasks: Default::default(),
+            reviewed_pull_request_heads: Default::default(),
+            run_history,
         };
+
+        if let Some(snapshot) = snapshot {
+            bootstrap.retrying = snapshot
+                .retrying
+                .into_iter()
+                .map(|row| (row.issue_id.clone(), row))
+                .collect();
+            bootstrap.throttles = snapshot
+                .throttles
+                .into_iter()
+                .map(|window| (window.component.clone(), window))
+                .collect();
+            bootstrap.budgets = snapshot
+                .budgets
+                .into_iter()
+                .map(|budget| (budget.component.clone(), budget))
+                .collect();
+            bootstrap.saved_contexts = snapshot
+                .saved_contexts
+                .into_iter()
+                .map(|context| (context.issue_id.clone(), context))
+                .collect();
+            bootstrap.recent_events = snapshot.recent_events;
+        }
 
         let movements = self.load_movements().await?;
         bootstrap.movements = movements.into_iter().map(|m| (m.id.clone(), m)).collect();
@@ -195,10 +116,23 @@ impl StateStore for SqliteStateStore {
     async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), CoreError> {
         let payload =
             serde_json::to_string(snapshot).map_err(|error| CoreError::Store(error.to_string()))?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| CoreError::Store(error.to_string()))?;
+        sqlx::query("delete from runtime_snapshots")
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| CoreError::Store(error.to_string()))?;
         sqlx::query("insert into runtime_snapshots (generated_at, payload) values (?1, ?2)")
             .bind(snapshot.generated_at.to_rfc3339())
             .bind(payload)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| CoreError::Store(error.to_string()))?;
+        transaction
+            .commit()
             .await
             .map_err(|error| CoreError::Store(error.to_string()))?;
         Ok(())
@@ -299,7 +233,6 @@ impl StateStore for SqliteStateStore {
         let rows: Vec<(String,)> = sqlx::query_as(
             r#"
             select payload from movements
-            where status not in ('delivered', 'failed', 'cancelled')
             order by created_at asc
             "#,
         )
@@ -377,24 +310,37 @@ impl StateStore for SqliteStateStore {
     }
 }
 
-#[cfg(not(feature = "sqlite"))]
-#[derive(Debug, Clone, Default)]
-pub struct SqliteStateStore;
-
-#[cfg(not(feature = "sqlite"))]
 impl SqliteStateStore {
-    pub async fn connect(_database_url: &str) -> Result<Self, Error> {
-        Err(Error::Disabled)
+    async fn load_run_history(&self) -> Result<Vec<PersistedRunRecord>, CoreError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"
+            select payload from run_records
+            order by id desc
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| CoreError::Store(error.to_string()))?;
+
+        rows.iter()
+            .map(|(payload,)| {
+                serde_json::from_str(payload).map_err(|error| CoreError::Store(error.to_string()))
+            })
+            .collect()
     }
 }
-
-#[cfg(all(test, feature = "sqlite"))]
+#[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use {
         super::SqliteStateStore,
         chrono::Utc,
-        polyphony_core::{ReviewProviderKind, ReviewTarget, ReviewedPullRequestHead, StateStore},
+        polyphony_core::{
+            AttemptStatus, CodexTotals, DispatchMode, LoadingState, Movement, MovementKind,
+            MovementStatus, PersistedRunRecord, ReviewProviderKind, ReviewTarget,
+            ReviewedPullRequestHead, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, StateStore,
+            TokenUsage, TrackerKind,
+        },
     };
 
     #[tokio::test]
@@ -425,5 +371,93 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].key, reviewed.key);
         assert_eq!(loaded[0].target.repository, "penso/polyphony");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_restores_snapshot_run_history_and_terminal_movements() {
+        let store = SqliteStateStore::connect("sqlite::memory:").await.unwrap();
+        let snapshot = RuntimeSnapshot {
+            generated_at: Utc::now(),
+            counts: SnapshotCounts::default(),
+            cadence: RuntimeCadence::default(),
+            visible_issues: Vec::new(),
+            visible_triggers: Vec::new(),
+            running: Vec::new(),
+            agent_history: Vec::new(),
+            retrying: Vec::new(),
+            codex_totals: CodexTotals::default(),
+            rate_limits: None,
+            throttles: Vec::new(),
+            budgets: Vec::new(),
+            agent_catalogs: Vec::new(),
+            saved_contexts: Vec::new(),
+            recent_events: Vec::new(),
+            movements: Vec::new(),
+            tasks: Vec::new(),
+            loading: LoadingState::default(),
+            dispatch_mode: DispatchMode::default(),
+            tracker_kind: TrackerKind::Github,
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: Vec::new(),
+        };
+        let run = PersistedRunRecord {
+            issue_id: "issue-1".into(),
+            issue_identifier: "GH-1".into(),
+            agent_name: "codex".into(),
+            model: Some("gpt-5".into()),
+            session_id: Some("sess-1".into()),
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            status: AttemptStatus::Succeeded,
+            attempt: Some(1),
+            max_turns: 4,
+            turn_count: 2,
+            last_event: Some("Outcome".into()),
+            last_message: Some("done".into()),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            last_event_at: Some(Utc::now()),
+            tokens: TokenUsage::default(),
+            workspace_path: None,
+            error: None,
+            saved_context: None,
+        };
+        let movement = Movement {
+            id: "mov-1".into(),
+            kind: MovementKind::IssueDelivery,
+            issue_id: Some("issue-1".into()),
+            issue_identifier: Some("GH-1".into()),
+            title: "Deliver it".into(),
+            status: MovementStatus::Delivered,
+            workspace_key: None,
+            workspace_path: None,
+            review_target: None,
+            deliverable: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        store.save_snapshot(&snapshot).await.unwrap();
+        store.record_run(&run).await.unwrap();
+        store.save_movement(&movement).await.unwrap();
+
+        let bootstrap = store.bootstrap().await.unwrap();
+        assert!(bootstrap.snapshot.is_some());
+        assert_eq!(bootstrap.run_history.len(), 1);
+        assert_eq!(bootstrap.movements.len(), 1);
+        assert_eq!(
+            bootstrap
+                .run_history
+                .first()
+                .map(|entry| entry.agent_name.as_str()),
+            Some("codex")
+        );
+        assert_eq!(
+            bootstrap.movements.get("mov-1").map(|entry| entry.status),
+            Some(MovementStatus::Delivered)
+        );
     }
 }

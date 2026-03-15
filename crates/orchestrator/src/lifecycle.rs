@@ -1,6 +1,17 @@
 use crate::{prelude::*, *};
 
 impl RuntimeService {
+    pub(crate) async fn record_run_history(
+        &mut self,
+        run: PersistedRunRecord,
+    ) -> Result<(), Error> {
+        if let Some(store) = &self.store {
+            store.record_run(&run).await?;
+        }
+        self.state.run_history.push_front(run);
+        Ok(())
+    }
+
     pub(crate) async fn startup_cleanup(&mut self) {
         let workflow = self.workflow();
         let terminal = workflow.config.tracker.terminal_states.clone();
@@ -85,6 +96,27 @@ impl RuntimeService {
             {
                 movement.status = MovementStatus::Cancelled;
                 movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    let _ = store.save_movement(movement).await;
+                }
+            }
+            let finished_at = Utc::now();
+            let outcome = AgentRunResult {
+                status: AttemptStatus::CancelledByReconciliation,
+                turns_completed: running.turn_count,
+                error: Some("stopped by orchestrator reconciliation".into()),
+                final_issue_state: None,
+            };
+            self.finalize_saved_context(issue_id, &running.issue.identifier, &running, &outcome);
+            let run = build_persisted_run_record(
+                &running,
+                outcome.status,
+                finished_at,
+                outcome.error.clone(),
+                self.state.saved_contexts.get(issue_id).cloned(),
+            );
+            if let Err(error) = self.record_run_history(run).await {
+                warn!(%error, issue_identifier = %running.issue.identifier, "persisting cancelled run failed");
             }
             self.push_event(
                 EventScope::Reconcile,

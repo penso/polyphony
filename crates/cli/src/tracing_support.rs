@@ -231,6 +231,41 @@ pub(crate) fn init_run_log_sink(workflow_path: &Path) -> Result<FileLogSink, Err
     FileLogSink::new(log_dir.join(file_name))
 }
 
+pub(crate) fn load_historical_log_lines(workflow_path: &Path) -> Result<Vec<String>, Error> {
+    let log_dir = workflow_root_dir(workflow_path)?
+        .join(".polyphony")
+        .join("logs");
+    if !log_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = fs::read_dir(&log_dir)
+        .map_err(Error::Io)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    let mut lines = Vec::new();
+    for path in entries {
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                warn!(path = %path.display(), %error, "failed to load historical log file");
+                continue;
+            },
+        };
+        lines.extend(
+            content
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned),
+        );
+    }
+    Ok(lines)
+}
+
 fn install_tracing_subscriber(
     filter: EnvFilter,
     tracer_provider: Option<SdkTracerProvider>,

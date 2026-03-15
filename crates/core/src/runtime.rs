@@ -161,6 +161,8 @@ pub struct RuntimeSnapshot {
     #[serde(default)]
     pub visible_triggers: Vec<VisibleTriggerRow>,
     pub running: Vec<RunningRow>,
+    #[serde(default)]
+    pub agent_history: Vec<AgentHistoryRow>,
     pub retrying: Vec<RetryRow>,
     pub codex_totals: CodexTotals,
     pub rate_limits: Option<Value>,
@@ -265,22 +267,94 @@ pub struct IssueStateUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentHistoryRow {
+    pub issue_id: String,
+    pub issue_identifier: String,
+    pub agent_name: String,
+    pub model: Option<String>,
+    pub status: AttemptStatus,
+    pub attempt: Option<u32>,
+    pub max_turns: u32,
+    pub turn_count: u32,
+    pub session_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub codex_app_server_pid: Option<String>,
+    pub last_event: Option<String>,
+    pub last_message: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub last_event_at: Option<DateTime<Utc>>,
+    pub tokens: TokenUsage,
+    #[serde(default)]
+    pub workspace_path: Option<PathBuf>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub saved_context: Option<AgentContextSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedRunRecord {
     pub issue_id: String,
     pub issue_identifier: String,
+    pub agent_name: String,
+    pub model: Option<String>,
     pub session_id: Option<String>,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub codex_app_server_pid: Option<String>,
     pub status: AttemptStatus,
     pub attempt: Option<u32>,
+    pub max_turns: u32,
+    pub turn_count: u32,
+    pub last_event: Option<String>,
+    pub last_message: Option<String>,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
-    pub details: BTreeMap<String, Value>,
+    pub last_event_at: Option<DateTime<Utc>>,
+    pub tokens: TokenUsage,
+    #[serde(default)]
+    pub workspace_path: Option<PathBuf>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub saved_context: Option<AgentContextSnapshot>,
+}
+
+impl PersistedRunRecord {
+    #[must_use]
+    pub fn to_history_row(&self) -> AgentHistoryRow {
+        AgentHistoryRow {
+            issue_id: self.issue_id.clone(),
+            issue_identifier: self.issue_identifier.clone(),
+            agent_name: self.agent_name.clone(),
+            model: self.model.clone(),
+            status: self.status,
+            attempt: self.attempt,
+            max_turns: self.max_turns,
+            turn_count: self.turn_count,
+            session_id: self.session_id.clone(),
+            thread_id: self.thread_id.clone(),
+            turn_id: self.turn_id.clone(),
+            codex_app_server_pid: self.codex_app_server_pid.clone(),
+            last_event: self.last_event.clone(),
+            last_message: self.last_message.clone(),
+            started_at: self.started_at,
+            finished_at: self.finished_at,
+            last_event_at: self.last_event_at,
+            tokens: self.tokens.clone(),
+            workspace_path: self.workspace_path.clone(),
+            error: self.error.clone(),
+            saved_context: self.saved_context.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreBootstrap {
+    #[serde(default)]
+    pub snapshot: Option<RuntimeSnapshot>,
     pub retrying: HashMap<String, RetryRow>,
     pub throttles: HashMap<String, ThrottleWindow>,
     pub budgets: HashMap<String, BudgetSnapshot>,
@@ -292,6 +366,8 @@ pub struct StoreBootstrap {
     pub tasks: HashMap<String, Task>,
     #[serde(default)]
     pub reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
+    #[serde(default)]
+    pub run_history: Vec<PersistedRunRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

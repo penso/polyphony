@@ -15,34 +15,35 @@ pub struct AgentRegistryRuntime {
 }
 
 impl AgentRegistryRuntime {
+    #[allow(clippy::vec_init_then_push)]
     pub fn new() -> Self {
-        let providers: Vec<Arc<dyn AgentProviderRuntime>> = [
-            #[cfg(feature = "acp")]
-            Some(Arc::new(polyphony_agent_acp::AcpRuntime) as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "acpx")]
-            Some(Arc::new(polyphony_agent_acpx::AcpxRuntime) as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "pi")]
-            Some(Arc::new(polyphony_agent_pi::PiRuntime) as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "codex")]
-            Some(Arc::new(polyphony_agent_codex::CodexRuntime) as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "claude")]
-            Some(Arc::new(polyphony_agent_claude::ClaudeRuntime::default())
-                as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "copilot")]
-            Some(Arc::new(polyphony_agent_copilot::CopilotRuntime::default())
-                as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "openai")]
-            Some(Arc::new(polyphony_agent_openai::OpenAiRuntime::new())
-                as Arc<dyn AgentProviderRuntime>),
-            #[cfg(feature = "local")]
-            Some(
-                Arc::new(polyphony_agent_local::LocalCliRuntime::fallback_transport())
-                    as Arc<dyn AgentProviderRuntime>,
-            ),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        #[allow(unused_mut)]
+        let mut providers = Vec::new();
+        #[cfg(feature = "acp")]
+        providers.push(Arc::new(polyphony_agent_acp::AcpRuntime) as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "acpx")]
+        providers
+            .push(Arc::new(polyphony_agent_acpx::AcpxRuntime) as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "pi")]
+        providers.push(Arc::new(polyphony_agent_pi::PiRuntime) as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "codex")]
+        providers
+            .push(Arc::new(polyphony_agent_codex::CodexRuntime) as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "claude")]
+        providers.push(Arc::new(polyphony_agent_claude::ClaudeRuntime::default())
+            as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "copilot")]
+        providers.push(Arc::new(polyphony_agent_copilot::CopilotRuntime::default())
+            as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "openai")]
+        providers
+            .push(Arc::new(polyphony_agent_openai::OpenAiRuntime::new())
+                as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "local")]
+        providers.push(
+            Arc::new(polyphony_agent_local::LocalCliRuntime::fallback_transport())
+                as Arc<dyn AgentProviderRuntime>,
+        );
         Self { providers }
     }
 
