@@ -15,12 +15,14 @@ use {
         CodexTotals, Error as CoreError, EventScope, FeedbackAction, FeedbackLink,
         FeedbackNotification, Issue, IssueTracker, LoadingState, Movement, MovementId,
         MovementKind, MovementRow, MovementStatus, NetworkCache, PersistedRunRecord, PipelinePlan,
-        PullRequestCommenter, PullRequestManager, PullRequestRef, PullRequestRequest,
-        PullRequestReviewComment, PullRequestReviewTrigger, PullRequestReviewTriggerSource,
-        RateLimitSignal, RetryRow, ReviewTarget, ReviewedPullRequestHead, RunningRow,
-        RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts, StateStore, Task, TaskId,
-        TaskRow, TaskStatus, ThrottleWindow, TokenUsage, VisibleIssueRow, WorkspaceCommitRequest,
-        WorkspaceCommitter, WorkspaceProvisioner, new_movement_id, sanitize_workspace_key,
+        PullRequestCommentTrigger, PullRequestCommenter, PullRequestConflictTrigger,
+        PullRequestManager, PullRequestRef, PullRequestRequest, PullRequestReviewComment,
+        PullRequestReviewTrigger, PullRequestTrigger, PullRequestTriggerSource, RateLimitSignal,
+        RetryRow, ReviewTarget, ReviewedPullRequestHead, RunningRow, RuntimeCadence, RuntimeEvent,
+        RuntimeSnapshot, SnapshotCounts, StateStore, Task, TaskId, TaskRow, TaskStatus,
+        ThrottleWindow, TokenUsage, VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
+        WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner, new_movement_id,
+        sanitize_workspace_key,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{
@@ -56,6 +58,9 @@ const DEFAULT_AUTOMATION_PR_TITLE: &str = "{{ issue.identifier }}: {{ issue.titl
 const DEFAULT_AUTOMATION_PR_BODY: &str = "Automated handoff for {{ issue.identifier }}.\n\nIssue: {{ issue.url }}\nBase branch: {{ base_branch }}\nHead branch: {{ head_branch }}\nCommit: {{ commit_sha }}";
 const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str = "Review the current branch against {{ base_branch }}.\nInspect the repository state and write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Recommended human checks\nDo not modify tracked source files other than `.polyphony/review.md`.";
 const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str = "Review pull request {{ issue.identifier }} against {{ base_branch }} at commit {{ head_sha }}.\nAuthor: {{ pull_request_author }}\nLabels: {{ pull_request_labels }}\nInspect the diff and repository state, then write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Required fixes\n- Optional improvements\nIf you have precise file-level findings, you may also write `.polyphony/review-comments.json` as a JSON array of objects with `path`, `line`, and `body`.\nDo not modify tracked source files other than `.polyphony/review.md` and `.polyphony/review-comments.json`.";
+const DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT: &str = "Review unresolved pull request feedback for {{ issue.identifier }} at commit {{ head_sha }}.\nComment author: {{ pull_request_comment_author }}\nComment path: {{ pull_request_comment_path }}\nComment line: {{ pull_request_comment_line }}\nComment body:\n{{ pull_request_comment_body }}\n\nInspect the diff and repository state, determine whether the unresolved feedback still requires changes, then write a concise markdown response to `.polyphony/review.md`.\nInclude these sections:\n- Summary
+- Requested action
+- Suggested response\nIf you have precise file-level findings, you may also write `.polyphony/review-comments.json` as a JSON array of objects with `path`, `line`, and `body`.\nDo not modify tracked source files other than `.polyphony/review.md` and `.polyphony/review-comments.json`.";
 
 const DEFAULT_PLANNER_PROMPT: &str = r#"You are a planning agent for issue {{ issue.identifier }}: {{ issue.title }}.
 
@@ -96,6 +101,9 @@ pub enum RuntimeCommand {
         issue_id: String,
         agent_name: Option<String>,
     },
+    DispatchPullRequestTrigger {
+        trigger_id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +114,7 @@ pub struct RuntimeHandle {
 
 pub struct RuntimeComponents {
     pub tracker: Arc<dyn IssueTracker>,
-    pub pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>>,
+    pub pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>>,
     pub agent: Arc<dyn AgentRuntime>,
     pub committer: Option<Arc<dyn WorkspaceCommitter>>,
     pub pull_request_manager: Option<Arc<dyn PullRequestManager>>,
@@ -119,7 +127,7 @@ pub type RuntimeComponentFactory =
 
 pub struct RuntimeService {
     tracker: Arc<dyn IssueTracker>,
-    pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>>,
+    pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>>,
     agent: Arc<dyn AgentRuntime>,
     provisioner: Arc<dyn WorkspaceProvisioner>,
     committer: Option<Arc<dyn WorkspaceCommitter>>,
@@ -135,6 +143,7 @@ pub struct RuntimeService {
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     pending_refresh: bool,
     pending_manual_dispatches: Vec<(String, Option<String>)>,
+    pending_manual_pull_request_trigger_dispatches: Vec<String>,
     state: RuntimeState,
     reload_support: Option<WorkflowReloadSupport>,
 }
@@ -179,12 +188,19 @@ struct RunningTask {
     /// Set when this running task is part of a pipeline.
     movement_id: Option<MovementId>,
     review_target: Option<ReviewTarget>,
+    review_comment_marker: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct RetryEntry {
     row: RetryRow,
     due_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct DiscardedTriggerEntry {
+    row: VisibleTriggerRow,
+    discarded_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +237,10 @@ struct RuntimeState {
     budgets: HashMap<String, BudgetSnapshot>,
     agent_catalogs: HashMap<String, AgentModelCatalog>,
     visible_issues: Vec<VisibleIssueRow>,
+    visible_review_triggers: HashMap<String, PullRequestReviewTrigger>,
+    visible_comment_triggers: HashMap<String, PullRequestCommentTrigger>,
+    visible_conflict_triggers: HashMap<String, PullRequestConflictTrigger>,
+    discarded_triggers: HashMap<String, DiscardedTriggerEntry>,
     saved_contexts: HashMap<String, AgentContextSnapshot>,
     recent_events: VecDeque<RuntimeEvent>,
     ended_runtime_seconds: f64,
@@ -239,7 +259,7 @@ struct RuntimeState {
     /// Workspace keys from orphaned workspaces detected at startup, pending dispatch.
     orphan_dispatch_keys: HashSet<String>,
     reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
-    review_retry_triggers: HashMap<String, PullRequestReviewTrigger>,
+    pull_request_retry_triggers: HashMap<String, PullRequestTrigger>,
     review_trigger_suppressions: HashMap<String, ReviewTriggerSuppression>,
 }
 
@@ -254,6 +274,10 @@ impl Default for RuntimeState {
             budgets: HashMap::new(),
             agent_catalogs: HashMap::new(),
             visible_issues: Vec::new(),
+            visible_review_triggers: HashMap::new(),
+            visible_comment_triggers: HashMap::new(),
+            visible_conflict_triggers: HashMap::new(),
+            discarded_triggers: HashMap::new(),
             saved_contexts: HashMap::new(),
             recent_events: VecDeque::with_capacity(128),
             ended_runtime_seconds: 0.0,
@@ -271,7 +295,7 @@ impl Default for RuntimeState {
             worktree_keys: HashSet::new(),
             orphan_dispatch_keys: HashSet::new(),
             reviewed_pull_request_heads: HashMap::new(),
-            review_retry_triggers: HashMap::new(),
+            pull_request_retry_triggers: HashMap::new(),
             review_trigger_suppressions: HashMap::new(),
         }
     }
@@ -298,7 +322,7 @@ struct WorkflowReloadSupport {
 impl RuntimeService {
     pub fn new(
         tracker: Arc<dyn IssueTracker>,
-        pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>>,
+        pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>>,
         agent: Arc<dyn AgentRuntime>,
         provisioner: Arc<dyn WorkspaceProvisioner>,
         committer: Option<Arc<dyn WorkspaceCommitter>>,
@@ -315,7 +339,7 @@ impl RuntimeService {
         (
             Self {
                 tracker,
-                pull_request_review_trigger_source,
+                pull_request_trigger_source,
                 agent,
                 provisioner,
                 committer,
@@ -331,6 +355,7 @@ impl RuntimeService {
                 external_command_rx,
                 pending_refresh: false,
                 pending_manual_dispatches: Vec::new(),
+                pending_manual_pull_request_trigger_dispatches: Vec::new(),
                 reload_support: None,
                 state: RuntimeState::default(),
             },
@@ -423,6 +448,12 @@ impl RuntimeService {
                             info!(%issue_id, ?agent_name, "manual dispatch queued (event loop)");
                             self.pending_manual_dispatches.push((issue_id, agent_name));
                             next_tick = Instant::now();
+                        }
+                        RuntimeCommand::DispatchPullRequestTrigger { trigger_id } => {
+                            info!(%trigger_id, "manual pull request trigger dispatch queued (event loop)");
+                            self.pending_manual_pull_request_trigger_dispatches
+                                .push(trigger_id);
+                            let _ = self.emit_snapshot().await;
                         }
                     }
                 }
@@ -528,6 +559,11 @@ impl RuntimeService {
                     info!(%issue_id, ?agent_name, "manual dispatch queued");
                     self.pending_manual_dispatches.push((issue_id, agent_name));
                 },
+                Ok(RuntimeCommand::DispatchPullRequestTrigger { trigger_id }) => {
+                    info!(%trigger_id, "manual pull request trigger dispatch queued");
+                    self.pending_manual_pull_request_trigger_dispatches
+                        .push(trigger_id);
+                },
                 Err(_) => return false,
             }
         }
@@ -571,6 +607,255 @@ impl RuntimeService {
                 "manual dispatch",
             )
             .await;
+        }
+    }
+
+    fn visible_pull_request_trigger(&self, trigger_id: &str) -> Option<PullRequestTrigger> {
+        self.state
+            .visible_review_triggers
+            .get(trigger_id)
+            .cloned()
+            .map(PullRequestTrigger::Review)
+            .or_else(|| {
+                self.state
+                    .visible_comment_triggers
+                    .get(trigger_id)
+                    .cloned()
+                    .map(PullRequestTrigger::Comment)
+            })
+            .or_else(|| {
+                self.state
+                    .visible_conflict_triggers
+                    .get(trigger_id)
+                    .cloned()
+                    .map(PullRequestTrigger::Conflict)
+            })
+    }
+
+    fn discarded_trigger_ttl(&self) -> chrono::Duration {
+        let poll_interval_ms = self.workflow_rx.borrow().config.polling.interval_ms;
+        let clamped_ms = (poll_interval_ms.saturating_mul(3)).clamp(30_000, 300_000);
+        chrono::Duration::milliseconds(clamped_ms as i64)
+    }
+
+    fn issue_trigger_row(
+        &self,
+        tracker_kind: polyphony_core::TrackerKind,
+        row: &VisibleIssueRow,
+    ) -> VisibleTriggerRow {
+        let mut row = row.clone();
+        let key = sanitize_workspace_key(&row.issue_identifier);
+        row.has_workspace = self.state.worktree_keys.contains(&key);
+        VisibleTriggerRow {
+            trigger_id: row.issue_id.clone(),
+            kind: VisibleTriggerKind::Issue,
+            source: tracker_kind.to_string(),
+            identifier: row.issue_identifier.clone(),
+            title: row.title.clone(),
+            status: row.state.clone(),
+            priority: row.priority,
+            labels: row.labels.clone(),
+            description: row.description.clone(),
+            url: row.url.clone(),
+            author: row.author.clone(),
+            parent_id: row.parent_id.clone(),
+            updated_at: row.updated_at,
+            created_at: row.created_at,
+            has_workspace: row.has_workspace,
+        }
+    }
+
+    fn pull_request_trigger_row(&self, trigger: &PullRequestTrigger) -> VisibleTriggerRow {
+        match trigger {
+            PullRequestTrigger::Review(trigger) => VisibleTriggerRow {
+                trigger_id: trigger.dedupe_key(),
+                kind: VisibleTriggerKind::PullRequestReview,
+                source: trigger.provider.to_string(),
+                identifier: trigger.display_identifier(),
+                title: trigger.title.clone(),
+                status: self
+                    .pull_request_trigger_status(&PullRequestTrigger::Review(trigger.clone())),
+                priority: None,
+                labels: trigger.labels.clone(),
+                description: Some(format!(
+                    "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nCheckout ref: {}",
+                    trigger.repository,
+                    trigger.base_branch,
+                    trigger.head_branch,
+                    trigger.head_sha,
+                    trigger.checkout_ref.as_deref().unwrap_or("<none>"),
+                )),
+                url: trigger.url.clone(),
+                author: trigger.author_login.clone(),
+                parent_id: None,
+                updated_at: trigger.updated_at,
+                created_at: trigger.created_at.or(trigger.updated_at),
+                has_workspace: self
+                    .state
+                    .worktree_keys
+                    .contains(&sanitize_workspace_key(&trigger.display_identifier())),
+            },
+            PullRequestTrigger::Comment(trigger) => VisibleTriggerRow {
+                trigger_id: trigger.dedupe_key(),
+                kind: VisibleTriggerKind::PullRequestComment,
+                source: trigger.provider.to_string(),
+                identifier: trigger.display_identifier(),
+                title: format!(
+                    "{}{}: {}",
+                    trigger.path,
+                    trigger
+                        .line
+                        .map(|line| format!(":{line}"))
+                        .unwrap_or_default(),
+                    truncate_for_trigger_title(&trigger.body, 72),
+                ),
+                status: self
+                    .pull_request_trigger_status(&PullRequestTrigger::Comment(trigger.clone())),
+                priority: None,
+                labels: trigger.labels.clone(),
+                description: Some(format!(
+                    "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nPath: {}\nLine: {}\nComment author: {}\n\n{}",
+                    trigger.repository,
+                    trigger.base_branch,
+                    trigger.head_branch,
+                    trigger.head_sha,
+                    trigger.path,
+                    trigger
+                        .line
+                        .map(|line| line.to_string())
+                        .unwrap_or_else(|| "<none>".into()),
+                    trigger
+                        .author_login
+                        .clone()
+                        .unwrap_or_else(|| "<unknown>".into()),
+                    trigger.body,
+                )),
+                url: trigger.url.clone(),
+                author: trigger.author_login.clone(),
+                parent_id: None,
+                updated_at: trigger.updated_at.or(trigger.created_at),
+                created_at: trigger.created_at.or(trigger.updated_at),
+                has_workspace: self
+                    .state
+                    .worktree_keys
+                    .contains(&sanitize_workspace_key(&trigger.display_identifier())),
+            },
+            PullRequestTrigger::Conflict(trigger) => VisibleTriggerRow {
+                trigger_id: trigger.dedupe_key(),
+                kind: VisibleTriggerKind::PullRequestConflict,
+                source: trigger.provider.to_string(),
+                identifier: trigger.display_identifier(),
+                title: format!(
+                    "conflicts with {}: {}",
+                    trigger.base_branch, trigger.pull_request_title
+                ),
+                status: self
+                    .pull_request_trigger_status(&PullRequestTrigger::Conflict(trigger.clone())),
+                priority: None,
+                labels: trigger.labels.clone(),
+                description: Some(format!(
+                    "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nMergeable: {}\nMerge state: {}",
+                    trigger.repository,
+                    trigger.base_branch,
+                    trigger.head_branch,
+                    trigger.head_sha,
+                    trigger.mergeable_state,
+                    trigger.merge_state_status,
+                )),
+                url: trigger.url.clone(),
+                author: trigger.author_login.clone(),
+                parent_id: None,
+                updated_at: trigger.updated_at.or(trigger.created_at),
+                created_at: trigger.created_at.or(trigger.updated_at),
+                has_workspace: self
+                    .state
+                    .worktree_keys
+                    .contains(&sanitize_workspace_key(&trigger.display_identifier())),
+            },
+        }
+    }
+
+    fn record_discarded_trigger(&mut self, mut row: VisibleTriggerRow) {
+        let became_discarded = !self.state.discarded_triggers.contains_key(&row.trigger_id);
+        let identifier = row.identifier.clone();
+        let kind = row.kind;
+        row.status = "already_fixed".into();
+        row.updated_at = Some(Utc::now());
+        self.state
+            .discarded_triggers
+            .insert(row.trigger_id.clone(), DiscardedTriggerEntry {
+                row,
+                discarded_at: Utc::now(),
+            });
+        if became_discarded {
+            self.push_event(
+                EventScope::Tracker,
+                format!("{kind} {identifier} is already fixed"),
+            );
+        }
+    }
+
+    fn prune_discarded_triggers(&mut self) {
+        let ttl = self.discarded_trigger_ttl();
+        let now = Utc::now();
+        self.state
+            .discarded_triggers
+            .retain(|_, entry| now.signed_duration_since(entry.discarded_at) < ttl);
+    }
+
+    fn issue_is_actionable(&self, issue_id: &str) -> bool {
+        self.state.running.contains_key(issue_id)
+            || self.state.retrying.contains_key(issue_id)
+            || self.is_claimed(issue_id)
+    }
+
+    async fn process_manual_pull_request_trigger_dispatches(&mut self) {
+        let trigger_ids = std::mem::take(&mut self.pending_manual_pull_request_trigger_dispatches);
+        if trigger_ids.is_empty() {
+            return;
+        }
+        info!(
+            count = trigger_ids.len(),
+            "processing manual pull request trigger dispatches"
+        );
+        let workflow = self.workflow();
+        for trigger_id in trigger_ids {
+            let Some(trigger) = self.visible_pull_request_trigger(&trigger_id) else {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("manual dispatch: pull request trigger {trigger_id} not found"),
+                );
+                warn!(%trigger_id, "pull request trigger not found for manual dispatch");
+                continue;
+            };
+            if let Some(reason) = self.pull_request_trigger_suppression(&workflow, &trigger) {
+                let status = self.pull_request_trigger_status(&trigger);
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "manual dispatch skipped: {} is {status} ({reason:?})",
+                        trigger.display_identifier()
+                    ),
+                );
+                continue;
+            }
+            if let Err(error) = self
+                .dispatch_pull_request_trigger(workflow.clone(), trigger.clone(), None)
+                .await
+            {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "manual dispatch failed: {} ({error})",
+                        trigger.display_identifier()
+                    ),
+                );
+                error!(
+                    %error,
+                    trigger_id = %trigger.dedupe_key(),
+                    "manual pull request trigger dispatch failed"
+                );
+            }
         }
     }
 
@@ -633,6 +918,7 @@ impl RuntimeService {
         }
 
         self.process_manual_dispatches().await;
+        self.process_manual_pull_request_trigger_dispatches().await;
 
         debug!("tick: reconciling running sessions");
         self.state.loading.reconciling = true;
@@ -714,9 +1000,28 @@ impl RuntimeService {
         self.state.cached_at = None;
         info!(count = issues.len(), "tick: fetched issues from tracker");
 
+        let previous_issue_rows = self.state.visible_issues.clone();
         let mut issues = issues;
         issues.sort_by(dispatch_order);
         self.state.visible_issues = issues.iter().map(summarize_issue).collect();
+        let tracker_kind = workflow.config.tracker.kind;
+        let current_issue_ids = self
+            .state
+            .visible_issues
+            .iter()
+            .map(|issue| issue.issue_id.clone())
+            .collect::<HashSet<_>>();
+        for issue_row in previous_issue_rows {
+            if current_issue_ids.contains(&issue_row.issue_id) {
+                self.state.discarded_triggers.remove(&issue_row.issue_id);
+                continue;
+            }
+            if self.issue_is_actionable(&issue_row.issue_id) {
+                continue;
+            }
+            self.record_discarded_trigger(self.issue_trigger_row(tracker_kind, &issue_row));
+        }
+        self.prune_discarded_triggers();
         self.save_cache().await;
 
         // Auto-dispatch issues whose orphaned workspaces were found at startup.
@@ -747,6 +1052,13 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
         }
 
+        if self.pull_request_trigger_source.is_some() {
+            self.poll_pull_request_triggers(
+                workflow.clone(),
+                self.state.dispatch_mode != polyphony_core::DispatchMode::Manual,
+            )
+            .await;
+        }
         if !workflow.config.has_dispatch_agents() {
             let _ = self.emit_snapshot().await;
             return false;
@@ -755,10 +1067,6 @@ impl RuntimeService {
             debug!("tick: dispatch skipped (manual mode)");
             let _ = self.emit_snapshot().await;
             return false;
-        }
-        if workflow.config.review_triggers.pr_reviews.enabled {
-            self.poll_pull_request_review_triggers(workflow.clone())
-                .await;
         }
         for issue in issues {
             if !self.should_dispatch(&workflow, &issue) {
@@ -779,15 +1087,15 @@ impl RuntimeService {
         false
     }
 
-    async fn poll_pull_request_review_triggers(&mut self, workflow: LoadedWorkflow) {
-        let Some(source) = self.pull_request_review_trigger_source.clone() else {
+    async fn poll_pull_request_triggers(&mut self, workflow: LoadedWorkflow, allow_dispatch: bool) {
+        let Some(source) = self.pull_request_trigger_source.clone() else {
             return;
         };
         let source_component_key = source.component_key();
         if self.is_throttled(&source_component_key) {
             return;
         }
-        let triggers = match source.fetch_review_triggers().await {
+        let triggers = match source.fetch_triggers().await {
             Ok(triggers) => triggers,
             Err(CoreError::RateLimited(signal)) => {
                 self.register_throttle(*signal);
@@ -796,29 +1104,79 @@ impl RuntimeService {
             Err(error) => {
                 self.push_event(
                     EventScope::Tracker,
-                    format!("PR review trigger fetch failed: {error}"),
+                    format!("pull request trigger fetch failed: {error}"),
                 );
-                warn!(%error, "pull request review trigger fetch failed");
+                warn!(%error, "pull request trigger fetch failed");
                 return;
             },
         };
+        let previous_triggers = self
+            .state
+            .visible_review_triggers
+            .values()
+            .cloned()
+            .map(PullRequestTrigger::Review)
+            .chain(
+                self.state
+                    .visible_comment_triggers
+                    .values()
+                    .cloned()
+                    .map(PullRequestTrigger::Comment),
+            )
+            .chain(
+                self.state
+                    .visible_conflict_triggers
+                    .values()
+                    .cloned()
+                    .map(PullRequestTrigger::Conflict),
+            )
+            .collect::<Vec<_>>();
+        self.state.visible_review_triggers.clear();
+        self.state.visible_comment_triggers.clear();
+        self.state.visible_conflict_triggers.clear();
+        for trigger in &triggers {
+            match trigger {
+                PullRequestTrigger::Review(trigger) => {
+                    self.state
+                        .visible_review_triggers
+                        .insert(trigger.dedupe_key(), trigger.clone());
+                },
+                PullRequestTrigger::Comment(trigger) => {
+                    self.state
+                        .visible_comment_triggers
+                        .insert(trigger.dedupe_key(), trigger.clone());
+                },
+                PullRequestTrigger::Conflict(trigger) => {
+                    self.state
+                        .visible_conflict_triggers
+                        .insert(trigger.dedupe_key(), trigger.clone());
+                },
+            }
+            self.state.discarded_triggers.remove(&trigger.dedupe_key());
+        }
         let mut seen_trigger_keys = HashSet::new();
         for trigger in triggers {
             seen_trigger_keys.insert(trigger.dedupe_key());
-            if let Some(reason) = self.review_trigger_suppression(&workflow, &trigger) {
-                self.record_review_trigger_suppression(&trigger, reason);
+            if let Some(reason) = self.pull_request_trigger_suppression(&workflow, &trigger) {
+                self.record_review_trigger_suppression(trigger.dedupe_key(), reason);
                 continue;
             }
-            self.clear_review_trigger_suppression(&trigger);
+            self.clear_review_trigger_suppression(&trigger.dedupe_key());
+            if matches!(trigger, PullRequestTrigger::Conflict(_)) {
+                continue;
+            }
+            if !allow_dispatch {
+                continue;
+            }
             if !self.has_available_slot(&workflow, "review") {
                 break;
             }
             if let Err(error) = self
-                .dispatch_pull_request_review(workflow.clone(), trigger.clone(), None)
+                .dispatch_pull_request_trigger(workflow.clone(), trigger.clone(), None)
                 .await
             {
                 self.state
-                    .review_retry_triggers
+                    .pull_request_retry_triggers
                     .insert(trigger.synthetic_issue_id(), trigger.clone());
                 self.schedule_retry(
                     trigger.synthetic_issue_id(),
@@ -833,6 +1191,16 @@ impl RuntimeService {
         self.state
             .review_trigger_suppressions
             .retain(|key, _| seen_trigger_keys.contains(key));
+        for trigger in previous_triggers {
+            if seen_trigger_keys.contains(&trigger.dedupe_key()) {
+                continue;
+            }
+            if self.issue_is_actionable(&trigger.synthetic_issue_id()) {
+                continue;
+            }
+            self.record_discarded_trigger(self.pull_request_trigger_row(&trigger));
+        }
+        self.prune_discarded_triggers();
     }
 
     async fn reconcile_running(&mut self) {
@@ -1139,6 +1507,7 @@ impl RuntimeService {
             active_task_id: None,
             movement_id: None,
             review_target: None,
+            review_comment_marker: None,
         });
         self.push_event(
             EventScope::Dispatch,
@@ -1617,6 +1986,7 @@ impl RuntimeService {
             active_task_id,
             movement_id,
             review_target: None,
+            review_comment_marker: None,
         });
         self.push_event(
             EventScope::Dispatch,
@@ -1881,7 +2251,12 @@ impl RuntimeService {
         if !workflow.config.has_dispatch_agents() {
             return;
         }
-        if let Some(trigger) = self.state.review_retry_triggers.get(&issue_id).cloned() {
+        if let Some(trigger) = self
+            .state
+            .pull_request_retry_triggers
+            .get(&issue_id)
+            .cloned()
+        {
             if !self.has_available_slot(&workflow, "review") {
                 self.schedule_retry(
                     issue_id,
@@ -1894,7 +2269,7 @@ impl RuntimeService {
                 return;
             }
             if let Err(error) = self
-                .dispatch_pull_request_review(workflow.clone(), trigger, Some(retry.row.attempt))
+                .dispatch_pull_request_trigger(workflow.clone(), trigger, Some(retry.row.attempt))
                 .await
             {
                 self.schedule_retry(
@@ -2037,26 +2412,54 @@ impl RuntimeService {
         Ok(())
     }
 
-    fn review_trigger_suppression(
+    fn pull_request_trigger_suppression(
         &self,
         workflow: &LoadedWorkflow,
-        trigger: &PullRequestReviewTrigger,
+        trigger: &PullRequestTrigger,
     ) -> Option<ReviewTriggerSuppression> {
-        if !workflow.config.review_triggers.pr_reviews.include_drafts && trigger.is_draft {
+        let (issue_id, labels, updated_at, is_draft) = match trigger {
+            PullRequestTrigger::Review(trigger) => (
+                trigger.synthetic_issue_id(),
+                &trigger.labels,
+                trigger.updated_at,
+                trigger.is_draft,
+            ),
+            PullRequestTrigger::Comment(trigger) => (
+                trigger.synthetic_issue_id(),
+                &trigger.labels,
+                trigger.updated_at.or(trigger.created_at),
+                trigger.is_draft,
+            ),
+            PullRequestTrigger::Conflict(trigger) => (
+                trigger.synthetic_issue_id(),
+                &trigger.labels,
+                trigger.updated_at.or(trigger.created_at),
+                trigger.is_draft,
+            ),
+        };
+        if !workflow.config.review_triggers.pr_reviews.include_drafts && is_draft {
             return Some(ReviewTriggerSuppression::Draft);
         }
-        let issue_id = trigger.synthetic_issue_id();
         if self.state.running.contains_key(&issue_id) || self.is_claimed(&issue_id) {
             return Some(ReviewTriggerSuppression::AlreadyRunning);
         }
-        if self
-            .state
-            .reviewed_pull_request_heads
-            .contains_key(&trigger.dedupe_key())
-        {
-            return Some(ReviewTriggerSuppression::AlreadyReviewed);
+
+        if matches!(
+            trigger,
+            PullRequestTrigger::Review(_) | PullRequestTrigger::Comment(_)
+        ) {
+            let reviewed_key = review_target_key(&trigger.review_target());
+            if let Some(reviewed) = self.state.reviewed_pull_request_heads.get(&reviewed_key) {
+                let reviewed_after_update = updated_at
+                    .map(|updated_at| reviewed.reviewed_at >= updated_at)
+                    .unwrap_or(true);
+                if reviewed_after_update {
+                    return Some(ReviewTriggerSuppression::AlreadyReviewed);
+                }
+            }
         }
-        if let Some(author) = trigger.author_login.as_deref() {
+
+        if let Some(author) = pull_request_trigger_author(trigger) {
             if workflow
                 .config
                 .review_triggers
@@ -2081,7 +2484,8 @@ impl RuntimeService {
                 });
             }
         }
-        if let Some(label) = trigger.labels.iter().find(|label| {
+
+        if let Some(label) = labels.iter().find(|label| {
             workflow
                 .config
                 .review_triggers
@@ -2099,7 +2503,7 @@ impl RuntimeService {
             .pr_reviews
             .only_labels
             .is_empty()
-            && !trigger.labels.iter().any(|label| {
+            && !labels.iter().any(|label| {
                 workflow
                     .config
                     .review_triggers
@@ -2117,7 +2521,7 @@ impl RuntimeService {
                     .clone(),
             });
         }
-        let updated_at = trigger.updated_at?;
+        let updated_at = updated_at?;
         let debounce = chrono::Duration::seconds(
             workflow.config.review_triggers.pr_reviews.debounce_seconds as i64,
         );
@@ -2129,73 +2533,112 @@ impl RuntimeService {
 
     fn record_review_trigger_suppression(
         &mut self,
-        trigger: &PullRequestReviewTrigger,
+        key: String,
         suppression: ReviewTriggerSuppression,
     ) {
-        let key = trigger.dedupe_key();
         let changed = self.state.review_trigger_suppressions.get(&key) != Some(&suppression);
         self.state
             .review_trigger_suppressions
-            .insert(key, suppression.clone());
+            .insert(key.clone(), suppression.clone());
         if !changed {
             return;
         }
+        let subject = self
+            .visible_pull_request_trigger(&key)
+            .map(|trigger| pull_request_trigger_subject(&trigger))
+            .unwrap_or_else(|| "pull request trigger".into());
         let message = match suppression {
-            ReviewTriggerSuppression::Draft => {
+            ReviewTriggerSuppression::Draft => format!("suppressed {subject}: draft"),
+            ReviewTriggerSuppression::AlreadyRunning => {
+                format!("suppressed {subject}: already running")
+            },
+            ReviewTriggerSuppression::AlreadyReviewed => {
+                format!("suppressed {subject}: already reviewed")
+            },
+            ReviewTriggerSuppression::IgnoredAuthor { author } => {
+                format!("suppressed {subject}: ignored author {author}")
+            },
+            ReviewTriggerSuppression::BotAuthor { author } => {
+                format!("suppressed {subject}: bot author {author}")
+            },
+            ReviewTriggerSuppression::IgnoredLabel { label } => {
+                format!("suppressed {subject}: ignored label {label}")
+            },
+            ReviewTriggerSuppression::MissingLabels { labels } => {
                 format!(
-                    "suppressed PR review {}: draft",
-                    trigger.display_identifier()
+                    "suppressed {subject}: missing required labels {}",
+                    labels.join(", ")
                 )
             },
-            ReviewTriggerSuppression::AlreadyRunning => format!(
-                "suppressed PR review {}: already running",
-                trigger.display_identifier()
-            ),
-            ReviewTriggerSuppression::AlreadyReviewed => format!(
-                "suppressed PR review {}: head {} already reviewed",
-                trigger.display_identifier(),
-                trigger.head_sha
-            ),
-            ReviewTriggerSuppression::IgnoredAuthor { author } => format!(
-                "suppressed PR review {}: ignored author {}",
-                trigger.display_identifier(),
-                author
-            ),
-            ReviewTriggerSuppression::BotAuthor { author } => format!(
-                "suppressed PR review {}: bot author {}",
-                trigger.display_identifier(),
-                author
-            ),
-            ReviewTriggerSuppression::IgnoredLabel { label } => format!(
-                "suppressed PR review {}: ignored label {}",
-                trigger.display_identifier(),
-                label
-            ),
-            ReviewTriggerSuppression::MissingLabels { labels } => format!(
-                "suppressed PR review {}: missing required labels {}",
-                trigger.display_identifier(),
-                labels.join(", ")
-            ),
-            ReviewTriggerSuppression::Debounced { remaining_seconds } => format!(
-                "suppressed PR review {}: debounce {}s remaining",
-                trigger.display_identifier(),
-                remaining_seconds.max(0)
-            ),
+            ReviewTriggerSuppression::Debounced { remaining_seconds } => {
+                format!(
+                    "suppressed {subject}: debounce {}s remaining",
+                    remaining_seconds.max(0)
+                )
+            },
         };
         self.push_event(EventScope::Tracker, message);
     }
 
-    fn clear_review_trigger_suppression(&mut self, trigger: &PullRequestReviewTrigger) {
-        if self
-            .state
-            .review_trigger_suppressions
-            .remove(&trigger.dedupe_key())
-            .is_some()
+    fn clear_review_trigger_suppression(&mut self, key: &str) {
+        if self.state.review_trigger_suppressions.remove(key).is_some()
+            && let Some(trigger) = self.visible_pull_request_trigger(key)
         {
             self.push_event(
                 EventScope::Tracker,
-                format!("PR review ready: {}", trigger.display_identifier()),
+                format!(
+                    "{} ready: {}",
+                    pull_request_trigger_kind_label(&trigger),
+                    trigger.display_identifier()
+                ),
             );
+        }
+    }
+
+    fn pull_request_trigger_status(&self, trigger: &PullRequestTrigger) -> String {
+        let issue_id = trigger.synthetic_issue_id();
+        if self.state.running.contains_key(&issue_id) {
+            return "running".into();
+        }
+        if self.state.retrying.contains_key(&issue_id) {
+            return "retrying".into();
+        }
+        match self
+            .state
+            .review_trigger_suppressions
+            .get(&trigger.dedupe_key())
+        {
+            Some(ReviewTriggerSuppression::Draft) => "draft".into(),
+            Some(ReviewTriggerSuppression::AlreadyRunning) => "running".into(),
+            Some(ReviewTriggerSuppression::AlreadyReviewed) => "reviewed".into(),
+            Some(ReviewTriggerSuppression::IgnoredAuthor { .. }) => "ignored_author".into(),
+            Some(ReviewTriggerSuppression::BotAuthor { .. }) => "ignored_bot".into(),
+            Some(ReviewTriggerSuppression::IgnoredLabel { .. }) => "ignored_label".into(),
+            Some(ReviewTriggerSuppression::MissingLabels { .. }) => "waiting_label".into(),
+            Some(ReviewTriggerSuppression::Debounced { .. }) => "debouncing".into(),
+            None => "ready".into(),
+        }
+    }
+
+    async fn dispatch_pull_request_trigger(
+        &mut self,
+        workflow: LoadedWorkflow,
+        trigger: PullRequestTrigger,
+        attempt: Option<u32>,
+    ) -> Result<(), Error> {
+        match trigger {
+            PullRequestTrigger::Review(trigger) => {
+                self.dispatch_pull_request_review(workflow, trigger, attempt)
+                    .await
+            },
+            PullRequestTrigger::Comment(trigger) => {
+                self.dispatch_pull_request_comment_review(workflow, trigger, attempt)
+                    .await
+            },
+            PullRequestTrigger::Conflict(trigger) => Err(Error::Core(CoreError::Adapter(format!(
+                "pull request conflict trigger dispatch is not implemented yet for {}",
+                trigger.display_identifier()
+            )))),
         }
     }
 
@@ -2346,9 +2789,10 @@ impl RuntimeService {
 
         self.claim_issue(issue_id.clone(), IssueClaimState::Running);
         self.state.retrying.remove(&issue_id);
-        self.state
-            .review_retry_triggers
-            .insert(issue_id.clone(), trigger_for_retry);
+        self.state.pull_request_retry_triggers.insert(
+            issue_id.clone(),
+            PullRequestTrigger::Review(trigger_for_retry),
+        );
         self.state.running.insert(issue_id.clone(), RunningTask {
             issue,
             agent_name: selected_agent_name,
@@ -2376,10 +2820,215 @@ impl RuntimeService {
             active_task_id: None,
             movement_id: Some(movement_id),
             review_target: Some(review_target),
+            review_comment_marker: Some(pull_request_review_comment_marker(
+                &trigger.review_target(),
+            )),
         });
         self.push_event(
             EventScope::Dispatch,
             format!("dispatched PR review {issue_identifier}"),
+        );
+        Ok(())
+    }
+
+    async fn dispatch_pull_request_comment_review(
+        &mut self,
+        workflow: LoadedWorkflow,
+        trigger: PullRequestCommentTrigger,
+        attempt: Option<u32>,
+    ) -> Result<(), Error> {
+        let issue = synthetic_issue_for_pull_request_comment(&trigger);
+        let issue_id = issue.id.clone();
+        let issue_identifier = issue.identifier.clone();
+        let review_target = trigger.review_target();
+        let review_agent = workflow
+            .config
+            .pr_review_agent()?
+            .ok_or_else(|| CoreError::Adapter("PR review agent is not available".into()))?;
+        let review_agent_for_task = review_agent.clone();
+        if self.is_throttled(&format!("agent:{}", review_agent.name)) {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "PR review agent `{}` is throttled",
+                review_agent.name
+            ))));
+        }
+        let workspace_manager = self.build_workspace_manager(&workflow);
+        let workspace = workspace_manager
+            .ensure_workspace_with_ref(
+                &issue.identifier,
+                issue.branch_name.clone(),
+                review_target.checkout_ref.clone(),
+                &workflow.config.hooks,
+            )
+            .await?;
+        self.state
+            .worktree_keys
+            .insert(workspace.workspace_key.clone());
+        let movement_id = new_movement_id();
+        let now = Utc::now();
+        let movement = Movement {
+            id: movement_id.clone(),
+            kind: MovementKind::PullRequestCommentReview,
+            issue_id: Some(issue_id.clone()),
+            issue_identifier: Some(issue_identifier.clone()),
+            title: format!(
+                "Review PR comment on {}: {}",
+                trigger.path, trigger.pull_request_title
+            ),
+            status: MovementStatus::InProgress,
+            workspace_key: Some(workspace.workspace_key.clone()),
+            workspace_path: Some(workspace.path.clone()),
+            review_target: Some(review_target.clone()),
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        };
+        if let Some(store) = &self.store {
+            store.save_movement(&movement).await?;
+        }
+        self.state.movements.insert(movement_id.clone(), movement);
+
+        let prompt = render_issue_template_with_strings(
+            workflow
+                .config
+                .review_triggers
+                .pr_reviews
+                .prompt
+                .as_deref()
+                .unwrap_or(DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT),
+            &issue,
+            attempt,
+            &[
+                ("repository", review_target.repository.clone()),
+                ("base_branch", review_target.base_branch.clone()),
+                ("head_branch", review_target.head_branch.clone()),
+                ("head_sha", review_target.head_sha.clone()),
+                (
+                    "pull_request_url",
+                    review_target.url.clone().unwrap_or_default(),
+                ),
+                ("pull_request_number", review_target.number.to_string()),
+                (
+                    "pull_request_comment_author",
+                    trigger.author_login.clone().unwrap_or_default(),
+                ),
+                ("pull_request_comment_path", trigger.path.clone()),
+                (
+                    "pull_request_comment_line",
+                    trigger
+                        .line
+                        .map(|line| line.to_string())
+                        .unwrap_or_default(),
+                ),
+                ("pull_request_comment_body", trigger.body.clone()),
+                ("pull_request_labels", trigger.labels.join(", ")),
+            ],
+        )?;
+        let command_tx = self.command_tx.clone();
+        let agent = self.agent.clone();
+        let workspace_path = workspace.path.clone();
+        let hooks = workflow.config.hooks.clone();
+        let active_states = workflow.config.tracker.active_states.clone();
+        let max_turns = workflow.config.agent.max_turns;
+        let provisioner = self.provisioner.clone();
+        let tracker = self.tracker.clone();
+        let selected_agent_name = review_agent.name.clone();
+        let started_at = Utc::now();
+        let trigger_for_retry = trigger.clone();
+        let issue_for_task = issue.clone();
+        let issue_identifier_for_task = issue_identifier.clone();
+        let issue_id_for_task = issue_id.clone();
+        let worker_span = info_span!(
+            "pull_request_comment_review_worker",
+            issue_identifier = %issue_identifier_for_task,
+            agent = %selected_agent_name,
+            attempt = attempt.unwrap_or(0)
+        );
+        let handle = tokio::spawn(
+            async move {
+                let manager = WorkspaceManager::new(
+                    workflow.config.workspace.root.clone(),
+                    provisioner,
+                    workflow.config.workspace.checkout_kind,
+                    workflow.config.workspace.sync_on_reuse,
+                    workflow.config.workspace.transient_paths.clone(),
+                    workflow.config.workspace.source_repo_path.clone(),
+                    workflow.config.workspace.clone_url.clone(),
+                    workflow.config.workspace.default_branch.clone(),
+                );
+                let outcome = run_worker_attempt(
+                    &manager,
+                    &hooks,
+                    agent,
+                    tracker,
+                    issue_for_task,
+                    attempt,
+                    workspace_path,
+                    prompt,
+                    active_states,
+                    max_turns,
+                    workflow.config.agent.continuation_prompt.clone(),
+                    review_agent_for_task,
+                    None,
+                    command_tx.clone(),
+                )
+                .await;
+                let outcome = match outcome {
+                    Ok(result) => result,
+                    Err(error) => agent_run_result_from_error(&error),
+                };
+                let _ = command_tx.send(OrchestratorMessage::WorkerFinished {
+                    issue_id: issue_id_for_task,
+                    issue_identifier: issue_identifier_for_task,
+                    attempt,
+                    started_at,
+                    outcome,
+                });
+            }
+            .instrument(worker_span),
+        );
+
+        self.claim_issue(issue_id.clone(), IssueClaimState::Running);
+        self.state.retrying.remove(&issue_id);
+        self.state.pull_request_retry_triggers.insert(
+            issue_id.clone(),
+            PullRequestTrigger::Comment(trigger_for_retry.clone()),
+        );
+        self.state.running.insert(issue_id.clone(), RunningTask {
+            issue,
+            agent_name: selected_agent_name,
+            model: review_agent
+                .model
+                .clone()
+                .or_else(|| review_agent.models.first().cloned()),
+            attempt,
+            workspace_path: workspace.path,
+            stall_timeout_ms: review_agent.stall_timeout_ms,
+            max_turns,
+            started_at,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            last_event: Some("dispatch_started".into()),
+            last_message: Some("PR comment review worker launched".into()),
+            last_event_at: Some(Utc::now()),
+            tokens: TokenUsage::default(),
+            last_reported_tokens: TokenUsage::default(),
+            turn_count: 0,
+            rate_limits: None,
+            handle,
+            active_task_id: None,
+            movement_id: Some(movement_id),
+            review_target: Some(review_target),
+            review_comment_marker: Some(pull_request_comment_review_comment_marker(
+                &trigger.review_target(),
+                &trigger.thread_id,
+            )),
+        });
+        self.push_event(
+            EventScope::Dispatch,
+            format!("dispatched PR comment review {issue_identifier}"),
         );
         Ok(())
     }
@@ -2601,7 +3250,7 @@ impl RuntimeService {
             },
             AttemptStatus::CancelledByReconciliation => {
                 self.release_issue(&issue_id);
-                self.state.review_retry_triggers.remove(&issue_id);
+                self.state.pull_request_retry_triggers.remove(&issue_id);
             },
             _ => {
                 self.schedule_retry(
@@ -2694,7 +3343,7 @@ impl RuntimeService {
                         .insert(reviewed.key.clone(), reviewed);
                     self.state.completed.insert(issue_id.clone());
                     self.release_issue(&issue_id);
-                    self.state.review_retry_triggers.remove(&issue_id);
+                    self.state.pull_request_retry_triggers.remove(&issue_id);
                 }
             },
             AttemptStatus::CancelledByReconciliation => {
@@ -2750,7 +3399,10 @@ impl RuntimeService {
                 "pull request commenter is not configured".into(),
             ))
         })?;
-        let marker = pull_request_review_comment_marker(review_target);
+        let marker = running
+            .review_comment_marker
+            .clone()
+            .unwrap_or_else(|| pull_request_review_comment_marker(review_target));
         let body = format!("{trimmed}\n\n{marker}");
         let pull_request = PullRequestRef {
             repository: review_target.repository.clone(),
@@ -3050,6 +3702,52 @@ impl RuntimeService {
             .sum();
         let mut totals = self.state.totals.clone();
         totals.seconds_running = self.state.ended_runtime_seconds + live_seconds;
+        let tracker_kind = self.workflow_rx.borrow().config.tracker.kind;
+        let visible_issues = self
+            .state
+            .visible_issues
+            .iter()
+            .map(|row| {
+                let mut row = row.clone();
+                let key = sanitize_workspace_key(&row.issue_identifier);
+                row.has_workspace = self.state.worktree_keys.contains(&key);
+                row
+            })
+            .collect::<Vec<_>>();
+        let mut visible_triggers = visible_issues
+            .iter()
+            .map(|row| self.issue_trigger_row(tracker_kind, row))
+            .collect::<Vec<_>>();
+        visible_triggers.extend(
+            self.state
+                .visible_review_triggers
+                .values()
+                .cloned()
+                .map(PullRequestTrigger::Review)
+                .map(|trigger| self.pull_request_trigger_row(&trigger)),
+        );
+        visible_triggers.extend(
+            self.state
+                .visible_comment_triggers
+                .values()
+                .cloned()
+                .map(PullRequestTrigger::Comment)
+                .map(|trigger| self.pull_request_trigger_row(&trigger)),
+        );
+        visible_triggers.extend(
+            self.state
+                .visible_conflict_triggers
+                .values()
+                .cloned()
+                .map(PullRequestTrigger::Conflict)
+                .map(|trigger| self.pull_request_trigger_row(&trigger)),
+        );
+        visible_triggers.extend(
+            self.state
+                .discarded_triggers
+                .values()
+                .map(|entry| entry.row.clone()),
+        );
         RuntimeSnapshot {
             generated_at: Utc::now(),
             counts: SnapshotCounts {
@@ -3087,17 +3785,8 @@ impl RuntimeService {
                 last_budget_poll_at: self.state.last_budget_poll_at,
                 last_model_discovery_at: self.state.last_model_discovery_at,
             },
-            visible_issues: self
-                .state
-                .visible_issues
-                .iter()
-                .map(|row| {
-                    let mut row = row.clone();
-                    let key = sanitize_workspace_key(&row.issue_identifier);
-                    row.has_workspace = self.state.worktree_keys.contains(&key);
-                    row
-                })
-                .collect(),
+            visible_issues,
+            visible_triggers,
             running: self
                 .state
                 .running
@@ -3191,7 +3880,7 @@ impl RuntimeService {
                 .collect(),
             loading: self.state.loading.clone(),
             dispatch_mode: self.state.dispatch_mode,
-            tracker_kind: self.workflow_rx.borrow().config.tracker.kind,
+            tracker_kind,
             from_cache: self.state.from_cache,
             cached_at: self.state.cached_at,
             agent_profile_names: self
@@ -3209,6 +3898,28 @@ impl RuntimeService {
     fn restore_cache(&mut self, cached: CachedSnapshot) {
         if self.state.visible_issues.is_empty() {
             self.state.visible_issues = cached.visible_issues;
+        }
+        if self.state.visible_issues.is_empty() && !cached.visible_triggers.is_empty() {
+            self.state.visible_issues = cached
+                .visible_triggers
+                .iter()
+                .filter(|trigger| trigger.kind == VisibleTriggerKind::Issue)
+                .map(|trigger| VisibleIssueRow {
+                    issue_id: trigger.trigger_id.clone(),
+                    issue_identifier: trigger.identifier.clone(),
+                    title: trigger.title.clone(),
+                    state: trigger.status.clone(),
+                    priority: trigger.priority,
+                    labels: trigger.labels.clone(),
+                    description: trigger.description.clone(),
+                    url: trigger.url.clone(),
+                    author: trigger.author.clone(),
+                    parent_id: trigger.parent_id.clone(),
+                    updated_at: trigger.updated_at,
+                    created_at: trigger.created_at,
+                    has_workspace: trigger.has_workspace,
+                })
+                .collect();
         }
         if self.state.budgets.is_empty() {
             for budget in cached.budgets {
@@ -3231,6 +3942,7 @@ impl RuntimeService {
             let cached = CachedSnapshot {
                 saved_at: Some(Utc::now()),
                 visible_issues: self.state.visible_issues.clone(),
+                visible_triggers: self.snapshot().visible_triggers,
                 budgets: self.state.budgets.values().cloned().collect(),
                 agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
             };
@@ -3531,11 +4243,11 @@ impl RuntimeService {
         let old_tracker_key = self.tracker.component_key();
         let new_tracker_key = components.tracker.component_key();
         let old_review_source_key = self
-            .pull_request_review_trigger_source
+            .pull_request_trigger_source
             .as_ref()
             .map(|source| source.component_key());
         let new_review_source_key = components
-            .pull_request_review_trigger_source
+            .pull_request_trigger_source
             .as_ref()
             .map(|source| source.component_key());
         let old_agent_runtime_key = self.agent.component_key();
@@ -3562,7 +4274,7 @@ impl RuntimeService {
             .collect::<HashSet<_>>();
 
         self.tracker = components.tracker;
-        self.pull_request_review_trigger_source = components.pull_request_review_trigger_source;
+        self.pull_request_trigger_source = components.pull_request_trigger_source;
         self.agent = components.agent;
         self.committer = components.committer;
         self.pull_request_manager = components.pull_request_manager;
@@ -4232,6 +4944,46 @@ fn synthetic_issue_for_pull_request_review(trigger: &PullRequestReviewTrigger) -
     }
 }
 
+fn synthetic_issue_for_pull_request_comment(trigger: &PullRequestCommentTrigger) -> Issue {
+    let line = trigger
+        .line
+        .map(|line| format!(":{line}"))
+        .unwrap_or_default();
+    Issue {
+        id: trigger.synthetic_issue_id(),
+        identifier: trigger.display_identifier(),
+        title: format!(
+            "Review unresolved PR comment on {}{}: {}",
+            trigger.path, line, trigger.pull_request_title
+        ),
+        description: Some(format!(
+            "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nCheckout ref: {}\nPath: {}\nLine: {}\nAuthor: {}\nLabels: {}\n\nComment:\n{}",
+            trigger.repository,
+            trigger.base_branch,
+            trigger.head_branch,
+            trigger.head_sha,
+            trigger.checkout_ref.as_deref().unwrap_or("<none>"),
+            trigger.path,
+            trigger
+                .line
+                .map(|line| line.to_string())
+                .unwrap_or_else(|| "<none>".into()),
+            trigger.author_login.as_deref().unwrap_or("<unknown>"),
+            if trigger.labels.is_empty() {
+                "<none>".to_string()
+            } else {
+                trigger.labels.join(", ")
+            },
+            trigger.body
+        )),
+        state: "Review".into(),
+        branch_name: Some(format!("pr-comment-review/{}", trigger.number)),
+        url: trigger.url.clone(),
+        updated_at: trigger.updated_at.or(trigger.created_at),
+        ..Issue::default()
+    }
+}
+
 fn is_probably_bot_author(author: &str) -> bool {
     author.ends_with("[bot]")
         || author.ends_with("-bot")
@@ -4251,6 +5003,56 @@ fn pull_request_review_comment_marker(target: &ReviewTarget) -> String {
         "<!-- polyphony:pr-review {} {}#{} sha={} -->",
         target.provider, target.repository, target.number, target.head_sha
     )
+}
+
+fn pull_request_comment_review_comment_marker(target: &ReviewTarget, thread_id: &str) -> String {
+    format!(
+        "<!-- polyphony:pr-comment-review {} {}#{} sha={} thread={} -->",
+        target.provider, target.repository, target.number, target.head_sha, thread_id
+    )
+}
+
+fn pull_request_trigger_author(trigger: &PullRequestTrigger) -> Option<&str> {
+    match trigger {
+        PullRequestTrigger::Review(trigger) => trigger.author_login.as_deref(),
+        PullRequestTrigger::Comment(trigger) => trigger.author_login.as_deref(),
+        PullRequestTrigger::Conflict(trigger) => trigger.author_login.as_deref(),
+    }
+}
+
+fn pull_request_trigger_subject(trigger: &PullRequestTrigger) -> String {
+    match trigger {
+        PullRequestTrigger::Review(trigger) => {
+            format!("PR review {}", trigger.display_identifier())
+        },
+        PullRequestTrigger::Comment(trigger) => format!(
+            "PR comment {} {}",
+            trigger.display_identifier(),
+            trigger.path
+        ),
+        PullRequestTrigger::Conflict(trigger) => format!(
+            "PR conflict {} against {}",
+            trigger.display_identifier(),
+            trigger.base_branch
+        ),
+    }
+}
+
+fn pull_request_trigger_kind_label(trigger: &PullRequestTrigger) -> &'static str {
+    match trigger {
+        PullRequestTrigger::Review(_) => "PR review",
+        PullRequestTrigger::Comment(_) => "PR comment",
+        PullRequestTrigger::Conflict(_) => "PR conflict",
+    }
+}
+
+fn truncate_for_trigger_title(value: &str, max_chars: usize) -> String {
+    let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.chars().count() <= max_chars {
+        return trimmed;
+    }
+    let end = trimmed.floor_char_boundary(max_chars.saturating_sub(1));
+    format!("{}…", &trimmed[..end])
 }
 
 async fn load_pull_request_review_comments(
@@ -4381,6 +5183,7 @@ fn empty_snapshot() -> RuntimeSnapshot {
         counts: SnapshotCounts::default(),
         cadence: RuntimeCadence::default(),
         visible_issues: Vec::new(),
+        visible_triggers: Vec::new(),
         running: Vec::new(),
         retrying: Vec::new(),
         codex_totals: CodexTotals::default(),
@@ -4913,6 +5716,30 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct SequencedPullRequestTriggerSource {
+        batches: Arc<Mutex<VecDeque<Vec<PullRequestTrigger>>>>,
+    }
+
+    impl SequencedPullRequestTriggerSource {
+        fn new(batches: Vec<Vec<PullRequestTrigger>>) -> Self {
+            Self {
+                batches: Arc::new(Mutex::new(batches.into())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PullRequestTriggerSource for SequencedPullRequestTriggerSource {
+        fn component_key(&self) -> String {
+            "github:test-pr-triggers".into()
+        }
+
+        async fn fetch_triggers(&self) -> Result<Vec<PullRequestTrigger>, polyphony_core::Error> {
+            Ok(self.batches.lock().unwrap().pop_front().unwrap_or_default())
+        }
+    }
+
     struct SequencedStateTracker {
         issue: Issue,
         states: Arc<Mutex<VecDeque<String>>>,
@@ -5104,6 +5931,53 @@ mod tests {
         }
     }
 
+    fn sample_pull_request_comment_trigger() -> PullRequestCommentTrigger {
+        let now = Utc::now();
+        PullRequestCommentTrigger {
+            provider: polyphony_core::ReviewProviderKind::Github,
+            repository: "penso/polyphony".into(),
+            number: 42,
+            pull_request_title: "Review me".into(),
+            url: Some("https://github.com/penso/polyphony/pull/42#discussion_r1".into()),
+            base_branch: "main".into(),
+            head_branch: "feature/review".into(),
+            head_sha: "abc123".into(),
+            checkout_ref: Some("refs/pull/42/head".into()),
+            thread_id: "thread-1".into(),
+            comment_id: "comment-1".into(),
+            path: "crates/core/src/lib.rs".into(),
+            line: Some(42),
+            body: "Please fix this branch.".into(),
+            author_login: Some("greptileai".into()),
+            labels: vec!["ready".into()],
+            created_at: Some(now - chrono::Duration::minutes(5)),
+            updated_at: Some(now - chrono::Duration::minutes(2)),
+            is_draft: false,
+        }
+    }
+
+    fn sample_pull_request_conflict_trigger() -> PullRequestConflictTrigger {
+        let now = Utc::now();
+        PullRequestConflictTrigger {
+            provider: polyphony_core::ReviewProviderKind::Github,
+            repository: "penso/polyphony".into(),
+            number: 43,
+            pull_request_title: "Merge me".into(),
+            url: Some("https://github.com/penso/polyphony/pull/43".into()),
+            base_branch: "main".into(),
+            head_branch: "feature/conflict".into(),
+            head_sha: "def456".into(),
+            checkout_ref: Some("refs/pull/43/head".into()),
+            author_login: Some("alice".into()),
+            labels: vec!["ready".into()],
+            created_at: Some(now - chrono::Duration::minutes(10)),
+            updated_at: Some(now - chrono::Duration::minutes(3)),
+            is_draft: false,
+            mergeable_state: "conflicting".into(),
+            merge_state_status: "dirty".into(),
+        }
+    }
+
     fn make_running_task(issue: Issue, workspace_path: PathBuf) -> RunningTask {
         RunningTask {
             issue,
@@ -5128,6 +6002,7 @@ mod tests {
             active_task_id: None,
             movement_id: None,
             review_target: None,
+            review_comment_marker: None,
             handle: tokio::spawn(async {
                 let _: () = std::future::pending().await;
             }),
@@ -5202,6 +6077,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disappearing_issues_become_already_fixed_triggers() {
+        let workspace_root = unique_workspace_root("discarded-issue");
+        let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+        let tracker_handle = tracker.clone();
+        let provisioner = RecordingProvisioner::default();
+        let mut service = test_service(tracker, provisioner, &workspace_root);
+
+        service.tick().await;
+        tracker_handle.issues.lock().unwrap().clear();
+        service.tick().await;
+
+        let snapshot = service.snapshot();
+        let discarded = snapshot
+            .visible_triggers
+            .iter()
+            .find(|trigger| trigger.trigger_id == "issue-1")
+            .expect("missing discarded issue trigger");
+        assert_eq!(discarded.kind, VisibleTriggerKind::Issue);
+        assert_eq!(discarded.status, "already_fixed");
+    }
+
+    #[tokio::test]
     async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched() {
         let workspace_root = unique_workspace_root("pr-review");
         let workflow = test_workflow_with_front_matter(
@@ -5221,6 +6118,7 @@ mod tests {
             checkout_ref: Some("refs/pull/42/head".into()),
             author_login: Some("alice".into()),
             labels: vec!["ready".into()],
+            created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
             updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
             is_draft: false,
         };
@@ -5291,6 +6189,9 @@ mod tests {
             active_task_id: None,
             movement_id: Some("mov-review".into()),
             review_target: Some(trigger.review_target()),
+            review_comment_marker: Some(pull_request_review_comment_marker(
+                &trigger.review_target(),
+            )),
             handle: tokio::spawn(async {
                 let _: () = std::future::pending().await;
             }),
@@ -5317,7 +6218,10 @@ mod tests {
                 .contains_key(&trigger.dedupe_key())
         );
         assert_eq!(
-            service.review_trigger_suppression(&service.workflow(), &trigger),
+            service.pull_request_trigger_suppression(
+                &service.workflow(),
+                &PullRequestTrigger::Review(trigger.clone()),
+            ),
             Some(ReviewTriggerSuppression::AlreadyReviewed)
         );
 
@@ -5356,6 +6260,9 @@ mod tests {
                     active_task_id: None,
                     movement_id: Some("mov-review".into()),
                     review_target: Some(trigger.review_target()),
+                    review_comment_marker: Some(pull_request_review_comment_marker(
+                        &trigger.review_target(),
+                    )),
                     handle: tokio::spawn(async {
                         let _: () = std::future::pending().await;
                     }),
@@ -5405,11 +6312,15 @@ mod tests {
             checkout_ref: Some("refs/pull/1/head".into()),
             author_login: Some("skip-me".into()),
             labels: vec!["ready".into()],
+            created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
             updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
             is_draft: false,
         };
         assert_eq!(
-            service.review_trigger_suppression(&workflow, &base_trigger),
+            service.pull_request_trigger_suppression(
+                &workflow,
+                &PullRequestTrigger::Review(base_trigger.clone()),
+            ),
             Some(ReviewTriggerSuppression::IgnoredAuthor {
                 author: "skip-me".into()
             })
@@ -5423,7 +6334,10 @@ mod tests {
             ..base_trigger.clone()
         };
         assert_eq!(
-            service.review_trigger_suppression(&workflow, &bot_trigger),
+            service.pull_request_trigger_suppression(
+                &workflow,
+                &PullRequestTrigger::Review(bot_trigger.clone()),
+            ),
             Some(ReviewTriggerSuppression::BotAuthor {
                 author: "dependabot[bot]".into()
             })
@@ -5438,7 +6352,10 @@ mod tests {
             ..base_trigger.clone()
         };
         assert_eq!(
-            service.review_trigger_suppression(&workflow, &ignored_label_trigger),
+            service.pull_request_trigger_suppression(
+                &workflow,
+                &PullRequestTrigger::Review(ignored_label_trigger.clone()),
+            ),
             Some(ReviewTriggerSuppression::IgnoredLabel {
                 label: "wip".into()
             })
@@ -5453,11 +6370,193 @@ mod tests {
             ..base_trigger
         };
         assert_eq!(
-            service.review_trigger_suppression(&workflow, &missing_label_trigger),
+            service.pull_request_trigger_suppression(
+                &workflow,
+                &PullRequestTrigger::Review(missing_label_trigger),
+            ),
             Some(ReviewTriggerSuppression::MissingLabels {
                 labels: vec!["ready".into()]
             })
         );
+    }
+
+    #[test]
+    fn pull_request_comment_triggers_are_suppressed_after_a_newer_review() {
+        let workspace_root = unique_workspace_root("pr-comment-suppression");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\n---\nPrompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let mut service = RuntimeService::new(
+            Arc::new(TestTracker::new(Vec::new())),
+            None,
+            Arc::new(NoopAgent),
+            Arc::new(RecordingProvisioner::default()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+        let workflow = service.workflow();
+        let now = Utc::now();
+        let trigger = PullRequestCommentTrigger {
+            provider: polyphony_core::ReviewProviderKind::Github,
+            repository: "penso/polyphony".into(),
+            number: 42,
+            pull_request_title: "Review me".into(),
+            url: Some("https://github.com/penso/polyphony/pull/42#discussion_r1".into()),
+            base_branch: "main".into(),
+            head_branch: "feature/review".into(),
+            head_sha: "abc123".into(),
+            checkout_ref: Some("refs/pull/42/head".into()),
+            thread_id: "thread-1".into(),
+            comment_id: "comment-1".into(),
+            path: "crates/core/src/lib.rs".into(),
+            line: Some(42),
+            body: "Please fix this branch.".into(),
+            author_login: Some("greptileai".into()),
+            labels: vec!["ready".into()],
+            created_at: Some(now - chrono::Duration::minutes(5)),
+            updated_at: Some(now - chrono::Duration::minutes(2)),
+            is_draft: false,
+        };
+        service.state.reviewed_pull_request_heads.insert(
+            review_target_key(&trigger.review_target()),
+            ReviewedPullRequestHead {
+                key: review_target_key(&trigger.review_target()),
+                target: trigger.review_target(),
+                reviewed_at: now - chrono::Duration::minutes(1),
+                movement_id: None,
+            },
+        );
+
+        assert_eq!(
+            service.pull_request_trigger_suppression(
+                &workflow,
+                &PullRequestTrigger::Comment(trigger.clone()),
+            ),
+            Some(ReviewTriggerSuppression::AlreadyReviewed)
+        );
+
+        service.state.reviewed_pull_request_heads.insert(
+            review_target_key(&trigger.review_target()),
+            ReviewedPullRequestHead {
+                key: review_target_key(&trigger.review_target()),
+                target: trigger.review_target(),
+                reviewed_at: now - chrono::Duration::minutes(3),
+                movement_id: None,
+            },
+        );
+
+        assert!(matches!(
+            service.pull_request_trigger_suppression(
+                &workflow,
+                &PullRequestTrigger::Comment(trigger),
+            ),
+            Some(ReviewTriggerSuppression::Debounced { remaining_seconds })
+                if remaining_seconds > 0 && remaining_seconds <= 180
+        ));
+    }
+
+    #[tokio::test]
+    async fn disappearing_pr_comment_triggers_become_already_fixed() {
+        let workspace_root = unique_workspace_root("discarded-pr-comment");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let source = SequencedPullRequestTriggerSource::new(vec![
+            vec![PullRequestTrigger::Comment(
+                sample_pull_request_comment_trigger(),
+            )],
+            Vec::new(),
+        ]);
+        let mut service = RuntimeService::new(
+            Arc::new(TestTracker::new(Vec::new())),
+            Some(Arc::new(source)),
+            Arc::new(NoopAgent),
+            Arc::new(RecordingProvisioner::default()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+        service.state.dispatch_mode = polyphony_core::DispatchMode::Manual;
+
+        service.tick().await;
+        service.tick().await;
+
+        let snapshot = service.snapshot();
+        let discarded = snapshot
+            .visible_triggers
+            .iter()
+            .find(|trigger| trigger.kind == VisibleTriggerKind::PullRequestComment)
+            .expect("missing discarded pr comment trigger");
+        assert_eq!(discarded.identifier, "penso/polyphony#42");
+        assert_eq!(discarded.status, "already_fixed");
+    }
+
+    #[tokio::test]
+    async fn conflict_triggers_become_already_fixed_without_retry_churn() {
+        let workspace_root = unique_workspace_root("pr-conflict-visible");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let source = SequencedPullRequestTriggerSource::new(vec![
+            vec![PullRequestTrigger::Conflict(
+                sample_pull_request_conflict_trigger(),
+            )],
+            Vec::new(),
+        ]);
+        let mut service = RuntimeService::new(
+            Arc::new(TestTracker::new(Vec::new())),
+            Some(Arc::new(source)),
+            Arc::new(NoopAgent),
+            Arc::new(RecordingProvisioner::default()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+
+        service.tick().await;
+
+        let snapshot = service.snapshot();
+        let conflict = snapshot
+            .visible_triggers
+            .iter()
+            .find(|trigger| trigger.kind == VisibleTriggerKind::PullRequestConflict)
+            .expect("missing conflict trigger");
+        assert_eq!(conflict.status, "ready");
+        assert!(service.state.retrying.is_empty());
+        assert!(service.state.running.is_empty());
+
+        service.tick().await;
+
+        let snapshot = service.snapshot();
+        let discarded = snapshot
+            .visible_triggers
+            .iter()
+            .find(|trigger| trigger.kind == VisibleTriggerKind::PullRequestConflict)
+            .expect("missing discarded conflict trigger");
+        assert_eq!(discarded.status, "already_fixed");
+        assert!(service.state.retrying.is_empty());
     }
 
     #[tokio::test]
@@ -5480,6 +6579,7 @@ mod tests {
             checkout_ref: Some("refs/pull/42/head".into()),
             author_login: Some("alice".into()),
             labels: vec!["ready".into()],
+            created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
             updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
             is_draft: false,
         };
@@ -5543,6 +6643,9 @@ mod tests {
                     active_task_id: None,
                     movement_id: Some("mov-inline".into()),
                     review_target: Some(trigger.review_target()),
+                    review_comment_marker: Some(pull_request_review_comment_marker(
+                        &trigger.review_target(),
+                    )),
                     handle: tokio::spawn(async {
                         let _: () = std::future::pending().await;
                     }),
@@ -5990,7 +7093,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                     format!("tracker:{}", workflow.config.tracker.kind),
                     Vec::new(),
                 )),
-                pull_request_review_trigger_source: None,
+                pull_request_trigger_source: None,
                 agent: Arc::new(NamedAgent::new(format!(
                     "agent:{}",
                     workflow.config.tracker.kind
@@ -6042,7 +7145,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                     format!("tracker:{}", workflow.config.tracker.kind),
                     vec![issue_for_factory.clone()],
                 )),
-                pull_request_review_trigger_source: None,
+                pull_request_trigger_source: None,
                 agent: Arc::new(NamedAgent::new(format!(
                     "agent:{}",
                     workflow.config.tracker.kind

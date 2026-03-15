@@ -14,7 +14,7 @@ use {
         event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
         terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
-    polyphony_core::{DispatchMode, RuntimeSnapshot},
+    polyphony_core::{DispatchMode, RuntimeSnapshot, VisibleTriggerKind},
     polyphony_orchestrator::RuntimeCommand,
     ratatui::{
         Terminal,
@@ -231,8 +231,8 @@ pub async fn run(
                                     if let Some(tab) = app.tab_at_position(mouse.column, mouse.row)
                                     {
                                         app.active_tab = tab;
-                                    } else if app.active_tab == app::ActiveTab::Issues {
-                                        // Single click selects issue row
+                                    } else if app.active_tab == app::ActiveTab::Triggers {
+                                        // Single click selects trigger row
                                         if let Some(idx) = app.issue_row_at_position(mouse.row) {
                                             app.issues_state.select(Some(idx));
                                         }
@@ -242,7 +242,7 @@ pub async fn run(
                                             now.duration_since(prev) < Duration::from_millis(400)
                                                 && app.last_click_pos.1 == mouse.row
                                         });
-                                        if is_double && app.selected_issue(&snapshot).is_some() {
+                                        if is_double && app.selected_trigger(&snapshot).is_some() {
                                             app.show_issue_detail = true;
                                             app.detail_scroll = 0;
                                             app.last_click_at = None;
@@ -417,8 +417,8 @@ pub async fn run(
                                 app.detail_scroll = app.detail_scroll.saturating_sub(8);
                             },
                             KeyCode::Char('o') => {
-                                if let Some(issue) = app.selected_issue(&snapshot)
-                                    && let Some(url) = &issue.url
+                                if let Some(trigger) = app.selected_trigger(&snapshot)
+                                    && let Some(url) = &trigger.url
                                 {
                                     let _ = std::process::Command::new("open").arg(url).spawn();
                                 }
@@ -525,7 +525,7 @@ fn handle_key(
         KeyCode::BackTab | KeyCode::Left => {
             app.active_tab = app.active_tab.previous();
         },
-        KeyCode::Char('1') => app.active_tab = app::ActiveTab::Issues,
+        KeyCode::Char('1') => app.active_tab = app::ActiveTab::Triggers,
         KeyCode::Char('2') => app.active_tab = app::ActiveTab::Agents,
         KeyCode::Char('3') => app.active_tab = app::ActiveTab::Orchestrator,
         KeyCode::Char('4') => app.active_tab = app::ActiveTab::Tasks,
@@ -598,26 +598,28 @@ fn handle_key(
             }
         },
 
-        // Sort cycling (Issues tab)
+        // Sort cycling (Triggers tab)
         KeyCode::Char('s') => {
-            if app.active_tab == app::ActiveTab::Issues {
+            if app.active_tab == app::ActiveTab::Triggers {
                 app.issue_sort = app.issue_sort.cycle();
                 app.rebuild_sorted_indices(snapshot);
             }
         },
 
-        // Issue detail modal
+        // Trigger detail modal
         KeyCode::Enter => {
-            if app.active_tab == app::ActiveTab::Issues && app.selected_issue(snapshot).is_some() {
+            if app.active_tab == app::ActiveTab::Triggers
+                && app.selected_trigger(snapshot).is_some()
+            {
                 app.show_issue_detail = true;
             }
         },
 
-        // Open issue in browser
+        // Open trigger in browser
         KeyCode::Char('o') => {
-            if app.active_tab == app::ActiveTab::Issues
-                && let Some(issue) = app.selected_issue(snapshot)
-                && let Some(url) = &issue.url
+            if app.active_tab == app::ActiveTab::Triggers
+                && let Some(trigger) = app.selected_trigger(snapshot)
+                && let Some(url) = &trigger.url
             {
                 let _ = std::process::Command::new("open").arg(url).spawn();
             }
@@ -625,7 +627,7 @@ fn handle_key(
 
         // Search
         KeyCode::Char('/') => {
-            if app.active_tab == app::ActiveTab::Issues {
+            if app.active_tab == app::ActiveTab::Triggers {
                 app.search_active = true;
                 app.search_query.clear();
             } else if app.active_tab == app::ActiveTab::Logs {
@@ -634,27 +636,37 @@ fn handle_key(
             }
         },
 
-        // Dispatch issue (default agent)
+        // Dispatch selected trigger
         KeyCode::Char('d') => {
-            if app.active_tab == app::ActiveTab::Issues
-                && let Some(issue) = app.selected_issue(snapshot)
+            if app.active_tab == app::ActiveTab::Triggers
+                && let Some(trigger) = app.selected_trigger(snapshot)
             {
-                return Some(RuntimeCommand::DispatchIssue {
-                    issue_id: issue.issue_id.clone(),
-                    agent_name: None,
+                return Some(match trigger.kind {
+                    VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
+                        issue_id: trigger.trigger_id.clone(),
+                        agent_name: None,
+                    },
+                    VisibleTriggerKind::PullRequestReview
+                    | VisibleTriggerKind::PullRequestComment
+                    | VisibleTriggerKind::PullRequestConflict => {
+                        RuntimeCommand::DispatchPullRequestTrigger {
+                            trigger_id: trigger.trigger_id.clone(),
+                        }
+                    },
                 });
             }
         },
 
         // Dispatch issue (pick agent)
         KeyCode::Char('D') => {
-            if app.active_tab == app::ActiveTab::Issues
-                && let Some(issue) = app.selected_issue(snapshot)
+            if app.active_tab == app::ActiveTab::Triggers
+                && let Some(issue) = app.selected_trigger(snapshot)
+                && issue.kind == VisibleTriggerKind::Issue
                 && !snapshot.agent_profile_names.is_empty()
             {
                 app.show_agent_picker = true;
                 app.agent_picker_selected = 0;
-                app.agent_picker_issue_id = Some(issue.issue_id.clone());
+                app.agent_picker_issue_id = Some(issue.trigger_id.clone());
             }
         },
 
@@ -805,6 +817,7 @@ mod tests {
         chrono::Utc,
         polyphony_core::{
             CodexTotals, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, VisibleIssueRow,
+            VisibleTriggerKind, VisibleTriggerRow,
         },
         ratatui::{Terminal, backend::TestBackend},
     };
@@ -824,6 +837,25 @@ mod tests {
                     issue_identifier: format!("GH-{i}"),
                     title: format!("Test issue {i}"),
                     state: "open".into(),
+                    priority: Some(2),
+                    labels: vec![],
+                    description: None,
+                    url: None,
+                    author: None,
+                    parent_id: None,
+                    updated_at: None,
+                    created_at: None,
+                    has_workspace: false,
+                })
+                .collect(),
+            visible_triggers: (0..visible)
+                .map(|i| VisibleTriggerRow {
+                    trigger_id: format!("id-{i}"),
+                    kind: VisibleTriggerKind::Issue,
+                    source: "github".into(),
+                    identifier: format!("GH-{i}"),
+                    title: format!("Test issue {i}"),
+                    status: "open".into(),
                     priority: Some(2),
                     labels: vec![],
                     description: None,
@@ -889,7 +921,7 @@ mod tests {
     #[test]
     fn tab_switching() {
         let mut app = AppState::new(default_theme(), LogBuffer::default());
-        assert_eq!(app.active_tab, app::ActiveTab::Issues);
+        assert_eq!(app.active_tab, app::ActiveTab::Triggers);
 
         app.active_tab = app.active_tab.next();
         assert_eq!(app.active_tab, app::ActiveTab::Agents);
@@ -907,7 +939,7 @@ mod tests {
         assert_eq!(app.active_tab, app::ActiveTab::Logs);
 
         app.active_tab = app.active_tab.next();
-        assert_eq!(app.active_tab, app::ActiveTab::Issues);
+        assert_eq!(app.active_tab, app::ActiveTab::Triggers);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use {
     chrono::{DateTime, Utc},
-    polyphony_core::{DispatchMode, RuntimeSnapshot, TrackerKind, VisibleIssueRow},
+    polyphony_core::{DispatchMode, RuntimeSnapshot, VisibleTriggerRow},
     ratatui::{
         layout::{Constraint, Direction, Layout, Margin, Rect},
         style::{Color, Modifier, Style},
@@ -16,8 +16,7 @@ use crate::{app::AppState, theme::Theme};
 
 pub fn draw_issue_detail_modal(
     frame: &mut ratatui::Frame<'_>,
-    issue: &VisibleIssueRow,
-    tracker_kind: TrackerKind,
+    issue: &VisibleTriggerRow,
     app: &mut AppState,
 ) {
     let theme = app.theme;
@@ -26,14 +25,14 @@ pub fn draw_issue_detail_modal(
     let area = centered_rect(frame.area(), max_w, max_h);
     frame.render_widget(Clear, area);
 
-    let source_label = format!("{tracker_kind:?}");
+    let source_label = format!("{} {}", issue.source, issue.kind);
 
     // Border title: source + identifier
     let block = Block::default()
         .title(Line::from(vec![
             Span::styled(format!(" {source_label} "), Style::default().fg(theme.info)),
             Span::styled(
-                format!("{} ", issue.issue_id),
+                format!("{} ", issue.trigger_id),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -82,7 +81,7 @@ pub fn draw_issue_detail_modal(
         .split(inner);
 
     // Row 1: Title (wrapping) with created time right-aligned on first line
-    let state_color = super::issues::state_color(&issue.state, theme);
+    let state_color = super::triggers::state_color(&issue.status, theme);
     let priority_str = issue
         .priority
         .map(|p| format!("P{p}"))
@@ -144,7 +143,7 @@ pub fn draw_issue_detail_modal(
     let mut meta_spans: Vec<Span<'_>> = Vec::new();
 
     meta_spans.push(Span::styled(
-        format!(" {} ", issue.state),
+        format!(" {} ", issue.status),
         Style::default().fg(state_color),
     ));
     meta_spans.push(Span::styled("  ", Style::default()));

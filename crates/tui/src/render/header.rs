@@ -58,9 +58,9 @@ pub fn draw_header(
 
     // Status summary
     let summary = vec![Line::from(vec![
-        Span::styled("issues ", Style::default().fg(theme.muted)),
+        Span::styled("triggers ", Style::default().fg(theme.muted)),
         Span::styled(
-            snapshot.visible_issues.len().to_string(),
+            snapshot.visible_triggers.len().to_string(),
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),

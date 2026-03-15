@@ -4,7 +4,7 @@ use std::{
 };
 
 use {
-    polyphony_core::{RunningRow, RuntimeSnapshot, VisibleIssueRow},
+    polyphony_core::{RunningRow, RuntimeSnapshot, VisibleTriggerRow},
     ratatui::{layout::Rect, widgets::TableState},
 };
 
@@ -14,7 +14,7 @@ use crate::{LogBuffer, theme::Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
-    Issues,
+    Triggers,
     Agents,
     Orchestrator,
     Tasks,
@@ -24,7 +24,7 @@ pub enum ActiveTab {
 
 impl ActiveTab {
     pub const ALL: [Self; 6] = [
-        Self::Issues,
+        Self::Triggers,
         Self::Agents,
         Self::Orchestrator,
         Self::Tasks,
@@ -34,7 +34,7 @@ impl ActiveTab {
 
     pub const fn title(self) -> &'static str {
         match self {
-            Self::Issues => "Issues",
+            Self::Triggers => "Triggers",
             Self::Agents => "Agents",
             Self::Orchestrator => "Orchestrator",
             Self::Tasks => "Tasks",
@@ -45,7 +45,7 @@ impl ActiveTab {
 
     pub const fn index(self) -> usize {
         match self {
-            Self::Issues => 0,
+            Self::Triggers => 0,
             Self::Agents => 1,
             Self::Orchestrator => 2,
             Self::Tasks => 3,
@@ -55,7 +55,7 @@ impl ActiveTab {
     }
 
     pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or(Self::Issues)
+        Self::ALL.get(index).copied().unwrap_or(Self::Triggers)
     }
 
     pub fn next(self) -> Self {
@@ -158,7 +158,7 @@ impl AppState {
     pub fn new(theme: Theme, log_buffer: LogBuffer) -> Self {
         Self {
             theme,
-            active_tab: ActiveTab::Issues,
+            active_tab: ActiveTab::Triggers,
             issues_state: TableState::default(),
             agents_state: TableState::default(),
             tasks_state: TableState::default(),
@@ -280,7 +280,7 @@ impl AppState {
     }
 
     pub fn rebuild_sorted_indices(&mut self, snapshot: &RuntimeSnapshot) {
-        let issues = &snapshot.visible_issues;
+        let issues = &snapshot.visible_triggers;
         let mut indices: Vec<usize> = if self.search_query.is_empty() {
             (0..issues.len()).collect()
         } else {
@@ -299,8 +299,8 @@ impl AppState {
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => {
-                            let na = extract_issue_number(&issues[a].issue_identifier);
-                            let nb = extract_issue_number(&issues[b].issue_identifier);
+                            let na = extract_issue_number(&issues[a].identifier);
+                            let nb = extract_issue_number(&issues[b].identifier);
                             nb.cmp(&na)
                         },
                     }
@@ -315,8 +315,8 @@ impl AppState {
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => {
-                            let na = extract_issue_number(&issues[a].issue_identifier);
-                            let nb = extract_issue_number(&issues[b].issue_identifier);
+                            let na = extract_issue_number(&issues[a].identifier);
+                            let nb = extract_issue_number(&issues[b].identifier);
                             na.cmp(&nb)
                         },
                     }
@@ -330,7 +330,7 @@ impl AppState {
                 });
             },
             IssueSortKey::State => {
-                indices.sort_by(|&a, &b| issues[a].state.cmp(&issues[b].state));
+                indices.sort_by(|&a, &b| issues[a].status.cmp(&issues[b].status))
             },
         }
         // Tree grouping: place children immediately after their parent
@@ -352,8 +352,8 @@ impl AppState {
             // Build a set of parent issue_ids that are visible in this list
             let visible_parents: std::collections::HashSet<&str> = indices
                 .iter()
-                .filter(|&&idx| children_by_parent.contains_key(issues[idx].issue_id.as_str()))
-                .map(|&idx| issues[idx].issue_id.as_str())
+                .filter(|&&idx| children_by_parent.contains_key(issues[idx].trigger_id.as_str()))
+                .map(|&idx| issues[idx].trigger_id.as_str())
                 .collect();
 
             let mut grouped = Vec::with_capacity(indices.len());
@@ -372,7 +372,7 @@ impl AppState {
                 depth.push(0);
                 last_child.push(false);
                 // Insert children after this parent
-                if let Some(kids) = children_by_parent.get(issues[idx].issue_id.as_str()) {
+                if let Some(kids) = children_by_parent.get(issues[idx].trigger_id.as_str()) {
                     for (ci, &kid_idx) in kids.iter().enumerate() {
                         grouped.push(kid_idx);
                         depth.push(1);
@@ -391,22 +391,25 @@ impl AppState {
         }
     }
 
-    /// Get the issue at the given display row (sorted).
-    pub fn sorted_issue<'a>(
+    /// Get the trigger at the given display row (sorted).
+    pub fn sorted_trigger<'a>(
         &self,
         snapshot: &'a RuntimeSnapshot,
         display_index: usize,
-    ) -> Option<&'a VisibleIssueRow> {
+    ) -> Option<&'a VisibleTriggerRow> {
         self.sorted_issue_indices
             .get(display_index)
-            .and_then(|&orig| snapshot.visible_issues.get(orig))
+            .and_then(|&orig| snapshot.visible_triggers.get(orig))
     }
 
-    /// Get the currently selected issue (in sorted order).
-    pub fn selected_issue<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a VisibleIssueRow> {
+    /// Get the currently selected trigger (in sorted order).
+    pub fn selected_trigger<'a>(
+        &self,
+        snapshot: &'a RuntimeSnapshot,
+    ) -> Option<&'a VisibleTriggerRow> {
         self.issues_state
             .selected()
-            .and_then(|display_idx| self.sorted_issue(snapshot, display_idx))
+            .and_then(|display_idx| self.sorted_trigger(snapshot, display_idx))
     }
 
     pub fn selected_agent<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a RunningRow> {
@@ -417,7 +420,7 @@ impl AppState {
 
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {
         match self.active_tab {
-            ActiveTab::Issues => self.sorted_issue_indices.len(),
+            ActiveTab::Triggers => self.sorted_issue_indices.len(),
             ActiveTab::Agents => snapshot.running.len(),
             ActiveTab::Orchestrator => snapshot.movements.len(),
             ActiveTab::Tasks => snapshot.tasks.len(),
@@ -432,7 +435,7 @@ impl AppState {
 
     pub fn active_table_state_mut(&mut self) -> &mut TableState {
         match self.active_tab {
-            ActiveTab::Issues => &mut self.issues_state,
+            ActiveTab::Triggers => &mut self.issues_state,
             ActiveTab::Agents => &mut self.agents_state,
             ActiveTab::Orchestrator => &mut self.movements_state,
             ActiveTab::Tasks => &mut self.tasks_state,
@@ -559,10 +562,12 @@ fn extract_issue_number(identifier: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn issue_matches(issue: &VisibleIssueRow, query: &str) -> bool {
+fn issue_matches(issue: &VisibleTriggerRow, query: &str) -> bool {
     issue.title.to_lowercase().contains(query)
-        || issue.issue_identifier.to_lowercase().contains(query)
-        || issue.state.to_lowercase().contains(query)
+        || issue.identifier.to_lowercase().contains(query)
+        || issue.status.to_lowercase().contains(query)
+        || issue.source.to_lowercase().contains(query)
+        || issue.kind.to_string().contains(query)
         || issue
             .labels
             .iter()

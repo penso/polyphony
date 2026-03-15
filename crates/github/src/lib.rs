@@ -19,9 +19,10 @@ use {
     },
     polyphony_core::{
         BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueComment,
-        IssueStateUpdate, IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestRef,
-        PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger,
-        PullRequestReviewTriggerSource, RateLimitSignal, ReviewProviderKind, TrackerQuery,
+        IssueStateUpdate, IssueTracker, PullRequestCommentTrigger, PullRequestCommenter,
+        PullRequestConflictTrigger, PullRequestManager, PullRequestRef, PullRequestRequest,
+        PullRequestReviewComment, PullRequestReviewTrigger, PullRequestTrigger,
+        PullRequestTriggerSource, RateLimitSignal, ReviewProviderKind, TrackerQuery,
         UpdateIssueRequest,
     },
     reqwest::{
@@ -86,6 +87,22 @@ pub struct AddIssueToProject;
     response_derives = "Debug, Serialize, Deserialize"
 )]
 pub struct UpdateIssueProjectStatus;
+
+mod github_graphql_scalars {
+    pub type DateTime = chrono::DateTime<chrono::Utc>;
+    pub type GitObjectID = String;
+    #[allow(clippy::upper_case_acronyms)]
+    pub type URI = String;
+}
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/schema.graphql",
+    query_path = "src/pull_request_triggers.graphql",
+    custom_scalars_module = "crate::github_graphql_scalars",
+    response_derives = "Debug, Serialize, Deserialize"
+)]
+pub struct FetchPullRequestTriggers;
 
 #[derive(Debug)]
 pub struct GithubIssueTracker {
@@ -630,25 +647,20 @@ impl GithubPullRequestReviewTriggerSource {
         })
     }
 
-    async fn pull_requests_page(
+    async fn graphql<ResponseData, QueryBody>(
         &self,
-        page: u32,
-    ) -> Result<Vec<GithubReviewPullRequestResponse>, CoreError> {
+        body: QueryBody,
+    ) -> Result<graphql_client::Response<ResponseData>, CoreError>
+    where
+        ResponseData: DeserializeOwned,
+        QueryBody: serde::Serialize,
+    {
         let response = self
             .http
-            .get(format!(
-                "https://api.github.com/repos/{}/{}/pulls",
-                self.owner, self.repo
-            ))
+            .post("https://api.github.com/graphql")
             .bearer_auth(&self.token)
             .header("User-Agent", "polyphony")
-            .query(&[
-                ("state", "open".to_string()),
-                ("sort", "updated".to_string()),
-                ("direction", "desc".to_string()),
-                ("per_page", "100".to_string()),
-                ("page", page.to_string()),
-            ])
+            .json(&body)
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
@@ -657,13 +669,18 @@ impl GithubPullRequestReviewTriggerSource {
         }
         let status = response.status();
         let payload = response
-            .json::<Vec<GithubReviewPullRequestResponse>>()
+            .json::<graphql_client::Response<ResponseData>>()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
         if !status.is_success() {
             return Err(CoreError::Adapter(format!(
-                "github pull request review trigger status {}",
+                "github graphql status {}",
                 status
+            )));
+        }
+        if let Some(errors) = &payload.errors {
+            return Err(CoreError::Adapter(format!(
+                "github graphql errors: {errors:?}"
             )));
         }
         Ok(payload)
@@ -671,26 +688,37 @@ impl GithubPullRequestReviewTriggerSource {
 }
 
 #[async_trait]
-impl PullRequestReviewTriggerSource for GithubPullRequestReviewTriggerSource {
+impl PullRequestTriggerSource for GithubPullRequestReviewTriggerSource {
     fn component_key(&self) -> String {
-        "reviews:github".into()
+        "pull_requests:github".into()
     }
 
-    async fn fetch_review_triggers(&self) -> Result<Vec<PullRequestReviewTrigger>, CoreError> {
+    async fn fetch_triggers(&self) -> Result<Vec<PullRequestTrigger>, CoreError> {
         let repository_name = format!("{}/{}", self.owner, self.repo);
         let mut triggers = Vec::new();
-        let mut page = 1;
+        let mut after = None;
         loop {
-            let pull_requests = self.pull_requests_page(page).await?;
-            let last_page = pull_requests.len() < 100;
-            triggers.extend(pull_request_review_triggers_from_responses(
+            let payload = self
+                .graphql::<fetch_pull_request_triggers::ResponseData, _>(
+                    FetchPullRequestTriggers::build_query(fetch_pull_request_triggers::Variables {
+                        owner: self.owner.clone(),
+                        name: self.repo.clone(),
+                        after: after.clone(),
+                    }),
+                )
+                .await?;
+            let Some(repository) = payload.data.and_then(|data| data.repository) else {
+                break;
+            };
+            let pull_requests = repository.pull_requests;
+            triggers.extend(pull_request_triggers_from_graphql(
                 &repository_name,
-                pull_requests,
+                pull_requests.nodes.unwrap_or_default(),
             ));
-            if last_page {
+            if !pull_requests.page_info.has_next_page {
                 break;
             }
-            page += 1;
+            after = pull_requests.page_info.end_cursor;
         }
         Ok(triggers)
     }
@@ -1203,11 +1231,13 @@ fn find_issue_comment_id_with_marker(
     })
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct GithubReviewPullRequestResponse {
     number: u64,
     title: String,
     html_url: String,
+    created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     draft: Option<bool>,
     user: Option<GithubReviewUser>,
@@ -1217,22 +1247,26 @@ struct GithubReviewPullRequestResponse {
     head: GithubReviewHeadRef,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct GithubReviewUser {
     login: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct GithubReviewLabel {
     name: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct GithubReviewBranchRef {
     #[serde(rename = "ref")]
     name: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct GithubReviewHeadRef {
     #[serde(rename = "ref")]
@@ -1240,6 +1274,7 @@ struct GithubReviewHeadRef {
     sha: String,
 }
 
+#[cfg(test)]
 fn pull_request_review_triggers_from_responses(
     repository_name: &str,
     pull_requests: Vec<GithubReviewPullRequestResponse>,
@@ -1268,10 +1303,144 @@ fn pull_request_review_triggers_from_responses(
                 .map(|label| label.name.trim().to_ascii_lowercase())
                 .filter(|label| !label.is_empty())
                 .collect(),
+            created_at: Some(pull_request.created_at),
             updated_at: Some(pull_request.updated_at),
             is_draft: pull_request.draft.unwrap_or(false),
         })
         .collect()
+}
+
+fn pull_request_triggers_from_graphql(
+    repository_name: &str,
+    pull_requests: Vec<
+        Option<fetch_pull_request_triggers::FetchPullRequestTriggersRepositoryPullRequestsNodes>,
+    >,
+) -> Vec<PullRequestTrigger> {
+    let mut triggers = Vec::new();
+    for pull_request in pull_requests.into_iter().flatten() {
+        let author_login = pull_request
+            .author
+            .as_ref()
+            .map(|author| author.login.to_ascii_lowercase());
+        let review_trigger = PullRequestReviewTrigger {
+            provider: ReviewProviderKind::Github,
+            repository: repository_name.to_string(),
+            number: pull_request.number as u64,
+            title: pull_request.title.clone(),
+            url: Some(pull_request.url.clone()),
+            base_branch: pull_request.base_ref_name.clone(),
+            head_branch: pull_request.head_ref_name.clone(),
+            head_sha: pull_request.head_ref_oid.clone(),
+            checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
+            author_login: author_login.clone(),
+            labels: pull_request
+                .labels
+                .and_then(|labels| labels.nodes)
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+                .map(|label| label.name.trim().to_ascii_lowercase())
+                .filter(|label: &String| !label.is_empty())
+                .collect(),
+            created_at: Some(pull_request.created_at),
+            updated_at: Some(pull_request.updated_at),
+            is_draft: pull_request.is_draft,
+        };
+        if should_emit_conflict_trigger(&pull_request.mergeable, &pull_request.merge_state_status) {
+            triggers.push(PullRequestTrigger::Conflict(PullRequestConflictTrigger {
+                provider: ReviewProviderKind::Github,
+                repository: repository_name.to_string(),
+                number: pull_request.number as u64,
+                pull_request_title: pull_request.title.clone(),
+                url: Some(pull_request.url.clone()),
+                base_branch: pull_request.base_ref_name.clone(),
+                head_branch: pull_request.head_ref_name.clone(),
+                head_sha: pull_request.head_ref_oid.clone(),
+                checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
+                author_login: author_login.clone(),
+                labels: review_trigger.labels.clone(),
+                created_at: Some(pull_request.created_at),
+                updated_at: Some(pull_request.updated_at),
+                is_draft: pull_request.is_draft,
+                mergeable_state: format!("{:?}", pull_request.mergeable).to_ascii_lowercase(),
+                merge_state_status: format!("{:?}", pull_request.merge_state_status)
+                    .to_ascii_lowercase(),
+            }));
+        }
+        let review_target = review_trigger.review_target();
+        let review_labels = review_trigger.labels.clone();
+        triggers.push(PullRequestTrigger::Review(review_trigger));
+
+        for thread in pull_request
+            .review_threads
+            .nodes
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+        {
+            if thread.is_resolved || thread.is_outdated {
+                continue;
+            }
+            let Some(comment) =
+                latest_unresolved_thread_comment(thread.comments.nodes.unwrap_or_default())
+            else {
+                continue;
+            };
+            let body = comment.body.trim().to_string();
+            if body.is_empty() {
+                continue;
+            }
+            triggers.push(PullRequestTrigger::Comment(PullRequestCommentTrigger {
+                provider: ReviewProviderKind::Github,
+                repository: review_target.repository.clone(),
+                number: review_target.number,
+                pull_request_title: pull_request.title.clone(),
+                url: Some(comment.url),
+                base_branch: review_target.base_branch.clone(),
+                head_branch: review_target.head_branch.clone(),
+                head_sha: review_target.head_sha.clone(),
+                checkout_ref: review_target.checkout_ref.clone(),
+                thread_id: thread.id,
+                comment_id: comment.id,
+                path: thread.path,
+                line: thread
+                    .line
+                    .map(|line| line as u32)
+                    .or(thread.original_line.map(|line| line as u32)),
+                body,
+                author_login: comment
+                    .author
+                    .map(|author| author.login.to_ascii_lowercase()),
+                labels: review_labels.clone(),
+                created_at: Some(comment.created_at),
+                updated_at: Some(comment.updated_at),
+                is_draft: pull_request.is_draft,
+            }));
+        }
+    }
+    triggers
+}
+
+fn latest_unresolved_thread_comment(
+    comments: Vec<Option<fetch_pull_request_triggers::FetchPullRequestTriggersRepositoryPullRequestsNodesReviewThreadsNodesCommentsNodes>>,
+) -> Option<fetch_pull_request_triggers::FetchPullRequestTriggersRepositoryPullRequestsNodesReviewThreadsNodesCommentsNodes>{
+    comments
+        .into_iter()
+        .flatten()
+        .max_by_key(|comment| comment.updated_at)
+}
+
+fn should_emit_conflict_trigger(
+    mergeable: &fetch_pull_request_triggers::MergeableState,
+    merge_state_status: &fetch_pull_request_triggers::MergeStateStatus,
+) -> bool {
+    matches!(
+        mergeable,
+        fetch_pull_request_triggers::MergeableState::CONFLICTING
+    ) || matches!(
+        merge_state_status,
+        fetch_pull_request_triggers::MergeStateStatus::DIRTY
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -1552,11 +1721,12 @@ mod tests {
     use {
         super::{
             GithubReviewBranchRef, GithubReviewHeadRef, GithubReviewLabel,
-            GithubReviewPullRequestResponse, GithubReviewUser,
-            StatusCode, find_issue_comment_id_with_marker, find_status_field_option,
-            github_rate_limit_signal, parse_rate_limit_reset, parse_retry_after_ms,
-            project_id_from_context, pull_request_review_triggers_from_responses,
-            resolve_project_issue_context, resolve_project_status_field,
+            GithubReviewPullRequestResponse, GithubReviewUser, StatusCode,
+            fetch_pull_request_triggers, find_issue_comment_id_with_marker,
+            find_status_field_option, github_rate_limit_signal, parse_rate_limit_reset,
+            parse_retry_after_ms, project_id_from_context,
+            pull_request_review_triggers_from_responses, resolve_project_issue_context,
+            resolve_project_status_field, should_emit_conflict_trigger,
         },
         chrono::{TimeZone, Utc},
         reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -1671,6 +1841,7 @@ mod tests {
                 number: 42,
                 title: "Ready".into(),
                 html_url: "https://github.com/penso/polyphony/pull/42".into(),
+                created_at: Utc.timestamp_opt(1_709_999_000, 0).single().unwrap(),
                 updated_at: Utc.timestamp_opt(1_710_000_000, 0).single().unwrap(),
                 draft: Some(false),
                 user: Some(GithubReviewUser {
@@ -1691,6 +1862,7 @@ mod tests {
                 number: 43,
                 title: "Fork".into(),
                 html_url: "https://github.com/penso/polyphony/pull/43".into(),
+                created_at: Utc.timestamp_opt(1_709_999_001, 0).single().unwrap(),
                 updated_at: Utc.timestamp_opt(1_710_000_001, 0).single().unwrap(),
                 draft: Some(false),
                 user: Some(GithubReviewUser {
@@ -1722,6 +1894,22 @@ mod tests {
             triggers[1].checkout_ref.as_deref(),
             Some("refs/pull/43/head")
         );
+    }
+
+    #[test]
+    fn conflict_trigger_detection_uses_mergeable_and_merge_state_status() {
+        assert!(should_emit_conflict_trigger(
+            &fetch_pull_request_triggers::MergeableState::CONFLICTING,
+            &fetch_pull_request_triggers::MergeStateStatus::CLEAN,
+        ));
+        assert!(should_emit_conflict_trigger(
+            &fetch_pull_request_triggers::MergeableState::MERGEABLE,
+            &fetch_pull_request_triggers::MergeStateStatus::DIRTY,
+        ));
+        assert!(!should_emit_conflict_trigger(
+            &fetch_pull_request_triggers::MergeableState::MERGEABLE,
+            &fetch_pull_request_triggers::MergeStateStatus::CLEAN,
+        ));
     }
 
     #[test]

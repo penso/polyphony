@@ -50,6 +50,8 @@ reviews it, then sends me a Telegram with buttons to review or merge
 
 - Be able to click on one movement to view the movement details. Then show something like the mission dashboard: total tasks, cached token, output token. Active feature, all features (one after another), progress logs.
 
+- Be able to choose to write tests first, so I should be able to choose orders for agents for movements/tasks. You should also be able to have multiple reviewers with different models.
+
 # missions
 
 1. initial planning phase, defining a lot of things. Breaking a big thing into
@@ -57,16 +59,18 @@ smaller task is more efficient. Extensive phase, defining a validation
 contract. Convert a spec -> assertions (assertions are from the user point of
 view), sum of assertions is what you want to build. Milestone = a bunch of
 features, after this milestone which assertions should pass. Spawn multiple
-agents to verify those assertions.
+agents to verify those assertions. Outcome from planning phase: criterias /
+assertions to pass. This is before the feature breakdown and any
+implementation.
 
 - A mission is a long term goal
 - validation contracts
 - orchestrator and validator used was GPT 5.2
 
-Mission:
+Mission (it's the name for a project):
   - mission path
   - working dir
-  - a group of features
+  - a group of features (76 in the demo at https://www.youtube.com/watch?v=5uYd5p3PJDI)
 
 Feature:
  - skill
@@ -75,9 +79,17 @@ Feature:
  - preconditions
  - expected behavior
  - description
+ - state: Pending, In Progress, Completed
 
 Features list: one after another
 
+In existing codebase
+ - proper lint tool
+ - deterministic tests: proper testing, unit testing, in place, e2e testing to have the same guarantees in place, on top of the user testing perspective defined in the feature
+
+ - TDD for workers, if possible it write tests first, then implement.
+
+ - mission: initial planning phase should think about everything. models are very good at delegation, separation of concerns. Rewrite the features files defining what workers will do.
 
 # Interesting links
 

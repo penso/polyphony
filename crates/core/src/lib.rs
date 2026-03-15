@@ -277,6 +277,7 @@ pub enum MovementKind {
     #[default]
     IssueDelivery,
     PullRequestReview,
+    PullRequestCommentReview,
 }
 
 impl fmt::Display for MovementKind {
@@ -284,6 +285,7 @@ impl fmt::Display for MovementKind {
         let s = match self {
             Self::IssueDelivery => "issue_delivery",
             Self::PullRequestReview => "pull_request_review",
+            Self::PullRequestCommentReview => "pull_request_comment_review",
         };
         f.write_str(s)
     }
@@ -426,6 +428,8 @@ pub struct PullRequestReviewTrigger {
     pub author_login: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub is_draft: bool,
 }
@@ -456,6 +460,159 @@ impl PullRequestReviewTrigger {
             head_branch: self.head_branch.clone(),
             head_sha: self.head_sha.clone(),
             checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestCommentTrigger {
+    pub provider: ReviewProviderKind,
+    pub repository: String,
+    pub number: u64,
+    pub pull_request_title: String,
+    pub url: Option<String>,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub head_sha: String,
+    #[serde(default)]
+    pub checkout_ref: Option<String>,
+    pub thread_id: String,
+    pub comment_id: String,
+    pub path: String,
+    pub line: Option<u32>,
+    pub body: String,
+    #[serde(default)]
+    pub author_login: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub is_draft: bool,
+}
+
+impl PullRequestCommentTrigger {
+    pub fn display_identifier(&self) -> String {
+        format!("{}#{}", self.repository, self.number)
+    }
+
+    pub fn dedupe_key(&self) -> String {
+        format!(
+            "pr_comment:{}:{}:{}:{}",
+            self.provider, self.repository, self.number, self.thread_id
+        )
+    }
+
+    pub fn synthetic_issue_id(&self) -> String {
+        self.dedupe_key()
+    }
+
+    pub fn review_target(&self) -> ReviewTarget {
+        ReviewTarget {
+            provider: self.provider,
+            repository: self.repository.clone(),
+            number: self.number,
+            url: self.url.clone(),
+            base_branch: self.base_branch.clone(),
+            head_branch: self.head_branch.clone(),
+            head_sha: self.head_sha.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestConflictTrigger {
+    pub provider: ReviewProviderKind,
+    pub repository: String,
+    pub number: u64,
+    pub pull_request_title: String,
+    pub url: Option<String>,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub head_sha: String,
+    #[serde(default)]
+    pub checkout_ref: Option<String>,
+    #[serde(default)]
+    pub author_login: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub is_draft: bool,
+    pub mergeable_state: String,
+    pub merge_state_status: String,
+}
+
+impl PullRequestConflictTrigger {
+    pub fn display_identifier(&self) -> String {
+        format!("{}#{}", self.repository, self.number)
+    }
+
+    pub fn dedupe_key(&self) -> String {
+        format!(
+            "pr_conflict:{}:{}:{}:{}",
+            self.provider, self.repository, self.number, self.head_sha
+        )
+    }
+
+    pub fn synthetic_issue_id(&self) -> String {
+        self.dedupe_key()
+    }
+
+    pub fn review_target(&self) -> ReviewTarget {
+        ReviewTarget {
+            provider: self.provider,
+            repository: self.repository.clone(),
+            number: self.number,
+            url: self.url.clone(),
+            base_branch: self.base_branch.clone(),
+            head_branch: self.head_branch.clone(),
+            head_sha: self.head_sha.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum PullRequestTrigger {
+    Review(PullRequestReviewTrigger),
+    Comment(PullRequestCommentTrigger),
+    Conflict(PullRequestConflictTrigger),
+}
+
+impl PullRequestTrigger {
+    pub fn dedupe_key(&self) -> String {
+        match self {
+            Self::Review(trigger) => trigger.dedupe_key(),
+            Self::Comment(trigger) => trigger.dedupe_key(),
+            Self::Conflict(trigger) => trigger.dedupe_key(),
+        }
+    }
+
+    pub fn synthetic_issue_id(&self) -> String {
+        match self {
+            Self::Review(trigger) => trigger.synthetic_issue_id(),
+            Self::Comment(trigger) => trigger.synthetic_issue_id(),
+            Self::Conflict(trigger) => trigger.synthetic_issue_id(),
+        }
+    }
+
+    pub fn display_identifier(&self) -> String {
+        match self {
+            Self::Review(trigger) => trigger.display_identifier(),
+            Self::Comment(trigger) => trigger.display_identifier(),
+            Self::Conflict(trigger) => trigger.display_identifier(),
+        }
+    }
+
+    pub fn review_target(&self) -> ReviewTarget {
+        match self {
+            Self::Review(trigger) => trigger.review_target(),
+            Self::Comment(trigger) => trigger.review_target(),
+            Self::Conflict(trigger) => trigger.review_target(),
         }
     }
 }
@@ -806,6 +963,54 @@ pub struct VisibleIssueRow {
     pub has_workspace: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VisibleTriggerKind {
+    #[default]
+    Issue,
+    PullRequestReview,
+    PullRequestComment,
+    PullRequestConflict,
+}
+
+impl fmt::Display for VisibleTriggerKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Issue => "issue",
+            Self::PullRequestReview => "pr_review",
+            Self::PullRequestComment => "pr_comment",
+            Self::PullRequestConflict => "pr_conflict",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisibleTriggerRow {
+    pub trigger_id: String,
+    pub kind: VisibleTriggerKind,
+    pub source: String,
+    pub identifier: String,
+    pub title: String,
+    pub status: String,
+    pub priority: Option<i32>,
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub has_workspace: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeSnapshot {
     pub generated_at: DateTime<Utc>,
@@ -814,6 +1019,8 @@ pub struct RuntimeSnapshot {
     pub cadence: RuntimeCadence,
     #[serde(default)]
     pub visible_issues: Vec<VisibleIssueRow>,
+    #[serde(default)]
+    pub visible_triggers: Vec<VisibleTriggerRow>,
     pub running: Vec<RunningRow>,
     pub retrying: Vec<RetryRow>,
     pub codex_totals: CodexTotals,
@@ -1104,9 +1311,9 @@ pub trait IssueTracker: Send + Sync {
 }
 
 #[async_trait]
-pub trait PullRequestReviewTriggerSource: Send + Sync {
+pub trait PullRequestTriggerSource: Send + Sync {
     fn component_key(&self) -> String;
-    async fn fetch_review_triggers(&self) -> Result<Vec<PullRequestReviewTrigger>, Error>;
+    async fn fetch_triggers(&self) -> Result<Vec<PullRequestTrigger>, Error>;
 }
 
 #[async_trait]
@@ -1273,6 +1480,8 @@ pub trait StateStore: Send + Sync {
 pub struct CachedSnapshot {
     pub saved_at: Option<DateTime<Utc>>,
     pub visible_issues: Vec<VisibleIssueRow>,
+    #[serde(default)]
+    pub visible_triggers: Vec<VisibleTriggerRow>,
     pub budgets: Vec<BudgetSnapshot>,
     pub agent_catalogs: Vec<AgentModelCatalog>,
 }

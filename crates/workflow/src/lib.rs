@@ -171,6 +171,7 @@ pub struct AgentProfileConfig {
 #[serde(default)]
 pub struct AgentsConfig {
     pub default: Option<String>,
+    pub reviewer: Option<String>,
     pub by_state: HashMap<String, String>,
     pub by_label: HashMap<String, String>,
     pub profiles: HashMap<String, AgentProfileConfig>,
@@ -754,6 +755,7 @@ impl ServiceConfig {
         self.pipeline.planner_agent = resolve_env_token(self.pipeline.planner_agent.take());
         self.pipeline.planner_prompt = resolve_env_token(self.pipeline.planner_prompt.take());
         self.pipeline.validation_agent = resolve_env_token(self.pipeline.validation_agent.take());
+        self.agents.reviewer = resolve_env_token(self.agents.reviewer.take());
         self.automation.review_agent = resolve_env_token(self.automation.review_agent.take());
         self.automation.commit_message = resolve_env_token(self.automation.commit_message.take());
         self.automation.pr_title = resolve_env_token(self.automation.pr_title.take());
@@ -1053,16 +1055,17 @@ impl ServiceConfig {
                 )));
             }
         }
-        if self.review_triggers.pr_reviews.enabled {
+        if let Some(agent_name) = &self.agents.reviewer
+            && !self.agents.profiles.contains_key(agent_name)
+        {
+            return Err(Error::InvalidConfig(format!(
+                "agents.reviewer `{agent_name}` is not defined"
+            )));
+        }
+        if self.tracker.kind == TrackerKind::Github {
             if self.review_triggers.pr_reviews.provider != "github" {
                 return Err(Error::InvalidConfig(
                     "review_triggers.pr_reviews.provider must be `github`".into(),
-                ));
-            }
-            if self.tracker.kind != TrackerKind::Github {
-                return Err(Error::InvalidConfig(
-                    "review_triggers.pr_reviews.enabled currently requires tracker.kind = github"
-                        .into(),
                 ));
             }
             if self
@@ -1259,10 +1262,16 @@ impl ServiceConfig {
 
     pub fn pr_review_agent(&self) -> Result<Option<AgentDefinition>, Error> {
         let selected_name = self
-            .review_triggers
-            .pr_reviews
-            .agent
+            .agents
+            .reviewer
             .as_ref()
+            .or_else(|| {
+                self.agents
+                    .profiles
+                    .get_key_value("reviewer")
+                    .map(|(name, _)| name)
+            })
+            .or(self.review_triggers.pr_reviews.agent.as_ref())
             .or(self.automation.review_agent.as_ref())
             .or(self.agents.default.as_ref());
         let Some(agent_name) = selected_name else {
@@ -2453,6 +2462,40 @@ review_triggers:
         assert!(config.review_triggers.pr_reviews.ignore_authors.is_empty());
         assert!(!config.review_triggers.pr_reviews.ignore_bot_authors);
         assert_eq!(config.pr_review_agent().unwrap().unwrap().name, "codex");
+    }
+
+    #[test]
+    fn pr_review_agent_prefers_agents_reviewer_role() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: penso/polyphony
+  api_key: token
+agents:
+  default: codex
+  reviewer: reviewer
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex --dangerously-bypass-approvals-and-sandbox app-server
+    reviewer:
+      kind: claude
+      transport: local_cli
+      command: claude -p --verbose --dangerously-skip-permissions
+automation:
+  review_agent: codex
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert_eq!(config.pr_review_agent().unwrap().unwrap().name, "reviewer");
     }
 
     #[test]

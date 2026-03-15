@@ -407,6 +407,7 @@ fn movement_kind_label(kind: polyphony_core::MovementKind) -> &'static str {
     match kind {
         polyphony_core::MovementKind::IssueDelivery => "issue",
         polyphony_core::MovementKind::PullRequestReview => "pr_review",
+        polyphony_core::MovementKind::PullRequestCommentReview => "pr_comment",
     }
 }
 

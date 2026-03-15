@@ -17,8 +17,8 @@ use {
     opentelemetry_sdk::{Resource, propagation::TraceContextPropagator, trace::SdkTracerProvider},
     polyphony_core::{
         CheckoutKind, IssueTracker, NetworkCache, PullRequestCommenter, PullRequestManager,
-        PullRequestReviewTriggerSource, RuntimeSnapshot, StateStore, TrackerKind,
-        WorkspaceCommitter, WorkspaceProvisioner,
+        PullRequestTriggerSource, RuntimeSnapshot, StateStore, TrackerKind, WorkspaceCommitter,
+        WorkspaceProvisioner,
     },
     polyphony_orchestrator::{
         RuntimeCommand, RuntimeComponentFactory, RuntimeComponents, RuntimeService,
@@ -690,7 +690,7 @@ async fn try_main() -> Result<(), Error> {
     let (workflow_tx, workflow_rx) = tokio::sync::watch::channel(workflow.clone());
     let (service, handle) = RuntimeService::new(
         components.tracker,
-        components.pull_request_review_trigger_source,
+        components.pull_request_trigger_source,
         components.agent,
         provisioner,
         components.committer,
@@ -1383,10 +1383,8 @@ fn build_runtime_components(
         (!registry.is_empty()).then_some(Arc::new(registry))
     };
     #[cfg(feature = "github")]
-    let pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>> =
-        if workflow.config.review_triggers.pr_reviews.enabled
-            && workflow.config.tracker.kind == TrackerKind::Github
-        {
+    let pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>> =
+        if workflow.config.tracker.kind == TrackerKind::Github {
             let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
                 Error::Config("tracker.repository is required for github PR review triggers".into())
             })?;
@@ -1396,13 +1394,13 @@ fn build_runtime_components(
             Some(
                 Arc::new(polyphony_github::GithubPullRequestReviewTriggerSource::new(
                     repository, token,
-                )?) as Arc<dyn PullRequestReviewTriggerSource>,
+                )?) as Arc<dyn PullRequestTriggerSource>,
             )
         } else {
             None
         };
     #[cfg(not(feature = "github"))]
-    let pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>> = None;
+    let pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>> = None;
     let committer: Option<Arc<dyn WorkspaceCommitter>> =
         workflow.config.automation.enabled.then_some(
             Arc::new(polyphony_git::GitWorkspaceCommitter) as Arc<dyn WorkspaceCommitter>,
@@ -1438,7 +1436,7 @@ fn build_runtime_components(
 
     Ok(RuntimeComponents {
         tracker,
-        pull_request_review_trigger_source,
+        pull_request_trigger_source,
         agent: Arc::new(polyphony_agents::AgentRegistryRuntime::new()),
         committer,
         pull_request_manager,

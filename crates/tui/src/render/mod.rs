@@ -2,11 +2,11 @@ mod agents;
 mod deliverables;
 mod footer;
 mod header;
-pub(crate) mod issues;
 mod logs;
 mod orchestrator;
 pub(crate) mod popups;
 mod tasks;
+mod triggers;
 
 use polyphony_core::RuntimeSnapshot;
 
@@ -28,7 +28,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
     app.content_area = areas[1];
 
     match app.active_tab {
-        ActiveTab::Issues => issues::draw_issues_tab(frame, areas[1], snapshot, app),
+        ActiveTab::Triggers => triggers::draw_triggers_tab(frame, areas[1], snapshot, app),
         ActiveTab::Agents => agents::draw_agents_tab(frame, areas[1], snapshot, app),
         ActiveTab::Orchestrator => {
             orchestrator::draw_orchestrator_tab(frame, areas[1], snapshot, app);
@@ -44,9 +44,9 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     // Popups render on top
     if app.show_issue_detail
-        && let Some(issue) = app.selected_issue(snapshot).cloned()
+        && let Some(issue) = app.selected_trigger(snapshot).cloned()
     {
-        popups::draw_issue_detail_modal(frame, &issue, snapshot.tracker_kind, app);
+        popups::draw_issue_detail_modal(frame, &issue, app);
     }
 
     if app.show_mode_modal {
