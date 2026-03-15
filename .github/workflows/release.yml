@@ -91,7 +91,7 @@ jobs:
       - name: Install mdBook
         run: cargo install --locked --version 0.4.49 mdbook
       - name: Install mdbook-mermaid
-        run: cargo install --locked --version 0.15.1 mdbook-mermaid
+        run: cargo install --locked --version 0.14.0 mdbook-mermaid
       - run: just docs-build
 
   release-metadata:
