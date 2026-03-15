@@ -457,6 +457,7 @@ async fn launch_codex_session(
     let thread_id = match handshake {
         Ok(thread_id) => thread_id,
         Err(error) => {
+            let error = classify_startup_error(&mut child, error).await;
             warn!(
                 issue_identifier = %spec.issue.identifier,
                 %error,
@@ -487,6 +488,18 @@ async fn launch_codex_session(
         next_request_id: 3,
         emitted_session_started: false,
     })
+}
+
+async fn classify_startup_error(child: &mut Child, error: CoreError) -> CoreError {
+    match &error {
+        CoreError::Adapter(message) if message == "port_exit" => {
+            match tokio::time::timeout(Duration::from_millis(200), child.wait()).await {
+                Ok(Ok(status)) if status.code() == Some(127) => adapter_error("codex_not_found"),
+                Ok(Ok(_)) | Ok(Err(_)) | Err(_) => error,
+            }
+        },
+        _ => error,
+    }
 }
 
 async fn wait_for_response(
