@@ -193,6 +193,15 @@ impl RuntimeService {
             .unwrap_or_else(|| {
                 render_issue_template_with_strings(DEFAULT_PLANNER_PROMPT, issue, attempt, &[])
             })?;
+        let prompt = apply_agent_prompt_template(
+            workflow,
+            &selected_agent.name,
+            prompt,
+            issue,
+            attempt,
+            1,
+            workflow.config.agent.max_turns,
+        )?;
 
         self.spawn_pipeline_worker(
             workflow.clone(),
@@ -263,7 +272,15 @@ impl RuntimeService {
         let selected_agent = agent_definition(&agent_name, profile);
 
         // Build task prompt with pipeline context
-        let prompt = self.build_task_prompt(&workflow, &issue, &task, movement_id, attempt)?;
+        let prompt = self.build_task_prompt(
+            &workflow,
+            &selected_agent.name,
+            &issue,
+            &task,
+            movement_id,
+            attempt,
+            workflow.config.agent.max_turns,
+        )?;
 
         // Mark task in progress
         if let Some(tasks) = self.state.tasks.get_mut(movement_id)
@@ -293,10 +310,12 @@ impl RuntimeService {
     pub(crate) fn build_task_prompt(
         &self,
         workflow: &LoadedWorkflow,
+        agent_name: &str,
         issue: &Issue,
         task: &Task,
         movement_id: &str,
         attempt: Option<u32>,
+        max_turns: u32,
     ) -> Result<String, Error> {
         let tasks = self.state.tasks.get(movement_id);
         let completed_tasks: Vec<String> = tasks
@@ -326,7 +345,15 @@ impl RuntimeService {
             .is_some_and(|path| path.join(".polyphony").join("plan.json").exists());
 
         // Render the workflow template with pipeline context injected
-        let base_prompt = render_turn_prompt(&workflow.definition, issue, attempt, 1, 1)?;
+        let base_prompt = apply_agent_prompt_template(
+            workflow,
+            agent_name,
+            render_turn_prompt(&workflow.definition, issue, attempt, 1, max_turns)?,
+            issue,
+            attempt,
+            1,
+            max_turns,
+        )?;
 
         let mut prompt = base_prompt;
         prompt.push_str(&format!(

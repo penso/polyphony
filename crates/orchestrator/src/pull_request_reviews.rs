@@ -82,6 +82,15 @@ impl RuntimeService {
                 ("pull_request_labels", trigger.labels.join(", ")),
             ],
         )?;
+        let prompt = apply_agent_prompt_template(
+            &workflow,
+            &review_agent.name,
+            prompt,
+            &issue,
+            attempt,
+            1,
+            workflow.config.agent.max_turns,
+        )?;
         let command_tx = self.command_tx.clone();
         let agent = self.agent.clone();
         let workspace_path = workspace.path.clone();
@@ -283,6 +292,15 @@ impl RuntimeService {
                 ("pull_request_labels", trigger.labels.join(", ")),
             ],
         )?;
+        let prompt = apply_agent_prompt_template(
+            &workflow,
+            &review_agent.name,
+            prompt,
+            &issue,
+            attempt,
+            1,
+            workflow.config.agent.max_turns,
+        )?;
         let command_tx = self.command_tx.clone();
         let agent = self.agent.clone();
         let workspace_path = workspace.path.clone();
@@ -409,34 +427,16 @@ impl RuntimeService {
             .unwrap_or_default()
             .as_secs_f64();
         self.state.totals.seconds_running = self.state.ended_runtime_seconds;
-
-        if let Some(store) = &self.store {
-            let mut details = std::collections::BTreeMap::new();
-            if let Some(error) = outcome.error.clone() {
-                details.insert("error".into(), Value::String(error));
-            }
-            if let Some(context) = self.state.saved_contexts.get(&issue_id) {
-                details.insert(
-                    "saved_context".into(),
-                    serde_json::to_value(context).unwrap_or(Value::Null),
-                );
-            }
-            store
-                .record_run(&PersistedRunRecord {
-                    issue_id: issue_id.clone(),
-                    issue_identifier: issue_identifier.clone(),
-                    session_id: running.session_id.clone(),
-                    thread_id: running.thread_id.clone(),
-                    turn_id: running.turn_id.clone(),
-                    codex_app_server_pid: running.codex_app_server_pid.clone(),
-                    status: outcome.status,
-                    attempt,
-                    started_at,
-                    finished_at: Some(Utc::now()),
-                    details,
-                })
-                .await?;
-        }
+        let finished_at = Utc::now();
+        self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
+        let persisted_run = build_persisted_run_record(
+            &running,
+            outcome.status,
+            finished_at,
+            outcome.error.clone(),
+            self.state.saved_contexts.get(&issue_id).cloned(),
+        );
+        self.record_run_history(persisted_run).await?;
 
         if running.review_target.is_some() {
             let result = self
@@ -452,8 +452,6 @@ impl RuntimeService {
             let issue = running.issue.clone();
             let workspace_path = running.workspace_path.clone();
             let active_task_id = running.active_task_id.clone();
-
-            self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
             self.push_event(
                 EventScope::Worker,
                 format!("{} pipeline worker {:?}", issue_identifier, outcome.status),
@@ -622,7 +620,6 @@ impl RuntimeService {
                 );
             },
         }
-        self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
         self.push_event(
             EventScope::Worker,
             format!("{} {:?}", issue_identifier, outcome.status),
@@ -719,7 +716,6 @@ impl RuntimeService {
                 );
             },
         }
-        self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
         self.push_event(
             EventScope::Worker,
             format!("{} PR review {:?}", issue_identifier, outcome.status),

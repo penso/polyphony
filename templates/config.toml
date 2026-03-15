@@ -80,6 +80,10 @@ max_turns = 20
 # risky = "claude"
 
 # Leave [agents.profiles] empty for tracker-only mode. Polyphony will still poll and display issues.
+# Agent-specific prompt files can live in `~/.config/polyphony/agents/<name>.md`
+# and `.polyphony/agents/<name>.md`. Repo-local files override user-global files.
+# Their YAML front matter can override profile fields, and their Markdown body is
+# appended as role-specific instructions when that agent runs.
 [agents.profiles]
 
 # Generic agent profile reference. Every supported field is shown here.

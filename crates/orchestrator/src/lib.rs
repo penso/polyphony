@@ -10,12 +10,12 @@ use {
     polyphony_core::{
         AgentContextSnapshot, AgentEvent, AgentModelCatalog, AgentRunResult, AgentRuntime,
         BudgetSnapshot, CodexTotals, Error as CoreError, Issue, IssueTracker, LoadingState,
-        Movement, MovementId, NetworkCache, PullRequestCommentTrigger, PullRequestCommenter,
-        PullRequestConflictTrigger, PullRequestManager, PullRequestReviewTrigger,
-        PullRequestTrigger, PullRequestTriggerSource, RateLimitSignal, RetryRow, ReviewTarget,
-        ReviewedPullRequestHead, RuntimeEvent, RuntimeSnapshot, StateStore, Task, TaskId,
-        ThrottleWindow, TokenUsage, TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerRow,
-        WorkspaceCommitter, WorkspaceProvisioner,
+        Movement, MovementId, NetworkCache, PersistedRunRecord, PullRequestCommentTrigger,
+        PullRequestCommenter, PullRequestConflictTrigger, PullRequestManager,
+        PullRequestReviewTrigger, PullRequestTrigger, PullRequestTriggerSource, RateLimitSignal,
+        RetryRow, ReviewTarget, ReviewedPullRequestHead, RuntimeEvent, RuntimeSnapshot, StateStore,
+        Task, TaskId, ThrottleWindow, TokenUsage, TrackerConnectionStatus, VisibleIssueRow,
+        VisibleTriggerRow, WorkspaceCommitter, WorkspaceProvisioner,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::LoadedWorkflow,
@@ -231,12 +231,17 @@ struct RuntimeState {
     budgets: HashMap<String, BudgetSnapshot>,
     agent_catalogs: HashMap<String, AgentModelCatalog>,
     visible_issues: Vec<VisibleIssueRow>,
+    bootstrapped_visible_issues: Vec<VisibleIssueRow>,
+    bootstrapped_visible_triggers: Vec<VisibleTriggerRow>,
+    issue_snapshot_loaded: bool,
+    pull_request_snapshot_loaded: bool,
     visible_review_triggers: HashMap<String, PullRequestReviewTrigger>,
     visible_comment_triggers: HashMap<String, PullRequestCommentTrigger>,
     visible_conflict_triggers: HashMap<String, PullRequestConflictTrigger>,
     discarded_triggers: HashMap<String, DiscardedTriggerEntry>,
     saved_contexts: HashMap<String, AgentContextSnapshot>,
     recent_events: VecDeque<RuntimeEvent>,
+    run_history: VecDeque<PersistedRunRecord>,
     ended_runtime_seconds: f64,
     totals: CodexTotals,
     rate_limits: Option<Value>,
@@ -270,12 +275,17 @@ impl Default for RuntimeState {
             budgets: HashMap::new(),
             agent_catalogs: HashMap::new(),
             visible_issues: Vec::new(),
+            bootstrapped_visible_issues: Vec::new(),
+            bootstrapped_visible_triggers: Vec::new(),
+            issue_snapshot_loaded: false,
+            pull_request_snapshot_loaded: false,
             visible_review_triggers: HashMap::new(),
             visible_comment_triggers: HashMap::new(),
             visible_conflict_triggers: HashMap::new(),
             discarded_triggers: HashMap::new(),
             saved_contexts: HashMap::new(),
             recent_events: VecDeque::with_capacity(128),
+            run_history: VecDeque::with_capacity(256),
             ended_runtime_seconds: 0.0,
             totals: CodexTotals::default(),
             rate_limits: None,
@@ -308,12 +318,17 @@ enum WorkflowFileFingerprint {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkflowInputsFingerprint {
+    entries: Vec<(PathBuf, WorkflowFileFingerprint)>,
+}
+
 struct WorkflowReloadSupport {
     workflow_path: PathBuf,
     user_config_path: Option<PathBuf>,
     workflow_tx: watch::Sender<LoadedWorkflow>,
     component_factory: Arc<RuntimeComponentFactory>,
-    last_seen_fingerprint: Option<WorkflowFileFingerprint>,
+    last_seen_fingerprint: Option<WorkflowInputsFingerprint>,
     reload_error: Option<String>,
 }
 

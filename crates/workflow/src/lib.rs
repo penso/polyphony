@@ -159,6 +159,42 @@ pub struct AgentProfileConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
+pub struct AgentProfileOverride {
+    pub kind: Option<String>,
+    pub transport: Option<String>,
+    pub command: Option<String>,
+    pub fallbacks: Option<Vec<String>>,
+    pub model: Option<String>,
+    pub models: Option<Vec<String>>,
+    pub models_command: Option<String>,
+    pub fetch_models: Option<bool>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub approval_policy: Option<String>,
+    pub thread_sandbox: Option<String>,
+    pub turn_sandbox_policy: Option<String>,
+    pub turn_timeout_ms: Option<u64>,
+    pub read_timeout_ms: Option<u64>,
+    pub stall_timeout_ms: Option<i64>,
+    pub credits_command: Option<String>,
+    pub spending_command: Option<String>,
+    pub use_tmux: Option<bool>,
+    pub tmux_session_prefix: Option<String>,
+    pub interaction_mode: Option<String>,
+    pub prompt_mode: Option<String>,
+    pub idle_timeout_ms: Option<u64>,
+    pub completion_sentinel: Option<String>,
+    pub env: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AgentPromptConfig {
+    pub profile: AgentProfileOverride,
+    pub prompt_template: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
 pub struct AgentsConfig {
     pub default: Option<String>,
     pub reviewer: Option<String>,
@@ -303,6 +339,7 @@ pub struct LoadedWorkflow {
     pub definition: WorkflowDefinition,
     pub config: ServiceConfig,
     pub path: PathBuf,
+    pub agent_prompts: HashMap<String, AgentPromptConfig>,
 }
 
 mod files;
@@ -316,14 +353,16 @@ mod tests;
 pub(crate) use crate::service::*;
 pub use crate::{
     files::{
-        default_repo_config_toml, default_user_config_toml, default_workflow_md,
+        agent_prompt_dirs, default_repo_config_toml, default_user_config_toml, default_workflow_md,
         ensure_repo_config_file, ensure_user_config_file, ensure_workflow_file, load_workflow,
-        load_workflow_with_user_config, repo_config_path, seed_repo_config_with_beads,
-        seed_repo_config_with_github, user_config_path,
+        load_workflow_with_user_config, repo_agent_prompt_dir, repo_config_path,
+        seed_repo_config_with_beads, seed_repo_config_with_github, user_agent_prompt_dir,
+        user_config_path,
     },
     render::{
-        agent_definition, render_issue_template, render_issue_template_with_strings, render_prompt,
-        render_turn_prompt, render_turn_template,
+        agent_definition, apply_agent_prompt_template, render_agent_prompt, render_issue_template,
+        render_issue_template_with_strings, render_prompt, render_turn_prompt,
+        render_turn_template,
     },
     service::parse_workflow,
 };

@@ -113,6 +113,17 @@ impl ServiceConfig {
         user_config_path: Option<&Path>,
         repo_config_path: Option<&Path>,
     ) -> Result<Self, Error> {
+        let config =
+            Self::build_from_workflow_with_configs(workflow, user_config_path, repo_config_path)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub(crate) fn build_from_workflow_with_configs(
+        workflow: &WorkflowDefinition,
+        user_config_path: Option<&Path>,
+        repo_config_path: Option<&Path>,
+    ) -> Result<Self, Error> {
         let front_matter = serde_yaml::to_string(&workflow.config)
             .map_err(|err| Error::WorkflowParse(err.to_string()))?;
         let mut builder = Config::builder()
@@ -208,7 +219,6 @@ impl ServiceConfig {
         config.hydrate_agents(raw.codex, raw.provider)?;
         config.resolve();
         config.normalize();
-        config.validate()?;
         Ok(config)
     }
 
@@ -244,6 +254,19 @@ impl ServiceConfig {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn apply_agent_prompt_overrides(
+        &mut self,
+        prompts: &HashMap<String, AgentPromptConfig>,
+    ) {
+        for (name, prompt) in prompts {
+            let profile = self.agents.profiles.entry(name.clone()).or_default();
+            profile.apply_override(&prompt.profile);
+        }
+        if self.agents.default.is_none() && self.agents.profiles.len() == 1 {
+            self.agents.default = self.agents.profiles.keys().next().cloned();
+        }
     }
 
     pub(crate) fn resolve(&mut self) {
@@ -826,6 +849,166 @@ impl AgentsConfig {
             || !self.by_state.is_empty()
             || !self.by_label.is_empty()
             || !self.profiles.is_empty()
+    }
+}
+
+impl AgentProfileConfig {
+    pub(crate) fn apply_override(&mut self, override_config: &AgentProfileOverride) {
+        if let Some(value) = &override_config.kind {
+            self.kind = value.clone();
+        }
+        if let Some(value) = &override_config.transport {
+            self.transport = Some(value.clone());
+        }
+        if let Some(value) = &override_config.command {
+            self.command = Some(value.clone());
+        }
+        if let Some(value) = &override_config.fallbacks {
+            self.fallbacks = value.clone();
+        }
+        if let Some(value) = &override_config.model {
+            self.model = Some(value.clone());
+        }
+        if let Some(value) = &override_config.models {
+            self.models = value.clone();
+        }
+        if let Some(value) = &override_config.models_command {
+            self.models_command = Some(value.clone());
+        }
+        if let Some(value) = override_config.fetch_models {
+            self.fetch_models = value;
+        }
+        if let Some(value) = &override_config.base_url {
+            self.base_url = Some(value.clone());
+        }
+        if let Some(value) = &override_config.api_key {
+            self.api_key = Some(value.clone());
+        }
+        if let Some(value) = &override_config.approval_policy {
+            self.approval_policy = Some(value.clone());
+        }
+        if let Some(value) = &override_config.thread_sandbox {
+            self.thread_sandbox = Some(value.clone());
+        }
+        if let Some(value) = &override_config.turn_sandbox_policy {
+            self.turn_sandbox_policy = Some(value.clone());
+        }
+        if let Some(value) = override_config.turn_timeout_ms {
+            self.turn_timeout_ms = value;
+        }
+        if let Some(value) = override_config.read_timeout_ms {
+            self.read_timeout_ms = value;
+        }
+        if let Some(value) = override_config.stall_timeout_ms {
+            self.stall_timeout_ms = Some(value);
+        }
+        if let Some(value) = &override_config.credits_command {
+            self.credits_command = Some(value.clone());
+        }
+        if let Some(value) = &override_config.spending_command {
+            self.spending_command = Some(value.clone());
+        }
+        if let Some(value) = override_config.use_tmux {
+            self.use_tmux = value;
+        }
+        if let Some(value) = &override_config.tmux_session_prefix {
+            self.tmux_session_prefix = Some(value.clone());
+        }
+        if let Some(value) = &override_config.interaction_mode {
+            self.interaction_mode = Some(value.clone());
+        }
+        if let Some(value) = &override_config.prompt_mode {
+            self.prompt_mode = Some(value.clone());
+        }
+        if let Some(value) = override_config.idle_timeout_ms {
+            self.idle_timeout_ms = value;
+        }
+        if let Some(value) = &override_config.completion_sentinel {
+            self.completion_sentinel = Some(value.clone());
+        }
+        if let Some(value) = &override_config.env {
+            self.env = value.clone();
+        }
+    }
+}
+
+impl AgentProfileOverride {
+    pub(crate) fn merge(&mut self, other: Self) {
+        if other.kind.is_some() {
+            self.kind = other.kind;
+        }
+        if other.transport.is_some() {
+            self.transport = other.transport;
+        }
+        if other.command.is_some() {
+            self.command = other.command;
+        }
+        if other.fallbacks.is_some() {
+            self.fallbacks = other.fallbacks;
+        }
+        if other.model.is_some() {
+            self.model = other.model;
+        }
+        if other.models.is_some() {
+            self.models = other.models;
+        }
+        if other.models_command.is_some() {
+            self.models_command = other.models_command;
+        }
+        if other.fetch_models.is_some() {
+            self.fetch_models = other.fetch_models;
+        }
+        if other.base_url.is_some() {
+            self.base_url = other.base_url;
+        }
+        if other.api_key.is_some() {
+            self.api_key = other.api_key;
+        }
+        if other.approval_policy.is_some() {
+            self.approval_policy = other.approval_policy;
+        }
+        if other.thread_sandbox.is_some() {
+            self.thread_sandbox = other.thread_sandbox;
+        }
+        if other.turn_sandbox_policy.is_some() {
+            self.turn_sandbox_policy = other.turn_sandbox_policy;
+        }
+        if other.turn_timeout_ms.is_some() {
+            self.turn_timeout_ms = other.turn_timeout_ms;
+        }
+        if other.read_timeout_ms.is_some() {
+            self.read_timeout_ms = other.read_timeout_ms;
+        }
+        if other.stall_timeout_ms.is_some() {
+            self.stall_timeout_ms = other.stall_timeout_ms;
+        }
+        if other.credits_command.is_some() {
+            self.credits_command = other.credits_command;
+        }
+        if other.spending_command.is_some() {
+            self.spending_command = other.spending_command;
+        }
+        if other.use_tmux.is_some() {
+            self.use_tmux = other.use_tmux;
+        }
+        if other.tmux_session_prefix.is_some() {
+            self.tmux_session_prefix = other.tmux_session_prefix;
+        }
+        if other.interaction_mode.is_some() {
+            self.interaction_mode = other.interaction_mode;
+        }
+        if other.prompt_mode.is_some() {
+            self.prompt_mode = other.prompt_mode;
+        }
+        if other.idle_timeout_ms.is_some() {
+            self.idle_timeout_ms = other.idle_timeout_ms;
+        }
+        if other.completion_sentinel.is_some() {
+            self.completion_sentinel = other.completion_sentinel;
+        }
+        if other.env.is_some() {
+            self.env = other.env;
+        }
     }
 }
 

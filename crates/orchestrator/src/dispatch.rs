@@ -175,7 +175,15 @@ impl RuntimeService {
         let active_states = workflow.config.tracker.active_states.clone();
         let max_turns = workflow.config.agent.max_turns;
         let prompt = append_saved_context(
-            render_turn_prompt(&workflow.definition, &issue, attempt, 1, max_turns)?,
+            apply_agent_prompt_template(
+                &workflow,
+                &selected_agent.name,
+                render_turn_prompt(&workflow.definition, &issue, attempt, 1, max_turns)?,
+                &issue,
+                attempt,
+                1,
+                max_turns,
+            )?,
             saved_context.as_ref(),
             attempt.is_some()
                 || saved_context

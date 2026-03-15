@@ -55,7 +55,11 @@ impl RuntimeService {
         component_factory: Arc<RuntimeComponentFactory>,
     ) -> Self {
         self.reload_support = Some(WorkflowReloadSupport {
-            last_seen_fingerprint: workflow_file_fingerprint(&workflow_path).ok(),
+            last_seen_fingerprint: workflow_inputs_fingerprint(
+                &workflow_path,
+                user_config_path.as_deref(),
+            )
+            .ok(),
             workflow_path,
             user_config_path,
             workflow_tx,
@@ -697,6 +701,7 @@ impl RuntimeService {
         let previous_issue_rows = self.state.visible_issues.clone();
         let mut issues = issues;
         issues.sort_by(dispatch_order);
+        self.state.issue_snapshot_loaded = true;
         self.state.visible_issues = issues.iter().map(summarize_issue).collect();
         let tracker_kind = workflow.config.tracker.kind;
         let current_issue_ids = self

@@ -1,11 +1,12 @@
 use crate::{prelude::*, *};
 
 pub fn render_prompt(
-    workflow: &WorkflowDefinition,
+    workflow: &LoadedWorkflow,
+    agent_name: &str,
     issue: &Issue,
     attempt: Option<u32>,
 ) -> Result<String, Error> {
-    render_turn_prompt(workflow, issue, attempt, 1, 1)
+    render_agent_prompt(workflow, agent_name, issue, attempt, 1, 1)
 }
 
 pub fn render_turn_prompt(
@@ -21,6 +22,57 @@ pub fn render_turn_prompt(
         workflow.prompt_template.as_str()
     };
     render_turn_template(source, issue, attempt, turn_number, max_turns)
+}
+
+pub fn render_agent_prompt(
+    workflow: &LoadedWorkflow,
+    agent_name: &str,
+    issue: &Issue,
+    attempt: Option<u32>,
+    turn_number: u32,
+    max_turns: u32,
+) -> Result<String, Error> {
+    let base_prompt =
+        render_turn_prompt(&workflow.definition, issue, attempt, turn_number, max_turns)?;
+    apply_agent_prompt_template(
+        workflow,
+        agent_name,
+        base_prompt,
+        issue,
+        attempt,
+        turn_number,
+        max_turns,
+    )
+}
+
+pub fn apply_agent_prompt_template(
+    workflow: &LoadedWorkflow,
+    agent_name: &str,
+    base_prompt: String,
+    issue: &Issue,
+    attempt: Option<u32>,
+    turn_number: u32,
+    max_turns: u32,
+) -> Result<String, Error> {
+    let Some(agent_prompt) = workflow.agent_prompts.get(agent_name) else {
+        return Ok(base_prompt);
+    };
+    if agent_prompt.prompt_template.trim().is_empty() {
+        return Ok(base_prompt);
+    }
+    let rendered = render_turn_template(
+        &agent_prompt.prompt_template,
+        issue,
+        attempt,
+        turn_number,
+        max_turns,
+    )?;
+    if rendered.trim().is_empty() {
+        return Ok(base_prompt);
+    }
+    Ok(format!(
+        "{base_prompt}\n\n## Agent Instructions ({agent_name})\n\n{rendered}"
+    ))
 }
 
 pub fn render_turn_template(

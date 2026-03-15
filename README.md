@@ -59,6 +59,15 @@ provider supports them. Today that means Claude with `--dangerously-skip-permiss
 with `--dangerously-bypass-approvals-and-sandbox`. Pi's CLI does not expose a separate approval
 flag in its help, so there is no extra bypass switch to add there.
 
+Agent-specific prompt files live outside TOML:
+
+- `~/.config/polyphony/agents/<name>.md` for reusable personal defaults
+- `.polyphony/agents/<name>.md` for repo-local overrides
+
+Each file may include YAML front matter to override profile fields such as `kind`, `model`, or
+`command`, plus a Markdown body that is appended as agent-specific instructions whenever that agent
+is selected.
+
 ```toml
 # ~/.config/polyphony/config.toml
 [agents]

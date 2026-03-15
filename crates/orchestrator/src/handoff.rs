@@ -54,9 +54,6 @@ impl RuntimeService {
                 kind: event.kind,
                 message: message.clone(),
             });
-            while context.transcript.len() > 40 {
-                context.transcript.remove(0);
-            }
         }
     }
 
@@ -103,9 +100,6 @@ impl RuntimeService {
                 kind: AgentEventKind::Outcome,
                 message: format!("run ended with error: {error}"),
             });
-        }
-        while context.transcript.len() > 40 {
-            context.transcript.remove(0);
         }
     }
 
@@ -289,6 +283,15 @@ impl RuntimeService {
                 ),
             ],
         )?;
+        let prompt = apply_agent_prompt_template(
+            workflow,
+            &review_agent.name,
+            prompt,
+            &running.issue,
+            running.attempt,
+            1,
+            workflow.config.agent.max_turns,
+        )?;
         let manager = self.build_workspace_manager(workflow);
         manager
             .run_before_run(&workflow.config.hooks, &running.workspace_path)
@@ -409,6 +412,7 @@ impl RuntimeService {
 
 pub fn spawn_workflow_watcher(
     workflow_path: PathBuf,
+    user_config_path: Option<PathBuf>,
     repo_config_path: Option<PathBuf>,
     runtime_command_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<JoinHandle<Result<(), Error>>, Error> {
@@ -422,6 +426,13 @@ pub fn spawn_workflow_watcher(
             && repo_config_path.exists()
         {
             watcher.watch(repo_config_path, RecursiveMode::NonRecursive)?;
+        }
+        if let Ok(agent_dirs) = agent_prompt_dirs(&workflow_path, user_config_path.as_deref()) {
+            for dir in agent_dirs {
+                if dir.exists() {
+                    watcher.watch(&dir, RecursiveMode::Recursive)?;
+                }
+            }
         }
         while let Some(event) = notify_rx.recv().await {
             match event {

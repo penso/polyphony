@@ -1,4 +1,3 @@
-
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -6,8 +5,9 @@ use std::{
 
 use {
     crate::{
-        ServiceConfig, WorkflowDefinition, files::*, load_workflow_with_user_config, render::*,
-        render_issue_template, render_turn_template, repo_config_path,
+        AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig, WorkflowDefinition,
+        files::*, load_workflow_with_user_config, render::*, render_issue_template,
+        render_turn_template, repo_config_path,
     },
     polyphony_core::{
         AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, TrackerKind,
@@ -1200,4 +1200,108 @@ agents:
         config.feedback.webhook["audit"].url.as_deref(),
         Some("https://example.com/hook")
     );
+}
+
+#[test]
+fn agent_prompt_files_define_profiles_and_repo_overrides_global() {
+    let root = unique_temp_path("agent-prompts-root", "d");
+    let user_root = unique_temp_path("agent-prompts-user", "d");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&user_root).unwrap();
+
+    let workflow_path = root.join("WORKFLOW.md");
+    fs::write(
+        &workflow_path,
+        r#"---
+agents:
+  default: research
+  profiles: {}
+---
+Shared workflow for {{ issue.identifier }}
+"#,
+    )
+    .unwrap();
+
+    let user_config_path = user_root.join("config.toml");
+    let user_agent_dir = user_root.join("agents");
+    fs::create_dir_all(&user_agent_dir).unwrap();
+    fs::write(
+        user_agent_dir.join("research.md"),
+        r#"---
+kind: kimi
+model: kimi-2.5
+fetch_models: false
+---
+Global research prompt for {{ issue.identifier }}
+"#,
+    )
+    .unwrap();
+
+    let repo_agent_dir = root.join(".polyphony").join("agents");
+    fs::create_dir_all(&repo_agent_dir).unwrap();
+    fs::write(
+        repo_agent_dir.join("research.md"),
+        r#"---
+model: kimi-k2
+---
+Repo research prompt for {{ issue.title }}
+"#,
+    )
+    .unwrap();
+
+    let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path)).unwrap();
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&user_root);
+
+    let research = workflow.config.agents.profiles.get("research").unwrap();
+    assert_eq!(research.kind, "kimi");
+    assert_eq!(research.model.as_deref(), Some("kimi-k2"));
+    assert!(!research.fetch_models);
+    assert_eq!(
+        workflow
+            .agent_prompts
+            .get("research")
+            .unwrap()
+            .prompt_template
+            .trim(),
+        "Repo research prompt for {{ issue.title }}"
+    );
+}
+
+#[test]
+fn render_agent_prompt_appends_role_specific_instructions() {
+    let workflow = WorkflowDefinition {
+        config: serde_yaml::from_str::<YamlValue>(
+            r#"
+agents:
+  default: research
+  profiles:
+    research:
+      kind: kimi
+      model: kimi-2.5
+      fetch_models: false
+"#,
+        )
+        .unwrap(),
+        prompt_template: "Base prompt for {{ issue.identifier }}".into(),
+    };
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    let loaded = LoadedWorkflow {
+        definition: workflow,
+        config,
+        path: unique_temp_path("render-agent-prompt", "md"),
+        agent_prompts: [("research".to_string(), AgentPromptConfig {
+            profile: AgentProfileOverride::default(),
+            prompt_template: "Investigate carefully for {{ issue.title }}".into(),
+        })]
+        .into_iter()
+        .collect(),
+    };
+
+    let rendered = render_agent_prompt(&loaded, "research", &sample_issue(), None, 1, 3).unwrap();
+
+    assert!(rendered.contains("Base prompt for ISSUE-1"));
+    assert!(rendered.contains("## Agent Instructions (research)"));
+    assert!(rendered.contains("Investigate carefully for Title"));
 }

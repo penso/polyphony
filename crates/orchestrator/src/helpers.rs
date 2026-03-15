@@ -1,8 +1,6 @@
 use crate::{prelude::*, *};
 
-pub(crate) fn workflow_file_fingerprint(
-    path: &Path,
-) -> Result<WorkflowFileFingerprint, std::io::Error> {
+fn path_fingerprint(path: &Path) -> Result<WorkflowFileFingerprint, std::io::Error> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(WorkflowFileFingerprint::Present {
             len: metadata.len(),
@@ -13,6 +11,42 @@ pub(crate) fn workflow_file_fingerprint(
         },
         Err(error) => Err(error),
     }
+}
+
+pub(crate) fn workflow_inputs_fingerprint(
+    workflow_path: &Path,
+    user_config_path: Option<&Path>,
+) -> Result<WorkflowInputsFingerprint, std::io::Error> {
+    let mut entries = vec![(
+        workflow_path.to_path_buf(),
+        path_fingerprint(workflow_path)?,
+    )];
+
+    if let Ok(repo_config) = repo_config_path(workflow_path) {
+        entries.push((repo_config.clone(), path_fingerprint(&repo_config)?));
+    }
+
+    if let Ok(agent_dirs) = agent_prompt_dirs(workflow_path, user_config_path) {
+        for dir in agent_dirs {
+            entries.push((dir.clone(), path_fingerprint(&dir)?));
+            if dir.is_dir() {
+                let mut files = fs::read_dir(&dir)?
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.is_file()
+                            && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+                    })
+                    .collect::<Vec<_>>();
+                files.sort();
+                for file in files {
+                    entries.push((file.clone(), path_fingerprint(&file)?));
+                }
+            }
+        }
+    }
+
+    Ok(WorkflowInputsFingerprint { entries })
 }
 
 pub(crate) async fn run_worker_attempt(
@@ -458,6 +492,7 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
         visible_issues: Vec::new(),
         visible_triggers: Vec::new(),
         running: Vec::new(),
+        agent_history: Vec::new(),
         retrying: Vec::new(),
         codex_totals: CodexTotals::default(),
         rate_limits: None,
@@ -475,6 +510,38 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
         from_cache: false,
         cached_at: None,
         agent_profile_names: Vec::new(),
+    }
+}
+
+pub(crate) fn build_persisted_run_record(
+    running: &RunningTask,
+    status: AttemptStatus,
+    finished_at: DateTime<Utc>,
+    error: Option<String>,
+    saved_context: Option<AgentContextSnapshot>,
+) -> PersistedRunRecord {
+    PersistedRunRecord {
+        issue_id: running.issue.id.clone(),
+        issue_identifier: running.issue.identifier.clone(),
+        agent_name: running.agent_name.clone(),
+        model: running.model.clone(),
+        session_id: running.session_id.clone(),
+        thread_id: running.thread_id.clone(),
+        turn_id: running.turn_id.clone(),
+        codex_app_server_pid: running.codex_app_server_pid.clone(),
+        status,
+        attempt: running.attempt,
+        max_turns: running.max_turns,
+        turn_count: running.turn_count,
+        last_event: running.last_event.clone(),
+        last_message: running.last_message.clone(),
+        started_at: running.started_at,
+        finished_at: Some(finished_at),
+        last_event_at: running.last_event_at,
+        tokens: running.tokens.clone(),
+        workspace_path: Some(running.workspace_path.clone()),
+        error,
+        saved_context,
     }
 }
 

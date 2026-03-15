@@ -1,4 +1,9 @@
-use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 
 use {
     clap::{Parser, Subcommand},
@@ -13,7 +18,9 @@ use {
 
 type TuiRunFuture = Pin<Box<dyn Future<Output = Result<(), polyphony_tui::Error>> + Send>>;
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send>>;
+#[cfg(feature = "beads")]
 const BEADS_SUPPLEMENTAL_PREFIX: &str = "beads:";
+#[cfg(feature = "github")]
 const GITHUB_SUPPLEMENTAL_PREFIX: &str = "github:";
 
 #[derive(Debug, Parser)]
@@ -144,7 +151,10 @@ use crate::{
     },
     commands::{handle_config_command, handle_doctor_command, handle_issue_command},
     errors::format_fatal_error,
-    tracing_support::{TracingOutput, init_run_log_sink, init_tracing, run_operator_surface},
+    tracing_support::{
+        TracingOutput, init_run_log_sink, init_tracing, load_historical_log_lines,
+        run_operator_surface,
+    },
     tracker_factory::build_runtime_components,
 };
 
@@ -176,6 +186,17 @@ async fn try_main() -> Result<(), Error> {
         return handle_issue_command(action, &workflow).await;
     }
 
+    let historical_logs = if cli.no_tui {
+        Vec::new()
+    } else {
+        match load_historical_log_lines(&workflow_path) {
+            Ok(lines) => lines,
+            Err(error) => {
+                eprintln!("polyphony: failed to load historical logs: {error}");
+                Vec::new()
+            },
+        }
+    };
     let log_file_sink = match init_run_log_sink(&workflow_path) {
         Ok(sink) => Some(sink),
         Err(error) => {
@@ -183,7 +204,7 @@ async fn try_main() -> Result<(), Error> {
             None
         },
     };
-    let tui_logs = LogBuffer::default();
+    let tui_logs = LogBuffer::from_lines(historical_logs);
     let tracing_output = if cli.no_tui {
         TracingOutput::stderr(log_file_sink)
     } else {
@@ -227,7 +248,7 @@ async fn try_main() -> Result<(), Error> {
     let components = build_runtime_components(&workflow)?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
         Arc::new(polyphony_git::GitWorkspaceProvisioner);
-    let store = build_store(cli.sqlite_url.as_deref()).await?;
+    let store = build_store(&workflow_path, cli.sqlite_url.as_deref()).await?;
     let cache: Option<Arc<dyn NetworkCache>> = {
         let cache_path = workflow_root_dir(&workflow_path)?
             .join(".polyphony")
@@ -252,12 +273,13 @@ async fn try_main() -> Result<(), Error> {
     );
     let service = service.with_workflow_reload(
         workflow_path.clone(),
-        Some(user_config_path),
+        Some(user_config_path.clone()),
         workflow_tx.clone(),
         component_factory,
     );
     let _watcher = spawn_workflow_watcher(
         workflow_path.clone(),
+        Some(user_config_path.clone()),
         repo_config_path,
         handle.command_tx.clone(),
     )?;
@@ -288,7 +310,10 @@ async fn try_main() -> Result<(), Error> {
     Ok(())
 }
 
-async fn build_store(sqlite_url: Option<&str>) -> Result<Option<Arc<dyn StateStore>>, Error> {
+async fn build_store(
+    workflow_path: &Path,
+    sqlite_url: Option<&str>,
+) -> Result<Option<Arc<dyn StateStore>>, Error> {
     #[cfg(feature = "sqlite")]
     if let Some(url) = sqlite_url {
         let store = polyphony_sqlite::SqliteStateStore::connect(url)
@@ -304,5 +329,10 @@ async fn build_store(sqlite_url: Option<&str>) -> Result<Option<Arc<dyn StateSto
         ));
     }
 
-    Ok(None)
+    let state_path = workflow_root_dir(workflow_path)?
+        .join(".polyphony")
+        .join("state.json");
+    Ok(Some(Arc::new(
+        polyphony_core::file_store::JsonStateStore::new(state_path),
+    )))
 }

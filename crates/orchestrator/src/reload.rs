@@ -19,19 +19,20 @@ impl RuntimeService {
         let user_config_path = reload_support.user_config_path.clone();
         let workflow_tx = reload_support.workflow_tx.clone();
         let component_factory = reload_support.component_factory.clone();
-        let last_seen_fingerprint = reload_support.last_seen_fingerprint;
+        let last_seen_fingerprint = reload_support.last_seen_fingerprint.clone();
 
-        let fingerprint = match workflow_file_fingerprint(&workflow_path) {
-            Ok(fingerprint) => Some(fingerprint),
-            Err(error) => {
-                self.note_workflow_reload_failure(
-                    None,
-                    format!("workflow fingerprint failed: {error}"),
-                    reason,
-                );
-                return;
-            },
-        };
+        let fingerprint =
+            match workflow_inputs_fingerprint(&workflow_path, user_config_path.as_deref()) {
+                Ok(fingerprint) => Some(fingerprint),
+                Err(error) => {
+                    self.note_workflow_reload_failure(
+                        None,
+                        format!("workflow fingerprint failed: {error}"),
+                        reason,
+                    );
+                    return;
+                },
+            };
         if !force && fingerprint == last_seen_fingerprint {
             return;
         }
@@ -39,7 +40,7 @@ impl RuntimeService {
         match load_workflow_with_user_config(&workflow_path, user_config_path.as_deref()) {
             Ok(workflow) => {
                 let current_workflow = self.workflow();
-                let recovered = self.clear_workflow_reload_error(fingerprint);
+                let recovered = self.clear_workflow_reload_error(fingerprint.clone());
                 if workflow.definition == current_workflow.definition
                     && workflow.config == current_workflow.config
                 {
@@ -80,7 +81,7 @@ impl RuntimeService {
 
     pub(crate) fn clear_workflow_reload_error(
         &mut self,
-        fingerprint: Option<WorkflowFileFingerprint>,
+        fingerprint: Option<WorkflowInputsFingerprint>,
     ) -> bool {
         let Some(reload_support) = self.reload_support.as_mut() else {
             return false;
@@ -93,7 +94,7 @@ impl RuntimeService {
 
     pub(crate) fn note_workflow_reload_failure(
         &mut self,
-        fingerprint: Option<WorkflowFileFingerprint>,
+        fingerprint: Option<WorkflowInputsFingerprint>,
         error: String,
         reason: &str,
     ) {
