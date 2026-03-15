@@ -65,13 +65,18 @@ pub fn draw_issues_tab(
         + 1;
 
     // Compute Status column width: max of data and "Status" header + 1 trailing space
+    let any_has_workspace = issue_data
+        .iter()
+        .any(|(issue, _, _, _, _, _)| issue.has_workspace);
+    let workspace_indicator_width: u16 = if any_has_workspace { 2 } else { 0 };
     let max_status_len = issue_data
         .iter()
         .map(|(issue, _, _, _, _, _)| issue.state.len())
         .max()
         .unwrap_or(6)
         .max(6) as u16 // min width = "Status" header
-        + 1;
+        + 1
+        + workspace_indicator_width;
 
     // Age column: max of data and "Age" header + 1 padding
     let max_age_len = issue_data
@@ -164,10 +169,18 @@ pub fn draw_issues_tab(
                     .alignment(Alignment::Right),
                 ),
                 Cell::from(
-                    Line::from(vec![
-                        Span::styled(issue.state.clone(), Style::default().fg(state_color)),
-                        Span::raw(" "),
-                    ])
+                    Line::from(if issue.has_workspace {
+                        vec![
+                            Span::styled("● ", Style::default().fg(theme.highlight)),
+                            Span::styled(issue.state.clone(), Style::default().fg(state_color)),
+                            Span::raw(" "),
+                        ]
+                    } else {
+                        vec![
+                            Span::styled(issue.state.clone(), Style::default().fg(state_color)),
+                            Span::raw(" "),
+                        ]
+                    })
                     .alignment(Alignment::Right),
                 ),
                 Cell::from(

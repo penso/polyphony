@@ -217,6 +217,7 @@ struct RuntimeState {
     dispatch_mode: polyphony_core::DispatchMode,
     movements: HashMap<MovementId, Movement>,
     tasks: HashMap<MovementId, Vec<Task>>,
+    worktree_keys: HashSet<String>,
 }
 
 impl Default for RuntimeState {
@@ -244,6 +245,7 @@ impl Default for RuntimeState {
             dispatch_mode: polyphony_core::DispatchMode::default(),
             movements: HashMap::new(),
             tasks: HashMap::new(),
+            worktree_keys: HashSet::new(),
         }
     }
 }
@@ -811,6 +813,9 @@ impl RuntimeService {
                 &workflow.config.hooks,
             )
             .await?;
+        self.state
+            .worktree_keys
+            .insert(workspace.workspace_key.clone());
         let issue_id = issue.id.clone();
         let issue_identifier = issue.identifier.clone();
         let issue_identifier_for_task = issue_identifier.clone();
@@ -980,6 +985,9 @@ impl RuntimeService {
                 &workflow.config.hooks,
             )
             .await?;
+        self.state
+            .worktree_keys
+            .insert(workspace.workspace_key.clone());
 
         if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
             warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
@@ -2030,6 +2038,26 @@ impl RuntimeService {
                 warn!(%error, issue_identifier = %issue.identifier, "terminal cleanup failed");
             }
         }
+
+        // Scan remaining workspaces on disk and cache the keys.
+        let existing = manager.list_workspaces().await;
+        let running_keys: HashSet<String> = self
+            .state
+            .running
+            .values()
+            .map(|r| sanitize_workspace_key(&r.issue.identifier))
+            .collect();
+        self.state.worktree_keys.clear();
+        for (key, _path) in &existing {
+            self.state.worktree_keys.insert(key.clone());
+            if !running_keys.contains(key) {
+                info!(workspace_key = %key, "orphaned workspace detected at startup");
+                self.push_event(
+                    EventScope::Startup,
+                    format!("orphaned workspace found: {key}"),
+                );
+            }
+        }
     }
 
     async fn stop_running(&mut self, issue_id: &str, cleanup_workspace: bool) {
@@ -2038,6 +2066,7 @@ impl RuntimeService {
             running.handle.abort();
             self.release_issue(issue_id);
             if cleanup_workspace {
+                let workspace_key = sanitize_workspace_key(&running.issue.identifier);
                 let manager = self.build_workspace_manager(&workflow);
                 if let Err(error) = manager
                     .cleanup_workspace(
@@ -2048,6 +2077,8 @@ impl RuntimeService {
                     .await
                 {
                     warn!(%error, issue_identifier = %running.issue.identifier, "cleanup failed");
+                } else {
+                    self.state.worktree_keys.remove(&workspace_key);
                 }
             }
             self.push_event(
@@ -2249,6 +2280,7 @@ impl RuntimeService {
                     .flat_map(|t| t.iter())
                     .filter(|t| t.status == TaskStatus::Completed)
                     .count(),
+                worktrees: self.state.worktree_keys.len(),
             },
             cadence: RuntimeCadence {
                 tracker_poll_interval_ms: self.workflow_rx.borrow().config.polling.interval_ms,
@@ -2258,7 +2290,17 @@ impl RuntimeService {
                 last_budget_poll_at: self.state.last_budget_poll_at,
                 last_model_discovery_at: self.state.last_model_discovery_at,
             },
-            visible_issues: self.state.visible_issues.clone(),
+            visible_issues: self
+                .state
+                .visible_issues
+                .iter()
+                .map(|row| {
+                    let mut row = row.clone();
+                    let key = sanitize_workspace_key(&row.issue_identifier);
+                    row.has_workspace = self.state.worktree_keys.contains(&key);
+                    row
+                })
+                .collect(),
             running: self
                 .state
                 .running
@@ -3462,6 +3504,7 @@ fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
         parent_id: issue.parent_id.clone(),
         updated_at: issue.updated_at,
         created_at: issue.created_at,
+        has_workspace: false,
     }
 }
 

@@ -682,6 +682,8 @@ pub struct VisibleIssueRow {
     pub updated_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub has_workspace: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -731,6 +733,8 @@ pub struct SnapshotCounts {
     pub tasks_in_progress: usize,
     #[serde(default)]
     pub tasks_completed: usize,
+    #[serde(default)]
+    pub worktrees: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

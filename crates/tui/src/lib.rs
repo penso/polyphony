@@ -763,6 +763,7 @@ mod tests {
                     parent_id: None,
                     updated_at: None,
                     created_at: None,
+                    has_workspace: false,
                 })
                 .collect(),
             running: vec![],

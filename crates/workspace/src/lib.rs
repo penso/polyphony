@@ -75,6 +75,23 @@ impl WorkspaceManager {
         }
     }
 
+    pub async fn list_workspaces(&self) -> Vec<(String, PathBuf)> {
+        let mut entries = Vec::new();
+        let mut read_dir = match tokio::fs::read_dir(&self.root).await {
+            Ok(rd) => rd,
+            Err(_) => return entries,
+        };
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let path = entry.path();
+            if path.is_dir()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                entries.push((name.to_string(), path));
+            }
+        }
+        entries
+    }
+
     pub fn workspace_path_for(&self, issue_identifier: &str) -> Result<(String, PathBuf), Error> {
         let workspace_key = sanitize_workspace_key(issue_identifier);
         let workspace_path = self.root.join(&workspace_key);

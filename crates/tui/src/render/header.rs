@@ -74,6 +74,21 @@ pub fn draw_header(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
+        if snapshot.counts.worktrees > 0 {
+            Span::styled("worktrees ", Style::default().fg(theme.muted))
+        } else {
+            Span::raw("")
+        },
+        if snapshot.counts.worktrees > 0 {
+            Span::styled(
+                format!("{}  ", snapshot.counts.worktrees),
+                Style::default()
+                    .fg(theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("")
+        },
         Span::styled("tasks ", Style::default().fg(theme.muted)),
         Span::styled(
             format!(
