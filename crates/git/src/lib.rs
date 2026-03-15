@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use {
@@ -235,13 +236,10 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
     match request.checkout_kind {
         CheckoutKind::Directory => Ok(()),
         CheckoutKind::LinkedWorktree => {
-            if let Some(source_repo_path) = request.source_repo_path.as_deref() {
-                let source_repo = git2::Repository::open(source_repo_path).map_err(|error| {
-                    CoreError::Adapter(format!("open source repo failed: {error}"))
-                })?;
-                if let Err(error) = fetch_origin(&source_repo) {
-                    warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
-                }
+            if let Some(source_repo_path) = request.source_repo_path.as_deref()
+                && let Err(error) = fetch_origin_with_timeout(source_repo_path)
+            {
+                warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
             sync_existing_repo_checkout(
                 &request.workspace_path,
@@ -250,10 +248,7 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
             )
         },
         CheckoutKind::DiscreteClone => {
-            let repo = git2::Repository::open(&request.workspace_path).map_err(|error| {
-                CoreError::Adapter(format!("open existing clone failed: {error}"))
-            })?;
-            if let Err(error) = fetch_origin(&repo) {
+            if let Err(error) = fetch_origin_with_timeout(&request.workspace_path) {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
             sync_existing_repo_checkout(
@@ -326,6 +321,33 @@ fn sync_existing_repo_checkout(
         checkout_branch(&repo, branch_name, default_branch)?;
     }
     Ok(())
+}
+
+const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Run `fetch_origin` in a separate thread with a timeout so a hanging SSH
+/// agent (e.g. YubiKey not tapped) doesn't block the orchestrator.
+fn fetch_origin_with_timeout(repo_path: &Path) -> Result<(), CoreError> {
+    let path = repo_path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let repo = git2::Repository::open(&path)
+                .map_err(|e| CoreError::Adapter(format!("open repo for fetch failed: {e}")))?;
+            fetch_origin(&repo)
+        })();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(FETCH_TIMEOUT) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            warn!("fetch_origin timed out after {FETCH_TIMEOUT:?}");
+            Err(CoreError::Adapter("fetch origin timed out".into()))
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(CoreError::Adapter("fetch origin thread panicked".into()))
+        },
+    }
 }
 
 fn fetch_origin(repo: &git2::Repository) -> Result<(), CoreError> {
