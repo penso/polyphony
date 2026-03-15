@@ -126,12 +126,12 @@ fn draw_status_panel(
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
-            .title(Line::from(Span::styled(
-                " Flow ",
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            )))
+                .title(Line::from(Span::styled(
+                    " Flow ",
+                    Style::default()
+                        .fg(theme.foreground)
+                        .add_modifier(Modifier::BOLD),
+                )))
                 .borders(ratatui::widgets::Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.border)),

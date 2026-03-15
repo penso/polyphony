@@ -165,9 +165,14 @@ fn github_connection_label(
             .filter(|label| !label.is_empty())
             .map(|label| (format!("{GITHUB_MARK} {label}"), success_color)),
         TrackerConnectionState::Disconnected => Some((
-            format!("{GITHUB_MARK} {}", status.detail.as_deref().unwrap_or("disconnected")),
+            format!(
+                "{GITHUB_MARK} {}",
+                status.detail.as_deref().unwrap_or("disconnected")
+            ),
             Color::Yellow,
         )),
-        TrackerConnectionState::Unknown => Some((format!("{GITHUB_MARK} checking"), Color::DarkGray)),
+        TrackerConnectionState::Unknown => {
+            Some((format!("{GITHUB_MARK} checking"), Color::DarkGray))
+        },
     }
 }
