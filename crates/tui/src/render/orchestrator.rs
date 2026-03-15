@@ -272,9 +272,11 @@ fn draw_events_panel(
     let total = snapshot.recent_events.len();
     let content_height = area.height.saturating_sub(2) as usize; // border top+bottom
 
+    // Reverse iteration: oldest first, newest at bottom (log-style)
     let lines: Vec<Line> = snapshot
         .recent_events
         .iter()
+        .rev()
         .map(|event| {
             let ts = event.at.format("%H:%M:%S");
             let scope_color = match event.scope {
@@ -298,8 +300,14 @@ fn draw_events_panel(
         })
         .collect();
 
-    // Clamp scroll to valid range
+    // Auto-scroll to bottom (newest) when new events arrive.
+    // Follow new events if user was already at/near the bottom, or if
+    // everything fits on screen (no scrollbar).
     let max_scroll = total.saturating_sub(content_height) as u16;
+    let was_at_bottom = app.events_scroll >= max_scroll.saturating_sub(1);
+    if was_at_bottom || total <= content_height {
+        app.events_scroll = max_scroll;
+    }
     if app.events_scroll > max_scroll {
         app.events_scroll = max_scroll;
     }
