@@ -14,7 +14,13 @@ $BinDir = Join-Path $StagingDir 'bin'
 New-Item -Path $BinDir -ItemType Directory -Force | Out-Null
 Copy-Item -Path $BinaryPath -Destination (Join-Path $BinDir "$AppName.exe") -Force
 Copy-Item -Path README.md -Destination (Join-Path $StagingDir 'README.md') -Force
-Copy-Item -Path LICENSE -Destination (Join-Path $StagingDir 'LICENSE') -Force
+if (Test-Path LICENSE) {
+  Copy-Item -Path LICENSE -Destination (Join-Path $StagingDir 'LICENSE') -Force
+} elseif (Test-Path LICENSE.md) {
+  Copy-Item -Path LICENSE.md -Destination (Join-Path $StagingDir 'LICENSE') -Force
+} else {
+  Write-Warning 'no LICENSE or LICENSE.md found, skipping license bundle'
+}
 
 if ($env:POLYPHONY_CHANGELOG_PATH) {
   if (Test-Path $env:POLYPHONY_CHANGELOG_PATH) {

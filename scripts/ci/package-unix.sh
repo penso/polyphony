@@ -18,7 +18,13 @@ ARCHIVE_PATH="${OUTPUT_DIR}/${APP_NAME}-${TAG}-${TARGET_TRIPLE}.tar.gz"
 mkdir -p "${STAGING_DIR}/bin"
 install -m 0755 "${BINARY_PATH}" "${STAGING_DIR}/bin/${APP_NAME}"
 cp README.md "${STAGING_DIR}/README.md"
-cp LICENSE "${STAGING_DIR}/LICENSE"
+if [[ -f LICENSE ]]; then
+  cp LICENSE "${STAGING_DIR}/LICENSE"
+elif [[ -f LICENSE.md ]]; then
+  cp LICENSE.md "${STAGING_DIR}/LICENSE"
+else
+  echo "warning: no LICENSE or LICENSE.md found, skipping license bundle"
+fi
 
 CHANGELOG_PATH="${POLYPHONY_CHANGELOG_PATH:-}"
 if [[ -n "${CHANGELOG_PATH}" && -f "${CHANGELOG_PATH}" ]]; then
