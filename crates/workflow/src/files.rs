@@ -119,6 +119,36 @@ pub fn ensure_repo_config_file(
     Ok(true)
 }
 
+pub fn ensure_repo_agent_prompt_files(
+    workflow_path: impl AsRef<Path>,
+) -> Result<Vec<PathBuf>, Error> {
+    let dir = repo_agent_prompt_dir(workflow_path)?;
+    fs::create_dir_all(&dir).map_err(|error| {
+        Error::Config(format!(
+            "creating `{}` for repo agent prompts failed: {error}",
+            dir.display()
+        ))
+    })?;
+    let mut created = Vec::new();
+    for (name, contents) in default_repo_agent_prompt_templates() {
+        let path = dir.join(format!("{name}.md"));
+        if path.exists() {
+            if !path.is_file() {
+                return Err(Error::Config(format!(
+                    "agent prompt path `{}` exists but is not a file",
+                    path.display()
+                )));
+            }
+            continue;
+        }
+        fs::write(&path, contents).map_err(|error| {
+            Error::Config(format!("writing `{}` failed: {error}", path.display()))
+        })?;
+        created.push(path);
+    }
+    Ok(created)
+}
+
 fn ensure_parent_dir(path: &Path, label: &str) -> Result<(), Error> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -147,6 +177,16 @@ pub fn default_repo_config_toml(source_repo_path: &Path) -> String {
         "{{SOURCE_REPO_PATH}}",
         &source_repo_path.display().to_string(),
     )
+}
+
+pub fn default_repo_agent_prompt_templates() -> [(&'static str, &'static str); 5] {
+    [
+        ("router", DEFAULT_REPO_AGENT_ROUTER_TEMPLATE),
+        ("implementer", DEFAULT_REPO_AGENT_IMPLEMENTER_TEMPLATE),
+        ("researcher", DEFAULT_REPO_AGENT_RESEARCHER_TEMPLATE),
+        ("tester", DEFAULT_REPO_AGENT_TESTER_TEMPLATE),
+        ("reviewer", DEFAULT_REPO_AGENT_REVIEWER_TEMPLATE),
+    ]
 }
 
 fn load_agent_prompt_configs(

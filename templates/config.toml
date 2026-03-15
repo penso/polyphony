@@ -70,6 +70,10 @@ max_turns = 20
 # todo = 2
 # "in progress" = 4
 
+[orchestration]
+# router_agent = "router"
+# mode = "advisory"              # or "enforced"
+
 [agents]
 # default = "codex"
 

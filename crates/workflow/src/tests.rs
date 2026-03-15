@@ -1073,7 +1073,9 @@ fn ensure_workflow_file_supports_repo_root_relative_path() {
     assert!(created);
     assert!(!created_again);
     assert!(contents.contains("# Polyphony Workflow"));
-    assert!(contents.contains("Local tracker identity and repo wiring can live"));
+    assert!(
+        contents.contains("Local tracker identity, router selection, and repo wiring can live")
+    );
 }
 
 #[test]
@@ -1092,6 +1094,48 @@ fn ensure_repo_config_file_writes_template_once() {
     assert!(contents.contains("Polyphony repo-local config."));
     assert!(contents.contains("checkout_kind = \"linked_worktree\""));
     assert!(contents.contains(&format!("source_repo_path = \"{}\"", root.display())));
+}
+
+#[test]
+fn ensure_repo_agent_prompt_files_writes_defaults_once() {
+    let root = unique_temp_path("repo-agent-prompts-root", "d");
+    fs::create_dir_all(&root).unwrap();
+    let workflow_path = root.join("WORKFLOW.md");
+    fs::write(&workflow_path, default_workflow_md()).unwrap();
+
+    let created = ensure_repo_agent_prompt_files(&workflow_path).unwrap();
+    let created_again = ensure_repo_agent_prompt_files(&workflow_path).unwrap();
+    let router = root.join(".polyphony").join("agents").join("router.md");
+    let reviewer = root.join(".polyphony").join("agents").join("reviewer.md");
+    let router_contents = fs::read_to_string(&router).unwrap();
+    let reviewer_contents = fs::read_to_string(&reviewer).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(created.len(), default_repo_agent_prompt_templates().len());
+    assert!(created_again.is_empty());
+    assert!(router_contents.contains("You are the routing agent"));
+    assert!(reviewer_contents.contains("You are the review specialist"));
+}
+
+#[test]
+fn generated_defaults_load_with_seeded_agent_prompts() {
+    let root = unique_temp_path("generated-defaults-load", "d");
+    fs::create_dir_all(&root).unwrap();
+    let workflow_path = root.join("WORKFLOW.md");
+    fs::write(&workflow_path, default_workflow_md()).unwrap();
+    ensure_repo_agent_prompt_files(&workflow_path).unwrap();
+
+    let workflow = load_workflow_with_user_config(&workflow_path, None).unwrap();
+
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(workflow.config.pipeline_active());
+    assert_eq!(workflow.config.router_agent_name(), Some("router"));
+    assert_eq!(
+        workflow.config.agents.default.as_deref(),
+        Some("implementer")
+    );
+    assert!(workflow.config.agents.profiles.contains_key("reviewer"));
 }
 
 #[test]
@@ -1304,4 +1348,35 @@ agents:
     assert!(rendered.contains("Base prompt for ISSUE-1"));
     assert!(rendered.contains("## Agent Instructions (research)"));
     assert!(rendered.contains("Investigate carefully for Title"));
+}
+
+#[test]
+fn orchestration_router_agent_enables_pipeline_activation() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+orchestration:
+  router_agent: router
+agents:
+  default: implementer
+  profiles:
+    implementer:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+    router:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+    assert!(config.pipeline_active());
+    assert_eq!(config.router_agent_name(), Some("router"));
 }

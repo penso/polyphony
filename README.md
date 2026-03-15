@@ -14,7 +14,7 @@ providers like `acpx`, this is what the project is for.
 ## What It Does
 
 - loads shared workflow policy from [`WORKFLOW.md`](WORKFLOW.md)
-- merges user config from `~/.config/polyphony/config.toml` and repo-local overrides from `.polyphony/config.toml`
+- merges user config from `~/.config/polyphony/config.toml` and repo-local overrides from `polyphony.toml`
 - polls GitHub, Linear, Beads, or runs trackerless in `none` mode
 - provisions per-issue workspaces with directory, linked-worktree, or clone strategies
 - dispatches agents with retries, fallback chains, throttling, and saved context handoff
@@ -38,20 +38,49 @@ cargo run -p polyphony-cli
 ```
 
 On first start, Polyphony creates `~/.config/polyphony/config.toml`. In repos with a generic
-workflow, it also seeds `.polyphony/config.toml`.
+workflow, it also seeds `polyphony.toml` and these repo-local specialist prompts:
 
-Minimal setup looks like this:
+- `.polyphony/agents/router.md`
+- `.polyphony/agents/implementer.md`
+- `.polyphony/agents/researcher.md`
+- `.polyphony/agents/tester.md`
+- `.polyphony/agents/reviewer.md`
+
+The default workflow is ready to use those agent types immediately. The simplest setup is usually:
+
+1. configure the tracker in `polyphony.toml`
+2. start `polyphony`
+3. edit `.polyphony/agents/*.md` only when you want to change the role prompt or underlying model
+
+Simple repo-local configuration:
 
 ```toml
-# ~/.config/polyphony/config.toml
-[agents]
-default = "claude"
+# polyphony.toml
+[tracker]
+kind = "github"
+repository = "owner/repo"
 
-[agents.profiles.claude]
-kind = "claude"
-transport = "local_cli"
-command = "claude -p --verbose --dangerously-skip-permissions"
-use_tmux = false
+[orchestration]
+router_agent = "router"
+
+[agents]
+default = "implementer"
+reviewer = "reviewer"
+```
+
+Example specialist prompt with provider/model settings in front matter:
+
+```md
+---
+kind: codex
+transport: app_server
+command: codex --dangerously-bypass-approvals-and-sandbox app-server
+approval_policy: auto
+thread_sandbox: workspace-write
+turn_sandbox_policy: workspace-write
+---
+You are the routing agent for this movement.
+Decide whether to keep the work as one implementation task or split it into specialist tasks.
 ```
 
 Polyphony is set up for unattended agent runs. Use the CLI's "don't ask me again" flags where the
@@ -123,7 +152,7 @@ review comments in addition to the summary body. `only_labels`, `ignore_labels`,
 turning the trigger off entirely.
 
 ```toml
-# .polyphony/config.toml
+# polyphony.toml
 [tracker]
 kind = "github"
 repository = "owner/repo"

@@ -26,3 +26,10 @@ checkout_kind = "linked_worktree"
 source_repo_path = "{{SOURCE_REPO_PATH}}"
 sync_on_reuse = true
 # default_branch = "main"
+
+[orchestration]
+router_agent = "router"
+
+[agents]
+default = "implementer"
+reviewer = "reviewer"

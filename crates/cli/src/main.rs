@@ -9,14 +9,13 @@ use {
     clap::{Parser, Subcommand},
     polyphony_core::{NetworkCache, StateStore, WorkspaceProvisioner},
     polyphony_orchestrator::{RuntimeComponentFactory, RuntimeService, spawn_workflow_watcher},
-    polyphony_tui::{LogBuffer, prompt_workflow_initialization},
     polyphony_workflow::{
-        ensure_user_config_file, load_workflow_with_user_config, user_config_path,
+        ensure_repo_agent_prompt_files, ensure_user_config_file, load_workflow_with_user_config,
+        user_config_path,
     },
     thiserror::Error,
 };
 
-type TuiRunFuture = Pin<Box<dyn Future<Output = Result<(), polyphony_tui::Error>> + Send>>;
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send>>;
 #[cfg(feature = "beads")]
 const BEADS_SUPPLEMENTAL_PREFIX: &str = "beads:";
@@ -113,7 +112,7 @@ enum Error {
     #[error("runtime error: {0}")]
     Runtime(#[from] polyphony_orchestrator::Error),
     #[error("tui error: {0}")]
-    Tui(#[from] polyphony_tui::Error),
+    Tui(#[from] ui_support::TuiError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -140,6 +139,7 @@ mod errors;
 mod prelude;
 mod tracing_support;
 mod tracker_factory;
+mod ui_support;
 
 #[cfg(test)]
 mod tests;
@@ -156,10 +156,12 @@ use crate::{
         run_operator_surface,
     },
     tracker_factory::build_runtime_components,
+    ui_support::{LogBuffer, prompt_workflow_initialization, run as run_tui, tui_available},
 };
 
 async fn try_main() -> Result<(), Error> {
     let cli = Cli::parse();
+    let tui_mode = tui_available() && !cli.no_tui;
     if let Some(dir) = &cli.directory {
         std::env::set_current_dir(dir).map_err(|e| {
             Error::Config(format!("cannot change to directory {}: {e}", dir.display()))
@@ -186,7 +188,7 @@ async fn try_main() -> Result<(), Error> {
         return handle_issue_command(action, &workflow).await;
     }
 
-    let historical_logs = if cli.no_tui {
+    let historical_logs = if !tui_mode {
         Vec::new()
     } else {
         match load_historical_log_lines(&workflow_path) {
@@ -205,18 +207,23 @@ async fn try_main() -> Result<(), Error> {
         },
     };
     let tui_logs = LogBuffer::from_lines(historical_logs);
-    let tracing_output = if cli.no_tui {
+    let tracing_output = if !tui_mode {
         TracingOutput::stderr(log_file_sink)
     } else {
         TracingOutput::tui(tui_logs.clone(), log_file_sink)
     };
-    let _telemetry = init_tracing(cli.log_json, !cli.no_tui, tracing_output.clone());
+    let _telemetry = init_tracing(cli.log_json, tui_mode, tracing_output.clone());
     tracing::info!(
         workflow_path = %workflow_path.display(),
-        no_tui = cli.no_tui,
+        no_tui = !tui_mode,
+        tui_compiled = tui_available(),
         sqlite_enabled = cli.sqlite_url.is_some(),
         "starting polyphony"
     );
+    if !tui_available() && !cli.no_tui {
+        eprintln!("polyphony: tui support is disabled for this build, continuing headless.");
+        tracing::warn!("tui support is disabled for this build; continuing headless");
+    }
     let user_config_path = user_config_path()?;
     if ensure_user_config_file(&user_config_path)? {
         tracing::info!(
@@ -224,7 +231,7 @@ async fn try_main() -> Result<(), Error> {
             "created default user config file"
         );
     }
-    if ensure_bootstrapped_workflow(&workflow_path, cli.no_tui, |workflow_path| {
+    if ensure_bootstrapped_workflow(&workflow_path, !tui_mode, |workflow_path| {
         Ok(prompt_workflow_initialization(workflow_path)?)
     })? == WorkflowBootstrap::Canceled
     {
@@ -233,6 +240,14 @@ async fn try_main() -> Result<(), Error> {
             "workflow initialization canceled"
         );
         return Ok(());
+    }
+    let created_agent_prompts = ensure_repo_agent_prompt_files(&workflow_path)?;
+    if !created_agent_prompts.is_empty() {
+        tracing::info!(
+            workflow_path = %workflow_path.display(),
+            created = created_agent_prompts.len(),
+            "created default repo agent prompt files"
+        );
     }
     let (repo_config_path, first_run_no_github) =
         maybe_seed_repo_config_with_github_detection(&workflow_path, Some(&user_config_path))?;
@@ -286,14 +301,12 @@ async fn try_main() -> Result<(), Error> {
     let service_task = tokio::spawn(service.run());
 
     run_operator_surface(
-        cli.no_tui,
+        !tui_mode,
         handle.snapshot_rx.clone(),
         handle.command_tx.clone(),
         tui_logs,
         tracing_output,
-        |snapshot_rx, command_tx, tui_logs| {
-            Box::pin(polyphony_tui::run(snapshot_rx, command_tx, tui_logs))
-        },
+        |snapshot_rx, command_tx, tui_logs| Box::pin(run_tui(snapshot_rx, command_tx, tui_logs)),
         Box::pin(tokio::signal::ctrl_c()),
     )
     .await?;

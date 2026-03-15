@@ -66,8 +66,8 @@ mod operator_surface_tests {
             command_tx,
             LogBuffer::default(),
             TracingOutput::stderr(None),
-            |_snapshot_rx, _command_tx, _tui_logs| -> crate::TuiRunFuture {
-                Box::pin(async { Err(polyphony_tui::Error::Io(io::Error::other("boom"))) })
+            |_snapshot_rx, _command_tx, _tui_logs| -> crate::ui_support::TuiRunFuture {
+                Box::pin(async { Err(crate::ui_support::TuiError::Io(io::Error::other("boom"))) })
             },
             Box::pin(async { Ok::<(), io::Error>(()) }),
         )
@@ -91,7 +91,7 @@ mod operator_surface_tests {
             command_tx,
             LogBuffer::default(),
             TracingOutput::stderr(None),
-            |_snapshot_rx, _command_tx, _tui_logs| -> crate::TuiRunFuture {
+            |_snapshot_rx, _command_tx, _tui_logs| -> crate::ui_support::TuiRunFuture {
                 Box::pin(async { Ok(()) })
             },
             Box::pin(async { Ok::<(), io::Error>(()) }),
@@ -116,7 +116,7 @@ mod operator_surface_tests {
             command_tx,
             LogBuffer::default(),
             TracingOutput::stderr(None),
-            |_snapshot_rx, _command_tx, _tui_logs| -> crate::TuiRunFuture {
+            |_snapshot_rx, _command_tx, _tui_logs| -> crate::ui_support::TuiRunFuture {
                 Box::pin(async { Ok(()) })
             },
             Box::pin(async { Err::<(), io::Error>(io::Error::other("ctrl-c failed")) }),
@@ -265,11 +265,16 @@ mod bootstrap_tests {
         let repo_config = maybe_seed_repo_config_file(&workflow_path, None).unwrap();
         let repo_config_path = repo_config_path(&workflow_path).unwrap();
         let contents = fs::read_to_string(&repo_config_path).unwrap();
-        let _ = fs::remove_dir_all(&repo_root);
+        let router_prompt = repo_root
+            .join(".polyphony")
+            .join("agents")
+            .join("router.md");
 
         assert_eq!(repo_config.as_deref(), Some(repo_config_path.as_path()));
         assert!(contents.contains("Polyphony repo-local config."));
         assert!(contents.contains("checkout_kind = \"linked_worktree\""));
+        assert!(router_prompt.exists());
+        let _ = fs::remove_dir_all(&repo_root);
     }
 
     #[test]
@@ -300,7 +305,7 @@ workspace:
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tracing"))]
 #[allow(clippy::unwrap_used)]
 mod tracing_tests {
     use std::{fs, io::Write as _, path::PathBuf};

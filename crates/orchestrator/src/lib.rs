@@ -76,6 +76,7 @@ Guidelines:
 - Each task should be completable by a single agent session
 - Use "research" for investigation, "coding" for implementation,
   "testing" for test writing/validation, "review" for code review
+- Use available specialist agents such as `researcher`, `implementer`, `tester`, and `reviewer`
 - The agent field is optional; omit it to use the default agent
 - Keep the plan focused — 2-5 tasks is typical
 - Write the plan file, then stop

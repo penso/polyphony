@@ -34,6 +34,14 @@ agent:
   max_concurrent_agents: 3
   max_turns: 4
   max_retry_backoff_ms: 60000
+orchestration:
+  router_agent: router
+  mode: advisory
+pipeline:
+  enabled: true
+agents:
+  default: implementer
+  reviewer: reviewer
 ---
 # Polyphony Workflow
 
@@ -48,7 +56,9 @@ Execution rules:
 - Make progress that is observable and incremental.
 - Prefer tests, logs, and explicit status over hidden work.
 - Leave the issue in a non-active handoff state when work is complete.
+- Let the router split complex work into specialist tasks when that helps quality or speed.
 
 Shared workflow policy belongs in this file.
 Shared credentials and reusable agent profiles belong in `~/.config/polyphony/config.toml`.
-Local tracker identity and repo wiring can live in `polyphony.toml`.
+Local tracker identity, router selection, and repo wiring can live in `polyphony.toml`.
+Role-specific prompts live in `.polyphony/agents/`.

@@ -83,7 +83,7 @@ impl RuntimeService {
         agent_override: Option<&str>,
         skip_workspace_sync: bool,
     ) -> Result<(), Error> {
-        if workflow.config.pipeline.enabled {
+        if workflow.config.pipeline_active() {
             return self
                 .dispatch_pipeline(
                     workflow,

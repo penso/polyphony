@@ -41,6 +41,7 @@ pub(crate) fn maybe_seed_repo_config_file(
     workflow_path: &Path,
     user_config_path: Option<&Path>,
 ) -> Result<Option<PathBuf>, Error> {
+    ensure_repo_agent_prompt_files(workflow_path)?;
     let repo_config_path = repo_config_path(workflow_path)?;
     if repo_config_path.exists() {
         if repo_config_path.is_file() {
@@ -80,6 +81,7 @@ pub(crate) fn maybe_seed_repo_config_with_github_detection(
     workflow_path: &Path,
     user_config_path: Option<&Path>,
 ) -> Result<(Option<PathBuf>, bool), Error> {
+    ensure_repo_agent_prompt_files(workflow_path)?;
     let rcp = repo_config_path(workflow_path)?;
     if rcp.exists() {
         if rcp.is_file() {

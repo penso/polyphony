@@ -55,7 +55,7 @@ impl RuntimeService {
         }
 
         let movement_id = new_movement_id();
-        let has_planner = workflow.config.pipeline.planner_agent.is_some();
+        let has_planner = workflow.config.router_agent_name().is_some();
         let initial_status = if has_planner {
             MovementStatus::Planning
         } else {
@@ -161,17 +161,11 @@ impl RuntimeService {
         movement_id: &str,
         workspace_path: &Path,
     ) -> Result<(), Error> {
-        let planner_agent_name =
-            workflow
-                .config
-                .pipeline
-                .planner_agent
-                .as_ref()
-                .ok_or_else(|| {
-                    Error::Core(CoreError::Adapter(
-                        "pipeline.planner_agent is required".into(),
-                    ))
-                })?;
+        let planner_agent_name = workflow.config.router_agent_name().ok_or_else(|| {
+            Error::Core(CoreError::Adapter(
+                "orchestration.router_agent or pipeline.planner_agent is required".into(),
+            ))
+        })?;
         let profile = workflow
             .config
             .agents
@@ -660,7 +654,7 @@ impl RuntimeService {
             .await
         } else {
             if workflow.config.pipeline.replan_on_failure
-                && workflow.config.pipeline.planner_agent.is_some()
+                && workflow.config.router_agent_name().is_some()
             {
                 self.push_event(
                     EventScope::Dispatch,

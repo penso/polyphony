@@ -13,6 +13,16 @@ use {
 const DEFAULT_USER_CONFIG_TEMPLATE: &str = include_str!("../../../templates/config.toml");
 const DEFAULT_WORKFLOW_TEMPLATE: &str = include_str!("../../../templates/WORKFLOW.md");
 const DEFAULT_REPO_CONFIG_TEMPLATE: &str = include_str!("../../../templates/repo-config.toml");
+const DEFAULT_REPO_AGENT_ROUTER_TEMPLATE: &str =
+    include_str!("../../../templates/agents/router.md");
+const DEFAULT_REPO_AGENT_IMPLEMENTER_TEMPLATE: &str =
+    include_str!("../../../templates/agents/implementer.md");
+const DEFAULT_REPO_AGENT_RESEARCHER_TEMPLATE: &str =
+    include_str!("../../../templates/agents/researcher.md");
+const DEFAULT_REPO_AGENT_TESTER_TEMPLATE: &str =
+    include_str!("../../../templates/agents/tester.md");
+const DEFAULT_REPO_AGENT_REVIEWER_TEMPLATE: &str =
+    include_str!("../../../templates/agents/reviewer.md");
 const DEFAULT_LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 #[derive(Debug, Error)]
@@ -109,6 +119,13 @@ pub struct AgentConfig {
     pub max_retry_backoff_ms: u64,
     pub max_turns: u32,
     pub continuation_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct OrchestrationConfig {
+    pub router_agent: Option<String>,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -307,6 +324,7 @@ pub struct ServiceConfig {
     pub workspace: WorkspaceConfig,
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
+    pub orchestration: OrchestrationConfig,
     pub agents: AgentsConfig,
     pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
@@ -324,6 +342,8 @@ struct RawServiceConfig {
     pub workspace: WorkspaceConfig,
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
+    #[serde(default)]
+    pub orchestration: OrchestrationConfig,
     pub agents: AgentsConfig,
     pub codex: Option<CodexConfig>,
     pub provider: Option<CodexConfig>,
@@ -353,7 +373,8 @@ mod tests;
 pub(crate) use crate::service::*;
 pub use crate::{
     files::{
-        agent_prompt_dirs, default_repo_config_toml, default_user_config_toml, default_workflow_md,
+        agent_prompt_dirs, default_repo_agent_prompt_templates, default_repo_config_toml,
+        default_user_config_toml, default_workflow_md, ensure_repo_agent_prompt_files,
         ensure_repo_config_file, ensure_user_config_file, ensure_workflow_file, load_workflow,
         load_workflow_with_user_config, repo_agent_prompt_dir, repo_config_path,
         seed_repo_config_with_beads, seed_repo_config_with_github, user_agent_prompt_dir,

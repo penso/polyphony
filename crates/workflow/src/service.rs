@@ -164,6 +164,8 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("agent.max_turns", 20)
             .map_err(config_error)?
+            .set_default("orchestration", HashMap::<String, i64>::new())
+            .map_err(config_error)?
             .set_default("agents", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .set_default("automation.enabled", false)
@@ -209,6 +211,7 @@ impl ServiceConfig {
             workspace: raw.workspace,
             hooks: raw.hooks,
             agent: raw.agent,
+            orchestration: raw.orchestration,
             agents: raw.agents,
             pipeline: raw.pipeline,
             automation: raw.automation,
@@ -264,8 +267,15 @@ impl ServiceConfig {
             let profile = self.agents.profiles.entry(name.clone()).or_default();
             profile.apply_override(&prompt.profile);
         }
-        if self.agents.default.is_none() && self.agents.profiles.len() == 1 {
-            self.agents.default = self.agents.profiles.keys().next().cloned();
+        if self.agents.default.is_none() {
+            if self.agents.profiles.contains_key("implementer") {
+                self.agents.default = Some("implementer".into());
+            } else if self.agents.profiles.len() == 1 {
+                self.agents.default = self.agents.profiles.keys().next().cloned();
+            }
+        }
+        if self.agents.reviewer.is_none() && self.agents.profiles.contains_key("reviewer") {
+            self.agents.reviewer = Some("reviewer".into());
         }
     }
 
@@ -291,6 +301,7 @@ impl ServiceConfig {
             .source_repo_path
             .take()
             .map(|path| expand_path_like(&path));
+        self.orchestration.router_agent = resolve_env_token(self.orchestration.router_agent.take());
         self.pipeline.planner_agent = resolve_env_token(self.pipeline.planner_agent.take());
         self.pipeline.planner_prompt = resolve_env_token(self.pipeline.planner_prompt.take());
         self.pipeline.validation_agent = resolve_env_token(self.pipeline.validation_agent.take());
@@ -440,6 +451,10 @@ impl ServiceConfig {
         }
         if self.review_triggers.pr_reviews.debounce_seconds == 0 {
             self.review_triggers.pr_reviews.debounce_seconds = 180;
+        }
+        self.orchestration.mode = self.orchestration.mode.trim().to_ascii_lowercase();
+        if self.orchestration.mode.is_empty() {
+            self.orchestration.mode = "advisory".into();
         }
         self.feedback.offered = self
             .feedback
@@ -601,6 +616,18 @@ impl ServiceConfig {
                 "agents.reviewer `{agent_name}` is not defined"
             )));
         }
+        if let Some(agent_name) = &self.orchestration.router_agent
+            && !self.agents.profiles.contains_key(agent_name)
+        {
+            return Err(Error::InvalidConfig(format!(
+                "orchestration.router_agent `{agent_name}` is not defined"
+            )));
+        }
+        if !matches!(self.orchestration.mode.as_str(), "advisory" | "enforced") {
+            return Err(Error::InvalidConfig(
+                "orchestration.mode must be `advisory` or `enforced`".into(),
+            ));
+        }
         if self.tracker.kind == TrackerKind::Github {
             if self.review_triggers.pr_reviews.provider != "github" {
                 return Err(Error::InvalidConfig(
@@ -676,6 +703,14 @@ impl ServiceConfig {
                     )));
                 }
             }
+        }
+        if self.router_agent_name().is_none()
+            && self.pipeline.enabled
+            && self.pipeline.stages.is_empty()
+        {
+            return Err(Error::InvalidConfig(
+                "pipeline.enabled requires orchestration.router_agent, pipeline.planner_agent, or pipeline.stages".into(),
+            ));
         }
         for offered in &self.feedback.offered {
             match offered.as_str() {
@@ -755,6 +790,17 @@ impl ServiceConfig {
 
     pub fn has_dispatch_agents(&self) -> bool {
         !self.agents.profiles.is_empty()
+    }
+
+    pub fn pipeline_active(&self) -> bool {
+        self.pipeline.enabled || self.orchestration.router_agent.is_some()
+    }
+
+    pub fn router_agent_name(&self) -> Option<&str> {
+        self.orchestration
+            .router_agent
+            .as_deref()
+            .or(self.pipeline.planner_agent.as_deref())
     }
 
     pub fn candidate_agents_for_issue(&self, issue: &Issue) -> Result<Vec<AgentDefinition>, Error> {
