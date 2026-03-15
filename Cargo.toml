@@ -40,7 +40,7 @@ config = "0.15"
 crossterm = "0.29"
 dirs = "6.0"
 futures-util = "0.3"
-git2 = "0.20"
+git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 graphql_client = "0.16"
 liquid = "0.26"
 notify = "8.2"

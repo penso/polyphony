@@ -149,7 +149,7 @@ jobs:
   build-macos-x86_64:
     name: Build macOS binary (x86_64)
     needs: [fmt, clippy, test, docs, release-metadata]
-    runs-on: macos-13
+    runs-on: macos-15-intel
     permissions:
       contents: read
     steps:
@@ -231,13 +231,10 @@ jobs:
       - name: Install Linux ARM64 toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            libssl-dev:arm64
+            libc6-dev-arm64-cross
       - name: Add Rust target
         env:
           TARGET: ${{ matrix.target }}
@@ -250,10 +247,6 @@ jobs:
           if [[ "$TARGET" == "aarch64-unknown-linux-gnu" ]]; then
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
-            export PKG_CONFIG_ALLOW_CROSS=1
-            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-            export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-            export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include
           fi
           cargo +${{ env.NIGHTLY_TOOLCHAIN }} build --locked --release -p polyphony-cli --target "$TARGET"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
