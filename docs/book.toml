@@ -1,17 +1,16 @@
 [book]
-title = "polyphony"
 description = "Project documentation for the polyphony Rust workspace"
-language = "en"
-multilingual = false
-src = "src"
+language    = "en"
+src         = "src"
+title       = "polyphony"
 
 [build]
 build-dir = "book"
 
 [output.html]
-default-theme = "rust"
+additional-js        = ["mermaid-init.js", "mermaid.min.js"]
+default-theme        = "rust"
 preferred-dark-theme = "navy"
-additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [preprocessor]
 
