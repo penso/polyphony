@@ -120,4 +120,7 @@ jobs:
       - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # mdbook
         with:
           tool: mdbook
+      - uses: taiki-e/install-action@a7c938ee233ac44ef6f2fba5ac2d30fa12584c6e # mdbook-mermaid
+        with:
+          tool: mdbook-mermaid
       - run: just docs-build
