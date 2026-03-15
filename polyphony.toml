@@ -32,6 +32,9 @@ sync_on_reuse = true
 # ── Agent routing for this repo ─────────────────────────────────────────────
 # Profiles (opus, codex, kimi) are defined in ~/.config/polyphony/config.toml.
 # This section controls which agent handles which kind of issue.
+[hooks]
+after_create = "mise trust"
+
 [agents]
 default = "opus"
 
