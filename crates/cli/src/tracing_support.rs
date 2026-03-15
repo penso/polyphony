@@ -1,10 +1,15 @@
-use crate::{prelude::*, *};
+use crate::{prelude::*, ui_support::LogBuffer, *};
 
+#[cfg(feature = "tracing")]
 pub(crate) struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
 }
 
+#[cfg(not(feature = "tracing"))]
+pub(crate) struct TelemetryGuard;
+
 #[derive(Clone)]
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
 pub(crate) struct TracingOutput {
     mode: Arc<Mutex<TracingOutputMode>>,
     file_sink: Option<FileLogSink>,
@@ -16,6 +21,7 @@ enum TracingOutputMode {
     Tui(LogBuffer),
 }
 
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
 impl TracingOutput {
     pub(crate) fn stderr(file_sink: Option<FileLogSink>) -> Self {
         Self {
@@ -76,22 +82,26 @@ impl TracingOutput {
     }
 }
 
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
 pub(crate) struct TracingOutputWriter {
     pub(crate) output: TracingOutput,
     pub(crate) buffer: Vec<u8>,
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
 pub(crate) struct FileLogSink {
     path: PathBuf,
     state: Arc<Mutex<FileLogSinkState>>,
 }
 
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
 struct FileLogSinkState {
     file: File,
     write_failed: bool,
 }
 
+#[cfg_attr(not(feature = "tracing"), allow(dead_code))]
 impl FileLogSink {
     fn new(path: PathBuf) -> Result<Self, Error> {
         let file = OpenOptions::new()
@@ -149,6 +159,7 @@ impl Drop for TracingOutputWriter {
     }
 }
 
+#[cfg(feature = "tracing")]
 impl<'a> MakeWriter<'a> for TracingOutput {
     type Writer = TracingOutputWriter;
 
@@ -160,6 +171,7 @@ impl<'a> MakeWriter<'a> for TracingOutput {
     }
 }
 
+#[cfg(feature = "tracing")]
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
         if let Some(tracer_provider) = self.tracer_provider.take() {
@@ -168,6 +180,7 @@ impl Drop for TelemetryGuard {
     }
 }
 
+#[cfg(feature = "tracing")]
 pub(crate) fn init_tracing(
     log_json: bool,
     tui_mode: bool,
@@ -212,6 +225,15 @@ pub(crate) fn init_tracing(
         );
     }
     TelemetryGuard { tracer_provider }
+}
+
+#[cfg(not(feature = "tracing"))]
+pub(crate) fn init_tracing(
+    _log_json: bool,
+    _tui_mode: bool,
+    _tracing_output: TracingOutput,
+) -> TelemetryGuard {
+    TelemetryGuard
 }
 
 pub(crate) fn init_run_log_sink(workflow_path: &Path) -> Result<FileLogSink, Error> {
@@ -266,6 +288,7 @@ pub(crate) fn load_historical_log_lines(workflow_path: &Path) -> Result<Vec<Stri
     Ok(lines)
 }
 
+#[cfg(feature = "tracing")]
 fn install_tracing_subscriber(
     filter: EnvFilter,
     tracer_provider: Option<SdkTracerProvider>,
@@ -307,6 +330,7 @@ fn install_tracing_subscriber(
     Ok(())
 }
 
+#[cfg(feature = "tracing")]
 fn build_tracer_provider() -> Result<Option<SdkTracerProvider>, Error> {
     if !otel_configured() {
         return Ok(None);
@@ -331,6 +355,7 @@ fn build_tracer_provider() -> Result<Option<SdkTracerProvider>, Error> {
     Ok(Some(tracer_provider))
 }
 
+#[cfg(feature = "tracing")]
 fn otel_configured() -> bool {
     env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_some()
         || env::var_os("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").is_some()
@@ -350,7 +375,7 @@ where
         watch::Receiver<RuntimeSnapshot>,
         mpsc::UnboundedSender<RuntimeCommand>,
         LogBuffer,
-    ) -> TuiRunFuture,
+    ) -> crate::ui_support::TuiRunFuture,
 {
     if no_tui {
         shutdown_signal.await?;

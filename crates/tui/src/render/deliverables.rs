@@ -84,7 +84,7 @@ pub fn draw_deliverables_tab(
     .block(
         Block::default()
             .title(Line::from(Span::styled(
-                " Output ",
+                " Outputs ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),

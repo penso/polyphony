@@ -127,7 +127,7 @@ fn draw_status_panel(
         Paragraph::new(lines).block(
             Block::default()
                 .title(Line::from(Span::styled(
-                    " Flow ",
+                    " Orchestration ",
                     Style::default()
                         .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),

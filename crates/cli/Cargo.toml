@@ -9,19 +9,51 @@ name = "polyphony"
 path = "src/main.rs"
 
 [features]
-default = ["sqlite", "linear", "github", "beads", "agent-codex", "agent-claude", "agent-copilot", "agent-openai", "agent-local", "agent-pi", "agent-acpx"]
+default = [
+  "sqlite",
+  "tracing",
+  "tui",
+  "linear",
+  "github",
+  "beads",
+  "acp",
+  "acpx",
+  "codex",
+  "claude",
+  "copilot",
+  "openai",
+  "local",
+  "pi",
+]
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
 github = ["dep:polyphony-github"]
 beads = ["dep:polyphony-beads"]
 sqlite = ["dep:polyphony-sqlite"]
-agent-acpx = ["polyphony-agents/acpx"]
-agent-codex = ["polyphony-agents/codex"]
-agent-claude = ["polyphony-agents/claude"]
-agent-copilot = ["polyphony-agents/copilot"]
-agent-openai = ["polyphony-agents/openai"]
-agent-local = ["polyphony-agents/local"]
-agent-pi = ["polyphony-agents/pi"]
+tui = ["dep:polyphony-tui"]
+tracing = [
+  "dep:opentelemetry",
+  "dep:opentelemetry-otlp",
+  "dep:opentelemetry_sdk",
+  "dep:tracing-opentelemetry",
+  "dep:tracing-subscriber",
+]
+acp = ["polyphony-agents/acp"]
+acpx = ["polyphony-agents/acpx"]
+codex = ["polyphony-agents/codex"]
+claude = ["polyphony-agents/claude"]
+copilot = ["polyphony-agents/copilot"]
+openai = ["polyphony-agents/openai"]
+local = ["polyphony-agents/local"]
+pi = ["polyphony-agents/pi"]
+agent-acp = ["acp"]
+agent-acpx = ["acpx"]
+agent-codex = ["codex"]
+agent-claude = ["claude"]
+agent-copilot = ["copilot"]
+agent-openai = ["openai"]
+agent-local = ["local"]
+agent-pi = ["pi"]
 
 [dependencies]
 async-trait.workspace = true
@@ -29,12 +61,12 @@ clap.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-opentelemetry.workspace = true
-opentelemetry-otlp.workspace = true
-opentelemetry_sdk.workspace = true
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
 tracing.workspace = true
-tracing-opentelemetry.workspace = true
-tracing-subscriber.workspace = true
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 polyphony-core = { path = "../core" }
 polyphony-agents = { path = "../agents", default-features = false }
 polyphony-git = { path = "../git" }
@@ -45,5 +77,5 @@ polyphony-beads = { path = "../beads", optional = true }
 polyphony-linear = { path = "../linear", optional = true }
 polyphony-orchestrator = { path = "../orchestrator" }
 polyphony-sqlite = { path = "../sqlite", optional = true }
-polyphony-tui = { path = "../tui" }
+polyphony-tui = { path = "../tui", optional = true }
 polyphony-workflow = { path = "../workflow" }

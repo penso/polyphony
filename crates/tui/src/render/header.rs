@@ -8,9 +8,10 @@ use {
     },
 };
 
-use crate::app::{ActiveTab, AppState};
+use crate::app::{ActiveTab, AppState, TAB_DIVIDER, TAB_PADDING_LEFT, TAB_PADDING_RIGHT};
 
 const GITHUB_MARK: &str = "";
+const MIN_TAB_SECTION_WIDTH: u16 = 56;
 
 pub fn draw_header(
     frame: &mut ratatui::Frame<'_>,
@@ -19,10 +20,13 @@ pub fn draw_header(
     app: &mut AppState,
 ) {
     let theme = app.theme;
+    let status_summary = header_summary_line(snapshot, theme);
+    let status_title = header_status_title(snapshot, theme);
+    let status_width = header_status_width(area.width, &status_summary, &status_title);
 
     let sections = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .constraints([Constraint::Fill(1), Constraint::Length(status_width)])
         .split(area);
 
     // Tab bar
@@ -56,7 +60,8 @@ pub fn draw_header(
             .collect::<Vec<_>>(),
     )
     .select(app.active_tab.index())
-    .divider(Span::raw("  "))
+    .divider(Span::raw(TAB_DIVIDER))
+    .padding(TAB_PADDING_LEFT, TAB_PADDING_RIGHT)
     .highlight_style(
         Style::default()
             .fg(theme.highlight)
@@ -71,7 +76,44 @@ pub fn draw_header(
     frame.render_widget(tabs, sections[0]);
 
     // Status summary
-    let summary = vec![Line::from(vec![
+    frame.render_widget(
+        Paragraph::new(vec![status_summary]).block(
+            Block::default()
+                .title(status_title)
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.border)),
+        ),
+        sections[1],
+    );
+}
+
+fn github_connection_label(
+    snapshot: &RuntimeSnapshot,
+    success_color: Color,
+) -> Option<(String, Color)> {
+    let status = snapshot.tracker_connection.as_ref()?;
+    match status.state {
+        TrackerConnectionState::Connected => status
+            .label
+            .as_deref()
+            .filter(|label| !label.is_empty())
+            .map(|label| (format!("{GITHUB_MARK} {label}"), success_color)),
+        TrackerConnectionState::Disconnected => Some((
+            format!(
+                "{GITHUB_MARK} {}",
+                status.detail.as_deref().unwrap_or("disconnected")
+            ),
+            Color::Yellow,
+        )),
+        TrackerConnectionState::Unknown => {
+            Some((format!("{GITHUB_MARK} checking"), Color::DarkGray))
+        },
+    }
+}
+
+fn header_summary_line(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Line<'static> {
+    Line::from(vec![
         Span::styled("triggers ", Style::default().fg(theme.muted)),
         Span::styled(
             snapshot.visible_triggers.len().to_string(),
@@ -114,8 +156,10 @@ pub fn draw_header(
             ),
             Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
         ),
-    ])];
+    ])
+}
 
+fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Line<'static> {
     let (mode_label, mode_color) = match snapshot.dispatch_mode {
         DispatchMode::Manual => ("manual", theme.info),
         DispatchMode::Automatic => ("auto", theme.success),
@@ -140,39 +184,13 @@ pub fn draw_header(
     }
 
     status_spans.push(Span::styled(" ", Style::default()));
-
-    frame.render_widget(
-        Paragraph::new(summary).block(
-            Block::default()
-                .title(Line::from(status_spans))
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.border)),
-        ),
-        sections[1],
-    );
+    Line::from(status_spans)
 }
 
-fn github_connection_label(
-    snapshot: &RuntimeSnapshot,
-    success_color: Color,
-) -> Option<(String, Color)> {
-    let status = snapshot.tracker_connection.as_ref()?;
-    match status.state {
-        TrackerConnectionState::Connected => status
-            .label
-            .as_deref()
-            .filter(|label| !label.is_empty())
-            .map(|label| (format!("{GITHUB_MARK} {label}"), success_color)),
-        TrackerConnectionState::Disconnected => Some((
-            format!(
-                "{GITHUB_MARK} {}",
-                status.detail.as_deref().unwrap_or("disconnected")
-            ),
-            Color::Yellow,
-        )),
-        TrackerConnectionState::Unknown => {
-            Some((format!("{GITHUB_MARK} checking"), Color::DarkGray))
-        },
-    }
+fn header_status_width(area_width: u16, summary: &Line<'_>, title: &Line<'_>) -> u16 {
+    let desired_content_width = summary.width().max(title.width());
+    let desired_total_width = desired_content_width.saturating_add(2);
+    let desired_total_width = u16::try_from(desired_total_width).unwrap_or(u16::MAX);
+    let max_status_width = area_width.saturating_sub(MIN_TAB_SECTION_WIDTH);
+    desired_total_width.min(max_status_width)
 }

@@ -9,6 +9,9 @@ use {
 };
 
 const RPS_HISTORY_CAP: usize = 120;
+pub(crate) const TAB_DIVIDER: &str = "  ";
+pub(crate) const TAB_PADDING_LEFT: &str = "";
+pub(crate) const TAB_PADDING_RIGHT: &str = "";
 
 use crate::{LogBuffer, theme::Theme};
 
@@ -40,9 +43,9 @@ impl ActiveTab {
     pub const fn title(self) -> &'static str {
         match self {
             Self::Triggers => "Triggers",
-            Self::Orchestrator => "Flow",
+            Self::Orchestrator => "Orchestration",
             Self::Tasks => "Tasks",
-            Self::Deliverables => "Output",
+            Self::Deliverables => "Outputs",
             Self::Agents => "Agents",
             Self::Logs => "Logs",
         }
@@ -539,11 +542,11 @@ impl AppState {
             return None;
         }
         // Ratatui Tabs renders: [pad_left][title][pad_right][divider] for each tab.
-        // Default padding is 1 space on each side; our divider is "  " (2 chars).
+        // Keep this in sync with render::header tab padding/divider.
         let rel = (column - area.x) as usize;
-        let pad_left = 1_usize;
-        let pad_right = 1_usize;
-        let divider_len = 2_usize;
+        let pad_left = TAB_PADDING_LEFT.len();
+        let pad_right = TAB_PADDING_RIGHT.len();
+        let divider_len = TAB_DIVIDER.len();
         let mut pos = 0;
         let tab_count = ActiveTab::ALL.len();
         for (i, tab) in ActiveTab::ALL.iter().enumerate() {
