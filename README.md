@@ -45,10 +45,47 @@ Minimal setup looks like this:
 ```toml
 # ~/.config/polyphony/config.toml
 [agents]
+default = "claude"
+
+[agents.profiles.claude]
+kind = "claude"
+transport = "local_cli"
+command = "claude -p --verbose --dangerously-skip-permissions"
+use_tmux = false
+```
+
+Polyphony is set up for unattended agent runs. Use the CLI's "don't ask me again" flags where the
+provider supports them. Today that means Claude with `--dangerously-skip-permissions` and Codex
+with `--dangerously-bypass-approvals-and-sandbox`. Pi's CLI does not expose a separate approval
+flag in its help, so there is no extra bypass switch to add there.
+
+```toml
+# ~/.config/polyphony/config.toml
+[agents]
+default = "codex"
+
+[agents.profiles.codex]
+kind = "codex"
+transport = "app_server"
+command = "codex --dangerously-bypass-approvals-and-sandbox app-server"
+approval_policy = "auto"
+thread_sandbox = "workspace-write"
+turn_sandbox_policy = "workspace-write"
+```
+
+For local CLI agents, `use_tmux` is the switch you want. Leave it `false` to use Polyphony's
+built-in PTY terminal backend, or set it to `true` to run the agent inside a tmux session you can
+attach to manually.
+
+```toml
+# ~/.config/polyphony/config.toml
+[agents]
 default = "pi"
 
 [agents.profiles.pi]
 kind = "pi"
+transport = "rpc"
+command = "pi"
 model = "anthropic/claude-sonnet-4-5"
 ```
 

@@ -12,7 +12,15 @@
 [tracker]
 # Keep the active tracker selection in repo-local config. This section is for generic defaults.
 kind = "none"
+# profile = "github_personal"
 endpoint = "https://api.linear.app/graphql"
+# api_key = "$TRACKER_API_KEY"
+# project_slug = "ENG"
+# project_owner = "your-org"
+# project_number = 1
+# project_status_field = "Status"
+# repository = "owner/repo"
+# team_id = "team-id"
 active_states = ["Todo", "In Progress"]
 terminal_states = ["Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Human Review"]
 
@@ -39,6 +47,9 @@ root = ".polyphony/workspaces"
 checkout_kind = "directory"
 sync_on_reuse = true
 transient_paths = ["tmp"]
+# source_repo_path = "/path/to/repo"
+# clone_url = "git@github.com:owner/repo.git"
+# default_branch = "main"
 
 [hooks]
 timeout_ms = 60000
@@ -91,7 +102,7 @@ max_turns = 20
 # stall_timeout_ms = 300000
 # credits_command = "custom-agent credits --json"
 # spending_command = "custom-agent spending --json"
-# use_tmux = false
+# use_tmux = false                # false uses Polyphony's managed PTY backend, true runs inside tmux for manual attach
 # tmux_session_prefix = "example"
 # interaction_mode = "one_shot"
 # prompt_mode = "env"
@@ -104,7 +115,7 @@ max_turns = 20
 # [agents.profiles.codex]
 # kind = "codex"
 # transport = "app_server"
-# command = "codex app-server"
+# command = "codex --dangerously-bypass-approvals-and-sandbox app-server"
 # fetch_models = true
 # models_command = "codex models --json"
 # approval_policy = "auto"
@@ -115,8 +126,9 @@ max_turns = 20
 # [agents.profiles.claude]
 # kind = "claude"
 # transport = "local_cli"
-# command = "claude"
-# use_tmux = true
+# command = "claude -p --verbose --dangerously-skip-permissions"
+# use_tmux = false                # default local terminal backend, visible in the Agents tab
+# tmux_session_prefix = "claude"  # used only when use_tmux = true, lets you `tmux attach -t claude-...`
 # interaction_mode = "interactive"
 # fetch_models = true
 # models_command = "claude models --json"
@@ -126,6 +138,7 @@ max_turns = 20
 # kind = "github-copilot"
 # transport = "local_cli"
 # command = "copilot"
+# use_tmux = false
 # fetch_models = false
 
 # OpenAI-compatible HTTP example.
@@ -133,8 +146,30 @@ max_turns = 20
 # kind = "openai"
 # transport = "openai_chat"
 # model = "gpt-5.1"
+# models = ["gpt-5.1", "gpt-5-mini"]
 # api_key = "$OPENAI_API_KEY"
 # fetch_models = true
+
+# ACP agent example.
+# [agents.profiles.acp_agent]
+# kind = "custom"
+# transport = "acp"
+# command = "your-acp-agent"
+# env = { ACP_TOKEN = "$ACP_TOKEN" }
+
+# ACPX bridge example.
+# [agents.profiles.claude_acpx]
+# kind = "claude"
+# transport = "acpx"
+# command = "acpx"
+
+# Pi RPC example.
+# [agents.profiles.pi]
+# kind = "pi"
+# transport = "rpc"
+# command = "pi"
+# model = "anthropic/claude-sonnet-4-5"
+# Pi does not expose a separate approval flag in its CLI help. Its built-in tools run directly.
 
 # OpenRouter example.
 # [agents.profiles.openrouter]

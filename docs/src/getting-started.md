@@ -16,8 +16,10 @@ just docs-build
 ## Running polyphony
 
 On first start, the CLI creates `~/.config/polyphony/config.toml` if it does not exist. The
-generated default config keeps `tracker.kind = "none"` and no dispatch agents, so the real CLI can
-start without external services or mock data:
+generated file is an annotated reference template, with every supported top-level config area shown
+and local CLI terminal settings such as `use_tmux` documented inline. The default values keep
+`tracker.kind = "none"` and no dispatch agents, so the real CLI can start without external services
+or mock data:
 
 ```bash
 cargo run -p polyphony-cli
