@@ -20,7 +20,9 @@ use {
     polyphony_core::{
         BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueComment,
         IssueStateUpdate, IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestRef,
-        PullRequestRequest, RateLimitSignal, TrackerQuery, UpdateIssueRequest,
+        PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger,
+        PullRequestReviewTriggerSource, RateLimitSignal, ReviewProviderKind, TrackerQuery,
+        UpdateIssueRequest,
     },
     reqwest::{
         Response, StatusCode,
@@ -610,6 +612,91 @@ impl IssueTracker for GithubIssueTracker {
 }
 
 #[derive(Debug, Clone)]
+pub struct GithubPullRequestReviewTriggerSource {
+    http: reqwest::Client,
+    token: String,
+    owner: String,
+    repo: String,
+}
+
+impl GithubPullRequestReviewTriggerSource {
+    pub fn new(repository: String, token: String) -> Result<Self, CoreError> {
+        let (owner, repo) = split_repo(&repository)?;
+        Ok(Self {
+            http: reqwest::Client::new(),
+            token,
+            owner,
+            repo,
+        })
+    }
+
+    async fn pull_requests_page(
+        &self,
+        page: u32,
+    ) -> Result<Vec<GithubReviewPullRequestResponse>, CoreError> {
+        let response = self
+            .http
+            .get(format!(
+                "https://api.github.com/repos/{}/{}/pulls",
+                self.owner, self.repo
+            ))
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .query(&[
+                ("state", "open".to_string()),
+                ("sort", "updated".to_string()),
+                ("direction", "desc".to_string()),
+                ("per_page", "100".to_string()),
+                ("page", page.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("tracker:github", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        let payload = response
+            .json::<Vec<GithubReviewPullRequestResponse>>()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github pull request review trigger status {}",
+                status
+            )));
+        }
+        Ok(payload)
+    }
+}
+
+#[async_trait]
+impl PullRequestReviewTriggerSource for GithubPullRequestReviewTriggerSource {
+    fn component_key(&self) -> String {
+        "reviews:github".into()
+    }
+
+    async fn fetch_review_triggers(&self) -> Result<Vec<PullRequestReviewTrigger>, CoreError> {
+        let repository_name = format!("{}/{}", self.owner, self.repo);
+        let mut triggers = Vec::new();
+        let mut page = 1;
+        loop {
+            let pull_requests = self.pull_requests_page(page).await?;
+            let last_page = pull_requests.len() < 100;
+            triggers.extend(pull_request_review_triggers_from_responses(
+                &repository_name,
+                pull_requests,
+            ));
+            if last_page {
+                break;
+            }
+            page += 1;
+        }
+        Ok(triggers)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GithubPullRequestCommenter {
     client: reqwest::Client,
     token: String,
@@ -621,6 +708,161 @@ impl GithubPullRequestCommenter {
             client: reqwest::Client::new(),
             token,
         }
+    }
+
+    async fn existing_comment_id_with_marker(
+        &self,
+        pull_request: &PullRequestRef,
+        marker: &str,
+    ) -> Result<Option<u64>, CoreError> {
+        let (owner, repo) = split_repo(&pull_request.repository)?;
+        let response = self
+            .client
+            .get(format!(
+                "https://api.github.com/repos/{owner}/{repo}/issues/{}/comments",
+                pull_request.number
+            ))
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .query(&[("per_page", "100")])
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:graphql", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github list pull request comments failed with status {status}"
+            )));
+        }
+        let comments = response
+            .json::<Vec<GithubIssueCommentResponse>>()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        Ok(find_issue_comment_id_with_marker(&comments, marker))
+    }
+
+    async fn update_issue_comment(
+        &self,
+        pull_request: &PullRequestRef,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<(), CoreError> {
+        let (owner, repo) = split_repo(&pull_request.repository)?;
+        let response = self
+            .client
+            .patch(format!(
+                "https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}"
+            ))
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .json(&serde_json::json!({ "body": body }))
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:graphql", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github update comment failed with status {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn existing_review_with_marker(
+        &self,
+        pull_request: &PullRequestRef,
+        marker: &str,
+    ) -> Result<Option<u64>, CoreError> {
+        let (owner, repo) = split_repo(&pull_request.repository)?;
+        let response = self
+            .client
+            .get(format!(
+                "https://api.github.com/repos/{owner}/{repo}/pulls/{}/reviews",
+                pull_request.number
+            ))
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .query(&[("per_page", "100")])
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:graphql", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github list pull request reviews failed with status {status}"
+            )));
+        }
+        let reviews = response
+            .json::<Vec<GithubPullRequestReviewResponse>>()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        Ok(reviews
+            .into_iter()
+            .find(|review| {
+                review
+                    .body
+                    .as_deref()
+                    .is_some_and(|body| body.contains(marker))
+            })
+            .map(|review| review.id))
+    }
+
+    async fn submit_pull_request_review(
+        &self,
+        pull_request: &PullRequestRef,
+        body: &str,
+        comments: &[PullRequestReviewComment],
+        commit_sha: &str,
+    ) -> Result<(), CoreError> {
+        let (owner, repo) = split_repo(&pull_request.repository)?;
+        let response = self
+            .client
+            .post(format!(
+                "https://api.github.com/repos/{owner}/{repo}/pulls/{}/reviews",
+                pull_request.number
+            ))
+            .bearer_auth(&self.token)
+            .header("User-Agent", "polyphony")
+            .json(&CreatePullRequestReviewBody {
+                body: body.to_string(),
+                event: "COMMENT".to_string(),
+                commit_id: commit_sha.to_string(),
+                comments: comments
+                    .iter()
+                    .map(|comment| CreatePullRequestReviewComment {
+                        path: comment.path.clone(),
+                        line: comment.line,
+                        side: "RIGHT".to_string(),
+                        body: comment.body.clone(),
+                    })
+                    .collect(),
+            })
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:graphql", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        if !status.is_success() {
+            let response_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unreadable body>"));
+            return Err(CoreError::Adapter(format!(
+                "github create pull request review failed with status {status}: {response_body}"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -760,6 +1002,47 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
         }
         Ok(())
     }
+
+    async fn sync_pull_request_comment(
+        &self,
+        pull_request: &PullRequestRef,
+        marker: &str,
+        body: &str,
+    ) -> Result<(), CoreError> {
+        if let Some(comment_id) = self
+            .existing_comment_id_with_marker(pull_request, marker)
+            .await?
+        {
+            self.update_issue_comment(pull_request, comment_id, body)
+                .await
+        } else {
+            self.comment_on_pull_request(pull_request, body).await
+        }
+    }
+
+    async fn sync_pull_request_review(
+        &self,
+        pull_request: &PullRequestRef,
+        marker: &str,
+        body: &str,
+        comments: &[PullRequestReviewComment],
+        commit_sha: &str,
+    ) -> Result<(), CoreError> {
+        if comments.is_empty() {
+            return self
+                .sync_pull_request_comment(pull_request, marker, body)
+                .await;
+        }
+        if self
+            .existing_review_with_marker(pull_request, marker)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        self.submit_pull_request_review(pull_request, body, comments, commit_sha)
+            .await
+    }
 }
 
 #[async_trait]
@@ -877,6 +1160,118 @@ impl PullRequestManager for GithubPullRequestManager {
 struct GithubPullRequestResponse {
     number: u64,
     html_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubIssueCommentResponse {
+    id: u64,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestReviewResponse {
+    id: u64,
+    body: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePullRequestReviewBody {
+    body: String,
+    event: String,
+    commit_id: String,
+    comments: Vec<CreatePullRequestReviewComment>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePullRequestReviewComment {
+    path: String,
+    line: u32,
+    side: String,
+    body: String,
+}
+
+fn find_issue_comment_id_with_marker(
+    comments: &[GithubIssueCommentResponse],
+    marker: &str,
+) -> Option<u64> {
+    comments.iter().find_map(|comment| {
+        comment
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains(marker))
+            .then_some(comment.id)
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReviewPullRequestResponse {
+    number: u64,
+    title: String,
+    html_url: String,
+    updated_at: DateTime<Utc>,
+    draft: Option<bool>,
+    user: Option<GithubReviewUser>,
+    #[serde(default)]
+    labels: Vec<GithubReviewLabel>,
+    base: GithubReviewBranchRef,
+    head: GithubReviewHeadRef,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReviewUser {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReviewLabel {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReviewBranchRef {
+    #[serde(rename = "ref")]
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReviewHeadRef {
+    #[serde(rename = "ref")]
+    name: String,
+    sha: String,
+}
+
+fn pull_request_review_triggers_from_responses(
+    repository_name: &str,
+    pull_requests: Vec<GithubReviewPullRequestResponse>,
+) -> Vec<PullRequestReviewTrigger> {
+    pull_requests
+        .into_iter()
+        .filter(|pull_request| {
+            !pull_request.head.name.is_empty() && !pull_request.head.sha.is_empty()
+        })
+        .map(|pull_request| PullRequestReviewTrigger {
+            provider: ReviewProviderKind::Github,
+            repository: repository_name.to_string(),
+            number: pull_request.number,
+            title: pull_request.title,
+            url: Some(pull_request.html_url),
+            base_branch: pull_request.base.name,
+            head_branch: pull_request.head.name,
+            head_sha: pull_request.head.sha,
+            checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
+            author_login: pull_request
+                .user
+                .map(|user| user.login.to_ascii_lowercase()),
+            labels: pull_request
+                .labels
+                .into_iter()
+                .map(|label| label.name.trim().to_ascii_lowercase())
+                .filter(|label| !label.is_empty())
+                .collect(),
+            updated_at: Some(pull_request.updated_at),
+            is_draft: pull_request.draft.unwrap_or(false),
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -1156,9 +1551,12 @@ fn is_primary_rate_limit(headers: &HeaderMap) -> bool {
 mod tests {
     use {
         super::{
-            StatusCode, find_status_field_option, github_rate_limit_signal, parse_rate_limit_reset,
-            parse_retry_after_ms, project_id_from_context, resolve_project_issue_context,
-            resolve_project_status_field,
+            GithubReviewBranchRef, GithubReviewHeadRef, GithubReviewLabel,
+            GithubReviewPullRequestResponse, GithubReviewUser,
+            StatusCode, find_issue_comment_id_with_marker, find_status_field_option,
+            github_rate_limit_signal, parse_rate_limit_reset, parse_retry_after_ms,
+            project_id_from_context, pull_request_review_triggers_from_responses,
+            resolve_project_issue_context, resolve_project_status_field,
         },
         chrono::{TimeZone, Utc},
         reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -1263,6 +1661,91 @@ mod tests {
         assert_eq!(
             signal.reset_at,
             Utc.timestamp_opt(1_710_000_000, 0).single()
+        );
+    }
+
+    #[test]
+    fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
+        let triggers = pull_request_review_triggers_from_responses("penso/polyphony", vec![
+            GithubReviewPullRequestResponse {
+                number: 42,
+                title: "Ready".into(),
+                html_url: "https://github.com/penso/polyphony/pull/42".into(),
+                updated_at: Utc.timestamp_opt(1_710_000_000, 0).single().unwrap(),
+                draft: Some(false),
+                user: Some(GithubReviewUser {
+                    login: "alice".into(),
+                }),
+                labels: vec![GithubReviewLabel {
+                    name: "Needs Review".into(),
+                }],
+                base: GithubReviewBranchRef {
+                    name: "main".into(),
+                },
+                head: GithubReviewHeadRef {
+                    name: "feature/review".into(),
+                    sha: "abc123".into(),
+                },
+            },
+            GithubReviewPullRequestResponse {
+                number: 43,
+                title: "Fork".into(),
+                html_url: "https://github.com/penso/polyphony/pull/43".into(),
+                updated_at: Utc.timestamp_opt(1_710_000_001, 0).single().unwrap(),
+                draft: Some(false),
+                user: Some(GithubReviewUser {
+                    login: "dependabot[bot]".into(),
+                }),
+                labels: Vec::new(),
+                base: GithubReviewBranchRef {
+                    name: "main".into(),
+                },
+                head: GithubReviewHeadRef {
+                    name: "fork/review".into(),
+                    sha: "def456".into(),
+                },
+            },
+        ]);
+
+        assert_eq!(triggers.len(), 2);
+        assert_eq!(triggers[0].number, 42);
+        assert_eq!(triggers[0].head_sha, "abc123");
+        assert_eq!(triggers[0].author_login.as_deref(), Some("alice"));
+        assert_eq!(triggers[0].labels, vec!["needs review"]);
+        assert_eq!(
+            triggers[0].checkout_ref.as_deref(),
+            Some("refs/pull/42/head")
+        );
+        assert_eq!(triggers[1].number, 43);
+        assert_eq!(triggers[1].author_login.as_deref(), Some("dependabot[bot]"));
+        assert_eq!(
+            triggers[1].checkout_ref.as_deref(),
+            Some("refs/pull/43/head")
+        );
+    }
+
+    #[test]
+    fn find_issue_comment_id_with_marker_matches_existing_review_comment() {
+        let comments = vec![
+            super::GithubIssueCommentResponse {
+                id: 1,
+                body: Some("hello".into()),
+            },
+            super::GithubIssueCommentResponse {
+                id: 2,
+                body: Some(
+                    "review\n\n<!-- polyphony:pr-review github penso/polyphony#42 sha=abc123 -->"
+                        .into(),
+                ),
+            },
+        ];
+
+        assert_eq!(
+            find_issue_comment_id_with_marker(
+                &comments,
+                "<!-- polyphony:pr-review github penso/polyphony#42 sha=abc123 -->",
+            ),
+            Some(2)
         );
     }
 }

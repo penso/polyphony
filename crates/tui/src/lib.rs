@@ -263,6 +263,15 @@ pub async fn run(
                                             && mouse_in_rect(
                                                 mouse.column,
                                                 mouse.row,
+                                                app.movement_detail_area,
+                                            )
+                                        {
+                                            app.movement_detail_scroll =
+                                                app.movement_detail_scroll.saturating_add(1);
+                                        } else if app.active_tab == app::ActiveTab::Orchestrator
+                                            && mouse_in_rect(
+                                                mouse.column,
+                                                mouse.row,
                                                 app.events_area,
                                             )
                                         {
@@ -290,6 +299,15 @@ pub async fn run(
                                     if !skip {
                                         app.last_scroll_at = Some(now);
                                         if app.active_tab == app::ActiveTab::Orchestrator
+                                            && mouse_in_rect(
+                                                mouse.column,
+                                                mouse.row,
+                                                app.movement_detail_area,
+                                            )
+                                        {
+                                            app.movement_detail_scroll =
+                                                app.movement_detail_scroll.saturating_sub(1);
+                                        } else if app.active_tab == app::ActiveTab::Orchestrator
                                             && mouse_in_rect(
                                                 mouse.column,
                                                 mouse.row,
@@ -516,11 +534,15 @@ fn handle_key(
         KeyCode::Char('J') => {
             if app.active_tab == app::ActiveTab::Agents {
                 app.agents_detail_scroll = app.agents_detail_scroll.saturating_add(1);
+            } else if app.active_tab == app::ActiveTab::Orchestrator {
+                app.movement_detail_scroll = app.movement_detail_scroll.saturating_add(1);
             }
         },
         KeyCode::Char('K') => {
             if app.active_tab == app::ActiveTab::Agents {
                 app.agents_detail_scroll = app.agents_detail_scroll.saturating_sub(1);
+            } else if app.active_tab == app::ActiveTab::Orchestrator {
+                app.movement_detail_scroll = app.movement_detail_scroll.saturating_sub(1);
             }
         },
 

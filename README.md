@@ -77,6 +77,10 @@ For local CLI agents, `use_tmux` is the switch you want. Leave it `false` to use
 built-in PTY terminal backend, or set it to `true` to run the agent inside a tmux session you can
 attach to manually.
 
+Polyphony can also create review-only work when new commits land on open GitHub pull requests.
+Enable `review_triggers.pr_reviews` to poll PR heads, debounce fresh pushes, run a review agent in
+the PR workspace, and post the result back as a PR comment instead of opening another PR.
+
 ```toml
 # ~/.config/polyphony/config.toml
 [agents]
@@ -88,6 +92,26 @@ transport = "rpc"
 command = "pi"
 model = "anthropic/claude-sonnet-4-5"
 ```
+
+```toml
+# ~/.config/polyphony/config.toml
+[review_triggers.pr_reviews]
+enabled = true
+provider = "github"
+agent = "codex"
+debounce_seconds = 180
+include_drafts = false
+only_labels = ["ready-for-review"]
+ignore_labels = ["wip"]
+ignore_bot_authors = true
+comment_mode = "summary"
+```
+
+Use `comment_mode = "inline"` if you want the review agent to optionally emit
+`.polyphony/review-comments.json` and have Polyphony submit file-level GitHub
+review comments in addition to the summary body. `only_labels`, `ignore_labels`,
+`ignore_authors`, and `ignore_bot_authors` let you suppress noisy PRs without
+turning the trigger off entirely.
 
 ```toml
 # .polyphony/config.toml

@@ -148,6 +148,7 @@ pub struct WorkspaceRequest {
     pub workspace_path: PathBuf,
     pub workspace_key: String,
     pub branch_name: Option<String>,
+    pub checkout_ref: Option<String>,
     pub checkout_kind: CheckoutKind,
     pub sync_on_reuse: bool,
     pub source_repo_path: Option<PathBuf>,
@@ -270,6 +271,24 @@ impl fmt::Display for MovementStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MovementKind {
+    #[default]
+    IssueDelivery,
+    PullRequestReview,
+}
+
+impl fmt::Display for MovementKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::IssueDelivery => "issue_delivery",
+            Self::PullRequestReview => "pull_request_review",
+        };
+        f.write_str(s)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskCategory {
@@ -363,15 +382,105 @@ pub struct Deliverable {
     pub url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewProviderKind {
+    Github,
+}
+
+impl fmt::Display for ReviewProviderKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Github => "github",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewTarget {
+    pub provider: ReviewProviderKind,
+    pub repository: String,
+    pub number: u64,
+    pub url: Option<String>,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub head_sha: String,
+    #[serde(default)]
+    pub checkout_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestReviewTrigger {
+    pub provider: ReviewProviderKind,
+    pub repository: String,
+    pub number: u64,
+    pub title: String,
+    pub url: Option<String>,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub head_sha: String,
+    #[serde(default)]
+    pub checkout_ref: Option<String>,
+    #[serde(default)]
+    pub author_login: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub is_draft: bool,
+}
+
+impl PullRequestReviewTrigger {
+    pub fn display_identifier(&self) -> String {
+        format!("{}#{}", self.repository, self.number)
+    }
+
+    pub fn dedupe_key(&self) -> String {
+        format!(
+            "pr_review:{}:{}:{}:{}",
+            self.provider, self.repository, self.number, self.head_sha
+        )
+    }
+
+    pub fn synthetic_issue_id(&self) -> String {
+        self.dedupe_key()
+    }
+
+    pub fn review_target(&self) -> ReviewTarget {
+        ReviewTarget {
+            provider: self.provider,
+            repository: self.repository.clone(),
+            number: self.number,
+            url: self.url.clone(),
+            base_branch: self.base_branch.clone(),
+            head_branch: self.head_branch.clone(),
+            head_sha: self.head_sha.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewedPullRequestHead {
+    pub key: String,
+    pub target: ReviewTarget,
+    pub reviewed_at: DateTime<Utc>,
+    pub movement_id: Option<MovementId>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Movement {
     pub id: MovementId,
+    #[serde(default)]
+    pub kind: MovementKind,
     pub issue_id: Option<IssueId>,
     pub issue_identifier: Option<String>,
     pub title: String,
     pub status: MovementStatus,
     pub workspace_key: Option<String>,
     pub workspace_path: Option<PathBuf>,
+    #[serde(default)]
+    pub review_target: Option<ReviewTarget>,
     pub deliverable: Option<Deliverable>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -448,12 +557,20 @@ impl PlannedTask {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MovementRow {
     pub id: MovementId,
+    #[serde(default)]
+    pub kind: MovementKind,
     pub issue_identifier: Option<String>,
     pub title: String,
     pub status: MovementStatus,
     pub task_count: usize,
     pub tasks_completed: usize,
     pub has_deliverable: bool,
+    #[serde(default)]
+    pub review_target: Option<ReviewTarget>,
+    #[serde(default)]
+    pub workspace_key: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -782,6 +899,8 @@ pub struct StoreBootstrap {
     pub movements: HashMap<String, Movement>,
     #[serde(default)]
     pub tasks: HashMap<String, Task>,
+    #[serde(default)]
+    pub reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -844,6 +963,13 @@ pub struct PullRequestRef {
     pub repository: String,
     pub number: u64,
     pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullRequestReviewComment {
+    pub path: String,
+    pub line: u32,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -978,6 +1104,12 @@ pub trait IssueTracker: Send + Sync {
 }
 
 #[async_trait]
+pub trait PullRequestReviewTriggerSource: Send + Sync {
+    fn component_key(&self) -> String;
+    async fn fetch_review_triggers(&self) -> Result<Vec<PullRequestReviewTrigger>, Error>;
+}
+
+#[async_trait]
 pub trait AgentRuntime: Send + Sync {
     fn component_key(&self) -> String;
 
@@ -1055,6 +1187,28 @@ pub trait PullRequestCommenter: Send + Sync {
         pull_request: &PullRequestRef,
         body: &str,
     ) -> Result<(), Error>;
+    async fn sync_pull_request_review(
+        &self,
+        pull_request: &PullRequestRef,
+        marker: &str,
+        body: &str,
+        comments: &[PullRequestReviewComment],
+        commit_sha: &str,
+    ) -> Result<(), Error> {
+        let _ = comments;
+        let _ = commit_sha;
+        self.sync_pull_request_comment(pull_request, marker, body)
+            .await
+    }
+    async fn sync_pull_request_comment(
+        &self,
+        pull_request: &PullRequestRef,
+        marker: &str,
+        body: &str,
+    ) -> Result<(), Error> {
+        let _ = marker;
+        self.comment_on_pull_request(pull_request, body).await
+    }
 }
 
 #[async_trait]
@@ -1100,6 +1254,17 @@ pub trait StateStore: Send + Sync {
         Ok(Vec::new())
     }
     async fn load_tasks_for_movement(&self, _movement_id: &str) -> Result<Vec<Task>, Error> {
+        Ok(Vec::new())
+    }
+    async fn save_reviewed_pull_request_head(
+        &self,
+        _head: &ReviewedPullRequestHead,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn load_reviewed_pull_request_heads(
+        &self,
+    ) -> Result<Vec<ReviewedPullRequestHead>, Error> {
         Ok(Vec::new())
     }
 }

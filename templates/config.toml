@@ -227,6 +227,33 @@ remote_name = "origin"
 # name = "Polyphony"
 # email = "polyphony@example.com"
 
+[review_triggers]
+
+[review_triggers.pr_reviews]
+# enabled = false
+# provider = "github"             # phase 1 supports GitHub polling
+# agent = "reviewer"              # optional, falls back to automation.review_agent or agents.default
+# debounce_seconds = 180          # wait after the latest push before dispatching a review
+# include_drafts = false
+# only_labels = ["ready-for-review"] # if set, at least one label here must be present
+# ignore_labels = ["wip", "do-not-review"]
+# ignore_authors = ["dependabot[bot]"]
+# ignore_bot_authors = true
+# comment_mode = "summary"        # use "inline" to submit GitHub review comments from `.polyphony/review-comments.json`
+# prompt = """
+# Review pull request {{ issue.identifier }} against {{ base_branch }} at commit {{ head_sha }}.
+# Author: {{ pull_request_author }}
+# Labels: {{ pull_request_labels }}
+# Write a concise markdown review to `.polyphony/review.md`.
+# If you have precise file-level findings, you may also write `.polyphony/review-comments.json`
+# as a JSON array of objects with `path`, `line`, and `body`.
+# Include:
+# - Summary
+# - Risks
+# - Required fixes
+# - Optional improvements
+# """
+
 [feedback]
 offered = []
 # action_base_url = "https://example.com/polyphony"

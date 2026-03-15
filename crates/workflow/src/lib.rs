@@ -210,6 +210,28 @@ pub struct AutomationConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
+pub struct PullRequestReviewConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub agent: Option<String>,
+    pub debounce_seconds: u64,
+    pub include_drafts: bool,
+    pub only_labels: Vec<String>,
+    pub ignore_labels: Vec<String>,
+    pub ignore_authors: Vec<String>,
+    pub ignore_bot_authors: bool,
+    pub comment_mode: String,
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct ReviewTriggersConfig {
+    pub pr_reviews: PullRequestReviewConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
 pub struct TelegramFeedbackConfig {
     pub bot_token: Option<String>,
     pub chat_id: String,
@@ -261,6 +283,7 @@ pub struct ServiceConfig {
     pub agents: AgentsConfig,
     pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
+    pub review_triggers: ReviewTriggersConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
 }
@@ -279,6 +302,7 @@ struct RawServiceConfig {
     pub provider: Option<CodexConfig>,
     pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
+    pub review_triggers: ReviewTriggersConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
 }
@@ -620,6 +644,8 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("automation.git.remote_name", "origin")
             .map_err(config_error)?
+            .set_default("review_triggers", HashMap::<String, i64>::new())
+            .map_err(config_error)?
             .set_default("pipeline.enabled", false)
             .map_err(config_error)?
             .set_default("pipeline.replan_on_failure", false)
@@ -658,6 +684,7 @@ impl ServiceConfig {
             agents: raw.agents,
             pipeline: raw.pipeline,
             automation: raw.automation,
+            review_triggers: raw.review_triggers,
             feedback: raw.feedback,
             server: raw.server,
         };
@@ -732,6 +759,10 @@ impl ServiceConfig {
         self.automation.pr_title = resolve_env_token(self.automation.pr_title.take());
         self.automation.pr_body = resolve_env_token(self.automation.pr_body.take());
         self.automation.review_prompt = resolve_env_token(self.automation.review_prompt.take());
+        self.review_triggers.pr_reviews.agent =
+            resolve_env_token(self.review_triggers.pr_reviews.agent.take());
+        self.review_triggers.pr_reviews.prompt =
+            resolve_env_token(self.review_triggers.pr_reviews.prompt.take());
         self.automation.git.author.name = resolve_env_token(self.automation.git.author.name.take());
         self.automation.git.author.email =
             resolve_env_token(self.automation.git.author.email.take());
@@ -823,6 +854,51 @@ impl ServiceConfig {
         }
         if self.automation.git.remote_name.trim().is_empty() {
             self.automation.git.remote_name = "origin".into();
+        }
+        self.review_triggers.pr_reviews.provider = self
+            .review_triggers
+            .pr_reviews
+            .provider
+            .trim()
+            .to_ascii_lowercase();
+        self.review_triggers.pr_reviews.comment_mode = self
+            .review_triggers
+            .pr_reviews
+            .comment_mode
+            .trim()
+            .to_ascii_lowercase();
+        self.review_triggers.pr_reviews.only_labels = self
+            .review_triggers
+            .pr_reviews
+            .only_labels
+            .drain(..)
+            .map(|label| label.trim().to_ascii_lowercase())
+            .filter(|label| !label.is_empty())
+            .collect();
+        self.review_triggers.pr_reviews.ignore_labels = self
+            .review_triggers
+            .pr_reviews
+            .ignore_labels
+            .drain(..)
+            .map(|label| label.trim().to_ascii_lowercase())
+            .filter(|label| !label.is_empty())
+            .collect();
+        self.review_triggers.pr_reviews.ignore_authors = self
+            .review_triggers
+            .pr_reviews
+            .ignore_authors
+            .drain(..)
+            .map(|author| author.trim().to_ascii_lowercase())
+            .filter(|author| !author.is_empty())
+            .collect();
+        if self.review_triggers.pr_reviews.provider.is_empty() {
+            self.review_triggers.pr_reviews.provider = "github".into();
+        }
+        if self.review_triggers.pr_reviews.comment_mode.is_empty() {
+            self.review_triggers.pr_reviews.comment_mode = "summary".into();
+        }
+        if self.review_triggers.pr_reviews.debounce_seconds == 0 {
+            self.review_triggers.pr_reviews.debounce_seconds = 180;
         }
         self.feedback.offered = self
             .feedback
@@ -977,6 +1053,63 @@ impl ServiceConfig {
                 )));
             }
         }
+        if self.review_triggers.pr_reviews.enabled {
+            if self.review_triggers.pr_reviews.provider != "github" {
+                return Err(Error::InvalidConfig(
+                    "review_triggers.pr_reviews.provider must be `github`".into(),
+                ));
+            }
+            if self.tracker.kind != TrackerKind::Github {
+                return Err(Error::InvalidConfig(
+                    "review_triggers.pr_reviews.enabled currently requires tracker.kind = github"
+                        .into(),
+                ));
+            }
+            if self
+                .tracker
+                .repository
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+            {
+                return Err(Error::InvalidConfig(
+                    "review_triggers.pr_reviews requires tracker.repository".into(),
+                ));
+            }
+            if !matches!(
+                self.review_triggers.pr_reviews.comment_mode.as_str(),
+                "summary" | "inline"
+            ) {
+                return Err(Error::InvalidConfig(
+                    "review_triggers.pr_reviews.comment_mode must be `summary` or `inline`".into(),
+                ));
+            }
+            if let Some(agent_name) = &self.review_triggers.pr_reviews.agent
+                && !self.agents.profiles.contains_key(agent_name)
+            {
+                return Err(Error::InvalidConfig(format!(
+                    "review_triggers.pr_reviews.agent `{agent_name}` is not defined"
+                )));
+            }
+            if self
+                .review_triggers
+                .pr_reviews
+                .only_labels
+                .iter()
+                .any(|label| {
+                    self.review_triggers
+                        .pr_reviews
+                        .ignore_labels
+                        .contains(label)
+                })
+            {
+                return Err(Error::InvalidConfig(
+                    "review_triggers.pr_reviews.only_labels and ignore_labels must not overlap"
+                        .into(),
+                ));
+            }
+        }
         if self.pipeline.enabled {
             if let Some(agent_name) = &self.pipeline.planner_agent
                 && !self.agents.profiles.contains_key(agent_name)
@@ -1121,6 +1254,23 @@ impl ServiceConfig {
             self.agents.profiles.get(agent_name).ok_or_else(|| {
                 Error::InvalidConfig(format!("unknown review agent `{agent_name}`"))
             })?;
+        Ok(Some(agent_definition(agent_name, profile)))
+    }
+
+    pub fn pr_review_agent(&self) -> Result<Option<AgentDefinition>, Error> {
+        let selected_name = self
+            .review_triggers
+            .pr_reviews
+            .agent
+            .as_ref()
+            .or(self.automation.review_agent.as_ref())
+            .or(self.agents.default.as_ref());
+        let Some(agent_name) = selected_name else {
+            return Ok(None);
+        };
+        let profile = self.agents.profiles.get(agent_name).ok_or_else(|| {
+            Error::InvalidConfig(format!("unknown PR review agent `{agent_name}`"))
+        })?;
         Ok(Some(agent_definition(agent_name, profile)))
     }
 
@@ -2262,6 +2412,157 @@ agents:
 
         assert!(matches!(selected.transport, AgentTransport::Rpc));
         assert_eq!(selected.command.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn review_triggers_parse_and_reuse_review_agent_defaults() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: penso/polyphony
+  api_key: token
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex --dangerously-bypass-approvals-and-sandbox app-server
+automation:
+  review_agent: codex
+review_triggers:
+  pr_reviews:
+    enabled: true
+    debounce_seconds: 45
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert!(config.review_triggers.pr_reviews.enabled);
+        assert_eq!(config.review_triggers.pr_reviews.provider, "github");
+        assert_eq!(config.review_triggers.pr_reviews.comment_mode, "summary");
+        assert_eq!(config.review_triggers.pr_reviews.debounce_seconds, 45);
+        assert!(config.review_triggers.pr_reviews.only_labels.is_empty());
+        assert!(config.review_triggers.pr_reviews.ignore_labels.is_empty());
+        assert!(config.review_triggers.pr_reviews.ignore_authors.is_empty());
+        assert!(!config.review_triggers.pr_reviews.ignore_bot_authors);
+        assert_eq!(config.pr_review_agent().unwrap().unwrap().name, "codex");
+    }
+
+    #[test]
+    fn review_triggers_allow_inline_comment_mode() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: penso/polyphony
+  api_key: token
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex --dangerously-bypass-approvals-and-sandbox app-server
+review_triggers:
+  pr_reviews:
+    enabled: true
+    comment_mode: inline
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert_eq!(config.review_triggers.pr_reviews.comment_mode, "inline");
+    }
+
+    #[test]
+    fn review_triggers_normalize_suppression_rules() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: penso/polyphony
+  api_key: token
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex --dangerously-bypass-approvals-and-sandbox app-server
+review_triggers:
+  pr_reviews:
+    enabled: true
+    only_labels: [" Ready ", "Needs-Review"]
+    ignore_labels: [" WIP "]
+    ignore_authors: [" Dependabot[bot] ", " renovate-bot "]
+    ignore_bot_authors: true
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+        assert_eq!(config.review_triggers.pr_reviews.only_labels, vec![
+            "ready",
+            "needs-review"
+        ]);
+        assert_eq!(config.review_triggers.pr_reviews.ignore_labels, vec!["wip"]);
+        assert_eq!(config.review_triggers.pr_reviews.ignore_authors, vec![
+            "dependabot[bot]",
+            "renovate-bot"
+        ]);
+        assert!(config.review_triggers.pr_reviews.ignore_bot_authors);
+    }
+
+    #[test]
+    fn review_triggers_reject_overlapping_only_and_ignore_labels() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+tracker:
+  kind: github
+  repository: penso/polyphony
+  api_key: token
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex --dangerously-bypass-approvals-and-sandbox app-server
+review_triggers:
+  pr_reviews:
+    enabled: true
+    only_labels: [ready]
+    ignore_labels: [ready]
+"#,
+        )
+        .unwrap();
+        let workflow = WorkflowDefinition {
+            config,
+            prompt_template: String::new(),
+        };
+        let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("only_labels and ignore_labels must not overlap")
+        );
     }
 
     #[test]

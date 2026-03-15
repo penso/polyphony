@@ -45,6 +45,40 @@ reviews it, then sends me a Telegram with buttons to review or merge
 - add setup tear down per worktree.
 - Look at features in moltis and arbor and see what to take
 
+- Have automatic merge main -> PR when detecting a conflict
+- Have Issues tab -> Trigger
+
+- Be able to click on one movement to view the movement details. Then show something like the mission dashboard: total tasks, cached token, output token. Active feature, all features (one after another), progress logs.
+
+# missions
+
+1. initial planning phase, defining a lot of things. Breaking a big thing into
+smaller task is more efficient. Extensive phase, defining a validation
+contract. Convert a spec -> assertions (assertions are from the user point of
+view), sum of assertions is what you want to build. Milestone = a bunch of
+features, after this milestone which assertions should pass. Spawn multiple
+agents to verify those assertions.
+
+- A mission is a long term goal
+- validation contracts
+- orchestrator and validator used was GPT 5.2
+
+Mission:
+  - mission path
+  - working dir
+  - a group of features
+
+Feature:
+ - skill
+ - milestone
+ - name (dashed)
+ - preconditions
+ - expected behavior
+ - description
+
+Features list: one after another
+
+
 # Interesting links
 
 https://x.com/agent_wrapper/status/2025986105485733945
@@ -52,3 +86,5 @@ https://github.com/ComposioHQ/agent-orchestrator
 https://www.8090.ai/
 https://factory.ai/news/missions
 https://www.terminaluse.com/
+
+

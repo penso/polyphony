@@ -104,6 +104,7 @@ pub struct AppState {
     pub movements_state: TableState,
     pub show_issue_detail: bool,
     pub detail_scroll: u16,
+    pub movement_detail_scroll: u16,
     pub agents_detail_scroll: u16,
     pub issue_sort: IssueSortKey,
     /// Sorted index mapping: sorted_issues[display_index] = original snapshot index
@@ -149,6 +150,8 @@ pub struct AppState {
     pub events_area: Rect,
     /// Bounding rect of the agent detail panel (set each frame by draw_agent_detail).
     pub agents_detail_area: Rect,
+    /// Bounding rect of the movement detail panel (set each frame by draw_movement_detail).
+    pub movement_detail_area: Rect,
 }
 
 impl AppState {
@@ -163,6 +166,7 @@ impl AppState {
             movements_state: TableState::default(),
             show_issue_detail: false,
             detail_scroll: 0,
+            movement_detail_scroll: 0,
             agents_detail_scroll: 0,
             issue_sort: IssueSortKey::Newest,
             sorted_issue_indices: Vec::new(),
@@ -197,6 +201,7 @@ impl AppState {
             events_scroll: 0,
             events_area: Rect::default(),
             agents_detail_area: Rect::default(),
+            movement_detail_area: Rect::default(),
         }
     }
 
@@ -219,7 +224,11 @@ impl AppState {
             .filter(|m| m.has_deliverable)
             .count();
         sync_selection(&mut self.deliverables_state, deliverable_count);
+        let previous_movement_selection = self.movements_state.selected();
         sync_selection(&mut self.movements_state, snapshot.movements.len());
+        if self.movements_state.selected() != previous_movement_selection {
+            self.movement_detail_scroll = 0;
+        }
 
         // Compute requests/sec from budget raw data
         let total_requests: u64 = snapshot
@@ -446,24 +455,42 @@ impl AppState {
     }
 
     pub fn move_down(&mut self, len: usize, amount: usize) {
-        let previous = matches!(self.active_tab, ActiveTab::Agents)
+        let previous_agent = matches!(self.active_tab, ActiveTab::Agents)
             .then(|| self.agents_state.selected())
             .flatten();
+        let previous_movement = matches!(self.active_tab, ActiveTab::Orchestrator)
+            .then(|| self.movements_state.selected())
+            .flatten();
         move_selection(self.active_table_state_mut(), len, amount);
-        if matches!(self.active_tab, ActiveTab::Agents) && self.agents_state.selected() != previous
+        if matches!(self.active_tab, ActiveTab::Agents)
+            && self.agents_state.selected() != previous_agent
         {
             self.agents_detail_scroll = 0;
+        }
+        if matches!(self.active_tab, ActiveTab::Orchestrator)
+            && self.movements_state.selected() != previous_movement
+        {
+            self.movement_detail_scroll = 0;
         }
     }
 
     pub fn move_up(&mut self, len: usize, amount: usize) {
-        let previous = matches!(self.active_tab, ActiveTab::Agents)
+        let previous_agent = matches!(self.active_tab, ActiveTab::Agents)
             .then(|| self.agents_state.selected())
             .flatten();
+        let previous_movement = matches!(self.active_tab, ActiveTab::Orchestrator)
+            .then(|| self.movements_state.selected())
+            .flatten();
         move_selection_back(self.active_table_state_mut(), len, amount);
-        if matches!(self.active_tab, ActiveTab::Agents) && self.agents_state.selected() != previous
+        if matches!(self.active_tab, ActiveTab::Agents)
+            && self.agents_state.selected() != previous_agent
         {
             self.agents_detail_scroll = 0;
+        }
+        if matches!(self.active_tab, ActiveTab::Orchestrator)
+            && self.movements_state.selected() != previous_movement
+        {
+            self.movement_detail_scroll = 0;
         }
     }
 

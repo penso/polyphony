@@ -237,29 +237,35 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
         workspace_path = %request.workspace_path.display(),
         checkout_kind = ?request.checkout_kind,
         branch_name = ?request.branch_name,
+        checkout_ref = ?request.checkout_ref,
         "syncing existing workspace before reuse"
     );
     match request.checkout_kind {
         CheckoutKind::Directory => Ok(()),
         CheckoutKind::LinkedWorktree => {
             if let Some(source_repo_path) = request.source_repo_path.as_deref()
-                && let Err(error) = fetch_origin_with_timeout(source_repo_path)
+                && let Err(error) =
+                    fetch_origin_with_timeout(source_repo_path, request.checkout_ref.as_deref())
             {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
             sync_existing_repo_checkout(
                 &request.workspace_path,
                 request.branch_name.as_deref(),
+                request.checkout_ref.as_deref(),
                 request.default_branch.as_deref(),
             )
         },
         CheckoutKind::DiscreteClone => {
-            if let Err(error) = fetch_origin_with_timeout(&request.workspace_path) {
+            if let Err(error) =
+                fetch_origin_with_timeout(&request.workspace_path, request.checkout_ref.as_deref())
+            {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
             sync_existing_repo_checkout(
                 &request.workspace_path,
                 request.branch_name.as_deref(),
+                request.checkout_ref.as_deref(),
                 request.default_branch.as_deref(),
             )
         },
@@ -281,9 +287,15 @@ fn add_linked_worktree(request: &WorkspaceRequest) -> Result<(), CoreError> {
         source_path = %source_path.display(),
         workspace_path = %request.workspace_path.display(),
         branch_name = %branch_name,
+        checkout_ref = ?request.checkout_ref,
         "creating linked worktree"
     );
-    let branch_ref = ensure_branch(&repo, &branch_name, request.default_branch.as_deref())?;
+    let branch_ref = if let Some(checkout_ref) = request.checkout_ref.as_deref() {
+        fetch_checkout_ref(&repo, checkout_ref)?;
+        ensure_branch_from_ref(&repo, &branch_name, checkout_ref)?
+    } else {
+        ensure_branch(&repo, &branch_name, request.default_branch.as_deref())?
+    };
     let mut opts = git2::WorktreeAddOptions::new();
     opts.reference(Some(&branch_ref));
     repo.worktree(&request.workspace_key, &request.workspace_path, Some(&opts))
@@ -306,11 +318,19 @@ fn create_discrete_clone(request: &WorkspaceRequest) -> Result<(), CoreError> {
         source = %source,
         workspace_path = %request.workspace_path.display(),
         branch_name = ?request.branch_name,
+        checkout_ref = ?request.checkout_ref,
         "creating discrete clone workspace"
     );
     let repo = git2::Repository::clone(&source, &request.workspace_path)
         .map_err(|error| CoreError::Adapter(format!("clone failed: {error}")))?;
-    if let Some(branch_name) = &request.branch_name {
+    if let Some(checkout_ref) = request.checkout_ref.as_deref() {
+        fetch_checkout_ref(&repo, checkout_ref)?;
+        let branch_name = request
+            .branch_name
+            .as_deref()
+            .unwrap_or(&request.workspace_key);
+        checkout_branch_from_ref(&repo, branch_name, checkout_ref)?;
+    } else if let Some(branch_name) = &request.branch_name {
         checkout_branch(&repo, branch_name, request.default_branch.as_deref())?;
     }
     Ok(())
@@ -319,11 +339,15 @@ fn create_discrete_clone(request: &WorkspaceRequest) -> Result<(), CoreError> {
 fn sync_existing_repo_checkout(
     repo_path: &Path,
     branch_name: Option<&str>,
+    checkout_ref: Option<&str>,
     default_branch: Option<&str>,
 ) -> Result<(), CoreError> {
     let repo = git2::Repository::open(repo_path)
         .map_err(|error| CoreError::Adapter(format!("open workspace repo failed: {error}")))?;
-    if let Some(branch_name) = branch_name {
+    if let Some(checkout_ref) = checkout_ref {
+        let branch_name = branch_name.unwrap_or("polyphony-review");
+        checkout_branch_from_ref(&repo, branch_name, checkout_ref)?;
+    } else if let Some(branch_name) = branch_name {
         checkout_branch(&repo, branch_name, default_branch)?;
     }
     Ok(())
@@ -333,11 +357,16 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Run `fetch_origin` in a separate thread with a timeout so a hanging SSH
 /// agent (e.g. YubiKey not tapped) doesn't block the orchestrator.
-fn fetch_origin_with_timeout(repo_path: &Path) -> Result<(), CoreError> {
+fn fetch_origin_with_timeout(
+    repo_path: &Path,
+    checkout_ref: Option<&str>,
+) -> Result<(), CoreError> {
     let path = repo_path.to_path_buf();
+    let checkout_ref = checkout_ref.map(str::to_owned);
     info!(
         repo_path = %path.display(),
         timeout_secs = FETCH_TIMEOUT.as_secs(),
+        checkout_ref = ?checkout_ref,
         "fetching origin for workspace reuse"
     );
     let (tx, rx) = std::sync::mpsc::channel();
@@ -345,7 +374,7 @@ fn fetch_origin_with_timeout(repo_path: &Path) -> Result<(), CoreError> {
         let result = (|| {
             let repo = git2::Repository::open(&path)
                 .map_err(|e| CoreError::Adapter(format!("open repo for fetch failed: {e}")))?;
-            fetch_origin(&repo)
+            fetch_origin(&repo, checkout_ref.as_deref())
         })();
         let _ = tx.send(result);
     });
@@ -361,7 +390,7 @@ fn fetch_origin_with_timeout(repo_path: &Path) -> Result<(), CoreError> {
     }
 }
 
-fn fetch_origin(repo: &git2::Repository) -> Result<(), CoreError> {
+fn fetch_origin(repo: &git2::Repository, checkout_ref: Option<&str>) -> Result<(), CoreError> {
     let Ok(mut remote) = repo.find_remote("origin") else {
         return Ok(());
     };
@@ -372,14 +401,25 @@ fn fetch_origin(repo: &git2::Repository) -> Result<(), CoreError> {
     });
     let mut fetch_options = git2::FetchOptions::new();
     fetch_options.remote_callbacks(callbacks);
+    let mut refspecs = vec!["refs/heads/*:refs/remotes/origin/*".to_string()];
+    if let Some(checkout_ref) = checkout_ref {
+        refspecs.push(format!(
+            "{checkout_ref}:{}",
+            local_checkout_ref_name(checkout_ref)
+        ));
+    }
     remote
         .fetch(
-            &["refs/heads/*:refs/remotes/origin/*"],
+            &refspecs.iter().map(String::as_str).collect::<Vec<_>>(),
             Some(&mut fetch_options),
             None,
         )
         .map_err(|error| CoreError::Adapter(format!("fetch origin failed: {error}")))?;
     Ok(())
+}
+
+fn fetch_checkout_ref(repo: &git2::Repository, checkout_ref: &str) -> Result<(), CoreError> {
+    fetch_origin(repo, Some(checkout_ref))
 }
 
 fn resolve_signature(
@@ -485,6 +525,29 @@ fn ensure_branch<'a>(
         .map_err(|error| CoreError::Adapter(format!("resolve branch failed: {error}")))
 }
 
+fn ensure_branch_from_ref<'a>(
+    repo: &'a git2::Repository,
+    branch_name: &str,
+    checkout_ref: &str,
+) -> Result<git2::Reference<'a>, CoreError> {
+    let commit = resolve_checkout_ref_commit(repo, checkout_ref)?;
+    if let Ok(mut branch) = repo.find_branch(branch_name, git2::BranchType::Local) {
+        branch
+            .get_mut()
+            .set_target(commit.id(), "update review branch")
+            .map_err(|error| CoreError::Adapter(format!("update branch failed: {error}")))?;
+        return branch
+            .into_reference()
+            .resolve()
+            .map_err(|error| CoreError::Adapter(format!("resolve branch failed: {error}")));
+    }
+    repo.branch(branch_name, &commit, false)
+        .map_err(|error| CoreError::Adapter(format!("create branch failed: {error}")))?
+        .into_reference()
+        .resolve()
+        .map_err(|error| CoreError::Adapter(format!("resolve branch failed: {error}")))
+}
+
 fn checkout_branch(
     repo: &git2::Repository,
     branch_name: &str,
@@ -503,6 +566,43 @@ fn checkout_branch(
     ))
     .map_err(|error| CoreError::Adapter(format!("checkout head failed: {error}")))?;
     Ok(())
+}
+
+fn checkout_branch_from_ref(
+    repo: &git2::Repository,
+    branch_name: &str,
+    checkout_ref: &str,
+) -> Result<(), CoreError> {
+    let reference = ensure_branch_from_ref(repo, branch_name, checkout_ref)?;
+    let ref_name = reference
+        .name()
+        .ok_or_else(|| CoreError::Adapter("branch reference name missing".into()))?;
+    repo.set_head(ref_name)
+        .map_err(|error| CoreError::Adapter(format!("set head failed: {error}")))?;
+    repo.checkout_head(Some(
+        git2::build::CheckoutBuilder::new()
+            .force()
+            .remove_untracked(true),
+    ))
+    .map_err(|error| CoreError::Adapter(format!("checkout head failed: {error}")))?;
+    Ok(())
+}
+
+fn resolve_checkout_ref_commit<'a>(
+    repo: &'a git2::Repository,
+    checkout_ref: &str,
+) -> Result<git2::Commit<'a>, CoreError> {
+    let local_ref = local_checkout_ref_name(checkout_ref);
+    repo.find_reference(&local_ref)
+        .or_else(|_| repo.find_reference(checkout_ref))
+        .map_err(|error| CoreError::Adapter(format!("resolve checkout ref failed: {error}")))?
+        .peel_to_commit()
+        .map_err(|error| CoreError::Adapter(format!("resolve checkout commit failed: {error}")))
+}
+
+fn local_checkout_ref_name(checkout_ref: &str) -> String {
+    let trimmed = checkout_ref.strip_prefix("refs/").unwrap_or(checkout_ref);
+    format!("refs/remotes/origin/{trimmed}")
 }
 
 fn resolve_base_commit<'a>(
@@ -614,6 +714,7 @@ mod tests {
             workspace_path: root.join(workspace_name),
             workspace_key: workspace_name.to_string(),
             branch_name: Some(format!("task/{workspace_name}")),
+            checkout_ref: None,
             checkout_kind,
             sync_on_reuse: true,
             source_repo_path,
@@ -648,6 +749,21 @@ mod tests {
         let parent_refs = parents.iter().collect::<Vec<_>>();
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
             .unwrap();
+    }
+
+    fn commit_on_branch(repo: &git2::Repository, branch_name: &str, file_name: &str, body: &str) {
+        if repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .is_err()
+        {
+            let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch(branch_name, &head_commit, false).unwrap();
+        }
+        repo.set_head(&format!("refs/heads/{branch_name}")).unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        std::fs::write(repo.workdir().unwrap().join(file_name), format!("{body}\n")).unwrap();
+        commit_all(repo, &format!("update {branch_name}"));
     }
 
     fn current_branch(repo: &git2::Repository) -> String {
@@ -755,6 +871,64 @@ mod tests {
         let repo = git2::Repository::open(&workspace.path).unwrap();
         assert!(!workspace.created_now);
         assert_eq!(current_branch(&repo), "main");
+    }
+
+    #[tokio::test]
+    async fn linked_worktree_checkout_ref_tracks_pull_request_head() {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("source");
+        let source_repo = init_repo(&source_path);
+        commit_on_branch(&source_repo, "feature/review", "review.txt", "first");
+        let feature_commit = source_repo.head().unwrap().peel_to_commit().unwrap();
+        source_repo
+            .reference(
+                "refs/pull/42/head",
+                feature_commit.id(),
+                true,
+                "test pr ref",
+            )
+            .unwrap();
+
+        let root = temp.path().join("workspaces");
+        let provisioner = GitWorkspaceProvisioner;
+        let mut request = make_request(
+            &root,
+            "FAC-105",
+            CheckoutKind::LinkedWorktree,
+            Some(source_path.clone()),
+        );
+        request.branch_name = Some("pr-review/42".into());
+        request.checkout_ref = Some("refs/pull/42/head".into());
+
+        let workspace = provisioner.ensure_workspace(request.clone()).await.unwrap();
+        let repo = git2::Repository::open(&workspace.path).unwrap();
+        assert_eq!(current_branch(&repo), "pr-review/42");
+        assert_eq!(
+            repo.head().unwrap().peel_to_commit().unwrap().id(),
+            feature_commit.id()
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("review.txt")).unwrap(),
+            "first\n"
+        );
+
+        commit_on_branch(&source_repo, "feature/review", "review.txt", "second");
+        let next_commit = source_repo.head().unwrap().peel_to_commit().unwrap();
+        source_repo
+            .reference("refs/pull/42/head", next_commit.id(), true, "update pr ref")
+            .unwrap();
+
+        let workspace = provisioner.ensure_workspace(request).await.unwrap();
+        let repo = git2::Repository::open(&workspace.path).unwrap();
+        assert!(!workspace.created_now);
+        assert_eq!(
+            repo.head().unwrap().peel_to_commit().unwrap().id(),
+            next_commit.id()
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join("review.txt")).unwrap(),
+            "second\n"
+        );
     }
 
     #[tokio::test]

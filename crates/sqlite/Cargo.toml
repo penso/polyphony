@@ -14,3 +14,7 @@ serde_json.workspace = true
 sqlx = { workspace = true, optional = true }
 thiserror.workspace = true
 polyphony-core = { path = "../core" }
+
+[dev-dependencies]
+chrono.workspace = true
+tokio.workspace = true

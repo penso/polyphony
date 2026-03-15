@@ -105,8 +105,19 @@ impl WorkspaceManager {
         branch_name: Option<String>,
         hooks: &HooksConfig,
     ) -> Result<Workspace, Error> {
+        self.ensure_workspace_with_ref(issue_identifier, branch_name, None, hooks)
+            .await
+    }
+
+    pub async fn ensure_workspace_with_ref(
+        &self,
+        issue_identifier: &str,
+        branch_name: Option<String>,
+        checkout_ref: Option<String>,
+        hooks: &HooksConfig,
+    ) -> Result<Workspace, Error> {
         tokio::fs::create_dir_all(&self.root).await?;
-        let request = self.workspace_request(issue_identifier, branch_name)?;
+        let request = self.workspace_request(issue_identifier, branch_name, checkout_ref)?;
         let started_at = Instant::now();
         info!(
             issue_identifier,
@@ -114,6 +125,7 @@ impl WorkspaceManager {
             checkout_kind = ?request.checkout_kind,
             sync_on_reuse = request.sync_on_reuse,
             branch_name = ?request.branch_name,
+            checkout_ref = ?request.checkout_ref,
             "ensuring workspace"
         );
         let workspace = self.provisioner.ensure_workspace(request.clone()).await?;
@@ -180,7 +192,7 @@ impl WorkspaceManager {
         branch_name: Option<String>,
         hooks: &HooksConfig,
     ) -> Result<(), Error> {
-        let request = self.workspace_request(issue_identifier, branch_name)?;
+        let request = self.workspace_request(issue_identifier, branch_name, None)?;
         if tokio::fs::metadata(&request.workspace_path).await.is_err() {
             return Ok(());
         }
@@ -208,6 +220,7 @@ impl WorkspaceManager {
         &self,
         issue_identifier: &str,
         branch_name: Option<String>,
+        checkout_ref: Option<String>,
     ) -> Result<WorkspaceRequest, Error> {
         let (workspace_key, workspace_path) = self.workspace_path_for(issue_identifier)?;
         Ok(WorkspaceRequest {
@@ -216,6 +229,7 @@ impl WorkspaceManager {
             workspace_path,
             workspace_key,
             branch_name,
+            checkout_ref,
             checkout_kind: self.checkout_kind,
             sync_on_reuse: self.sync_on_reuse,
             source_repo_path: self.source_repo_path.clone(),

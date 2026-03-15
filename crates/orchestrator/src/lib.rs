@@ -13,9 +13,11 @@ use {
         AgentContextEntry, AgentContextSnapshot, AgentEvent, AgentEventKind, AgentModelCatalog,
         AgentRunResult, AgentRunSpec, AgentRuntime, AttemptStatus, BudgetSnapshot, CachedSnapshot,
         CodexTotals, Error as CoreError, EventScope, FeedbackAction, FeedbackLink,
-        FeedbackNotification, Issue, IssueTracker, LoadingState, Movement, MovementId, MovementRow,
-        MovementStatus, NetworkCache, PersistedRunRecord, PipelinePlan, PullRequestCommenter,
-        PullRequestManager, PullRequestRequest, RateLimitSignal, RetryRow, RunningRow,
+        FeedbackNotification, Issue, IssueTracker, LoadingState, Movement, MovementId,
+        MovementKind, MovementRow, MovementStatus, NetworkCache, PersistedRunRecord, PipelinePlan,
+        PullRequestCommenter, PullRequestManager, PullRequestRef, PullRequestRequest,
+        PullRequestReviewComment, PullRequestReviewTrigger, PullRequestReviewTriggerSource,
+        RateLimitSignal, RetryRow, ReviewTarget, ReviewedPullRequestHead, RunningRow,
         RuntimeCadence, RuntimeEvent, RuntimeSnapshot, SnapshotCounts, StateStore, Task, TaskId,
         TaskRow, TaskStatus, ThrottleWindow, TokenUsage, VisibleIssueRow, WorkspaceCommitRequest,
         WorkspaceCommitter, WorkspaceProvisioner, new_movement_id, sanitize_workspace_key,
@@ -53,6 +55,7 @@ const DEFAULT_AUTOMATION_COMMIT_MESSAGE: &str = "fix({{ issue.identifier }}): {{
 const DEFAULT_AUTOMATION_PR_TITLE: &str = "{{ issue.identifier }}: {{ issue.title }}";
 const DEFAULT_AUTOMATION_PR_BODY: &str = "Automated handoff for {{ issue.identifier }}.\n\nIssue: {{ issue.url }}\nBase branch: {{ base_branch }}\nHead branch: {{ head_branch }}\nCommit: {{ commit_sha }}";
 const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str = "Review the current branch against {{ base_branch }}.\nInspect the repository state and write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Recommended human checks\nDo not modify tracked source files other than `.polyphony/review.md`.";
+const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str = "Review pull request {{ issue.identifier }} against {{ base_branch }} at commit {{ head_sha }}.\nAuthor: {{ pull_request_author }}\nLabels: {{ pull_request_labels }}\nInspect the diff and repository state, then write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Required fixes\n- Optional improvements\nIf you have precise file-level findings, you may also write `.polyphony/review-comments.json` as a JSON array of objects with `path`, `line`, and `body`.\nDo not modify tracked source files other than `.polyphony/review.md` and `.polyphony/review-comments.json`.";
 
 const DEFAULT_PLANNER_PROMPT: &str = r#"You are a planning agent for issue {{ issue.identifier }}: {{ issue.title }}.
 
@@ -103,6 +106,7 @@ pub struct RuntimeHandle {
 
 pub struct RuntimeComponents {
     pub tracker: Arc<dyn IssueTracker>,
+    pub pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>>,
     pub agent: Arc<dyn AgentRuntime>,
     pub committer: Option<Arc<dyn WorkspaceCommitter>>,
     pub pull_request_manager: Option<Arc<dyn PullRequestManager>>,
@@ -115,6 +119,7 @@ pub type RuntimeComponentFactory =
 
 pub struct RuntimeService {
     tracker: Arc<dyn IssueTracker>,
+    pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>>,
     agent: Arc<dyn AgentRuntime>,
     provisioner: Arc<dyn WorkspaceProvisioner>,
     committer: Option<Arc<dyn WorkspaceCommitter>>,
@@ -173,6 +178,7 @@ struct RunningTask {
     active_task_id: Option<TaskId>,
     /// Set when this running task is part of a pipeline.
     movement_id: Option<MovementId>,
+    review_target: Option<ReviewTarget>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +197,18 @@ struct ActiveThrottle {
 enum IssueClaimState {
     Running,
     RetryQueued,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReviewTriggerSuppression {
+    Draft,
+    AlreadyRunning,
+    AlreadyReviewed,
+    IgnoredAuthor { author: String },
+    BotAuthor { author: String },
+    IgnoredLabel { label: String },
+    MissingLabels { labels: Vec<String> },
+    Debounced { remaining_seconds: i64 },
 }
 
 #[derive(Debug)]
@@ -220,6 +238,9 @@ struct RuntimeState {
     worktree_keys: HashSet<String>,
     /// Workspace keys from orphaned workspaces detected at startup, pending dispatch.
     orphan_dispatch_keys: HashSet<String>,
+    reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
+    review_retry_triggers: HashMap<String, PullRequestReviewTrigger>,
+    review_trigger_suppressions: HashMap<String, ReviewTriggerSuppression>,
 }
 
 impl Default for RuntimeState {
@@ -249,6 +270,9 @@ impl Default for RuntimeState {
             tasks: HashMap::new(),
             worktree_keys: HashSet::new(),
             orphan_dispatch_keys: HashSet::new(),
+            reviewed_pull_request_heads: HashMap::new(),
+            review_retry_triggers: HashMap::new(),
+            review_trigger_suppressions: HashMap::new(),
         }
     }
 }
@@ -274,6 +298,7 @@ struct WorkflowReloadSupport {
 impl RuntimeService {
     pub fn new(
         tracker: Arc<dyn IssueTracker>,
+        pull_request_review_trigger_source: Option<Arc<dyn PullRequestReviewTriggerSource>>,
         agent: Arc<dyn AgentRuntime>,
         provisioner: Arc<dyn WorkspaceProvisioner>,
         committer: Option<Arc<dyn WorkspaceCommitter>>,
@@ -290,6 +315,7 @@ impl RuntimeService {
         (
             Self {
                 tracker,
+                pull_request_review_trigger_source,
                 agent,
                 provisioner,
                 committer,
@@ -730,6 +756,10 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
             return false;
         }
+        if workflow.config.review_triggers.pr_reviews.enabled {
+            self.poll_pull_request_review_triggers(workflow.clone())
+                .await;
+        }
         for issue in issues {
             if !self.should_dispatch(&workflow, &issue) {
                 continue;
@@ -747,6 +777,62 @@ impl RuntimeService {
         }
         let _ = self.emit_snapshot().await;
         false
+    }
+
+    async fn poll_pull_request_review_triggers(&mut self, workflow: LoadedWorkflow) {
+        let Some(source) = self.pull_request_review_trigger_source.clone() else {
+            return;
+        };
+        let source_component_key = source.component_key();
+        if self.is_throttled(&source_component_key) {
+            return;
+        }
+        let triggers = match source.fetch_review_triggers().await {
+            Ok(triggers) => triggers,
+            Err(CoreError::RateLimited(signal)) => {
+                self.register_throttle(*signal);
+                return;
+            },
+            Err(error) => {
+                self.push_event(
+                    EventScope::Tracker,
+                    format!("PR review trigger fetch failed: {error}"),
+                );
+                warn!(%error, "pull request review trigger fetch failed");
+                return;
+            },
+        };
+        let mut seen_trigger_keys = HashSet::new();
+        for trigger in triggers {
+            seen_trigger_keys.insert(trigger.dedupe_key());
+            if let Some(reason) = self.review_trigger_suppression(&workflow, &trigger) {
+                self.record_review_trigger_suppression(&trigger, reason);
+                continue;
+            }
+            self.clear_review_trigger_suppression(&trigger);
+            if !self.has_available_slot(&workflow, "review") {
+                break;
+            }
+            if let Err(error) = self
+                .dispatch_pull_request_review(workflow.clone(), trigger.clone(), None)
+                .await
+            {
+                self.state
+                    .review_retry_triggers
+                    .insert(trigger.synthetic_issue_id(), trigger.clone());
+                self.schedule_retry(
+                    trigger.synthetic_issue_id(),
+                    trigger.display_identifier(),
+                    1,
+                    Some(error.to_string()),
+                    false,
+                    workflow.config.agent.max_retry_backoff_ms,
+                );
+            }
+        }
+        self.state
+            .review_trigger_suppressions
+            .retain(|key, _| seen_trigger_keys.contains(key));
     }
 
     async fn reconcile_running(&mut self) {
@@ -894,12 +980,14 @@ impl RuntimeService {
         let now = Utc::now();
         let movement = Movement {
             id: movement_id.clone(),
+            kind: MovementKind::IssueDelivery,
             issue_id: Some(issue.id.clone()),
             issue_identifier: Some(issue.identifier.clone()),
             title: issue.title.clone(),
             status: MovementStatus::InProgress,
             workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
             workspace_path: Some(workspace.path.clone()),
+            review_target: None,
             deliverable: None,
             created_at: now,
             updated_at: now,
@@ -1050,6 +1138,7 @@ impl RuntimeService {
             handle,
             active_task_id: None,
             movement_id: None,
+            review_target: None,
         });
         self.push_event(
             EventScope::Dispatch,
@@ -1121,12 +1210,14 @@ impl RuntimeService {
         let now = Utc::now();
         let movement = Movement {
             id: movement_id.clone(),
+            kind: MovementKind::IssueDelivery,
             issue_id: Some(issue.id.clone()),
             issue_identifier: Some(issue.identifier.clone()),
             title: issue.title.clone(),
             status: initial_status,
             workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
             workspace_path: Some(workspace.path.clone()),
+            review_target: None,
             deliverable: None,
             created_at: now,
             updated_at: now,
@@ -1525,6 +1616,7 @@ impl RuntimeService {
             handle,
             active_task_id,
             movement_id,
+            review_target: None,
         });
         self.push_event(
             EventScope::Dispatch,
@@ -1789,6 +1881,33 @@ impl RuntimeService {
         if !workflow.config.has_dispatch_agents() {
             return;
         }
+        if let Some(trigger) = self.state.review_retry_triggers.get(&issue_id).cloned() {
+            if !self.has_available_slot(&workflow, "review") {
+                self.schedule_retry(
+                    issue_id,
+                    retry.row.issue_identifier,
+                    retry.row.attempt + 1,
+                    Some("no available orchestrator slots".into()),
+                    false,
+                    workflow.config.agent.max_retry_backoff_ms,
+                );
+                return;
+            }
+            if let Err(error) = self
+                .dispatch_pull_request_review(workflow.clone(), trigger, Some(retry.row.attempt))
+                .await
+            {
+                self.schedule_retry(
+                    retry.row.issue_id,
+                    retry.row.issue_identifier,
+                    retry.row.attempt + 1,
+                    Some(error.to_string()),
+                    false,
+                    workflow.config.agent.max_retry_backoff_ms,
+                );
+            }
+            return;
+        }
         let query = workflow.config.tracker_query();
         let issues = match self.tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
@@ -1918,6 +2037,353 @@ impl RuntimeService {
         Ok(())
     }
 
+    fn review_trigger_suppression(
+        &self,
+        workflow: &LoadedWorkflow,
+        trigger: &PullRequestReviewTrigger,
+    ) -> Option<ReviewTriggerSuppression> {
+        if !workflow.config.review_triggers.pr_reviews.include_drafts && trigger.is_draft {
+            return Some(ReviewTriggerSuppression::Draft);
+        }
+        let issue_id = trigger.synthetic_issue_id();
+        if self.state.running.contains_key(&issue_id) || self.is_claimed(&issue_id) {
+            return Some(ReviewTriggerSuppression::AlreadyRunning);
+        }
+        if self
+            .state
+            .reviewed_pull_request_heads
+            .contains_key(&trigger.dedupe_key())
+        {
+            return Some(ReviewTriggerSuppression::AlreadyReviewed);
+        }
+        if let Some(author) = trigger.author_login.as_deref() {
+            if workflow
+                .config
+                .review_triggers
+                .pr_reviews
+                .ignore_authors
+                .iter()
+                .any(|candidate| candidate == author)
+            {
+                return Some(ReviewTriggerSuppression::IgnoredAuthor {
+                    author: author.to_string(),
+                });
+            }
+            if workflow
+                .config
+                .review_triggers
+                .pr_reviews
+                .ignore_bot_authors
+                && is_probably_bot_author(author)
+            {
+                return Some(ReviewTriggerSuppression::BotAuthor {
+                    author: author.to_string(),
+                });
+            }
+        }
+        if let Some(label) = trigger.labels.iter().find(|label| {
+            workflow
+                .config
+                .review_triggers
+                .pr_reviews
+                .ignore_labels
+                .contains(label)
+        }) {
+            return Some(ReviewTriggerSuppression::IgnoredLabel {
+                label: label.clone(),
+            });
+        }
+        if !workflow
+            .config
+            .review_triggers
+            .pr_reviews
+            .only_labels
+            .is_empty()
+            && !trigger.labels.iter().any(|label| {
+                workflow
+                    .config
+                    .review_triggers
+                    .pr_reviews
+                    .only_labels
+                    .contains(label)
+            })
+        {
+            return Some(ReviewTriggerSuppression::MissingLabels {
+                labels: workflow
+                    .config
+                    .review_triggers
+                    .pr_reviews
+                    .only_labels
+                    .clone(),
+            });
+        }
+        let updated_at = trigger.updated_at?;
+        let debounce = chrono::Duration::seconds(
+            workflow.config.review_triggers.pr_reviews.debounce_seconds as i64,
+        );
+        let remaining = debounce - Utc::now().signed_duration_since(updated_at);
+        (remaining > chrono::Duration::zero()).then_some(ReviewTriggerSuppression::Debounced {
+            remaining_seconds: remaining.num_seconds(),
+        })
+    }
+
+    fn record_review_trigger_suppression(
+        &mut self,
+        trigger: &PullRequestReviewTrigger,
+        suppression: ReviewTriggerSuppression,
+    ) {
+        let key = trigger.dedupe_key();
+        let changed = self.state.review_trigger_suppressions.get(&key) != Some(&suppression);
+        self.state
+            .review_trigger_suppressions
+            .insert(key, suppression.clone());
+        if !changed {
+            return;
+        }
+        let message = match suppression {
+            ReviewTriggerSuppression::Draft => {
+                format!(
+                    "suppressed PR review {}: draft",
+                    trigger.display_identifier()
+                )
+            },
+            ReviewTriggerSuppression::AlreadyRunning => format!(
+                "suppressed PR review {}: already running",
+                trigger.display_identifier()
+            ),
+            ReviewTriggerSuppression::AlreadyReviewed => format!(
+                "suppressed PR review {}: head {} already reviewed",
+                trigger.display_identifier(),
+                trigger.head_sha
+            ),
+            ReviewTriggerSuppression::IgnoredAuthor { author } => format!(
+                "suppressed PR review {}: ignored author {}",
+                trigger.display_identifier(),
+                author
+            ),
+            ReviewTriggerSuppression::BotAuthor { author } => format!(
+                "suppressed PR review {}: bot author {}",
+                trigger.display_identifier(),
+                author
+            ),
+            ReviewTriggerSuppression::IgnoredLabel { label } => format!(
+                "suppressed PR review {}: ignored label {}",
+                trigger.display_identifier(),
+                label
+            ),
+            ReviewTriggerSuppression::MissingLabels { labels } => format!(
+                "suppressed PR review {}: missing required labels {}",
+                trigger.display_identifier(),
+                labels.join(", ")
+            ),
+            ReviewTriggerSuppression::Debounced { remaining_seconds } => format!(
+                "suppressed PR review {}: debounce {}s remaining",
+                trigger.display_identifier(),
+                remaining_seconds.max(0)
+            ),
+        };
+        self.push_event(EventScope::Tracker, message);
+    }
+
+    fn clear_review_trigger_suppression(&mut self, trigger: &PullRequestReviewTrigger) {
+        if self
+            .state
+            .review_trigger_suppressions
+            .remove(&trigger.dedupe_key())
+            .is_some()
+        {
+            self.push_event(
+                EventScope::Tracker,
+                format!("PR review ready: {}", trigger.display_identifier()),
+            );
+        }
+    }
+
+    async fn dispatch_pull_request_review(
+        &mut self,
+        workflow: LoadedWorkflow,
+        trigger: PullRequestReviewTrigger,
+        attempt: Option<u32>,
+    ) -> Result<(), Error> {
+        let issue = synthetic_issue_for_pull_request_review(&trigger);
+        let issue_id = issue.id.clone();
+        let issue_identifier = issue.identifier.clone();
+        let review_target = trigger.review_target();
+        let review_agent = workflow
+            .config
+            .pr_review_agent()?
+            .ok_or_else(|| CoreError::Adapter("PR review agent is not available".into()))?;
+        let review_agent_for_task = review_agent.clone();
+        if self.is_throttled(&format!("agent:{}", review_agent.name)) {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "PR review agent `{}` is throttled",
+                review_agent.name
+            ))));
+        }
+        let workspace_manager = self.build_workspace_manager(&workflow);
+        let workspace = workspace_manager
+            .ensure_workspace_with_ref(
+                &issue.identifier,
+                issue.branch_name.clone(),
+                review_target.checkout_ref.clone(),
+                &workflow.config.hooks,
+            )
+            .await?;
+        self.state
+            .worktree_keys
+            .insert(workspace.workspace_key.clone());
+        let movement_id = new_movement_id();
+        let now = Utc::now();
+        let movement = Movement {
+            id: movement_id.clone(),
+            kind: MovementKind::PullRequestReview,
+            issue_id: Some(issue_id.clone()),
+            issue_identifier: Some(issue_identifier.clone()),
+            title: trigger.title.clone(),
+            status: MovementStatus::InProgress,
+            workspace_key: Some(workspace.workspace_key.clone()),
+            workspace_path: Some(workspace.path.clone()),
+            review_target: Some(review_target.clone()),
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        };
+        if let Some(store) = &self.store {
+            store.save_movement(&movement).await?;
+        }
+        self.state.movements.insert(movement_id.clone(), movement);
+
+        let prompt = render_issue_template_with_strings(
+            workflow
+                .config
+                .review_triggers
+                .pr_reviews
+                .prompt
+                .as_deref()
+                .unwrap_or(DEFAULT_PULL_REQUEST_REVIEW_PROMPT),
+            &issue,
+            attempt,
+            &[
+                ("repository", review_target.repository.clone()),
+                ("base_branch", review_target.base_branch.clone()),
+                ("head_branch", review_target.head_branch.clone()),
+                ("head_sha", review_target.head_sha.clone()),
+                (
+                    "pull_request_url",
+                    review_target.url.clone().unwrap_or_default(),
+                ),
+                ("pull_request_number", review_target.number.to_string()),
+                (
+                    "pull_request_author",
+                    trigger.author_login.clone().unwrap_or_default(),
+                ),
+                ("pull_request_labels", trigger.labels.join(", ")),
+            ],
+        )?;
+        let command_tx = self.command_tx.clone();
+        let agent = self.agent.clone();
+        let workspace_path = workspace.path.clone();
+        let hooks = workflow.config.hooks.clone();
+        let active_states = workflow.config.tracker.active_states.clone();
+        let max_turns = workflow.config.agent.max_turns;
+        let provisioner = self.provisioner.clone();
+        let tracker = self.tracker.clone();
+        let selected_agent_name = review_agent.name.clone();
+        let started_at = Utc::now();
+        let trigger_for_retry = trigger.clone();
+        let issue_for_task = issue.clone();
+        let issue_identifier_for_task = issue_identifier.clone();
+        let issue_id_for_task = issue_id.clone();
+        let worker_span = info_span!(
+            "pull_request_review_worker",
+            issue_identifier = %issue_identifier_for_task,
+            agent = %selected_agent_name,
+            attempt = attempt.unwrap_or(0)
+        );
+        let handle = tokio::spawn(
+            async move {
+                let manager = WorkspaceManager::new(
+                    workflow.config.workspace.root.clone(),
+                    provisioner,
+                    workflow.config.workspace.checkout_kind,
+                    workflow.config.workspace.sync_on_reuse,
+                    workflow.config.workspace.transient_paths.clone(),
+                    workflow.config.workspace.source_repo_path.clone(),
+                    workflow.config.workspace.clone_url.clone(),
+                    workflow.config.workspace.default_branch.clone(),
+                );
+                let outcome = run_worker_attempt(
+                    &manager,
+                    &hooks,
+                    agent,
+                    tracker,
+                    issue_for_task,
+                    attempt,
+                    workspace_path,
+                    prompt,
+                    active_states,
+                    max_turns,
+                    workflow.config.agent.continuation_prompt.clone(),
+                    review_agent_for_task,
+                    None,
+                    command_tx.clone(),
+                )
+                .await;
+                let outcome = match outcome {
+                    Ok(result) => result,
+                    Err(error) => agent_run_result_from_error(&error),
+                };
+                let _ = command_tx.send(OrchestratorMessage::WorkerFinished {
+                    issue_id: issue_id_for_task,
+                    issue_identifier: issue_identifier_for_task,
+                    attempt,
+                    started_at,
+                    outcome,
+                });
+            }
+            .instrument(worker_span),
+        );
+
+        self.claim_issue(issue_id.clone(), IssueClaimState::Running);
+        self.state.retrying.remove(&issue_id);
+        self.state
+            .review_retry_triggers
+            .insert(issue_id.clone(), trigger_for_retry);
+        self.state.running.insert(issue_id.clone(), RunningTask {
+            issue,
+            agent_name: selected_agent_name,
+            model: review_agent
+                .model
+                .clone()
+                .or_else(|| review_agent.models.first().cloned()),
+            attempt,
+            workspace_path: workspace.path,
+            stall_timeout_ms: review_agent.stall_timeout_ms,
+            max_turns,
+            started_at,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            last_event: Some("dispatch_started".into()),
+            last_message: Some("PR review worker launched".into()),
+            last_event_at: Some(Utc::now()),
+            tokens: TokenUsage::default(),
+            last_reported_tokens: TokenUsage::default(),
+            turn_count: 0,
+            rate_limits: None,
+            handle,
+            active_task_id: None,
+            movement_id: Some(movement_id),
+            review_target: Some(review_target),
+        });
+        self.push_event(
+            EventScope::Dispatch,
+            format!("dispatched PR review {issue_identifier}"),
+        );
+        Ok(())
+    }
+
     async fn finish_running(
         &mut self,
         issue_id: String,
@@ -1962,6 +2428,14 @@ impl RuntimeService {
                     details,
                 })
                 .await?;
+        }
+
+        if running.review_target.is_some() {
+            let result = self
+                .finish_pull_request_review(issue_id, issue_identifier, attempt, running, outcome)
+                .await;
+            self.emit_snapshot().await?;
+            return result;
         }
 
         // Pipeline worker handling
@@ -2127,6 +2601,7 @@ impl RuntimeService {
             },
             AttemptStatus::CancelledByReconciliation => {
                 self.release_issue(&issue_id);
+                self.state.review_retry_triggers.remove(&issue_id);
             },
             _ => {
                 self.schedule_retry(
@@ -2145,6 +2620,175 @@ impl RuntimeService {
             format!("{} {:?}", issue_identifier, outcome.status),
         );
         self.emit_snapshot().await?;
+        Ok(())
+    }
+
+    async fn finish_pull_request_review(
+        &mut self,
+        issue_id: String,
+        issue_identifier: String,
+        attempt: Option<u32>,
+        running: RunningTask,
+        outcome: AgentRunResult,
+    ) -> Result<(), Error> {
+        let Some(review_target) = running.review_target.clone() else {
+            return Ok(());
+        };
+        let movement_id = running.movement_id.clone();
+        let movement_status = match outcome.status {
+            AttemptStatus::Succeeded => MovementStatus::Delivered,
+            AttemptStatus::Failed | AttemptStatus::TimedOut | AttemptStatus::Stalled => {
+                MovementStatus::Failed
+            },
+            AttemptStatus::CancelledByReconciliation => MovementStatus::Cancelled,
+        };
+        if let Some(movement_id) = movement_id.as_ref()
+            && let Some(movement) = self.state.movements.get_mut(movement_id)
+        {
+            movement.status = movement_status;
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+
+        match outcome.status {
+            AttemptStatus::Succeeded => {
+                if let Err(error) = self
+                    .post_pull_request_review_comment(&running, &review_target)
+                    .await
+                {
+                    if let Some(movement_id) = movement_id.as_ref()
+                        && let Some(movement) = self.state.movements.get_mut(movement_id)
+                    {
+                        movement.status = MovementStatus::Failed;
+                        movement.updated_at = Utc::now();
+                        if let Some(store) = &self.store {
+                            let _ = store.save_movement(movement).await;
+                        }
+                    }
+                    self.push_event(
+                        EventScope::Handoff,
+                        format!("{} review comment failed: {}", issue_identifier, error),
+                    );
+                    self.schedule_retry(
+                        issue_id.clone(),
+                        issue_identifier.clone(),
+                        attempt.unwrap_or(0) + 1,
+                        Some(error.to_string()),
+                        false,
+                        self.workflow().config.agent.max_retry_backoff_ms,
+                    );
+                } else {
+                    let reviewed = ReviewedPullRequestHead {
+                        key: review_target_key(&review_target),
+                        target: review_target.clone(),
+                        reviewed_at: Utc::now(),
+                        movement_id: movement_id.clone(),
+                    };
+                    if let Some(store) = &self.store {
+                        store.save_reviewed_pull_request_head(&reviewed).await?;
+                    }
+                    self.state
+                        .reviewed_pull_request_heads
+                        .insert(reviewed.key.clone(), reviewed);
+                    self.state.completed.insert(issue_id.clone());
+                    self.release_issue(&issue_id);
+                    self.state.review_retry_triggers.remove(&issue_id);
+                }
+            },
+            AttemptStatus::CancelledByReconciliation => {
+                self.release_issue(&issue_id);
+            },
+            _ => {
+                self.schedule_retry(
+                    issue_id.clone(),
+                    issue_identifier.clone(),
+                    attempt.unwrap_or(0) + 1,
+                    outcome.error.clone(),
+                    false,
+                    self.workflow().config.agent.max_retry_backoff_ms,
+                );
+            },
+        }
+        self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
+        self.push_event(
+            EventScope::Worker,
+            format!("{} PR review {:?}", issue_identifier, outcome.status),
+        );
+        Ok(())
+    }
+
+    async fn post_pull_request_review_comment(
+        &mut self,
+        running: &RunningTask,
+        review_target: &ReviewTarget,
+    ) -> Result<(), Error> {
+        let review_path = running.workspace_path.join(".polyphony").join("review.md");
+        let review_body = tokio::fs::read_to_string(&review_path).await?;
+        let trimmed = review_body.trim();
+        let _ = tokio::fs::remove_file(&review_path).await;
+        if trimmed.is_empty() {
+            return Err(Error::Core(CoreError::Adapter(
+                "PR review agent produced an empty `.polyphony/review.md`".into(),
+            )));
+        }
+        let comment_mode = self
+            .workflow()
+            .config
+            .review_triggers
+            .pr_reviews
+            .comment_mode
+            .clone();
+        let review_comments_path = running
+            .workspace_path
+            .join(".polyphony")
+            .join("review-comments.json");
+        let review_comments = load_pull_request_review_comments(&review_comments_path).await?;
+        let commenter = self.pull_request_commenter.clone().ok_or_else(|| {
+            Error::Core(CoreError::Adapter(
+                "pull request commenter is not configured".into(),
+            ))
+        })?;
+        let marker = pull_request_review_comment_marker(review_target);
+        let body = format!("{trimmed}\n\n{marker}");
+        let pull_request = PullRequestRef {
+            repository: review_target.repository.clone(),
+            number: review_target.number,
+            url: review_target.url.clone(),
+        };
+        if comment_mode == "inline" && !review_comments.is_empty() {
+            commenter
+                .sync_pull_request_review(
+                    &pull_request,
+                    &marker,
+                    &body,
+                    &review_comments,
+                    &review_target.head_sha,
+                )
+                .await?;
+        } else {
+            commenter
+                .sync_pull_request_comment(&pull_request, &marker, &body)
+                .await?;
+        }
+        self.push_event(
+            EventScope::Handoff,
+            if comment_mode == "inline" && !review_comments.is_empty() {
+                format!(
+                    "{} reviewed PR #{} at {} with {} inline comments",
+                    running.issue.identifier,
+                    review_target.number,
+                    review_target.head_sha,
+                    review_comments.len()
+                )
+            } else {
+                format!(
+                    "{} reviewed PR #{} at {}",
+                    running.issue.identifier, review_target.number, review_target.head_sha
+                )
+            },
+        );
         Ok(())
     }
 
@@ -2513,12 +3157,16 @@ impl RuntimeService {
                         .unwrap_or(0);
                     MovementRow {
                         id: m.id.clone(),
+                        kind: m.kind,
                         issue_identifier: m.issue_identifier.clone(),
                         title: m.title.clone(),
                         status: m.status,
                         task_count,
                         tasks_completed,
                         has_deliverable: m.deliverable.is_some(),
+                        review_target: m.review_target.clone(),
+                        workspace_key: m.workspace_key.clone(),
+                        workspace_path: m.workspace_path.clone(),
                         created_at: m.created_at,
                     }
                 })
@@ -2629,6 +3277,7 @@ impl RuntimeService {
                 .or_default()
                 .push(task);
         }
+        self.state.reviewed_pull_request_heads = bootstrap.reviewed_pull_request_heads;
     }
 
     fn register_throttle(&mut self, signal: RateLimitSignal) {
@@ -2881,6 +3530,14 @@ impl RuntimeService {
     ) {
         let old_tracker_key = self.tracker.component_key();
         let new_tracker_key = components.tracker.component_key();
+        let old_review_source_key = self
+            .pull_request_review_trigger_source
+            .as_ref()
+            .map(|source| source.component_key());
+        let new_review_source_key = components
+            .pull_request_review_trigger_source
+            .as_ref()
+            .map(|source| source.component_key());
         let old_agent_runtime_key = self.agent.component_key();
         let new_agent_runtime_key = components.agent.component_key();
         let old_agent_names = current_workflow
@@ -2905,6 +3562,7 @@ impl RuntimeService {
             .collect::<HashSet<_>>();
 
         self.tracker = components.tracker;
+        self.pull_request_review_trigger_source = components.pull_request_review_trigger_source;
         self.agent = components.agent;
         self.committer = components.committer;
         self.pull_request_manager = components.pull_request_manager;
@@ -2914,6 +3572,12 @@ impl RuntimeService {
         if old_tracker_key != new_tracker_key {
             self.state.throttles.remove(&old_tracker_key);
             self.state.budgets.remove(&old_tracker_key);
+        }
+        if old_review_source_key != new_review_source_key
+            && let Some(component_key) = old_review_source_key
+        {
+            self.state.throttles.remove(&component_key);
+            self.state.budgets.remove(&component_key);
         }
         if old_agent_runtime_key != new_agent_runtime_key {
             self.state.throttles.remove(&old_agent_runtime_key);
@@ -3541,6 +4205,87 @@ fn is_active_state(active_states: &[String], state: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(state))
 }
 
+fn synthetic_issue_for_pull_request_review(trigger: &PullRequestReviewTrigger) -> Issue {
+    Issue {
+        id: trigger.synthetic_issue_id(),
+        identifier: trigger.display_identifier(),
+        title: format!("Review PR #{}: {}", trigger.number, trigger.title),
+        description: Some(format!(
+            "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nCheckout ref: {}\nAuthor: {}\nLabels: {}",
+            trigger.repository,
+            trigger.base_branch,
+            trigger.head_branch,
+            trigger.head_sha,
+            trigger.checkout_ref.as_deref().unwrap_or("<none>"),
+            trigger.author_login.as_deref().unwrap_or("<unknown>"),
+            if trigger.labels.is_empty() {
+                "<none>".to_string()
+            } else {
+                trigger.labels.join(", ")
+            }
+        )),
+        state: "Review".into(),
+        branch_name: Some(format!("pr-review/{}", trigger.number)),
+        url: trigger.url.clone(),
+        updated_at: trigger.updated_at,
+        ..Issue::default()
+    }
+}
+
+fn is_probably_bot_author(author: &str) -> bool {
+    author.ends_with("[bot]")
+        || author.ends_with("-bot")
+        || author == "dependabot"
+        || author.starts_with("dependabot-")
+}
+
+fn review_target_key(target: &ReviewTarget) -> String {
+    format!(
+        "pr_review:{}:{}:{}:{}",
+        target.provider, target.repository, target.number, target.head_sha
+    )
+}
+
+fn pull_request_review_comment_marker(target: &ReviewTarget) -> String {
+    format!(
+        "<!-- polyphony:pr-review {} {}#{} sha={} -->",
+        target.provider, target.repository, target.number, target.head_sha
+    )
+}
+
+async fn load_pull_request_review_comments(
+    path: &Path,
+) -> Result<Vec<PullRequestReviewComment>, Error> {
+    let raw = match tokio::fs::read_to_string(path).await {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    let _ = tokio::fs::remove_file(path).await;
+    let drafts = serde_json::from_str::<Vec<PullRequestReviewComment>>(&raw).map_err(|error| {
+        Error::Core(CoreError::Adapter(format!(
+            "invalid `.polyphony/review-comments.json`: {error}"
+        )))
+    })?;
+    let mut comments = Vec::with_capacity(drafts.len());
+    for draft in drafts {
+        let path = draft.path.trim();
+        let body = draft.body.trim();
+        if path.is_empty() || body.is_empty() || draft.line == 0 {
+            return Err(Error::Core(CoreError::Adapter(
+                "review comments must include non-empty `path`, non-empty `body`, and `line` > 0"
+                    .into(),
+            )));
+        }
+        comments.push(PullRequestReviewComment {
+            path: path.to_string(),
+            line: draft.line,
+            body: body.to_string(),
+        });
+    }
+    Ok(comments)
+}
+
 fn build_continuation_prompt(
     issue: &Issue,
     attempt: Option<u32>,
@@ -3760,7 +4505,8 @@ mod tests {
     use {
         async_trait::async_trait,
         polyphony_core::{
-            AgentSession, IssueAuthor, IssueComment, IssueStateUpdate, Workspace, WorkspaceRequest,
+            AgentSession, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, Workspace,
+            WorkspaceRequest,
         },
         polyphony_workflow::load_workflow,
         tokio::sync::watch,
@@ -3885,6 +4631,104 @@ mod tests {
             _event_tx: mpsc::UnboundedSender<AgentEvent>,
         ) -> Result<AgentRunResult, polyphony_core::Error> {
             Ok(AgentRunResult::succeeded(1))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingPullRequestCommenter {
+        comments: Arc<Mutex<Vec<(PullRequestRef, String)>>>,
+        reviews: Arc<
+            Mutex<
+                Vec<(
+                    PullRequestRef,
+                    String,
+                    Vec<PullRequestReviewComment>,
+                    String,
+                )>,
+            >,
+        >,
+    }
+
+    impl RecordingPullRequestCommenter {
+        fn comment_bodies(&self) -> Vec<String> {
+            self.comments
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, body)| body.clone())
+                .collect()
+        }
+
+        fn reviews(
+            &self,
+        ) -> Vec<(
+            PullRequestRef,
+            String,
+            Vec<PullRequestReviewComment>,
+            String,
+        )> {
+            self.reviews.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl PullRequestCommenter for RecordingPullRequestCommenter {
+        fn component_key(&self) -> String {
+            "github:test-comments".into()
+        }
+
+        async fn comment_on_pull_request(
+            &self,
+            pull_request: &PullRequestRef,
+            body: &str,
+        ) -> Result<(), polyphony_core::Error> {
+            self.comments
+                .lock()
+                .unwrap()
+                .push((pull_request.clone(), body.to_string()));
+            Ok(())
+        }
+
+        async fn sync_pull_request_comment(
+            &self,
+            pull_request: &PullRequestRef,
+            marker: &str,
+            body: &str,
+        ) -> Result<(), polyphony_core::Error> {
+            let mut comments = self.comments.lock().unwrap();
+            if let Some((_, existing_body)) = comments
+                .iter_mut()
+                .find(|(_, existing_body)| existing_body.contains(marker))
+            {
+                *existing_body = body.to_string();
+            } else {
+                comments.push((pull_request.clone(), body.to_string()));
+            }
+            Ok(())
+        }
+
+        async fn sync_pull_request_review(
+            &self,
+            pull_request: &PullRequestRef,
+            marker: &str,
+            body: &str,
+            comments: &[PullRequestReviewComment],
+            commit_sha: &str,
+        ) -> Result<(), polyphony_core::Error> {
+            let mut reviews = self.reviews.lock().unwrap();
+            if reviews
+                .iter()
+                .any(|(_, existing_body, ..)| existing_body.contains(marker))
+            {
+                return Ok(());
+            }
+            reviews.push((
+                pull_request.clone(),
+                body.to_string(),
+                comments.to_vec(),
+                commit_sha.to_string(),
+            ));
+            Ok(())
         }
     }
 
@@ -4158,6 +5002,9 @@ mod tests {
             &self,
             request: WorkspaceRequest,
         ) -> Result<Workspace, polyphony_core::Error> {
+            tokio::fs::create_dir_all(&request.workspace_path)
+                .await
+                .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?;
             Ok(Workspace {
                 path: request.workspace_path,
                 workspace_key: request.workspace_key,
@@ -4202,6 +5049,7 @@ mod tests {
         let (_tx, rx) = watch::channel(workflow);
         RuntimeService::new(
             Arc::new(tracker),
+            None,
             Arc::new(NoopAgent),
             Arc::new(provisioner),
             None,
@@ -4225,6 +5073,7 @@ mod tests {
         let (tx, rx) = watch::channel(workflow.clone());
         RuntimeService::new(
             tracker,
+            None,
             agent,
             Arc::new(provisioner),
             None,
@@ -4278,6 +5127,7 @@ mod tests {
             rate_limits: None,
             active_task_id: None,
             movement_id: None,
+            review_target: None,
             handle: tokio::spawn(async {
                 let _: () = std::future::pending().await;
             }),
@@ -4325,6 +5175,7 @@ mod tests {
         let provisioner = RecordingProvisioner::default();
         let mut service = RuntimeService::new(
             Arc::new(tracker),
+            None,
             Arc::new(NoopAgent),
             Arc::new(provisioner),
             None,
@@ -4348,6 +5199,366 @@ mod tests {
 
         assert_eq!(visible, vec!["FAC-1", "FAC-2"]);
         assert!(snapshot.running.is_empty());
+    }
+
+    #[tokio::test]
+    async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched() {
+        let workspace_root = unique_workspace_root("pr-review");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let trigger = PullRequestReviewTrigger {
+            provider: polyphony_core::ReviewProviderKind::Github,
+            repository: "penso/polyphony".into(),
+            number: 42,
+            title: "Review me".into(),
+            url: Some("https://github.com/penso/polyphony/pull/42".into()),
+            base_branch: "main".into(),
+            head_branch: "feature/review".into(),
+            head_sha: "abc123".into(),
+            checkout_ref: Some("refs/pull/42/head".into()),
+            author_login: Some("alice".into()),
+            labels: vec!["ready".into()],
+            updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
+            is_draft: false,
+        };
+        let commenter = RecordingPullRequestCommenter::default();
+        let provisioner = RecordingProvisioner::default();
+        let mut service = RuntimeService::new(
+            Arc::new(TestTracker::new(Vec::new())),
+            None,
+            Arc::new(NoopAgent),
+            Arc::new(provisioner),
+            None,
+            None,
+            Some(Arc::new(commenter.clone())),
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+        let issue = synthetic_issue_for_pull_request_review(&trigger);
+        let workspace_path = workspace_root.join(sanitize_workspace_key(&issue.identifier));
+        tokio::fs::create_dir_all(workspace_path.join(".polyphony"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            workspace_path.join(".polyphony").join("review.md"),
+            "Summary\n\nReviewed penso/polyphony#42",
+        )
+        .await
+        .unwrap();
+        service
+            .state
+            .movements
+            .insert("mov-review".into(), Movement {
+                id: "mov-review".into(),
+                kind: MovementKind::PullRequestReview,
+                issue_id: Some(issue.id.clone()),
+                issue_identifier: Some(issue.identifier.clone()),
+                title: trigger.title.clone(),
+                status: MovementStatus::InProgress,
+                workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
+                workspace_path: Some(workspace_path.clone()),
+                review_target: Some(trigger.review_target()),
+                deliverable: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            });
+        let running = RunningTask {
+            issue: issue.clone(),
+            agent_name: "reviewer".into(),
+            model: None,
+            attempt: None,
+            workspace_path,
+            stall_timeout_ms: 300_000,
+            max_turns: 4,
+            started_at: Utc::now(),
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            last_event: None,
+            last_message: None,
+            last_event_at: None,
+            tokens: TokenUsage::default(),
+            last_reported_tokens: TokenUsage::default(),
+            turn_count: 0,
+            rate_limits: None,
+            active_task_id: None,
+            movement_id: Some("mov-review".into()),
+            review_target: Some(trigger.review_target()),
+            handle: tokio::spawn(async {
+                let _: () = std::future::pending().await;
+            }),
+        };
+        service
+            .finish_pull_request_review(
+                issue.id.clone(),
+                issue.identifier.clone(),
+                None,
+                running,
+                AgentRunResult::succeeded(1),
+            )
+            .await
+            .unwrap();
+
+        let comment_bodies = commenter.comment_bodies();
+        assert_eq!(comment_bodies.len(), 1);
+        assert!(comment_bodies[0].contains("Summary"));
+        assert!(comment_bodies[0].contains("polyphony:pr-review"));
+        assert!(
+            service
+                .state
+                .reviewed_pull_request_heads
+                .contains_key(&trigger.dedupe_key())
+        );
+        assert_eq!(
+            service.review_trigger_suppression(&service.workflow(), &trigger),
+            Some(ReviewTriggerSuppression::AlreadyReviewed)
+        );
+
+        tokio::fs::write(
+            workspace_root
+                .join(sanitize_workspace_key(&issue.identifier))
+                .join(".polyphony")
+                .join("review.md"),
+            "Summary\n\nUpdated review body",
+        )
+        .await
+        .unwrap();
+        service
+            .post_pull_request_review_comment(
+                &RunningTask {
+                    issue,
+                    agent_name: "reviewer".into(),
+                    model: None,
+                    attempt: None,
+                    workspace_path: workspace_root
+                        .join(sanitize_workspace_key(&trigger.display_identifier())),
+                    stall_timeout_ms: 300_000,
+                    max_turns: 4,
+                    started_at: Utc::now(),
+                    session_id: None,
+                    thread_id: None,
+                    turn_id: None,
+                    codex_app_server_pid: None,
+                    last_event: None,
+                    last_message: None,
+                    last_event_at: None,
+                    tokens: TokenUsage::default(),
+                    last_reported_tokens: TokenUsage::default(),
+                    turn_count: 0,
+                    rate_limits: None,
+                    active_task_id: None,
+                    movement_id: Some("mov-review".into()),
+                    review_target: Some(trigger.review_target()),
+                    handle: tokio::spawn(async {
+                        let _: () = std::future::pending().await;
+                    }),
+                },
+                &trigger.review_target(),
+            )
+            .await
+            .unwrap();
+        let comment_bodies = commenter.comment_bodies();
+        assert_eq!(comment_bodies.len(), 1);
+        assert!(comment_bodies[0].contains("Updated review body"));
+    }
+
+    #[test]
+    fn review_trigger_suppression_respects_authors_labels_and_bots() {
+        let workspace_root = unique_workspace_root("pr-review-suppression");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n    only_labels: [ready]\n    ignore_labels: [wip]\n    ignore_authors: [skip-me]\n    ignore_bot_authors: true\n---\nPrompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let service = RuntimeService::new(
+            Arc::new(TestTracker::new(Vec::new())),
+            None,
+            Arc::new(NoopAgent),
+            Arc::new(RecordingProvisioner::default()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+        let workflow = service.workflow();
+
+        let base_trigger = PullRequestReviewTrigger {
+            provider: polyphony_core::ReviewProviderKind::Github,
+            repository: "penso/polyphony".into(),
+            number: 1,
+            title: "Review me".into(),
+            url: Some("https://github.com/penso/polyphony/pull/1".into()),
+            base_branch: "main".into(),
+            head_branch: "feature/review".into(),
+            head_sha: "sha1".into(),
+            checkout_ref: Some("refs/pull/1/head".into()),
+            author_login: Some("skip-me".into()),
+            labels: vec!["ready".into()],
+            updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
+            is_draft: false,
+        };
+        assert_eq!(
+            service.review_trigger_suppression(&workflow, &base_trigger),
+            Some(ReviewTriggerSuppression::IgnoredAuthor {
+                author: "skip-me".into()
+            })
+        );
+
+        let bot_trigger = PullRequestReviewTrigger {
+            number: 2,
+            head_sha: "sha2".into(),
+            checkout_ref: Some("refs/pull/2/head".into()),
+            author_login: Some("dependabot[bot]".into()),
+            ..base_trigger.clone()
+        };
+        assert_eq!(
+            service.review_trigger_suppression(&workflow, &bot_trigger),
+            Some(ReviewTriggerSuppression::BotAuthor {
+                author: "dependabot[bot]".into()
+            })
+        );
+
+        let ignored_label_trigger = PullRequestReviewTrigger {
+            number: 3,
+            head_sha: "sha3".into(),
+            checkout_ref: Some("refs/pull/3/head".into()),
+            author_login: Some("alice".into()),
+            labels: vec!["wip".into()],
+            ..base_trigger.clone()
+        };
+        assert_eq!(
+            service.review_trigger_suppression(&workflow, &ignored_label_trigger),
+            Some(ReviewTriggerSuppression::IgnoredLabel {
+                label: "wip".into()
+            })
+        );
+
+        let missing_label_trigger = PullRequestReviewTrigger {
+            number: 4,
+            head_sha: "sha4".into(),
+            checkout_ref: Some("refs/pull/4/head".into()),
+            author_login: Some("alice".into()),
+            labels: vec!["backend".into()],
+            ..base_trigger
+        };
+        assert_eq!(
+            service.review_trigger_suppression(&workflow, &missing_label_trigger),
+            Some(ReviewTriggerSuppression::MissingLabels {
+                labels: vec!["ready".into()]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn inline_pull_request_review_comments_are_submitted_when_requested() {
+        let workspace_root = unique_workspace_root("pr-review-inline");
+        let workflow = test_workflow_with_front_matter(
+            &workspace_root,
+            "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n    comment_mode: inline\n---\nPrompt\n",
+        );
+        let (_tx, rx) = watch::channel(workflow);
+        let trigger = PullRequestReviewTrigger {
+            provider: polyphony_core::ReviewProviderKind::Github,
+            repository: "penso/polyphony".into(),
+            number: 42,
+            title: "Review me".into(),
+            url: Some("https://github.com/penso/polyphony/pull/42".into()),
+            base_branch: "main".into(),
+            head_branch: "feature/review".into(),
+            head_sha: "abc123".into(),
+            checkout_ref: Some("refs/pull/42/head".into()),
+            author_login: Some("alice".into()),
+            labels: vec!["ready".into()],
+            updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
+            is_draft: false,
+        };
+        let commenter = RecordingPullRequestCommenter::default();
+        let mut service = RuntimeService::new(
+            Arc::new(TestTracker::new(Vec::new())),
+            None,
+            Arc::new(NoopAgent),
+            Arc::new(RecordingProvisioner::default()),
+            None,
+            None,
+            Some(Arc::new(commenter.clone())),
+            None,
+            None,
+            None,
+            rx,
+        )
+        .0;
+        let issue = synthetic_issue_for_pull_request_review(&trigger);
+        let workspace_path = workspace_root.join(sanitize_workspace_key(&issue.identifier));
+        tokio::fs::create_dir_all(workspace_path.join(".polyphony"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            workspace_path.join(".polyphony").join("review.md"),
+            "Summary\n\nNeeds fixes",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            workspace_path
+                .join(".polyphony")
+                .join("review-comments.json"),
+            r#"[{"path":"crates/core/src/lib.rs","line":42,"body":"Fix this branch."}]"#,
+        )
+        .await
+        .unwrap();
+
+        service
+            .post_pull_request_review_comment(
+                &RunningTask {
+                    issue,
+                    agent_name: "reviewer".into(),
+                    model: None,
+                    attempt: None,
+                    workspace_path,
+                    stall_timeout_ms: 300_000,
+                    max_turns: 4,
+                    started_at: Utc::now(),
+                    session_id: None,
+                    thread_id: None,
+                    turn_id: None,
+                    codex_app_server_pid: None,
+                    last_event: None,
+                    last_message: None,
+                    last_event_at: None,
+                    tokens: TokenUsage::default(),
+                    last_reported_tokens: TokenUsage::default(),
+                    turn_count: 0,
+                    rate_limits: None,
+                    active_task_id: None,
+                    movement_id: Some("mov-inline".into()),
+                    review_target: Some(trigger.review_target()),
+                    handle: tokio::spawn(async {
+                        let _: () = std::future::pending().await;
+                    }),
+                },
+                &trigger.review_target(),
+            )
+            .await
+            .unwrap();
+
+        assert!(commenter.comment_bodies().is_empty());
+        let reviews = commenter.reviews();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].2.len(), 1);
+        assert_eq!(reviews[0].2[0].path, "crates/core/src/lib.rs");
+        assert_eq!(reviews[0].2[0].line, 42);
+        assert_eq!(reviews[0].3, "abc123");
     }
 
     #[tokio::test]
@@ -4696,6 +5907,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
         let provisioner = RecordingProvisioner::default();
         let mut service = RuntimeService::new(
             Arc::new(tracker),
+            None,
             Arc::new(NoopAgent),
             Arc::new(provisioner),
             None,
@@ -4778,6 +5990,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                     format!("tracker:{}", workflow.config.tracker.kind),
                     Vec::new(),
                 )),
+                pull_request_review_trigger_source: None,
                 agent: Arc::new(NamedAgent::new(format!(
                     "agent:{}",
                     workflow.config.tracker.kind
@@ -4829,6 +6042,7 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
                     format!("tracker:{}", workflow.config.tracker.kind),
                     vec![issue_for_factory.clone()],
                 )),
+                pull_request_review_trigger_source: None,
                 agent: Arc::new(NamedAgent::new(format!(
                     "agent:{}",
                     workflow.config.tracker.kind

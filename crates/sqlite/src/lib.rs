@@ -2,8 +2,8 @@
 use async_trait::async_trait;
 #[cfg(feature = "sqlite")]
 use polyphony_core::{
-    BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, RuntimeSnapshot, StateStore,
-    StoreBootstrap, Task,
+    BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, ReviewedPullRequestHead,
+    RuntimeSnapshot, StateStore, StoreBootstrap, Task,
 };
 use thiserror::Error;
 
@@ -106,6 +106,18 @@ impl SqliteStateStore {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            r#"
+            create table if not exists reviewed_pull_request_heads (
+              id integer primary key autoincrement,
+              review_key text not null unique,
+              reviewed_at text not null,
+              payload text not null
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
@@ -128,6 +140,7 @@ impl StateStore for SqliteStateStore {
                 recent_events: Vec::new(),
                 movements: Default::default(),
                 tasks: Default::default(),
+                reviewed_pull_request_heads: Default::default(),
             },
             Some((payload,)) => {
                 let snapshot: RuntimeSnapshot = serde_json::from_str(&payload)
@@ -156,6 +169,7 @@ impl StateStore for SqliteStateStore {
                     recent_events: snapshot.recent_events,
                     movements: Default::default(),
                     tasks: Default::default(),
+                    reviewed_pull_request_heads: Default::default(),
                 }
             },
         };
@@ -169,6 +183,11 @@ impl StateStore for SqliteStateStore {
                 bootstrap.tasks.insert(task.id.clone(), task);
             }
         }
+        let reviewed_heads = self.load_reviewed_pull_request_heads().await?;
+        bootstrap.reviewed_pull_request_heads = reviewed_heads
+            .into_iter()
+            .map(|head| (head.key.clone(), head))
+            .collect();
 
         Ok(bootstrap)
     }
@@ -314,6 +333,48 @@ impl StateStore for SqliteStateStore {
             })
             .collect()
     }
+
+    async fn save_reviewed_pull_request_head(
+        &self,
+        head: &ReviewedPullRequestHead,
+    ) -> Result<(), CoreError> {
+        let payload =
+            serde_json::to_string(head).map_err(|error| CoreError::Store(error.to_string()))?;
+        sqlx::query(
+            r#"
+            insert or replace into reviewed_pull_request_heads (
+              review_key, reviewed_at, payload
+            ) values (?1, ?2, ?3)
+            "#,
+        )
+        .bind(&head.key)
+        .bind(head.reviewed_at.to_rfc3339())
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| CoreError::Store(error.to_string()))?;
+        Ok(())
+    }
+
+    async fn load_reviewed_pull_request_heads(
+        &self,
+    ) -> Result<Vec<ReviewedPullRequestHead>, CoreError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"
+            select payload from reviewed_pull_request_heads
+            order by reviewed_at asc
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| CoreError::Store(error.to_string()))?;
+
+        rows.iter()
+            .map(|(payload,)| {
+                serde_json::from_str(payload).map_err(|error| CoreError::Store(error.to_string()))
+            })
+            .collect()
+    }
 }
 
 #[cfg(not(feature = "sqlite"))]
@@ -324,5 +385,45 @@ pub struct SqliteStateStore;
 impl SqliteStateStore {
     pub async fn connect(_database_url: &str) -> Result<Self, Error> {
         Err(Error::Disabled)
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use {
+        super::SqliteStateStore,
+        chrono::Utc,
+        polyphony_core::{ReviewProviderKind, ReviewTarget, ReviewedPullRequestHead, StateStore},
+    };
+
+    #[tokio::test]
+    async fn persists_reviewed_pull_request_heads() {
+        let store = SqliteStateStore::connect("sqlite::memory:").await.unwrap();
+        let reviewed = ReviewedPullRequestHead {
+            key: "pr_review:github:penso/polyphony:42:abc123".into(),
+            target: ReviewTarget {
+                provider: ReviewProviderKind::Github,
+                repository: "penso/polyphony".into(),
+                number: 42,
+                url: Some("https://github.com/penso/polyphony/pull/42".into()),
+                base_branch: "main".into(),
+                head_branch: "feature/review".into(),
+                head_sha: "abc123".into(),
+                checkout_ref: Some("refs/pull/42/head".into()),
+            },
+            reviewed_at: Utc::now(),
+            movement_id: Some("mov-1".into()),
+        };
+
+        store
+            .save_reviewed_pull_request_head(&reviewed)
+            .await
+            .unwrap();
+        let loaded = store.load_reviewed_pull_request_heads().await.unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].key, reviewed.key);
+        assert_eq!(loaded[0].target.repository, "penso/polyphony");
     }
 }
