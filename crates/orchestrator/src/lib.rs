@@ -218,6 +218,8 @@ struct RuntimeState {
     movements: HashMap<MovementId, Movement>,
     tasks: HashMap<MovementId, Vec<Task>>,
     worktree_keys: HashSet<String>,
+    /// Workspace keys from orphaned workspaces detected at startup, pending dispatch.
+    orphan_dispatch_keys: HashSet<String>,
 }
 
 impl Default for RuntimeState {
@@ -246,6 +248,7 @@ impl Default for RuntimeState {
             movements: HashMap::new(),
             tasks: HashMap::new(),
             worktree_keys: HashSet::new(),
+            orphan_dispatch_keys: HashSet::new(),
         }
     }
 }
@@ -668,6 +671,30 @@ impl RuntimeService {
         issues.sort_by(dispatch_order);
         self.state.visible_issues = issues.iter().map(summarize_issue).collect();
         self.save_cache().await;
+
+        // Auto-dispatch issues whose orphaned workspaces were found at startup.
+        if !self.state.orphan_dispatch_keys.is_empty() {
+            let orphan_keys = std::mem::take(&mut self.state.orphan_dispatch_keys);
+            for issue in &issues {
+                let key = sanitize_workspace_key(&issue.identifier);
+                if orphan_keys.contains(&key) && !self.is_claimed(&issue.id) {
+                    info!(
+                        issue_identifier = %issue.identifier,
+                        workspace_key = %key,
+                        "auto-dispatching orphaned workspace issue"
+                    );
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("auto-dispatch orphaned: {}", issue.identifier),
+                    );
+                    self.pending_manual_dispatches
+                        .push((issue.id.clone(), None));
+                }
+            }
+            // Process orphan dispatches immediately rather than waiting for next tick.
+            self.process_manual_dispatches().await;
+        }
+
         if !workflow.config.has_dispatch_agents() {
             let _ = self.emit_snapshot().await;
             return false;
@@ -2056,6 +2083,7 @@ impl RuntimeService {
                     EventScope::Startup,
                     format!("orphaned workspace found: {key}"),
                 );
+                self.state.orphan_dispatch_keys.insert(key.clone());
             }
         }
     }
