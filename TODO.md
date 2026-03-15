@@ -91,6 +91,9 @@ In existing codebase
 
  - mission: initial planning phase should think about everything. models are very good at delegation, separation of concerns. Rewrite the features files defining what workers will do.
 
+ Upgrade the rigor of specification and validation criterias. Vet through all
+ of them. What is correctness mean.
+
 # Interesting links
 
 https://x.com/agent_wrapper/status/2025986105485733945

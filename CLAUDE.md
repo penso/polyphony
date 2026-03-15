@@ -52,3 +52,22 @@ Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): descripti
 - Do **not** add manual `CHANGELOG.md` entries in normal PRs.
 - `CHANGELOG.md` entries are generated from commit history via `git-cliff` (`cliff.toml`).
 - Use conventional commits and preview unreleased notes with `just changelog-unreleased`.
+
+## Rust Rules
+
+- Do not use `unwrap()` or `expect()` in non-test code. In test modules, use `#[allow(clippy::unwrap_used, clippy::expect_used)]` on the module.
+- Use clear error handling with typed errors (`thiserror`/`anyhow` where appropriate).
+- Keep modules focused and delete dead code instead of leaving it around.
+- Collapse nested `if` / `if let` statements when possible (clippy `collapsible_if`).
+- **Never shell out to external CLIs** (`gh`, `git` via `Command::new`, etc.) for GitHub API calls or operations that can be done with Rust crates. Use `octocrab`, `reqwest`, or other Rust HTTP/API crates instead. The only acceptable use of `std::process::Command` is where no Rust crate equivalent exists.
+
+## Module Organization
+
+- Split large files by domain: types, constants, helpers, actions. Keep files under ~800 lines where practical.
+- Use `pub(crate)` visibility for items shared within a crate but not exported. Apply to struct fields, methods, and free functions in submodules.
+- Use `pub(crate) use module::*` glob re-exports in parent modules to keep call sites clean after extraction.
+- When splitting `impl` blocks across files, the struct definition stays in `types.rs` and method impls go in the relevant domain file.
+
+## Workspace Dependencies
+
+All third-party dependency versions are centralized in the root `Cargo.toml` under `[workspace.dependencies]`. Crate-level `Cargo.toml` files must use `{ workspace = true }` (with optional extra keys like `features` or `optional`). Never hardcode a version in a subcrate — add it to the workspace root first.
