@@ -1826,6 +1826,14 @@ impl RuntimeService {
             );
             return;
         }
+        let skip_workspace_sync = should_skip_workspace_sync_for_retry(retry.row.error.as_deref());
+        if skip_workspace_sync {
+            info!(
+                issue_identifier = %issue.identifier,
+                attempt = retry.row.attempt,
+                "retrying issue without workspace sync after provider rate limit"
+            );
+        }
         if let Err(error) = self
             .dispatch_issue(
                 workflow.clone(),
@@ -1833,7 +1841,7 @@ impl RuntimeService {
                 Some(retry.row.attempt),
                 retry.row.error.is_some(),
                 None,
-                false,
+                skip_workspace_sync,
             )
             .await
         {
@@ -2328,7 +2336,8 @@ impl RuntimeService {
         continuation: bool,
         max_retry_backoff_ms: u64,
     ) {
-        let delay_ms = if continuation {
+        let immediate_retry = continuation || is_rate_limited_error(error.as_deref());
+        let delay_ms = if immediate_retry {
             1_000
         } else {
             let exponent = attempt.saturating_sub(1).min(10);
@@ -3580,6 +3589,22 @@ fn normalized_worker_error_message(error: &Error) -> String {
     }
 }
 
+fn is_rate_limited_error(error: Option<&str>) -> bool {
+    error.is_some_and(|message| {
+        let lowered = message.to_ascii_lowercase();
+        lowered.starts_with("rate_limited:")
+            || lowered.contains("rate limit")
+            || lowered.contains("usage limit")
+            || lowered.contains("quota exhausted")
+            || lowered.contains("out of tokens")
+            || lowered.contains("no more tokens")
+    })
+}
+
+fn should_skip_workspace_sync_for_retry(error: Option<&str>) -> bool {
+    is_rate_limited_error(error)
+}
+
 fn apply_usage_delta(totals: &mut CodexTotals, running: &mut RunningTask, usage: TokenUsage) {
     let delta_input = usage
         .input_tokens
@@ -4714,6 +4739,30 @@ Turn {{ turn_number }} of {{ max_turns }}. Continuation={{ is_continuation }}."
         let running = service.state.running.get(&issue.id).unwrap();
         assert_eq!(running.agent_name, "kimi");
         running.handle.abort();
+    }
+
+    #[test]
+    fn rate_limited_errors_are_detected_for_fast_retry() {
+        assert!(super::is_rate_limited_error(Some(
+            "rate_limited: Claude usage limit reached"
+        )));
+        assert!(super::is_rate_limited_error(Some("quota exhausted")));
+        assert!(!super::is_rate_limited_error(Some("response_error")));
+        assert!(!super::is_rate_limited_error(None));
+    }
+
+    #[test]
+    fn rate_limited_retries_skip_workspace_sync() {
+        assert!(super::should_skip_workspace_sync_for_retry(Some(
+            "rate_limited: You've hit your limit"
+        )));
+        assert!(super::should_skip_workspace_sync_for_retry(Some(
+            "quota exhausted"
+        )));
+        assert!(!super::should_skip_workspace_sync_for_retry(Some(
+            "response_error"
+        )));
+        assert!(!super::should_skip_workspace_sync_for_retry(None));
     }
 
     #[tokio::test]

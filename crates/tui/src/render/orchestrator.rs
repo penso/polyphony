@@ -23,7 +23,7 @@ pub fn draw_orchestrator_tab(
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5), // Status panel
+            Constraint::Length(6), // Status panel
             Constraint::Length(8), // Movements table (compact)
             Constraint::Min(8),    // Recent events (gets remaining space)
         ])
@@ -118,6 +118,7 @@ fn draw_status_panel(
             ),
             Span::styled(" (done/active/pending)", Style::default().fg(theme.muted)),
         ]),
+        Line::from(throttle_status_spans(snapshot, theme)),
     ];
 
     frame.render_widget(
@@ -135,6 +136,73 @@ fn draw_status_panel(
         ),
         area,
     );
+}
+
+fn throttle_status_spans<'a>(
+    snapshot: &RuntimeSnapshot,
+    theme: crate::theme::Theme,
+) -> Vec<Span<'a>> {
+    if snapshot.throttles.is_empty() {
+        return vec![
+            Span::styled("Throttles ", Style::default().fg(theme.muted)),
+            Span::styled("none", Style::default().fg(theme.muted)),
+        ];
+    }
+
+    let now = Utc::now();
+    let mut spans = vec![
+        Span::styled("Throttles ", Style::default().fg(theme.muted)),
+        Span::styled(
+            snapshot.throttles.len().to_string(),
+            Style::default()
+                .fg(theme.danger)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ", Style::default().fg(theme.muted)),
+    ];
+
+    for (index, throttle) in snapshot.throttles.iter().take(2).enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(", ", Style::default().fg(theme.muted)));
+        }
+        let remaining = throttle.until.signed_duration_since(now);
+        spans.push(Span::styled(
+            format!(
+                "{} {}",
+                short_component(&throttle.component),
+                compact_duration(remaining),
+            ),
+            Style::default().fg(theme.danger),
+        ));
+    }
+
+    if snapshot.throttles.len() > 2 {
+        spans.push(Span::styled(
+            format!(" +{}", snapshot.throttles.len() - 2),
+            Style::default().fg(theme.muted),
+        ));
+    }
+
+    spans
+}
+
+fn short_component(component: &str) -> &str {
+    component.rsplit(':').next().unwrap_or(component)
+}
+
+fn compact_duration(duration: chrono::Duration) -> String {
+    let total_seconds = duration.num_seconds().max(0);
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours}h{minutes:02}m")
+    } else if minutes > 0 {
+        format!("{minutes}m{seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn draw_movements_table(

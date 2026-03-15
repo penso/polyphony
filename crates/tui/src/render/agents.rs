@@ -347,6 +347,8 @@ fn build_agent_detail_lines(
     }
 
     lines.push(Line::default());
+    append_agent_availability_lines(&mut lines, snapshot, agent, theme);
+    lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         "Recent Events",
         Style::default()
@@ -371,6 +373,89 @@ fn build_agent_detail_lines(
     }
 
     lines
+}
+
+fn append_agent_availability_lines(
+    lines: &mut Vec<Line<'static>>,
+    snapshot: &RuntimeSnapshot,
+    agent: &RunningRow,
+    theme: crate::theme::Theme,
+) {
+    lines.push(Line::from(Span::styled(
+        "Availability",
+        Style::default()
+            .fg(theme.highlight)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    let component = format!("agent:{}", agent.agent_name);
+    if let Some(throttle) = snapshot
+        .throttles
+        .iter()
+        .find(|throttle| throttle.component == component)
+    {
+        let remaining = throttle.until.signed_duration_since(Utc::now());
+        lines.push(Line::from(vec![
+            Span::styled("Throttled until ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(
+                    "{} ({})",
+                    throttle.until.format("%H:%M UTC"),
+                    format_duration(remaining)
+                ),
+                Style::default().fg(theme.danger),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            throttle.reason.clone(),
+            Style::default().fg(theme.warning),
+        )));
+        return;
+    }
+
+    if let Some(budget) = snapshot
+        .budgets
+        .iter()
+        .find(|budget| budget.component == component)
+    {
+        let remaining = budget.credits_remaining.unwrap_or(0.0);
+        let total = budget.credits_total.unwrap_or(0.0);
+        let used_up = total > 0.0 && remaining <= 0.0;
+        let color = if used_up {
+            theme.danger
+        } else {
+            theme.foreground
+        };
+        let summary = if total > 0.0 {
+            format!("{remaining:.0}/{total:.0} credits remaining")
+        } else {
+            format!("{remaining:.0} credits remaining")
+        };
+        lines.push(Line::from(Span::styled(
+            summary,
+            Style::default().fg(color),
+        )));
+        if let Some(reset_at) = budget.reset_at {
+            let remaining = reset_at.signed_duration_since(Utc::now());
+            lines.push(Line::from(vec![
+                Span::styled("Resets at ", Style::default().fg(theme.muted)),
+                Span::styled(
+                    format!(
+                        "{} ({})",
+                        reset_at.format("%H:%M UTC"),
+                        format_duration(remaining)
+                    ),
+                    Style::default().fg(theme.info),
+                ),
+            ]));
+        }
+        return;
+    }
+
+    lines.push(Line::from(Span::styled(
+        "No budget or throttle data for this agent yet.",
+        Style::default().fg(theme.muted),
+    )));
 }
 
 fn extend_plain_lines(lines: &mut Vec<Line<'static>>, content: &str, color: ratatui::style::Color) {
@@ -478,9 +563,27 @@ fn format_tokens(tokens: u64) -> String {
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let keep = max_len.saturating_sub(3);
+        let truncated: String = s.chars().take(keep).collect();
+        format!("{truncated}...")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::render::agents::truncate;
+
+    #[test]
+    fn truncate_handles_unicode_without_panicking() {
+        let message = "rate_limited: You've hit your limit · resets 2am (Europe/Lisbon)";
+
+        assert_eq!(
+            truncate(message, 40),
+            "rate_limited: You've hit your limit ·..."
+        );
     }
 }

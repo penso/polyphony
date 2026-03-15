@@ -7,11 +7,13 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+portable-pty.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+vt100.workspace = true
 polyphony-core = { path = "../core" }
 polyphony-agent-common = { path = "../agent-common" }
 
