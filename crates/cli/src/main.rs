@@ -7,6 +7,7 @@ use std::{
 
 use {
     clap::{Parser, Subcommand},
+    polyphony_agents::run_docker_sandbox_manifest,
     polyphony_core::{NetworkCache, StateStore, WorkspaceProvisioner},
     polyphony_orchestrator::{RuntimeComponentFactory, RuntimeService, spawn_workflow_watcher},
     polyphony_workflow::{
@@ -62,6 +63,20 @@ enum Commands {
     },
     /// Check agent commands, models_command, and configuration health
     Doctor,
+    #[command(hide = true)]
+    Internal {
+        #[command(subcommand)]
+        action: InternalAction,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum InternalAction {
+    #[command(name = "docker-sandbox-run", hide = true)]
+    DockerSandboxRun {
+        #[arg(long)]
+        manifest: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -244,6 +259,14 @@ async fn try_main() -> Result<(), Error> {
         let user_config_path = user_config_path()?;
         let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
         return handle_doctor_command(&workflow);
+    }
+    if let Some(Commands::Internal { action }) = &cli.command {
+        let status = match action {
+            InternalAction::DockerSandboxRun { manifest } => {
+                run_docker_sandbox_manifest(manifest).await?
+            },
+        };
+        std::process::exit(status);
     }
     if let Some(Commands::Data { action }) = &cli.command {
         let user_config_path = user_config_path()?;

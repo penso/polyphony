@@ -112,11 +112,14 @@ max_turns = 20
 # base_url = "https://api.openai.com/v1"
 # api_key = "$OPENAI_API_KEY"
 # [agents.profiles.example.sandbox]
-# backend = "host"
+# backend = "host"                 # or "codex" / "docker"
 # profile = "workspace-write"
 # policy = "allow-network"
 # [agents.profiles.example.sandbox.env]
 # POLYPHONY_SANDBOX_LABEL = "implementer"
+# POLYPHONY_SANDBOX_DOCKER_IMAGE = "ghcr.io/polyphony/agent:latest"
+# POLYPHONY_SANDBOX_DOCKER_MEMORY_BYTES = "1073741824"
+# POLYPHONY_SANDBOX_DOCKER_NANO_CPUS = "2000000000"
 # [agents.profiles.example.runtime]
 # backend = "provider"
 # endpoint = "http://127.0.0.1:8080/v1"

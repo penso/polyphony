@@ -430,8 +430,9 @@ pub(crate) fn parse_sandbox_backend_kind(value: Option<&str>) -> Result<SandboxB
     match value {
         Some("host") => Ok(SandboxBackendKind::Host),
         Some("codex") => Ok(SandboxBackendKind::Codex),
+        Some("docker") => Ok(SandboxBackendKind::Docker),
         Some(other) => Err(Error::InvalidConfig(format!(
-            "sandbox.backend must be one of `host` or `codex`, got `{other}`"
+            "sandbox.backend must be one of `host`, `codex`, or `docker`, got `{other}`"
         ))),
         None => Ok(SandboxBackendKind::Host),
     }

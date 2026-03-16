@@ -340,6 +340,47 @@ agents:
 }
 
 #[test]
+fn docker_sandbox_backend_is_parsed_from_agent_profiles() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: implementer
+  profiles:
+    implementer:
+      kind: claude
+      transport: local_cli
+      command: claude --print "$POLYPHONY_PROMPT"
+      sandbox:
+        backend: docker
+        profile: workspace-read
+        policy: allow-network
+        env:
+          POLYPHONY_SANDBOX_DOCKER_IMAGE: ghcr.io/polyphony/agent:latest
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+
+    assert_eq!(selected.sandbox.backend, SandboxBackendKind::Docker);
+    assert_eq!(selected.sandbox.profile.as_deref(), Some("workspace-read"));
+    assert_eq!(selected.sandbox.policy.as_deref(), Some("allow-network"));
+    assert_eq!(
+        selected
+            .sandbox
+            .env
+            .get("POLYPHONY_SANDBOX_DOCKER_IMAGE")
+            .map(String::as_str),
+        Some("ghcr.io/polyphony/agent:latest")
+    );
+}
+
+#[test]
 fn invalid_runtime_backend_is_rejected() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
@@ -363,6 +404,31 @@ agents:
 
     let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
     assert!(error.to_string().contains("runtime.backend must be one of"));
+}
+
+#[test]
+fn invalid_sandbox_backend_mentions_docker_option() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: local
+  profiles:
+    local:
+      kind: claude
+      transport: local_cli
+      command: claude
+      sandbox:
+        backend: warp_drive
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
+    assert!(error.to_string().contains("`host`, `codex`, or `docker`"));
 }
 
 #[test]

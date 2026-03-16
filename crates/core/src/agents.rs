@@ -114,6 +114,7 @@ pub enum SandboxBackendKind {
     #[default]
     Host,
     Codex,
+    Docker,
 }
 
 impl fmt::Display for SandboxBackendKind {
@@ -121,6 +122,7 @@ impl fmt::Display for SandboxBackendKind {
         let label = match self {
             Self::Host => "host",
             Self::Codex => "codex",
+            Self::Docker => "docker",
         };
         f.write_str(label)
     }

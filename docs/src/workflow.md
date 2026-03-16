@@ -96,7 +96,7 @@ Each agent profile can also control:
 - `model`, `models`, and `models_command` for single-model or discovered-model setups
 - `fetch_models` to enable automatic model discovery
 - `api_key` for `openai_chat` profiles when they are actually used, while missing keys only disable `/models` discovery during startup
-- `sandbox.backend`, `sandbox.profile`, and `sandbox.policy` for backend-selected sandboxing, with current built-ins `host` and `codex`
+- `sandbox.backend`, `sandbox.profile`, and `sandbox.policy` for backend-selected sandboxing, with current built-ins `host`, `codex`, and `docker`
 - `runtime.backend`, `runtime.endpoint`, and `runtime.model_source` for local runtime selection. The config surface accepts `provider`, `openai_compatible`, `llama_cpp`, `ollama`, and `lm_studio`; the built-in dispatch backends currently wire `provider`, `openai_compatible`, `ollama`, and `lm_studio`
 - `approval_policy`, `thread_sandbox`, and `turn_sandbox_policy` for app-server-backed agents
 - `turn_timeout_ms`, `read_timeout_ms`, and `stall_timeout_ms` for agent timing controls
