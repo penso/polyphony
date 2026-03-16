@@ -53,6 +53,17 @@ pub fn draw_header(
         );
     }
 
+    // When a detail view is active, show breadcrumb in the bottom title
+    if app.has_detail() {
+        let breadcrumb = super::detail_common::build_breadcrumb(app, snapshot);
+        if !breadcrumb.spans.is_empty() {
+            let mut bc_spans = vec![Span::styled(" ", Style::default())];
+            bc_spans.extend(breadcrumb.spans);
+            bc_spans.push(Span::styled(" ", Style::default()));
+            tab_block = tab_block.title_bottom(Line::from(bc_spans));
+        }
+    }
+
     let tabs = Tabs::new(
         ActiveTab::ALL
             .into_iter()
@@ -165,6 +176,7 @@ fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
         DispatchMode::Automatic => ("auto", theme.success),
         DispatchMode::Nightshift => ("nightshift", theme.highlight),
         DispatchMode::Idle => ("idle", theme.warning),
+        DispatchMode::Stop => ("stop", theme.danger),
     };
 
     let mut status_spans = vec![

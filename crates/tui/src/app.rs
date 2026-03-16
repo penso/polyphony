@@ -29,6 +29,80 @@ pub(crate) struct AgentDetailArtifactCache {
     pub saved_context: Option<AgentContextSnapshot>,
 }
 
+/// Which section of a detail page has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DetailSection {
+    /// The main body / description area (scrollable text).
+    #[default]
+    Body,
+    /// A numbered sub-section (e.g., 0 = movements mini-list, 1 = agents mini-list).
+    Section(u8),
+}
+
+/// In split (master-detail) mode, which pane has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SplitFocus {
+    /// The list pane on the left.
+    #[default]
+    List,
+    /// The detail pane on the right.
+    Detail,
+}
+
+/// A detail view on the navigation stack. Each variant holds its own scroll
+/// state and any cached artifacts needed for rendering.
+#[derive(Debug, Clone)]
+pub(crate) enum DetailView {
+    Trigger {
+        trigger_id: String,
+        scroll: u16,
+        focus: DetailSection,
+        movements_selected: usize,
+        agents_selected: usize,
+    },
+    Movement {
+        movement_id: String,
+        scroll: u16,
+        focus: DetailSection,
+        tasks_selected: usize,
+    },
+    Task {
+        task_id: String,
+        scroll: u16,
+    },
+    Agent {
+        agent_index: usize,
+        scroll: u16,
+        artifact_cache: Box<Option<AgentDetailArtifactCache>>,
+    },
+    Deliverable {
+        movement_id: String,
+        scroll: u16,
+    },
+}
+
+impl DetailView {
+    pub(crate) fn scroll(&self) -> u16 {
+        match self {
+            Self::Trigger { scroll, .. }
+            | Self::Movement { scroll, .. }
+            | Self::Task { scroll, .. }
+            | Self::Agent { scroll, .. }
+            | Self::Deliverable { scroll, .. } => *scroll,
+        }
+    }
+
+    pub(crate) fn scroll_mut(&mut self) -> &mut u16 {
+        match self {
+            Self::Trigger { scroll, .. }
+            | Self::Movement { scroll, .. }
+            | Self::Task { scroll, .. }
+            | Self::Agent { scroll, .. }
+            | Self::Deliverable { scroll, .. } => scroll,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTab {
     Triggers,
@@ -119,12 +193,8 @@ pub struct AppState {
     pub tasks_state: TableState,
     pub deliverables_state: TableState,
     pub movements_state: TableState,
-    pub show_issue_detail: bool,
-    pub show_task_detail: bool,
-    pub detail_scroll: u16,
-    pub task_detail_scroll: u16,
-    pub movement_detail_scroll: u16,
-    pub agents_detail_scroll: u16,
+    pub detail_stack: Vec<DetailView>,
+    pub split_focus: SplitFocus,
     pub issue_sort: IssueSortKey,
     /// Sorted index mapping: sorted_issues[display_index] = original snapshot index
     pub sorted_issue_indices: Vec<usize>,
@@ -167,15 +237,8 @@ pub struct AppState {
     pub events_scroll: u16,
     /// Bounding rect of the events panel (set each frame by draw_events_panel).
     pub events_area: Rect,
-    /// Bounding rect of the movement detail panel (set each frame by draw_movement_detail).
-    pub movement_detail_area: Rect,
-    pub agent_detail_artifact: Option<AgentDetailArtifactCache>,
     /// Sorted task indices: sorted_task_indices[display_index] = original snapshot index
     pub sorted_task_indices: Vec<usize>,
-    pub show_movement_detail: bool,
-    pub show_deliverable_detail: bool,
-    pub deliverable_detail_scroll: u16,
-    pub show_agent_detail: bool,
 }
 
 impl AppState {
@@ -188,12 +251,8 @@ impl AppState {
             tasks_state: TableState::default(),
             deliverables_state: TableState::default(),
             movements_state: TableState::default(),
-            show_issue_detail: false,
-            show_task_detail: false,
-            detail_scroll: 0,
-            task_detail_scroll: 0,
-            movement_detail_scroll: 0,
-            agents_detail_scroll: 0,
+            detail_stack: Vec::new(),
+            split_focus: SplitFocus::default(),
             issue_sort: IssueSortKey::Newest,
             sorted_issue_indices: Vec::new(),
             tree_depth: Vec::new(),
@@ -226,13 +285,7 @@ impl AppState {
             last_scroll_at: None,
             events_scroll: 0,
             events_area: Rect::default(),
-            movement_detail_area: Rect::default(),
-            agent_detail_artifact: None,
             sorted_task_indices: Vec::new(),
-            show_movement_detail: false,
-            show_deliverable_detail: false,
-            deliverable_detail_scroll: 0,
-            show_agent_detail: false,
         }
     }
 
@@ -248,9 +301,15 @@ impl AppState {
             &mut self.agents_state,
             snapshot.running.len() + snapshot.agent_history.len(),
         );
-        if self.agents_state.selected() != previous_agent_selection {
-            self.agents_detail_scroll = 0;
-            self.agent_detail_artifact = None;
+        if self.agents_state.selected() != previous_agent_selection
+            && let Some(DetailView::Agent {
+                scroll,
+                artifact_cache,
+                ..
+            }) = self.detail_stack.last_mut()
+        {
+            *scroll = 0;
+            **artifact_cache = None;
         }
         sync_selection(&mut self.tasks_state, snapshot.tasks.len());
         let deliverable_count = snapshot
@@ -261,8 +320,10 @@ impl AppState {
         sync_selection(&mut self.deliverables_state, deliverable_count);
         let previous_movement_selection = self.movements_state.selected();
         sync_selection(&mut self.movements_state, snapshot.movements.len());
-        if self.movements_state.selected() != previous_movement_selection {
-            self.movement_detail_scroll = 0;
+        if self.movements_state.selected() != previous_movement_selection
+            && let Some(DetailView::Movement { scroll, .. }) = self.detail_stack.last_mut()
+        {
+            *scroll = 0;
         }
 
         // Compute requests/sec from budget raw data
@@ -311,6 +372,32 @@ impl AppState {
         self.rps_history.push_back((credit_delta * 10.0) as u64);
         if self.rps_history.len() > RPS_HISTORY_CAP {
             self.rps_history.pop_front();
+        }
+
+        // Auto-pop detail if the viewed entity disappeared from the snapshot
+        if let Some(detail) = self.detail_stack.last() {
+            let missing = match detail {
+                DetailView::Trigger { trigger_id, .. } => {
+                    !snapshot
+                        .visible_triggers
+                        .iter()
+                        .any(|t| t.trigger_id == *trigger_id)
+                },
+                DetailView::Movement { movement_id, .. }
+                | DetailView::Deliverable { movement_id, .. } => {
+                    !snapshot.movements.iter().any(|m| m.id == *movement_id)
+                },
+                DetailView::Task { task_id, .. } => {
+                    !snapshot.tasks.iter().any(|t| t.id == *task_id)
+                },
+                DetailView::Agent { agent_index, .. } => {
+                    let total = snapshot.running.len() + snapshot.agent_history.len();
+                    *agent_index >= total
+                },
+            };
+            if missing {
+                self.detail_stack.pop();
+            }
         }
     }
 
@@ -456,6 +543,7 @@ impl AppState {
             .and_then(|display_idx| self.sorted_trigger(snapshot, display_idx))
     }
 
+    #[allow(dead_code)]
     pub fn selected_agent<'a>(
         &self,
         snapshot: &'a RuntimeSnapshot,
@@ -535,44 +623,53 @@ impl AppState {
     }
 
     pub fn move_down(&mut self, len: usize, amount: usize) {
-        let previous_agent = matches!(self.active_tab, ActiveTab::Agents)
-            .then(|| self.agents_state.selected())
-            .flatten();
-        let previous_movement = matches!(self.active_tab, ActiveTab::Orchestrator)
-            .then(|| self.movements_state.selected())
-            .flatten();
         move_selection(self.active_table_state_mut(), len, amount);
-        if matches!(self.active_tab, ActiveTab::Agents)
-            && self.agents_state.selected() != previous_agent
-        {
-            self.agents_detail_scroll = 0;
-            self.agent_detail_artifact = None;
-        }
-        if matches!(self.active_tab, ActiveTab::Orchestrator)
-            && self.movements_state.selected() != previous_movement
-        {
-            self.movement_detail_scroll = 0;
-        }
     }
 
     pub fn move_up(&mut self, len: usize, amount: usize) {
-        let previous_agent = matches!(self.active_tab, ActiveTab::Agents)
-            .then(|| self.agents_state.selected())
-            .flatten();
-        let previous_movement = matches!(self.active_tab, ActiveTab::Orchestrator)
-            .then(|| self.movements_state.selected())
-            .flatten();
         move_selection_back(self.active_table_state_mut(), len, amount);
-        if matches!(self.active_tab, ActiveTab::Agents)
-            && self.agents_state.selected() != previous_agent
-        {
-            self.agents_detail_scroll = 0;
-            self.agent_detail_artifact = None;
-        }
-        if matches!(self.active_tab, ActiveTab::Orchestrator)
-            && self.movements_state.selected() != previous_movement
-        {
-            self.movement_detail_scroll = 0;
+    }
+
+    // --- Detail stack helpers ---
+
+    pub(crate) fn has_detail(&self) -> bool {
+        !self.detail_stack.is_empty()
+    }
+
+    pub(crate) fn current_detail(&self) -> Option<&DetailView> {
+        self.detail_stack.last()
+    }
+
+    pub(crate) fn current_detail_mut(&mut self) -> Option<&mut DetailView> {
+        self.detail_stack.last_mut()
+    }
+
+    pub(crate) fn push_detail(&mut self, view: DetailView) {
+        self.detail_stack.push(view);
+    }
+
+    pub(crate) fn pop_detail(&mut self) {
+        self.detail_stack.pop();
+    }
+
+    pub(crate) fn clear_detail_stack(&mut self) {
+        self.detail_stack.clear();
+        self.split_focus = SplitFocus::default();
+    }
+
+    /// Whether the terminal is wide enough for the split master-detail layout.
+    /// Must be called with the current terminal width (from frame area).
+    pub(crate) fn is_split_eligible(&self) -> bool {
+        self.detail_stack.len() == 1 && !matches!(self.active_tab, ActiveTab::Logs)
+    }
+
+    pub(crate) fn current_detail_scroll(&self) -> u16 {
+        self.detail_stack.last().map(|d| d.scroll()).unwrap_or(0)
+    }
+
+    pub(crate) fn set_current_detail_scroll(&mut self, value: u16) {
+        if let Some(detail) = self.detail_stack.last_mut() {
+            *detail.scroll_mut() = value;
         }
     }
 

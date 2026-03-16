@@ -657,12 +657,18 @@ fn agent_detail_scroll_resets_when_agent_selection_changes() {
 
     app.on_snapshot(&snapshot);
     app.active_tab = app::ActiveTab::Agents;
-    app.agents_detail_scroll = 5;
+    // Push an agent detail with non-zero scroll
+    app.push_detail(app::DetailView::Agent {
+        agent_index: 0,
+        scroll: 5,
+        artifact_cache: Box::new(None),
+    });
 
     app.move_down(snapshot.running.len(), 1);
 
     assert_eq!(app.agents_state.selected(), Some(1));
-    assert_eq!(app.agents_detail_scroll, 0);
+    // The detail scroll is managed per-view now, move_down doesn't reset it
+    assert_eq!(app.current_detail_scroll(), 5);
 }
 
 #[test]
@@ -679,4 +685,182 @@ fn log_buffer_push_and_read() {
     buf.push_line("three");
     buf.push_line("four");
     assert_eq!(buf.all_lines(), vec!["two", "three", "four"]);
+}
+
+#[test]
+fn detail_stack_push_pop() {
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    assert!(!app.has_detail());
+
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "t-1".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+    assert!(app.has_detail());
+    assert!(matches!(
+        app.current_detail(),
+        Some(app::DetailView::Trigger { .. })
+    ));
+
+    app.push_detail(app::DetailView::Movement {
+        movement_id: "m-1".into(),
+        scroll: 0,
+        focus: Default::default(),
+        tasks_selected: 0,
+    });
+    assert_eq!(app.detail_stack.len(), 2);
+    assert!(matches!(
+        app.current_detail(),
+        Some(app::DetailView::Movement { .. })
+    ));
+
+    app.pop_detail();
+    assert!(matches!(
+        app.current_detail(),
+        Some(app::DetailView::Trigger { .. })
+    ));
+
+    app.pop_detail();
+    assert!(!app.has_detail());
+}
+
+#[test]
+fn tab_switch_clears_detail_stack() {
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.push_detail(app::DetailView::Task {
+        task_id: "t-1".into(),
+        scroll: 0,
+    });
+    assert!(app.has_detail());
+
+    app.clear_detail_stack();
+    assert!(!app.has_detail());
+    assert_eq!(app.split_focus, app::SplitFocus::List);
+}
+
+#[test]
+fn detail_scroll_through_stack() {
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "t-1".into(),
+        scroll: 5,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+    assert_eq!(app.current_detail_scroll(), 5);
+
+    app.set_current_detail_scroll(10);
+    assert_eq!(app.current_detail_scroll(), 10);
+}
+
+#[test]
+fn split_layout_eligible_only_for_single_depth() {
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.active_tab = app::ActiveTab::Triggers;
+
+    // No detail — not split eligible (nothing to show on right)
+    assert!(!app.is_split_eligible());
+
+    // One detail — eligible
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "t-1".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+    assert!(app.is_split_eligible());
+
+    // Two details — not eligible (full-page)
+    app.push_detail(app::DetailView::Movement {
+        movement_id: "m-1".into(),
+        scroll: 0,
+        focus: Default::default(),
+        tasks_selected: 0,
+    });
+    assert!(!app.is_split_eligible());
+}
+
+#[test]
+fn split_layout_not_eligible_for_logs() {
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.active_tab = app::ActiveTab::Logs;
+    app.push_detail(app::DetailView::Task {
+        task_id: "t-1".into(),
+        scroll: 0,
+    });
+    assert!(!app.is_split_eligible());
+}
+
+#[test]
+fn entity_disappears_auto_pops_detail() {
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    let mut snapshot = test_snapshot(3);
+    app.on_snapshot(&snapshot);
+
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "id-1".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+    assert!(app.has_detail());
+
+    // Remove the trigger from the snapshot
+    snapshot.visible_triggers.retain(|t| t.trigger_id != "id-1");
+    app.on_snapshot(&snapshot);
+
+    // Detail should have been auto-popped
+    assert!(!app.has_detail());
+}
+
+#[test]
+fn render_split_layout_does_not_panic() {
+    // 160 cols is above the 140 threshold for split mode
+    let backend = TestBackend::new(160, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let snapshot = test_snapshot(5);
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "id-0".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+}
+
+#[test]
+fn render_narrow_detail_does_not_panic() {
+    // 80 cols is below the 140 threshold — should render full-page detail
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let snapshot = test_snapshot(3);
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "id-0".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
 }
