@@ -410,6 +410,121 @@ impl RuntimeService {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WatchTarget {
+    pub(crate) path: PathBuf,
+    pub(crate) mode: RecursiveMode,
+}
+
+fn push_watch_target(targets: &mut Vec<WatchTarget>, target: WatchTarget) {
+    if let Some(existing) = targets
+        .iter_mut()
+        .find(|existing| existing.path == target.path)
+    {
+        if existing.mode == RecursiveMode::NonRecursive && target.mode == RecursiveMode::Recursive {
+            existing.mode = RecursiveMode::Recursive;
+        }
+        return;
+    }
+    targets.push(target);
+}
+
+fn file_watch_target(path: &Path) -> Option<WatchTarget> {
+    if path.exists() {
+        return Some(WatchTarget {
+            path: path.to_path_buf(),
+            mode: RecursiveMode::NonRecursive,
+        });
+    }
+
+    path.parent()
+        .filter(|parent| parent.exists())
+        .map(|parent| WatchTarget {
+            path: parent.to_path_buf(),
+            mode: RecursiveMode::NonRecursive,
+        })
+}
+
+fn dir_watch_target(path: &Path, stop_at: Option<&Path>) -> Option<WatchTarget> {
+    if path.exists() {
+        return Some(WatchTarget {
+            path: path.to_path_buf(),
+            mode: RecursiveMode::Recursive,
+        });
+    }
+
+    for ancestor in path.ancestors().skip(1) {
+        if let Some(limit) = stop_at
+            && !ancestor.starts_with(limit)
+        {
+            break;
+        }
+        if ancestor.exists() {
+            return Some(WatchTarget {
+                path: ancestor.to_path_buf(),
+                mode: RecursiveMode::Recursive,
+            });
+        }
+    }
+
+    None
+}
+
+pub(crate) fn workflow_watch_targets(
+    workflow_path: &Path,
+    user_config_path: Option<&Path>,
+    repo_config_path: Option<&Path>,
+) -> Vec<WatchTarget> {
+    let mut targets = vec![WatchTarget {
+        path: workflow_path.to_path_buf(),
+        mode: RecursiveMode::NonRecursive,
+    }];
+
+    if let Some(user_config_path) = user_config_path {
+        match file_watch_target(user_config_path) {
+            Some(target) => push_watch_target(&mut targets, target),
+            None => debug!(
+                path = %user_config_path.display(),
+                "skipping watch for user config because its parent directory is missing"
+            ),
+        }
+
+        if let Some(user_agent_dir) =
+            polyphony_workflow::user_agent_prompt_dir(Some(user_config_path))
+        {
+            let stop_at = user_config_path.parent();
+            match dir_watch_target(&user_agent_dir, stop_at) {
+                Some(target) => push_watch_target(&mut targets, target),
+                None => debug!(
+                    path = %user_agent_dir.display(),
+                    "skipping watch for user agent prompts because the config directory is missing"
+                ),
+            }
+        }
+    }
+
+    if let Some(repo_config_path) = repo_config_path {
+        match file_watch_target(repo_config_path) {
+            Some(target) => push_watch_target(&mut targets, target),
+            None => debug!(
+                path = %repo_config_path.display(),
+                "skipping watch for repo config because its parent directory is missing"
+            ),
+        }
+    }
+
+    if let Ok(repo_agent_dir) = polyphony_workflow::repo_agent_prompt_dir(workflow_path) {
+        let stop_at = repo_config_path
+            .and_then(Path::parent)
+            .or_else(|| workflow_path.parent());
+        if let Some(target) = dir_watch_target(&repo_agent_dir, stop_at) {
+            push_watch_target(&mut targets, target);
+        }
+    }
+
+    targets
+}
+
 pub fn spawn_workflow_watcher(
     workflow_path: PathBuf,
     user_config_path: Option<PathBuf>,
@@ -421,18 +536,12 @@ pub fn spawn_workflow_watcher(
         let mut watcher: RecommendedWatcher = notify::recommended_watcher(move |event| {
             let _ = notify_tx.send(event);
         })?;
-        watcher.watch(&workflow_path, RecursiveMode::NonRecursive)?;
-        if let Some(repo_config_path) = repo_config_path.as_ref()
-            && repo_config_path.exists()
-        {
-            watcher.watch(repo_config_path, RecursiveMode::NonRecursive)?;
-        }
-        if let Ok(agent_dirs) = agent_prompt_dirs(&workflow_path, user_config_path.as_deref()) {
-            for dir in agent_dirs {
-                if dir.exists() {
-                    watcher.watch(&dir, RecursiveMode::Recursive)?;
-                }
-            }
+        for target in workflow_watch_targets(
+            &workflow_path,
+            user_config_path.as_deref(),
+            repo_config_path.as_deref(),
+        ) {
+            watcher.watch(&target.path, target.mode)?;
         }
         while let Some(event) = notify_rx.recv().await {
             match event {

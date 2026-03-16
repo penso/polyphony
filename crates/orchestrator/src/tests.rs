@@ -714,6 +714,24 @@ fn unique_workspace_root(test_name: &str) -> PathBuf {
     ))
 }
 
+fn fingerprint_entry<'a>(
+    fingerprint: &'a WorkflowInputsFingerprint,
+    path: &Path,
+) -> Option<&'a WorkflowFileFingerprint> {
+    fingerprint
+        .entries
+        .iter()
+        .find(|(entry_path, _)| entry_path == path)
+        .map(|(_, entry)| entry)
+}
+
+fn watch_target<'a>(
+    targets: &'a [crate::handoff::WatchTarget],
+    path: &Path,
+) -> Option<&'a crate::handoff::WatchTarget> {
+    targets.iter().find(|target| target.path == path)
+}
+
 #[tokio::test]
 async fn reconcile_running_releases_missing_issue() {
     let workspace_root = unique_workspace_root("missing");
@@ -1989,4 +2007,202 @@ fn append_saved_context_includes_recent_transcript() {
     assert!(prompt.contains("Last agent: claude (claude-sonnet)"));
     assert!(prompt.contains("Last error: tool timeout"));
     assert!(prompt.contains("Implemented parser, tests still failing"));
+}
+
+#[test]
+fn workflow_inputs_fingerprint_tracks_user_and_repo_config_paths() {
+    let workspace_root = unique_workspace_root("workflow-fingerprint-paths");
+    let workflow = test_workflow(&workspace_root);
+    let user_config_path = workspace_root
+        .join("user-config")
+        .join(".config")
+        .join("polyphony")
+        .join("config.toml");
+    let repo_config = repo_config_path(&workflow.path).unwrap();
+
+    let fingerprint = workflow_inputs_fingerprint(&workflow.path, Some(&user_config_path)).unwrap();
+
+    assert_eq!(
+        fingerprint_entry(&fingerprint, &workflow.path),
+        Some(&WorkflowFileFingerprint::Present {
+            len: fs::metadata(&workflow.path).unwrap().len(),
+            modified: fs::metadata(&workflow.path).unwrap().modified().ok(),
+        })
+    );
+    assert_eq!(
+        fingerprint_entry(&fingerprint, &user_config_path),
+        Some(&WorkflowFileFingerprint::Missing)
+    );
+    assert_eq!(
+        fingerprint_entry(&fingerprint, &repo_config),
+        Some(&WorkflowFileFingerprint::Missing)
+    );
+}
+
+#[test]
+fn workflow_inputs_fingerprint_keeps_tracking_repo_config_when_present() {
+    let workspace_root = unique_workspace_root("workflow-fingerprint-repo-config");
+    let workflow = test_workflow(&workspace_root);
+    let repo_config = repo_config_path(&workflow.path).unwrap();
+
+    fs::write(&repo_config, "tracker = \"linear\"\n").unwrap();
+
+    let fingerprint = workflow_inputs_fingerprint(&workflow.path, None).unwrap();
+
+    let Some(WorkflowFileFingerprint::Present { len, modified }) =
+        fingerprint_entry(&fingerprint, &repo_config)
+    else {
+        panic!("missing repo config fingerprint entry");
+    };
+
+    assert_eq!(*len, 19);
+    assert!(modified.is_some());
+}
+
+#[test]
+fn workflow_inputs_fingerprint_changes_when_user_config_is_created_or_updated() {
+    let workspace_root = unique_workspace_root("workflow-fingerprint-user-config");
+    let workflow = test_workflow(&workspace_root);
+    let user_config_path = workspace_root
+        .join("user-config")
+        .join(".config")
+        .join("polyphony")
+        .join("config.toml");
+
+    let missing = workflow_inputs_fingerprint(&workflow.path, Some(&user_config_path)).unwrap();
+    fs::create_dir_all(user_config_path.parent().unwrap()).unwrap();
+    fs::write(&user_config_path, "token = \"abc\"\n").unwrap();
+    let created = workflow_inputs_fingerprint(&workflow.path, Some(&user_config_path)).unwrap();
+    fs::write(
+        &user_config_path,
+        "token = \"abcdef\"\nprofile = \"fast\"\n",
+    )
+    .unwrap();
+    let updated = workflow_inputs_fingerprint(&workflow.path, Some(&user_config_path)).unwrap();
+
+    assert_eq!(
+        fingerprint_entry(&missing, &user_config_path),
+        Some(&WorkflowFileFingerprint::Missing)
+    );
+    assert_ne!(missing, created);
+    assert_ne!(created, updated);
+    let Some(WorkflowFileFingerprint::Present {
+        len: created_len,
+        modified: created_modified,
+    }) = fingerprint_entry(&created, &user_config_path)
+    else {
+        panic!("missing created user config fingerprint entry");
+    };
+    let Some(WorkflowFileFingerprint::Present {
+        len: updated_len,
+        modified: updated_modified,
+    }) = fingerprint_entry(&updated, &user_config_path)
+    else {
+        panic!("missing updated user config fingerprint entry");
+    };
+
+    assert_eq!(*created_len, 14);
+    assert!(created_modified.is_some());
+    assert!(*updated_len > *created_len);
+    assert!(updated_modified.is_some());
+}
+
+#[test]
+fn workflow_inputs_fingerprint_changes_when_user_config_mtime_changes() {
+    let workspace_root = unique_workspace_root("workflow-fingerprint-user-config-mtime");
+    let workflow = test_workflow(&workspace_root);
+    let user_config_path = workspace_root
+        .join("user-config")
+        .join(".config")
+        .join("polyphony")
+        .join("config.toml");
+
+    fs::create_dir_all(user_config_path.parent().unwrap()).unwrap();
+    fs::write(&user_config_path, "token = \"abc\"\n").unwrap();
+    let before = workflow_inputs_fingerprint(&workflow.path, Some(&user_config_path)).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    fs::write(&user_config_path, "token = \"xyz\"\n").unwrap();
+    let after = workflow_inputs_fingerprint(&workflow.path, Some(&user_config_path)).unwrap();
+
+    assert_ne!(before, after);
+    let Some(WorkflowFileFingerprint::Present {
+        len: before_len,
+        modified: before_modified,
+    }) = fingerprint_entry(&before, &user_config_path)
+    else {
+        panic!("missing initial user config fingerprint entry");
+    };
+    let Some(WorkflowFileFingerprint::Present {
+        len: after_len,
+        modified: after_modified,
+    }) = fingerprint_entry(&after, &user_config_path)
+    else {
+        panic!("missing rewritten user config fingerprint entry");
+    };
+
+    assert_eq!(*before_len, *after_len);
+    assert!(before_modified.is_some());
+    assert!(after_modified.is_some());
+    assert_ne!(before_modified, after_modified);
+}
+
+#[test]
+fn workflow_watch_targets_cover_missing_sources_without_broad_user_fallbacks() {
+    let workspace_root = unique_workspace_root("workflow-watch-targets");
+    let workflow = test_workflow(&workspace_root);
+    let user_config_root = workspace_root
+        .join("user-home")
+        .join(".config")
+        .join("polyphony");
+    let user_config_path = user_config_root.join("config.toml");
+    let repo_config = repo_config_path(&workflow.path).unwrap();
+
+    fs::create_dir_all(&user_config_root).unwrap();
+
+    let targets = crate::handoff::workflow_watch_targets(
+        &workflow.path,
+        Some(&user_config_path),
+        Some(&repo_config),
+    );
+
+    assert_eq!(
+        watch_target(&targets, &workflow.path).map(|target| target.mode),
+        Some(RecursiveMode::NonRecursive)
+    );
+    assert_eq!(
+        watch_target(&targets, &user_config_root).map(|target| target.mode),
+        Some(RecursiveMode::Recursive)
+    );
+    assert_eq!(
+        watch_target(&targets, &workspace_root).map(|target| target.mode),
+        Some(RecursiveMode::Recursive)
+    );
+}
+
+#[test]
+fn workflow_watch_targets_skip_user_paths_when_config_root_is_missing() {
+    let workspace_root = unique_workspace_root("workflow-watch-targets-missing-user-root");
+    let workflow = test_workflow(&workspace_root);
+    let user_config_root = workspace_root
+        .join("user-home")
+        .join(".config")
+        .join("polyphony");
+    let user_config_path = user_config_root.join("config.toml");
+    let repo_config = repo_config_path(&workflow.path).unwrap();
+
+    fs::create_dir_all(user_config_root.parent().unwrap()).unwrap();
+
+    let targets = crate::handoff::workflow_watch_targets(
+        &workflow.path,
+        Some(&user_config_path),
+        Some(&repo_config),
+    );
+
+    assert!(watch_target(&targets, &user_config_root).is_none());
+    assert!(watch_target(&targets, user_config_root.parent().unwrap()).is_none());
+    assert_eq!(
+        watch_target(&targets, &workspace_root).map(|target| target.mode),
+        Some(RecursiveMode::Recursive)
+    );
 }
