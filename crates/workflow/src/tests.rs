@@ -1,19 +1,22 @@
 use std::{
     fs,
+    sync::{LazyLock, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use {
     crate::{
-        AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig, WorkflowDefinition,
-        files::*, load_workflow_with_user_config, render::*, render_issue_template,
-        render_turn_template, repo_config_path,
+        AgentProfileConfig, AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig,
+        WorkflowDefinition, files::*, load_workflow_with_user_config, render::*,
+        render_issue_template, render_turn_template, repo_config_path,
     },
     polyphony_core::{
         AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, TrackerKind,
     },
     serde_yaml::Value as YamlValue,
 };
+
+static ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn sample_issue() -> Issue {
     Issue {
@@ -34,6 +37,42 @@ fn unique_temp_path(name: &str, extension: &str) -> std::path::PathBuf {
             .as_nanos(),
         extension
     ))
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+
+    fn clear(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
 }
 
 #[test]
@@ -410,6 +449,57 @@ agents:
 
     assert_eq!(names, vec!["codex", "kimi", "claude"]);
     assert_eq!(candidates[0].fallback_agents, vec!["kimi", "claude"]);
+}
+
+#[test]
+fn ollama_and_lmstudio_profiles_use_openai_chat_transport_and_local_base_urls() {
+    for (kind, expected_base_url) in [
+        ("ollama", "http://localhost:11434/v1"),
+        ("lmstudio", "http://127.0.0.1:1234/v1"),
+    ] {
+        let profile = AgentProfileConfig {
+            kind: kind.into(),
+            ..AgentProfileConfig::default()
+        };
+        let definition = agent_definition(kind, &profile);
+
+        assert_eq!(infer_agent_transport(&profile), AgentTransport::OpenAiChat);
+        assert_eq!(definition.transport, AgentTransport::OpenAiChat);
+        assert_eq!(definition.base_url.as_deref(), Some(expected_base_url));
+    }
+}
+
+#[test]
+fn local_profiles_use_env_base_url_overrides_unless_base_url_is_configured() {
+    let _env_lock = ENV_MUTEX.lock().unwrap();
+    let _clear_ollama = EnvVarGuard::clear("OLLAMA_BASE_URL");
+    let _clear_lmstudio = EnvVarGuard::clear("LMSTUDIO_BASE_URL");
+    let _ollama_override = EnvVarGuard::set("OLLAMA_BASE_URL", "http://127.0.0.1:4317/v1");
+    let _lmstudio_override = EnvVarGuard::set("LMSTUDIO_BASE_URL", "http://127.0.0.1:8123/v1");
+
+    let ollama = agent_definition("ollama", &AgentProfileConfig {
+        kind: "ollama".into(),
+        ..AgentProfileConfig::default()
+    });
+    let lmstudio = agent_definition("lmstudio", &AgentProfileConfig {
+        kind: "lmstudio".into(),
+        ..AgentProfileConfig::default()
+    });
+    let explicit = agent_definition("explicit_ollama", &AgentProfileConfig {
+        kind: "ollama".into(),
+        base_url: Some("http://192.168.1.10:11434/v1".into()),
+        ..AgentProfileConfig::default()
+    });
+
+    assert_eq!(ollama.base_url.as_deref(), Some("http://127.0.0.1:4317/v1"));
+    assert_eq!(
+        lmstudio.base_url.as_deref(),
+        Some("http://127.0.0.1:8123/v1")
+    );
+    assert_eq!(
+        explicit.base_url.as_deref(),
+        Some("http://192.168.1.10:11434/v1")
+    );
 }
 
 #[test]
@@ -806,6 +896,10 @@ review_triggers:
 
 #[test]
 fn openai_chat_fallbacks_without_api_keys_do_not_block_workflow_load() {
+    let _env_lock = ENV_MUTEX.lock().unwrap();
+    let _clear_openai = EnvVarGuard::clear("OPENAI_API_KEY");
+    let _clear_kimi = EnvVarGuard::clear("KIMI_API_KEY");
+    let _clear_moonshot = EnvVarGuard::clear("MOONSHOT_API_KEY");
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 agents:
@@ -848,6 +942,49 @@ agents:
 }
 
 #[test]
+fn local_openai_compatible_profiles_do_not_require_api_keys() {
+    let _env_lock = ENV_MUTEX.lock().unwrap();
+    let _clear_ollama = EnvVarGuard::clear("OLLAMA_API_KEY");
+    let _clear_lmstudio = EnvVarGuard::clear("LMSTUDIO_API_KEY");
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: ollama
+  profiles:
+    ollama:
+      kind: ollama
+      fetch_models: true
+    lmstudio:
+      kind: lmstudio
+      model: local-model
+      fetch_models: false
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+    let candidates = config.candidate_agents_for_issue(&sample_issue()).unwrap();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].name, "ollama");
+    assert_eq!(candidates[0].kind, "ollama");
+    assert_eq!(candidates[0].transport, AgentTransport::OpenAiChat);
+    assert_eq!(candidates[0].api_key, None);
+    assert_eq!(
+        config
+            .agents
+            .profiles
+            .get("lmstudio")
+            .and_then(|profile| profile.api_key.as_deref()),
+        None
+    );
+}
+
+#[test]
 fn tracker_only_workflow_without_agents_is_valid() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
@@ -875,6 +1012,9 @@ tracker:
 
 #[test]
 fn github_tracker_without_api_key_is_valid() {
+    let _env_lock = ENV_MUTEX.lock().unwrap();
+    let _clear_github = EnvVarGuard::clear("GITHUB_TOKEN");
+    let _clear_gh = EnvVarGuard::clear("GH_TOKEN");
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:
