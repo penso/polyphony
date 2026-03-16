@@ -1,5 +1,7 @@
 use crate::{prelude::*, *};
 
+const SLOW_TRACKER_COMPONENT_FETCH_WARN_THRESHOLD_MS: u128 = 750;
+
 pub(crate) struct EmptyTracker;
 
 #[async_trait]
@@ -135,15 +137,48 @@ impl IssueTracker for CompositeTracker {
         &self,
         query: &polyphony_core::TrackerQuery,
     ) -> Result<Vec<polyphony_core::Issue>, polyphony_core::Error> {
+        let primary_component = self.primary.component_key();
+        let primary_started = Instant::now();
         let mut issues = self.primary.fetch_candidate_issues(query).await?;
+        let primary_elapsed = primary_started.elapsed().as_millis();
+        info!(
+            component = %primary_component,
+            elapsed_ms = primary_elapsed,
+            count = issues.len(),
+            "tracker component fetched candidate issues"
+        );
+        if primary_elapsed >= SLOW_TRACKER_COMPONENT_FETCH_WARN_THRESHOLD_MS {
+            warn!(
+                component = %primary_component,
+                elapsed_ms = primary_elapsed,
+                count = issues.len(),
+                "tracker component candidate issue fetch was slow"
+            );
+        }
         let mut seen = issues
             .iter()
             .map(|issue| issue.id.clone())
             .collect::<HashSet<_>>();
         for supplemental in &self.supplements {
-            for issue in supplemental
-                .namespace_issues(supplemental.tracker.fetch_candidate_issues(query).await?)
-            {
+            let supplemental_component = supplemental.tracker.component_key();
+            let supplemental_started = Instant::now();
+            let supplemental_issues = supplemental.tracker.fetch_candidate_issues(query).await?;
+            let supplemental_elapsed = supplemental_started.elapsed().as_millis();
+            info!(
+                component = %supplemental_component,
+                elapsed_ms = supplemental_elapsed,
+                count = supplemental_issues.len(),
+                "supplemental tracker fetched candidate issues"
+            );
+            if supplemental_elapsed >= SLOW_TRACKER_COMPONENT_FETCH_WARN_THRESHOLD_MS {
+                warn!(
+                    component = %supplemental_component,
+                    elapsed_ms = supplemental_elapsed,
+                    count = supplemental_issues.len(),
+                    "supplemental tracker candidate issue fetch was slow"
+                );
+            }
+            for issue in supplemental.namespace_issues(supplemental_issues) {
                 if seen.insert(issue.id.clone()) {
                     issues.push(issue);
                 }
@@ -414,7 +449,9 @@ pub(crate) fn build_runtime_components(
     };
     #[cfg(feature = "github")]
     let pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>> =
-        if workflow.config.tracker.kind == TrackerKind::Github {
+        if workflow.config.tracker.kind == TrackerKind::Github
+            && workflow.config.review_triggers.pr_reviews.enabled
+        {
             let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
                 Error::Config("tracker.repository is required for github PR review triggers".into())
             })?;

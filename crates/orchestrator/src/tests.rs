@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use {
     crate::{helpers::*, prelude::*, *},
     std::{
@@ -11,12 +13,16 @@ use {
 use {
     async_trait::async_trait,
     polyphony_core::{
-        AgentSession, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, Workspace,
-        WorkspaceRequest,
+        AgentSession, Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus,
+        DispatchMode, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, StoreBootstrap,
+        Workspace, WorkspaceCommitResult, WorkspaceRequest,
     },
     polyphony_workflow::load_workflow,
     serde_json::json,
-    tokio::sync::watch,
+    tokio::{
+        sync::{Notify, watch},
+        time::timeout,
+    },
 };
 
 #[derive(Clone)]
@@ -24,6 +30,64 @@ struct TestTracker {
     issues: Arc<Mutex<HashMap<String, Issue>>>,
     workflow_updates: Arc<Mutex<Vec<String>>>,
     fetch_by_ids_calls: Arc<Mutex<u32>>,
+}
+
+#[derive(Clone)]
+struct DelayedCleanupTracker {
+    issues: Arc<Vec<Issue>>,
+    cleanup_gate: Arc<Notify>,
+}
+
+#[async_trait]
+impl IssueTracker for DelayedCleanupTracker {
+    fn component_key(&self) -> String {
+        "tracker:delayed-cleanup".into()
+    }
+
+    async fn fetch_candidate_issues(
+        &self,
+        _query: &polyphony_core::TrackerQuery,
+    ) -> Result<Vec<Issue>, polyphony_core::Error> {
+        Ok(self.issues.as_ref().clone())
+    }
+
+    async fn fetch_issues_by_states(
+        &self,
+        _project_slug: Option<&str>,
+        _states: &[String],
+    ) -> Result<Vec<Issue>, polyphony_core::Error> {
+        self.cleanup_gate.notified().await;
+        Ok(Vec::new())
+    }
+
+    async fn fetch_issues_by_ids(
+        &self,
+        issue_ids: &[String],
+    ) -> Result<Vec<Issue>, polyphony_core::Error> {
+        Ok(self
+            .issues
+            .iter()
+            .filter(|issue| issue_ids.contains(&issue.id))
+            .cloned()
+            .collect())
+    }
+
+    async fn fetch_issue_states_by_ids(
+        &self,
+        issue_ids: &[String],
+    ) -> Result<Vec<polyphony_core::IssueStateUpdate>, polyphony_core::Error> {
+        Ok(self
+            .issues
+            .iter()
+            .filter(|issue| issue_ids.contains(&issue.id))
+            .map(|issue| IssueStateUpdate {
+                id: issue.id.clone(),
+                identifier: issue.identifier.clone(),
+                state: issue.state.clone(),
+                updated_at: issue.updated_at,
+            })
+            .collect())
+    }
 }
 
 impl TestTracker {
@@ -550,10 +614,169 @@ impl WorkspaceProvisioner for RecordingProvisioner {
     }
 }
 
+#[derive(Clone, Default)]
+struct ScriptedPipelineAgent {
+    calls: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+impl ScriptedPipelineAgent {
+    fn recorded_agent_names(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(agent_name, _)| agent_name.clone())
+            .collect()
+    }
+}
+
+#[async_trait]
+impl AgentRuntime for ScriptedPipelineAgent {
+    fn component_key(&self) -> String {
+        "provider:scripted-pipeline".into()
+    }
+
+    async fn run(
+        &self,
+        spec: AgentRunSpec,
+        _event_tx: mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<AgentRunResult, polyphony_core::Error> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((spec.agent.name.clone(), spec.prompt.clone()));
+        let polyphony_dir = spec.workspace_path.join(".polyphony");
+        tokio::fs::create_dir_all(&polyphony_dir)
+            .await
+            .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?;
+
+        if spec.agent.name == "router" {
+            let plan = json!({
+                "tasks": [{
+                    "title": "Create the missing file",
+                    "category": "coding",
+                    "description": "Add the repository marker file requested by the issue.",
+                    "agent": "implementer"
+                }]
+            });
+            tokio::fs::write(polyphony_dir.join("plan.json"), plan.to_string())
+                .await
+                .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?;
+            return Ok(AgentRunResult::succeeded(1));
+        }
+
+        if spec.prompt.contains("Review the current branch against") {
+            tokio::fs::write(
+                polyphony_dir.join("review.md"),
+                "Summary\n\nAutomated review found no blockers.",
+            )
+            .await
+            .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?;
+            return Ok(AgentRunResult::succeeded(1));
+        }
+
+        tokio::fs::write(
+            spec.workspace_path.join("e2e-pr.txt"),
+            "polyphony end-to-end dogfood\n",
+        )
+        .await
+        .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?;
+
+        Ok(AgentRunResult {
+            status: AttemptStatus::Succeeded,
+            turns_completed: 1,
+            error: None,
+            final_issue_state: Some("Done".into()),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct RecordingCommitter {
+    requests: Arc<Mutex<Vec<WorkspaceCommitRequest>>>,
+    result: Option<WorkspaceCommitResult>,
+}
+
+impl RecordingCommitter {
+    fn new(result: Option<WorkspaceCommitResult>) -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+            result,
+        }
+    }
+
+    fn requests(&self) -> Vec<WorkspaceCommitRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl WorkspaceCommitter for RecordingCommitter {
+    fn component_key(&self) -> String {
+        "git:test-committer".into()
+    }
+
+    async fn commit_and_push(
+        &self,
+        request: &WorkspaceCommitRequest,
+    ) -> Result<Option<WorkspaceCommitResult>, polyphony_core::Error> {
+        self.requests.lock().unwrap().push(request.clone());
+        Ok(self.result.clone())
+    }
+}
+
+#[derive(Clone)]
+struct RecordingPullRequestManager {
+    requests: Arc<Mutex<Vec<PullRequestRequest>>>,
+    ensured_pull_request: PullRequestRef,
+}
+
+impl RecordingPullRequestManager {
+    fn new(ensured_pull_request: PullRequestRef) -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+            ensured_pull_request,
+        }
+    }
+
+    fn requests(&self) -> Vec<PullRequestRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl PullRequestManager for RecordingPullRequestManager {
+    fn component_key(&self) -> String {
+        "github:test-prs".into()
+    }
+
+    async fn ensure_pull_request(
+        &self,
+        request: &PullRequestRequest,
+    ) -> Result<PullRequestRef, polyphony_core::Error> {
+        self.requests.lock().unwrap().push(request.clone());
+        Ok(self.ensured_pull_request.clone())
+    }
+
+    async fn merge_pull_request(
+        &self,
+        _pull_request: &PullRequestRef,
+    ) -> Result<(), polyphony_core::Error> {
+        Ok(())
+    }
+}
+
 fn test_workflow(workspace_root: &Path) -> LoadedWorkflow {
     test_workflow_with_front_matter(
         workspace_root,
         "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nTest prompt\n",
+    )
+}
+
+fn pipeline_workflow_with_automation(workspace_root: &Path) -> LoadedWorkflow {
+    test_workflow_with_front_matter(
+        workspace_root,
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: test-token\n  active_states: [Todo, In Progress]\n  terminal_states: [Done]\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\n  checkout_kind: linked_worktree\n  source_repo_path: __ROOT__/source-repo\nagent:\n  max_turns: 3\norchestration:\n  router_agent: router\nagents:\n  default: implementer\n  profiles:\n    router:\n      kind: mock\n      transport: mock\n      command: mock\n    implementer:\n      kind: mock\n      transport: mock\n      command: mock\nautomation:\n  enabled: true\n  git:\n    remote_name: origin\n---\nFix {{ issue.identifier }}\n",
     )
 }
 
@@ -712,6 +935,14 @@ fn unique_workspace_root(test_name: &str) -> PathBuf {
         "polyphony-orchestrator-{test_name}-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ))
+}
+
+async fn handle_next_worker_message(service: &mut RuntimeService) {
+    let message = timeout(Duration::from_secs(5), service.command_rx.recv())
+        .await
+        .expect("timed out waiting for orchestrator worker message")
+        .expect("orchestrator command channel closed");
+    service.handle_message(message).await.unwrap();
 }
 
 #[tokio::test]
@@ -1471,6 +1702,122 @@ async fn orphan_auto_dispatch_uses_loaded_issue_without_refetch_by_id() {
 }
 
 #[tokio::test]
+async fn first_tick_shows_issues_before_startup_cleanup_finishes() {
+    let workspace_root = unique_workspace_root("startup-first-paint");
+    let issue = sample_issue("issue-startup-1", "FAC-STARTUP-1", "Todo", "First paint");
+    let tracker = DelayedCleanupTracker {
+        issues: Arc::new(vec![issue.clone()]),
+        cleanup_gate: Arc::new(Notify::new()),
+    };
+    let workflow = test_workflow(&workspace_root);
+    let (_tx, workflow_rx) = watch::channel(workflow);
+    let (service, handle) = RuntimeService::new(
+        Arc::new(tracker.clone()),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(RecordingProvisioner::default()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        workflow_rx,
+    );
+    let mut snapshot_rx = handle.snapshot_rx.clone();
+    let command_tx = handle.command_tx.clone();
+    let service_task = tokio::spawn(async move { service.run().await });
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            let snapshot = snapshot_rx.borrow().clone();
+            if snapshot
+                .visible_issues
+                .iter()
+                .any(|row| row.issue_id == issue.id)
+            {
+                break;
+            }
+            snapshot_rx
+                .changed()
+                .await
+                .expect("snapshot channel closed");
+        }
+    })
+    .await
+    .expect("first issue snapshot should not wait for startup cleanup");
+
+    tracker.cleanup_gate.notify_waiters();
+    let _ = command_tx.send(RuntimeCommand::Shutdown);
+    service_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn automatic_dispatch_skips_waiting_issue_approval() {
+    let workspace_root = unique_workspace_root("approval-waiting");
+    let mut issue = sample_issue("issue-approval-1", "FAC-APPROVAL-1", "Todo", "Review input");
+    issue.approval_state = polyphony_core::IssueApprovalState::Waiting;
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
+
+    service.tick().await;
+
+    assert!(!service.state.running.contains_key(&issue.id));
+    assert_eq!(service.state.visible_issues.len(), 1);
+    assert_eq!(
+        service.state.visible_issues[0].approval_state,
+        polyphony_core::IssueApprovalState::Waiting
+    );
+}
+
+#[tokio::test]
+async fn manual_dispatch_still_runs_waiting_issue_without_approval_override() {
+    let workspace_root = unique_workspace_root("approval-manual-dispatch");
+    let mut issue = sample_issue("issue-approval-2", "FAC-APPROVAL-2", "Todo", "Manual only");
+    issue.approval_state = polyphony_core::IssueApprovalState::Waiting;
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+    service
+        .pending_manual_dispatches
+        .push((issue.id.clone(), None));
+
+    service.process_manual_dispatches().await;
+
+    assert!(service.state.running.contains_key(&issue.id));
+    assert!(service.state.approved_issue_keys.is_empty());
+}
+
+#[tokio::test]
+async fn approving_waiting_issue_persists_and_allows_automatic_dispatch() {
+    let workspace_root = unique_workspace_root("approval-approved");
+    let mut issue = sample_issue("issue-approval-3", "FAC-APPROVAL-3", "Todo", "Approve me");
+    issue.approval_state = polyphony_core::IssueApprovalState::Waiting;
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
+
+    service.tick().await;
+    service
+        .pending_issue_approvals
+        .push((issue.id.clone(), "mock".into()));
+    service.process_pending_issue_approvals().await;
+
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.approved_issue_keys, vec!["mock:issue-approval-3"]);
+    assert_eq!(snapshot.visible_triggers.len(), 1);
+    assert_eq!(
+        snapshot.visible_triggers[0].approval_state,
+        polyphony_core::IssueApprovalState::Approved
+    );
+
+    service.tick().await;
+
+    assert!(service.state.running.contains_key(&issue.id));
+}
+
+#[tokio::test]
 async fn reconcile_running_cleans_workspace_for_terminal_issue() {
     let workspace_root = unique_workspace_root("terminal");
     let provisioner = RecordingProvisioner::default();
@@ -1679,6 +2026,7 @@ async fn run_worker_attempt_reuses_live_session_and_continues_while_issue_active
         after_create: None,
         before_run: None,
         after_run: None,
+        after_outcome: None,
         before_remove: None,
         timeout_ms: 1_000,
     };
@@ -1782,6 +2130,18 @@ async fn saved_context_updates_from_streamed_agent_events() {
     assert_eq!(running.thread_id.as_deref(), Some("thread-1"));
     assert_eq!(running.turn_id.as_deref(), Some("turn-3"));
     assert_eq!(running.codex_app_server_pid.as_deref(), Some("4242"));
+    let artifact_dir = workspace_root
+        .join("FAC-5")
+        .join(".polyphony")
+        .join("runtime");
+    let saved_context = tokio::fs::read_to_string(artifact_dir.join("saved-context.json"))
+        .await
+        .unwrap();
+    let events = tokio::fs::read_to_string(artifact_dir.join("agent-events.jsonl"))
+        .await
+        .unwrap();
+    assert!(saved_context.contains("\"issue_identifier\": \"FAC-5\""));
+    assert!(events.contains("\"issue_identifier\":\"FAC-5\""));
 }
 
 #[tokio::test]
@@ -1989,4 +2349,403 @@ fn append_saved_context_includes_recent_transcript() {
     assert!(prompt.contains("Last agent: claude (claude-sonnet)"));
     assert!(prompt.contains("Last error: tool timeout"));
     assert!(prompt.contains("Implemented parser, tests still failing"));
+}
+
+#[tokio::test]
+async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github() {
+    let workspace_root = unique_workspace_root("pipeline-issue-pr");
+    let workflow = pipeline_workflow_with_automation(&workspace_root);
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let mut issue = sample_issue("issue-pipeline-pr", "DOG-101", "Todo", "Create e2e file");
+    issue.url = Some("https://example.test/issues/DOG-101".into());
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let tracker_handle = tracker.clone();
+    let agent = ScriptedPipelineAgent::default();
+    let agent_handle = agent.clone();
+    let committer = RecordingCommitter::new(Some(WorkspaceCommitResult {
+        branch_name: "task/dog-101".into(),
+        head_sha: "abc123def".into(),
+        changed_files: 1,
+    }));
+    let committer_handle = committer.clone();
+    let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
+        repository: "penso/polyphony".into(),
+        number: 17,
+        url: Some("https://github.com/penso/polyphony/pull/17".into()),
+    });
+    let pull_request_manager_handle = pull_request_manager.clone();
+    let mut service = RuntimeService::new(
+        Arc::new(tracker),
+        None,
+        Arc::new(agent),
+        Arc::new(RecordingProvisioner::default()),
+        Some(Arc::new(committer)),
+        Some(Arc::new(pull_request_manager)),
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+
+    service
+        .dispatch_issue(workflow.clone(), issue.clone(), None, false, None, false)
+        .await
+        .unwrap();
+    handle_next_worker_message(&mut service).await;
+    handle_next_worker_message(&mut service).await;
+
+    let movement = service
+        .state
+        .movements
+        .values()
+        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
+        .cloned()
+        .expect("issue movement missing after pipeline completion");
+    assert_eq!(movement.status, MovementStatus::Delivered);
+    let deliverable = movement
+        .deliverable
+        .expect("movement should record the pull request deliverable");
+    assert_eq!(deliverable.kind, DeliverableKind::GithubPullRequest);
+    assert_eq!(deliverable.status, DeliverableStatus::Open);
+    assert_eq!(
+        deliverable.url.as_deref(),
+        Some("https://github.com/penso/polyphony/pull/17")
+    );
+    assert_eq!(tracker_handle.recorded_workflow_updates(), vec![
+        "In Progress",
+        "Done"
+    ]);
+    assert_eq!(committer_handle.requests().len(), 1);
+    assert_eq!(
+        committer_handle.requests()[0].base_branch.as_deref(),
+        Some("main")
+    );
+    assert_eq!(pull_request_manager_handle.requests().len(), 1);
+    assert_eq!(
+        pull_request_manager_handle.requests()[0].head_branch,
+        "task/dog-101"
+    );
+    assert_eq!(
+        pull_request_manager_handle.requests()[0].title,
+        "DOG-101: Create e2e file"
+    );
+    assert_eq!(agent_handle.recorded_agent_names(), vec![
+        "router",
+        "implementer",
+        "implementer"
+    ]);
+    assert_eq!(
+        tokio::fs::read_to_string(workspace_root.join("DOG-101").join("e2e-pr.txt"))
+            .await
+            .unwrap(),
+        "polyphony end-to-end dogfood\n"
+    );
+
+    let snapshot = service.snapshot();
+    let movement_row = snapshot
+        .movements
+        .iter()
+        .find(|movement| movement.issue_identifier.as_deref() == Some("DOG-101"))
+        .expect("movement row missing from runtime snapshot");
+    assert_eq!(movement_row.status, MovementStatus::Delivered);
+    assert!(movement_row.has_deliverable);
+}
+
+#[tokio::test]
+async fn pipeline_issue_trigger_writes_workspace_artifacts_and_runs_after_outcome_hook() {
+    let workspace_root = unique_workspace_root("pipeline-issue-artifacts");
+    let mut workflow = pipeline_workflow_with_automation(&workspace_root);
+    workflow.config.hooks.after_outcome = Some("printf cleaned > .after_outcome".into());
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let mut issue = sample_issue(
+        "issue-pipeline-artifacts",
+        "DOG-103",
+        "Todo",
+        "Archive artifacts",
+    );
+    issue.url = Some("https://example.test/issues/DOG-103".into());
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let agent = ScriptedPipelineAgent::default();
+    let committer = RecordingCommitter::new(Some(WorkspaceCommitResult {
+        branch_name: "task/dog-103".into(),
+        head_sha: "abc123def".into(),
+        changed_files: 1,
+    }));
+    let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
+        repository: "penso/polyphony".into(),
+        number: 23,
+        url: Some("https://github.com/penso/polyphony/pull/23".into()),
+    });
+    let mut service = RuntimeService::new(
+        Arc::new(tracker),
+        None,
+        Arc::new(agent),
+        Arc::new(RecordingProvisioner::default()),
+        Some(Arc::new(committer)),
+        Some(Arc::new(pull_request_manager)),
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+
+    service
+        .dispatch_issue(workflow, issue, None, false, None, false)
+        .await
+        .unwrap();
+    handle_next_worker_message(&mut service).await;
+    handle_next_worker_message(&mut service).await;
+
+    let workspace_path = workspace_root.join("DOG-103");
+    let artifact_dir = workspace_path.join(".polyphony").join("runtime");
+    assert_eq!(
+        tokio::fs::read_to_string(workspace_path.join(".after_outcome"))
+            .await
+            .unwrap(),
+        "cleaned"
+    );
+    let saved_context = tokio::fs::read_to_string(artifact_dir.join("saved-context.json"))
+        .await
+        .unwrap();
+    let runs = tokio::fs::read_to_string(artifact_dir.join("run-history.jsonl"))
+        .await
+        .unwrap();
+    assert!(saved_context.contains("\"issue_identifier\": \"DOG-103\""));
+    assert!(runs.contains("\"issue_identifier\":\"DOG-103\""));
+}
+
+#[test]
+fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
+    let workspace_root = unique_workspace_root("restore-context-artifact");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    let workspace_path = workspace_root.join("DOG-104");
+    std::fs::create_dir_all(workspace_path.join(".polyphony/runtime")).unwrap();
+    let now = Utc::now();
+    let context = AgentContextSnapshot {
+        issue_id: "issue-restore".into(),
+        issue_identifier: "DOG-104".into(),
+        updated_at: now,
+        agent_name: "implementer".into(),
+        model: None,
+        session_id: None,
+        thread_id: None,
+        turn_id: None,
+        codex_app_server_pid: None,
+        status: Some(AttemptStatus::Succeeded),
+        error: None,
+        usage: TokenUsage::default(),
+        transcript: vec![AgentContextEntry {
+            at: now,
+            kind: AgentEventKind::Notification,
+            message: "rehydrated from workspace".into(),
+        }],
+    };
+    std::fs::write(
+        polyphony_core::workspace_saved_context_artifact_path(&workspace_path),
+        serde_json::to_vec_pretty(&context).unwrap(),
+    )
+    .unwrap();
+
+    service.restore_bootstrap(StoreBootstrap {
+        snapshot: Some(RuntimeSnapshot {
+            generated_at: now,
+            counts: SnapshotCounts::default(),
+            cadence: RuntimeCadence::default(),
+            visible_issues: Vec::new(),
+            visible_triggers: Vec::new(),
+            approved_issue_keys: Vec::new(),
+            running: Vec::new(),
+            agent_history: Vec::new(),
+            retrying: Vec::new(),
+            codex_totals: CodexTotals::default(),
+            rate_limits: None,
+            throttles: Vec::new(),
+            budgets: Vec::new(),
+            agent_catalogs: Vec::new(),
+            saved_contexts: vec![saved_context_metadata(AgentContextSnapshot {
+                transcript: Vec::new(),
+                ..context.clone()
+            })],
+            recent_events: Vec::new(),
+            movements: Vec::new(),
+            tasks: Vec::new(),
+            loading: LoadingState::default(),
+            dispatch_mode: DispatchMode::default(),
+            tracker_kind: TrackerKind::default(),
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: Vec::new(),
+        }),
+        retrying: std::collections::HashMap::new(),
+        throttles: std::collections::HashMap::new(),
+        budgets: std::collections::HashMap::new(),
+        saved_contexts: std::collections::HashMap::new(),
+        recent_events: Vec::new(),
+        movements: std::collections::HashMap::new(),
+        tasks: std::collections::HashMap::new(),
+        reviewed_pull_request_heads: std::collections::HashMap::new(),
+        run_history: vec![PersistedRunRecord {
+            issue_id: "issue-restore".into(),
+            issue_identifier: "DOG-104".into(),
+            agent_name: "implementer".into(),
+            model: None,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            status: AttemptStatus::Succeeded,
+            attempt: Some(1),
+            max_turns: 3,
+            turn_count: 1,
+            last_event: None,
+            last_message: None,
+            started_at: now,
+            finished_at: Some(now),
+            last_event_at: Some(now),
+            tokens: TokenUsage::default(),
+            workspace_path: Some(workspace_path.clone()),
+            error: None,
+            saved_context: None,
+        }],
+    });
+
+    let restored = service.state.saved_contexts.get("issue-restore").unwrap();
+    assert_eq!(restored.transcript.len(), 1);
+    assert_eq!(restored.transcript[0].message, "rehydrated from workspace");
+}
+
+#[tokio::test]
+async fn pipeline_issue_trigger_can_finish_without_opening_a_pull_request() {
+    let workspace_root = unique_workspace_root("pipeline-issue-no-pr");
+    let workflow = pipeline_workflow_with_automation(&workspace_root);
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let issue = sample_issue(
+        "issue-pipeline-clean",
+        "DOG-102",
+        "Todo",
+        "Workspace already done",
+    );
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let tracker_handle = tracker.clone();
+    let agent = ScriptedPipelineAgent::default();
+    let agent_handle = agent.clone();
+    let committer = RecordingCommitter::new(None);
+    let committer_handle = committer.clone();
+    let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
+        repository: "penso/polyphony".into(),
+        number: 99,
+        url: Some("https://github.com/penso/polyphony/pull/99".into()),
+    });
+    let pull_request_manager_handle = pull_request_manager.clone();
+    let mut service = RuntimeService::new(
+        Arc::new(tracker),
+        None,
+        Arc::new(agent),
+        Arc::new(RecordingProvisioner::default()),
+        Some(Arc::new(committer)),
+        Some(Arc::new(pull_request_manager)),
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+
+    service
+        .dispatch_issue(workflow, issue.clone(), None, false, None, false)
+        .await
+        .unwrap();
+    handle_next_worker_message(&mut service).await;
+    handle_next_worker_message(&mut service).await;
+
+    let movement = service
+        .state
+        .movements
+        .values()
+        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
+        .cloned()
+        .expect("issue movement missing after clean pipeline completion");
+    assert_eq!(movement.status, MovementStatus::Review);
+    assert!(movement.deliverable.is_none());
+    assert_eq!(tracker_handle.recorded_workflow_updates(), vec![
+        "In Progress",
+        "Done"
+    ]);
+    assert_eq!(committer_handle.requests().len(), 1);
+    assert!(pull_request_manager_handle.requests().is_empty());
+    assert_eq!(agent_handle.recorded_agent_names(), vec![
+        "router",
+        "implementer"
+    ]);
+
+    let snapshot = service.snapshot();
+    let movement_row = snapshot
+        .movements
+        .iter()
+        .find(|movement| movement.issue_identifier.as_deref() == Some("DOG-102"))
+        .expect("movement row missing from runtime snapshot");
+    assert_eq!(movement_row.status, MovementStatus::Review);
+    assert!(!movement_row.has_deliverable);
+}
+
+#[tokio::test]
+async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
+    let workspace_root = unique_workspace_root("deliverable-decision");
+    let tracker = TestTracker::new(vec![sample_issue("github:7", "#7", "Todo", "Need a PR")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    let now = Utc::now();
+    service.state.movements.insert("mov-1".into(), Movement {
+        id: "mov-1".into(),
+        kind: MovementKind::IssueDelivery,
+        issue_id: Some("github:7".into()),
+        issue_identifier: Some("#7".into()),
+        title: "Need a PR".into(),
+        status: MovementStatus::Delivered,
+        workspace_key: Some("_7".into()),
+        workspace_path: Some(workspace_root.join("_7")),
+        review_target: None,
+        deliverable: Some(Deliverable {
+            kind: DeliverableKind::GithubPullRequest,
+            status: DeliverableStatus::Open,
+            url: Some("https://github.com/penso/polyphony/pull/8".into()),
+            decision: DeliverableDecision::Waiting,
+        }),
+        created_at: now,
+        updated_at: now,
+    });
+
+    service
+        .pending_deliverable_resolutions
+        .push(("mov-1".into(), DeliverableDecision::Accepted));
+    service.process_pending_deliverable_resolutions().await;
+
+    let movement = service
+        .state
+        .movements
+        .get("mov-1")
+        .expect("movement exists");
+    let deliverable = movement
+        .deliverable
+        .as_ref()
+        .expect("deliverable exists after resolution");
+    assert_eq!(deliverable.decision, DeliverableDecision::Accepted);
+
+    let snapshot = service.snapshot();
+    let row = snapshot.movements.first().expect("movement row exists");
+    assert_eq!(
+        row.deliverable
+            .as_ref()
+            .expect("deliverable row exists")
+            .decision,
+        DeliverableDecision::Accepted
+    );
 }

@@ -382,6 +382,7 @@ mod tests {
             cadence: RuntimeCadence::default(),
             visible_issues: Vec::new(),
             visible_triggers: Vec::new(),
+            approved_issue_keys: Vec::new(),
             running: Vec::new(),
             agent_history: Vec::new(),
             retrying: Vec::new(),

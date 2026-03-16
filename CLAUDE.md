@@ -17,7 +17,18 @@ For general repository rules, Rust workflow, testing expectations, and release h
 - Prefer stateful tables, scrollbars for long panes, sparklines for short history trends, and gauges or progress bars for cadence, retry, or completion state.
 - Design for both wide and narrow terminals. Do not assume a large screen.
 - Check the ratatui version pinned in the workspace `Cargo.toml` and `Cargo.lock` before copying APIs from the website or local checkout. The local `~/code/ratatui` clone may be ahead of the version this repo actually builds against.
-- **Never block the TUI loop.** The draw → input → update cycle must stay instant. After handling a keypress, loop back to draw immediately — do not sleep, await network, or fall into a timed select. Network fetches and other async work belong in the orchestrator; the TUI only reads the latest snapshot.
+- **Never block the TUI loop.** The draw → input → update cycle must stay instant. After handling a keypress, loop back to draw immediately — do not sleep, await network, or fall into a timed select. Network fetches and other async work belong in the orchestrator; the TUI only reads the latest snapshot. Any operation taking more than 100ms must show a loading indicator (e.g. braille spinner) so the user knows something is happening.
+
+### Listing tables
+
+- Every tab is a full-height listing table with a scrollbar when content exceeds the visible area.
+- Every listing row must support opening a detail modal (Enter key) that shows expanded information relevant to that row.
+- **Column styling:** ID, time, and other secondary/metadata columns use the `theme.muted` color. Primary content (title, name) uses `theme.foreground`.
+- **Emoji indicators:** Prefer emoji/Unicode symbols over text for columns that represent an enum with ≤5 values (status, decision, kind). This keeps columns compact. Examples: `●` open, `✓` done, `✕` failed, `◷` waiting, `⊘` cancelled.
+- **No highlight arrow symbol.** Row selection uses background highlight only (`row_highlight_style`), not a `▸` prefix — the arrow duplicates the background highlight.
+- **First-column activity indicator:** The first column of listing rows can show the item's activity state: a braille spinner (`⠋⠙⠹…`) when actively running, a dot (`●`) for static state like "has workspace", or blank.
+- **Footer:** Show selection position (e.g. "3 of 12") and any relevant counts (e.g. retrying agents) in the table block's bottom border.
+- **Sorting:** Support sort toggling (e.g. `s` key) where it makes sense. Show the current sort label in the footer.
 
 ## Type System Conventions
 
@@ -64,6 +75,7 @@ Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): descripti
 ## Module Organization
 
 - Split large files by domain: types, constants, helpers, actions. Keep files under ~800 lines where practical.
+- **Do not add implementation code in `main.rs`, `lib.rs`, or `mod.rs`.** These files are for module declarations, re-exports, and top-level wiring only. Put implementation logic in dedicated modules.
 - Use `pub(crate)` visibility for items shared within a crate but not exported. Apply to struct fields, methods, and free functions in submodules.
 - Use `pub(crate) use module::*` glob re-exports in parent modules to keep call sites clean after extraction.
 - When splitting `impl` blocks across files, the struct definition stays in `types.rs` and method impls go in the relevant domain file.

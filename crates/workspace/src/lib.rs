@@ -173,17 +173,23 @@ impl WorkspaceManager {
     }
 
     pub async fn run_after_run_best_effort(&self, hooks: &HooksConfig, workspace_path: &Path) {
-        if let Err(error) = self
-            .run_hook(
-                "after_run",
-                hooks.after_run.as_deref(),
-                workspace_path,
-                hooks.timeout_ms,
-            )
-            .await
-        {
-            warn!(%error, "after_run hook failed");
-        }
+        self.run_hook_best_effort(
+            "after_run",
+            hooks.after_run.as_deref(),
+            workspace_path,
+            hooks.timeout_ms,
+        )
+        .await;
+    }
+
+    pub async fn run_after_outcome_best_effort(&self, hooks: &HooksConfig, workspace_path: &Path) {
+        self.run_hook_best_effort(
+            "after_outcome",
+            hooks.after_outcome.as_deref(),
+            workspace_path,
+            hooks.timeout_ms,
+        )
+        .await;
     }
 
     pub async fn cleanup_workspace(
@@ -254,6 +260,18 @@ impl WorkspaceManager {
             }
         }
         Ok(())
+    }
+
+    async fn run_hook_best_effort(
+        &self,
+        hook_name: &str,
+        script: Option<&str>,
+        cwd: &Path,
+        timeout_ms: u64,
+    ) {
+        if let Err(error) = self.run_hook(hook_name, script, cwd, timeout_ms).await {
+            warn!(%error, hook = hook_name, "workspace hook failed");
+        }
     }
 
     async fn run_hook(
@@ -519,6 +537,7 @@ mod tests {
             after_create: None,
             before_run: None,
             after_run: None,
+            after_outcome: None,
             before_remove: None,
             timeout_ms: 5_000,
         }
@@ -606,6 +625,29 @@ mod tests {
 
         assert!(root.join("before_remove_ran").exists());
         assert!(!workspace.path.exists());
+    }
+
+    #[tokio::test]
+    async fn after_outcome_runs_in_workspace() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("workspaces");
+        let provisioner = Arc::new(RecordingProvisioner::default());
+        let manager = manager(root, provisioner);
+        let mut hooks = hooks();
+        hooks.after_outcome = Some("printf done > .after_outcome".into());
+
+        let workspace = manager
+            .ensure_workspace("FAC-5", Some("task/fac-5".into()), &hooks)
+            .await
+            .unwrap();
+        manager
+            .run_after_outcome_best_effort(&hooks, &workspace.path)
+            .await;
+
+        assert_eq!(
+            std::fs::read_to_string(workspace.path.join(".after_outcome")).unwrap(),
+            "done"
+        );
     }
 
     #[test]

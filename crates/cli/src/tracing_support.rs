@@ -245,7 +245,7 @@ pub(crate) fn init_run_log_sink(workflow_path: &Path) -> Result<FileLogSink, Err
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let file_name = format!(
-        "polyphony-{}-{:09}-pid{}.log",
+        "polyphony-{}-{:09}-pid{}.jsonl",
         now.as_secs(),
         now.subsec_nanos(),
         std::process::id()
@@ -265,7 +265,10 @@ pub(crate) fn load_historical_log_lines(workflow_path: &Path) -> Result<Vec<Stri
         .map_err(Error::Io)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl" || extension == "log")
+        })
         .collect::<Vec<_>>();
     entries.sort();
 

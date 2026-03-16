@@ -13,8 +13,8 @@ pub(crate) use {
     polyphony_core::{
         AgentContextEntry, AgentContextSnapshot, AgentEventKind, AgentRunResult, AgentRunSpec,
         AgentRuntime, AttemptStatus, BudgetSnapshot, CachedSnapshot, Error as CoreError,
-        EventScope, FeedbackAction, FeedbackLink, FeedbackNotification, Issue, IssueTracker,
-        Movement, MovementKind, MovementRow, MovementStatus, NetworkCache, PersistedRunRecord,
+        EventScope, FeedbackAction, FeedbackLink, FeedbackNotification, Issue, IssueApprovalState,
+        IssueTracker, Movement, MovementKind, MovementRow, MovementStatus, NetworkCache,
         PipelinePlan, PullRequestCommentTrigger, PullRequestCommenter, PullRequestManager,
         PullRequestRef, PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger,
         PullRequestTrigger, PullRequestTriggerSource, RateLimitSignal, RetryRow, ReviewTarget,
@@ -22,7 +22,9 @@ pub(crate) use {
         SnapshotCounts, StateStore, TaskRow, TaskStatus, ThrottleWindow, TokenUsage,
         TrackerConnectionStatus, TrackerKind, VisibleIssueRow, VisibleTriggerKind,
         VisibleTriggerRow, WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner,
-        new_movement_id, sanitize_workspace_key,
+        load_workspace_saved_context_artifact, new_movement_id, sanitize_workspace_key,
+        workspace_agent_events_artifact_path, workspace_run_history_artifact_path,
+        workspace_runtime_artifact_dir, workspace_saved_context_artifact_path,
     },
     polyphony_feedback::FeedbackRegistry,
     polyphony_workflow::{

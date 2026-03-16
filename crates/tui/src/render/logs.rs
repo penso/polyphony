@@ -11,6 +11,7 @@ use {
             Table,
         },
     },
+    serde_json::Value,
 };
 
 use crate::{app::AppState, theme::Theme};
@@ -132,6 +133,10 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
         .collect();
 
     let title = build_logs_title(&app.logs_search_query, app.logs_search_active, theme);
+    let selected_style = Style::default()
+        .bg(theme.selection)
+        .fg(theme.foreground)
+        .add_modifier(Modifier::BOLD);
 
     let table = Table::new(rows, [
         Constraint::Length(9),
@@ -140,7 +145,9 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
         Constraint::Fill(1),
     ])
     .header(header)
+    .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
+    .highlight_symbol("▸ ")
     .block(
         Block::default()
             .title(title)
@@ -371,16 +378,30 @@ fn draw_network_panel(
 ) {
     let theme = app.theme;
 
-    // Split: stats left, sparkline right
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(38), Constraint::Min(10)])
+        .constraints([
+            Constraint::Max(48),
+            Constraint::Length(34),
+            Constraint::Min(10),
+        ])
         .split(area);
 
-    // ── Left: stats ──
+    let budget_block = Block::default()
+        .title(Span::styled(
+            " Budgets ",
+            Style::default().fg(theme.highlight),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border));
+    frame.render_widget(
+        Paragraph::new(provider_budget_lines(snapshot, theme)).block(budget_block),
+        chunks[0],
+    );
+
     let pending = pending_count(snapshot);
     let req_sec = format!("{:.1}", app.requests_per_sec);
-
     let row1 = Line::from(vec![
         Span::styled("Req/sec: ", Style::default().fg(theme.muted)),
         Span::styled(&req_sec, Style::default().fg(theme.foreground)),
@@ -394,12 +415,9 @@ fn draw_network_panel(
             }),
         ),
     ]);
-
-    let budget_lines = budget_spans(snapshot, theme);
     let throttle_line = throttle_spans(snapshot, theme);
-
     let mut lines = vec![row1];
-    lines.extend(budget_lines);
+    lines.push(fetch_status_line(snapshot, theme));
     lines.push(throttle_line);
 
     let stats_block = Block::default()
@@ -411,12 +429,12 @@ fn draw_network_panel(
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border));
 
-    frame.render_widget(Paragraph::new(lines).block(stats_block), chunks[0]);
+    frame.render_widget(Paragraph::new(lines).block(stats_block), chunks[1]);
 
-    // ── Right: sparkline ──
     let data: Vec<u64> = app.rps_history.iter().rev().copied().collect();
 
     let sparkline_block = Block::default()
+        .title(Span::styled(" Pace ", Style::default().fg(theme.highlight)))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border));
@@ -428,7 +446,7 @@ fn draw_network_panel(
         .direction(RenderDirection::RightToLeft)
         .style(Style::default().fg(Color::Cyan));
 
-    frame.render_widget(sparkline, chunks[1]);
+    frame.render_widget(sparkline, chunks[2]);
 }
 
 fn pending_count(snapshot: &RuntimeSnapshot) -> usize {
@@ -447,70 +465,6 @@ fn pending_count(snapshot: &RuntimeSnapshot) -> usize {
         count += 1;
     }
     count
-}
-
-fn budget_spans<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Vec<Line<'a>> {
-    if snapshot.budgets.is_empty() {
-        return vec![Line::from(Span::styled(
-            "No rate limit data",
-            Style::default().fg(theme.muted),
-        ))];
-    }
-
-    snapshot
-        .budgets
-        .iter()
-        .map(|b| {
-            let remaining = b.credits_remaining.unwrap_or(0.0);
-            let total = b.credits_total.unwrap_or(1.0);
-            let ratio = if total > 0.0 {
-                remaining / total
-            } else {
-                0.0
-            };
-
-            let color = if ratio > 0.5 {
-                Color::Green
-            } else if ratio > 0.2 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-
-            let remaining_str = format_number(remaining as u64);
-            let total_str = format_number(total as u64);
-
-            let mut spans = vec![
-                Span::styled(
-                    format!("{}: ", short_component(&b.component)),
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{remaining_str}/{total_str}"),
-                    Style::default().fg(color),
-                ),
-            ];
-
-            if let Some(reset_at) = b.reset_at {
-                let secs = reset_at
-                    .signed_duration_since(Utc::now())
-                    .num_seconds()
-                    .max(0);
-                if secs > 0 {
-                    let mins = secs / 60;
-                    let s = secs % 60;
-                    spans.push(Span::styled(
-                        format!(" resets {mins}m{s:02}s"),
-                        Style::default().fg(theme.muted),
-                    ));
-                }
-            }
-
-            Line::from(spans)
-        })
-        .collect()
 }
 
 fn throttle_spans<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Line<'a> {
@@ -542,15 +496,226 @@ fn throttle_spans<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Line<'a> {
     Line::from(spans)
 }
 
-/// Shorten component names like "tracker:github" -> "github"
 fn short_component(component: &str) -> &str {
     component.rsplit(':').next().unwrap_or(component)
 }
 
-fn format_number(n: u64) -> String {
-    if n >= 1_000 {
-        format!("{},{:03}", n / 1_000, n % 1_000)
+fn fetch_status_line<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Line<'a> {
+    let loading = &snapshot.loading;
+    if loading.fetching_budgets {
+        return Line::from(vec![
+            Span::styled("Budgets: ", Style::default().fg(theme.muted)),
+            Span::styled("refreshing", Style::default().fg(theme.info)),
+        ]);
+    }
+    if loading.fetching_issues || loading.fetching_models || loading.reconciling {
+        return Line::from(vec![
+            Span::styled("Runtime: ", Style::default().fg(theme.muted)),
+            Span::styled("busy", Style::default().fg(theme.warning)),
+        ]);
+    }
+    Line::from(vec![
+        Span::styled("Runtime: ", Style::default().fg(theme.muted)),
+        Span::styled("idle", Style::default().fg(theme.foreground)),
+    ])
+}
+
+fn provider_budget_lines<'a>(snapshot: &RuntimeSnapshot, theme: Theme) -> Vec<Line<'a>> {
+    let mut providers = provider_budget_summaries(snapshot);
+    providers.sort_by(|left, right| {
+        provider_rank(left.provider.as_str())
+            .cmp(&provider_rank(right.provider.as_str()))
+            .then_with(|| left.provider.cmp(&right.provider))
+    });
+
+    if providers.is_empty() {
+        return vec![Line::from(Span::styled(
+            "No provider budget data",
+            Style::default().fg(theme.muted),
+        ))];
+    }
+
+    let mut lines = Vec::new();
+    for provider in providers.into_iter().take(2) {
+        let label = capitalize(provider.provider.as_str());
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{label:<7}"),
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("S ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(
+                    "{:>3.0}% ",
+                    provider.session_remaining_percent.unwrap_or(0.0)
+                ),
+                Style::default().fg(ratio_color(provider.session_remaining_percent, theme)),
+            ),
+            Span::styled(
+                provider
+                    .session_reset_at
+                    .map(short_reset_label)
+                    .unwrap_or_else(|| "n/a".into()),
+                Style::default().fg(theme.muted),
+            ),
+        ]));
+
+        let pace_label = if provider.weekly_deficit_percent > 0.0 {
+            format!("Δ{:>2.0}%", provider.weekly_deficit_percent)
+        } else if provider.weekly_reserve_percent > 0.0 {
+            format!("R{:>2.0}%", provider.weekly_reserve_percent)
+        } else {
+            "On pace".into()
+        };
+        lines.push(Line::from(vec![
+            Span::styled("       W ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(
+                    "{:>3.0}% ",
+                    provider.weekly_remaining_percent.unwrap_or(0.0)
+                ),
+                Style::default().fg(ratio_color(provider.weekly_remaining_percent, theme)),
+            ),
+            Span::styled(
+                pace_label,
+                Style::default().fg(if provider.weekly_deficit_percent > 0.0 {
+                    theme.danger
+                } else {
+                    theme.info
+                }),
+            ),
+            Span::styled(" ", Style::default().fg(theme.muted)),
+            Span::styled(
+                provider
+                    .weekly_eta_seconds
+                    .map(short_eta_label)
+                    .or_else(|| provider.weekly_reset_at.map(short_reset_label))
+                    .unwrap_or_else(|| "n/a".into()),
+                Style::default().fg(theme.muted),
+            ),
+        ]));
+    }
+    lines
+}
+
+#[derive(Clone)]
+struct ProviderBudgetSummary {
+    provider: String,
+    session_remaining_percent: Option<f64>,
+    session_reset_at: Option<chrono::DateTime<Utc>>,
+    weekly_remaining_percent: Option<f64>,
+    weekly_deficit_percent: f64,
+    weekly_reserve_percent: f64,
+    weekly_eta_seconds: Option<i64>,
+    weekly_reset_at: Option<chrono::DateTime<Utc>>,
+}
+
+fn provider_budget_summaries(snapshot: &RuntimeSnapshot) -> Vec<ProviderBudgetSummary> {
+    use std::collections::BTreeMap;
+
+    let mut providers = BTreeMap::new();
+    for budget in &snapshot.budgets {
+        let Some(raw) = budget.raw.as_ref() else {
+            continue;
+        };
+        let Some(provider) = raw.get("provider").and_then(Value::as_str) else {
+            continue;
+        };
+        providers
+            .entry(provider.to_string())
+            .and_modify(|existing: &mut ProviderBudgetSummary| {
+                if budget.captured_at > existing.weekly_reset_at.unwrap_or(budget.captured_at) {
+                    *existing = provider_budget_summary(provider, budget);
+                }
+            })
+            .or_insert_with(|| provider_budget_summary(provider, budget));
+    }
+    providers.into_values().collect()
+}
+
+fn provider_budget_summary(
+    provider: &str,
+    budget: &polyphony_core::BudgetSnapshot,
+) -> ProviderBudgetSummary {
+    let raw = budget.raw.as_ref();
+    ProviderBudgetSummary {
+        provider: provider.to_string(),
+        session_remaining_percent: raw
+            .and_then(|value| value.pointer("/session/remaining_percent"))
+            .and_then(Value::as_f64)
+            .or(budget.credits_remaining),
+        session_reset_at: raw
+            .and_then(|value| value.pointer("/session/reset_at"))
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339),
+        weekly_remaining_percent: raw
+            .and_then(|value| value.pointer("/weekly/remaining_percent"))
+            .and_then(Value::as_f64),
+        weekly_deficit_percent: raw
+            .and_then(|value| value.pointer("/weekly/deficit_percent"))
+            .and_then(Value::as_f64)
+            .unwrap_or_default(),
+        weekly_reserve_percent: raw
+            .and_then(|value| value.pointer("/weekly/reserve_percent"))
+            .and_then(Value::as_f64)
+            .unwrap_or_default(),
+        weekly_eta_seconds: raw
+            .and_then(|value| value.pointer("/weekly/eta_seconds"))
+            .and_then(Value::as_i64),
+        weekly_reset_at: raw
+            .and_then(|value| value.pointer("/weekly/reset_at"))
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339),
+    }
+}
+
+fn parse_rfc3339(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn short_reset_label(reset_at: chrono::DateTime<Utc>) -> String {
+    short_eta_label(reset_at.signed_duration_since(Utc::now()).num_seconds())
+}
+
+fn short_eta_label(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if days > 0 {
+        format!("{days}d{hours}h")
+    } else if hours > 0 {
+        format!("{hours}h{minutes:02}m")
     } else {
-        n.to_string()
+        format!("{minutes}m")
+    }
+}
+
+fn ratio_color(value: Option<f64>, theme: Theme) -> Color {
+    match value.unwrap_or(0.0) {
+        value if value > 50.0 => Color::Green,
+        value if value > 20.0 => Color::Yellow,
+        value if value > 0.0 => theme.warning,
+        _ => theme.danger,
+    }
+}
+
+fn provider_rank(provider: &str) -> u8 {
+    match provider {
+        "codex" => 0,
+        "claude" => 1,
+        _ => 2,
+    }
+}
+
+fn capitalize(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }

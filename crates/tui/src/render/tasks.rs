@@ -1,8 +1,9 @@
 use {
+    chrono::{DateTime, Utc},
     polyphony_core::RuntimeSnapshot,
     ratatui::{
         layout::{Constraint, Rect},
-        style::{Modifier, Style},
+        style::{Color, Modifier, Style},
         text::{Line, Span},
         widgets::{
             Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
@@ -20,38 +21,50 @@ pub fn draw_tasks_tab(
     app: &mut AppState,
 ) {
     let theme = app.theme;
-    let tasks = &snapshot.tasks;
+
+    // Sort tasks by most recent first (started_at descending, fall back to created_at)
+    let mut sorted_indices: Vec<usize> = (0..snapshot.tasks.len()).collect();
+    sorted_indices.sort_by(|&a, &b| {
+        let ta = snapshot.tasks[a].started_at.unwrap_or(snapshot.tasks[a].created_at);
+        let tb = snapshot.tasks[b].started_at.unwrap_or(snapshot.tasks[b].created_at);
+        tb.cmp(&ta)
+    });
+    app.sorted_task_indices = sorted_indices;
+    let tasks = &app.sorted_task_indices;
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("ID", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Type", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("St", Style::default().fg(theme.muted))),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = tasks
         .iter()
-        .map(|task| {
+        .map(|&idx| {
+            let task = &snapshot.tasks[idx];
             let status_color = task_status_color(&task.status, theme);
             let category_color = task_category_color(&task.category, theme);
 
+            let time_label = format_task_time(task.started_at, task.created_at);
+
             Row::new(vec![
                 Cell::from(Span::styled(
-                    truncate_id(&task.id),
-                    Style::default().fg(theme.info),
+                    time_label,
+                    Style::default().fg(theme.muted),
                 )),
                 Cell::from(Span::styled(
                     task.title.clone(),
                     Style::default().fg(theme.foreground),
                 )),
                 Cell::from(Span::styled(
-                    task.category.to_string(),
+                    task_category_label(&task.category),
                     Style::default().fg(category_color),
                 )),
                 Cell::from(Span::styled(
-                    task.status.to_string(),
+                    task_status_icon(&task.status),
                     Style::default().fg(status_color),
                 )),
             ])
@@ -74,15 +87,14 @@ pub fn draw_tasks_tab(
     };
 
     let table = Table::new(rows, [
-        Constraint::Length(10),
+        Constraint::Length(16),
         Constraint::Fill(1),
-        Constraint::Length(14),
-        Constraint::Length(14),
+        Constraint::Length(13),
+        Constraint::Length(4),
     ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
     .block(
         Block::default()
             .title(Line::from(Span::styled(
@@ -126,6 +138,17 @@ pub fn draw_tasks_tab(
     }
 }
 
+fn task_status_icon(status: &polyphony_core::TaskStatus) -> &'static str {
+    use polyphony_core::TaskStatus;
+    match status {
+        TaskStatus::Pending => "…",
+        TaskStatus::InProgress => "◐",
+        TaskStatus::Completed => "✓",
+        TaskStatus::Failed => "✕",
+        TaskStatus::Cancelled => "⊘",
+    }
+}
+
 fn task_status_color(
     status: &polyphony_core::TaskStatus,
     theme: crate::theme::Theme,
@@ -140,24 +163,31 @@ fn task_status_color(
     }
 }
 
-fn task_category_color(
-    category: &polyphony_core::TaskCategory,
-    theme: crate::theme::Theme,
-) -> ratatui::style::Color {
+fn task_category_label(category: &polyphony_core::TaskCategory) -> &'static str {
     use polyphony_core::TaskCategory;
     match category {
-        TaskCategory::Coding => theme.highlight,
-        TaskCategory::Testing => theme.success,
-        TaskCategory::Research => theme.info,
-        TaskCategory::Documentation => theme.warning,
-        TaskCategory::Review => theme.foreground,
+        TaskCategory::Coding => "coding",
+        TaskCategory::Testing => "testing",
+        TaskCategory::Research => "research",
+        TaskCategory::Documentation => "docs",
+        TaskCategory::Review => "review",
     }
 }
 
-fn truncate_id(id: &str) -> String {
-    if id.len() <= 8 {
-        id.into()
-    } else {
-        format!("{}…", &id[..7])
+fn format_task_time(started_at: Option<DateTime<Utc>>, created_at: DateTime<Utc>) -> String {
+    super::format_listing_time(started_at.unwrap_or(created_at))
+}
+
+fn task_category_color(
+    category: &polyphony_core::TaskCategory,
+    theme: crate::theme::Theme,
+) -> Color {
+    use polyphony_core::TaskCategory;
+    match category {
+        TaskCategory::Coding => theme.muted,
+        TaskCategory::Testing => theme.muted,
+        TaskCategory::Research => theme.muted,
+        TaskCategory::Documentation => theme.muted,
+        TaskCategory::Review => theme.muted,
     }
 }

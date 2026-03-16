@@ -108,6 +108,7 @@ pub struct HooksConfig {
     pub after_create: Option<String>,
     pub before_run: Option<String>,
     pub after_run: Option<String>,
+    pub after_outcome: Option<String>,
     pub before_remove: Option<String>,
     pub timeout_ms: u64,
 }
@@ -126,6 +127,7 @@ pub struct AgentConfig {
 pub struct OrchestrationConfig {
     pub router_agent: Option<String>,
     pub mode: String,
+    pub dispatch_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -241,6 +243,24 @@ pub struct ServerConfig {
     pub port: Option<u16>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DaemonConfig {
+    pub listen_address: String,
+    pub listen_port: u16,
+    pub auth_token: Option<String>,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            listen_address: "127.0.0.1".into(),
+            listen_port: 0,
+            auth_token: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AutomationGitAuthorConfig {
@@ -348,6 +368,7 @@ pub struct ServiceConfig {
     pub review_triggers: ReviewTriggersConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
+    pub daemon: DaemonConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -371,6 +392,7 @@ struct RawServiceConfig {
     pub review_triggers: ReviewTriggersConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
+    pub daemon: DaemonConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

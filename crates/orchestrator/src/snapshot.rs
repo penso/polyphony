@@ -99,8 +99,11 @@ impl RuntimeService {
         self.state.recent_events.push_front(RuntimeEvent {
             at: Utc::now(),
             scope,
-            message,
+            message: truncate_runtime_event_message(message),
         });
+        while self.state.recent_events.len() > MAX_RECENT_EVENTS {
+            self.state.recent_events.pop_back();
+        }
     }
 
     pub(crate) async fn emit_snapshot(&mut self) -> Result<(), Error> {
@@ -137,7 +140,7 @@ impl RuntimeService {
         let visible_issues = issue_rows
             .iter()
             .map(|row| {
-                let mut row = row.clone();
+                let mut row = self.resolved_issue_row(tracker_kind, row);
                 let key = sanitize_workspace_key(&row.issue_identifier);
                 row.has_workspace = self.state.worktree_keys.contains(&key);
                 row
@@ -147,6 +150,13 @@ impl RuntimeService {
             .iter()
             .map(|row| self.issue_trigger_row(tracker_kind, row))
             .collect::<Vec<_>>();
+        let mut approved_issue_keys = self
+            .state
+            .approved_issue_keys
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        approved_issue_keys.sort();
         if self.state.pull_request_snapshot_loaded
             || !self.state.visible_review_triggers.is_empty()
             || !self.state.visible_comment_triggers.is_empty()
@@ -231,6 +241,7 @@ impl RuntimeService {
             },
             visible_issues,
             visible_triggers,
+            approved_issue_keys,
             running: self
                 .state
                 .running
@@ -260,7 +271,9 @@ impl RuntimeService {
                 .state
                 .run_history
                 .iter()
-                .map(PersistedRunRecord::to_history_row)
+                .cloned()
+                .map(persisted_run_metadata)
+                .map(|run| run.to_history_row())
                 .collect(),
             retrying: self
                 .state
@@ -278,7 +291,13 @@ impl RuntimeService {
                 .collect(),
             budgets: self.state.budgets.values().cloned().collect(),
             agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
-            saved_contexts: self.state.saved_contexts.values().cloned().collect(),
+            saved_contexts: self
+                .state
+                .saved_contexts
+                .values()
+                .cloned()
+                .map(saved_context_metadata)
+                .collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
             movements: self
                 .state
@@ -302,6 +321,7 @@ impl RuntimeService {
                         status: m.status,
                         task_count,
                         tasks_completed,
+                        deliverable: m.deliverable.clone(),
                         has_deliverable: m.deliverable.is_some(),
                         review_target: m.review_target.clone(),
                         workspace_key: m.workspace_key.clone(),
@@ -319,12 +339,18 @@ impl RuntimeService {
                         id: t.id.clone(),
                         movement_id: t.movement_id.clone(),
                         title: t.title.clone(),
+                        description: t.description.clone(),
                         category: t.category,
                         status: t.status,
                         ordinal: t.ordinal,
                         agent_name: t.agent_name.clone(),
                         turns_completed: t.turns_completed,
                         total_tokens: t.tokens.total_tokens,
+                        started_at: t.started_at,
+                        finished_at: t.finished_at,
+                        error: t.error.clone(),
+                        created_at: t.created_at,
+                        updated_at: t.updated_at,
                     })
                 })
                 .collect(),
@@ -362,6 +388,7 @@ impl RuntimeService {
                     issue_identifier: trigger.identifier.clone(),
                     title: trigger.title.clone(),
                     state: trigger.status.clone(),
+                    approval_state: trigger.approval_state,
                     priority: trigger.priority,
                     labels: trigger.labels.clone(),
                     description: trigger.description.clone(),
@@ -382,6 +409,9 @@ impl RuntimeService {
         if self.state.tracker_connection.is_none() {
             self.state.tracker_connection = cached.tracker_connection;
         }
+        if self.state.approved_issue_keys.is_empty() {
+            self.state.approved_issue_keys = cached.approved_issue_keys.into_iter().collect();
+        }
         if self.state.agent_catalogs.is_empty() {
             for catalog in cached.agent_catalogs {
                 self.state
@@ -395,10 +425,18 @@ impl RuntimeService {
 
     pub(crate) async fn save_cache(&self) {
         if let Some(cache) = &self.cache {
+            let mut approved_issue_keys = self
+                .state
+                .approved_issue_keys
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            approved_issue_keys.sort();
             let cached = CachedSnapshot {
                 saved_at: Some(Utc::now()),
                 visible_issues: self.state.visible_issues.clone(),
                 visible_triggers: self.snapshot().visible_triggers,
+                approved_issue_keys,
                 budgets: self.state.budgets.values().cloned().collect(),
                 agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
                 tracker_connection: self.state.tracker_connection.clone(),
@@ -420,13 +458,20 @@ impl RuntimeService {
                 .collect();
             self.state.tracker_connection = snapshot.tracker_connection;
             self.state.dispatch_mode = snapshot.dispatch_mode;
+            self.state.approved_issue_keys = snapshot.approved_issue_keys.into_iter().collect();
             self.state.totals = snapshot.codex_totals;
             self.state.rate_limits = snapshot.rate_limits;
             self.state.ended_runtime_seconds = self.state.totals.seconds_running;
         }
         self.state.recent_events = bootstrap.recent_events.into_iter().collect();
+        while self.state.recent_events.len() > MAX_RECENT_EVENTS {
+            self.state.recent_events.pop_back();
+        }
         self.state.budgets = bootstrap.budgets;
         self.state.saved_contexts = bootstrap.saved_contexts;
+        for context in self.state.saved_contexts.values_mut() {
+            compact_saved_context_in_place(context);
+        }
         self.state.throttles = bootstrap
             .throttles
             .into_iter()
@@ -465,6 +510,38 @@ impl RuntimeService {
         }
         self.state.reviewed_pull_request_heads = bootstrap.reviewed_pull_request_heads;
         self.state.run_history = bootstrap.run_history.into_iter().collect();
+        while self.state.run_history.len() > MAX_RUN_HISTORY {
+            self.state.run_history.pop_back();
+        }
+        for run in &self.state.run_history {
+            let Some(workspace_path) = run.workspace_path.as_deref() else {
+                continue;
+            };
+            let needs_reload = self
+                .state
+                .saved_contexts
+                .get(&run.issue_id)
+                .is_none_or(|context| context.transcript.is_empty());
+            if !needs_reload {
+                continue;
+            }
+            match load_workspace_saved_context_artifact(workspace_path) {
+                Ok(Some(context)) => {
+                    self.state
+                        .saved_contexts
+                        .insert(run.issue_id.clone(), context);
+                },
+                Ok(None) => {},
+                Err(error) => {
+                    warn!(
+                        %error,
+                        workspace_path = %workspace_path.display(),
+                        issue_identifier = %run.issue_identifier,
+                        "loading workspace saved context artifact failed"
+                    );
+                },
+            }
+        }
     }
 
     pub(crate) fn register_throttle(&mut self, signal: RateLimitSignal) {

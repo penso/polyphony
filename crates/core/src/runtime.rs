@@ -84,6 +84,8 @@ pub struct VisibleIssueRow {
     pub issue_identifier: String,
     pub title: String,
     pub state: String,
+    #[serde(default)]
+    pub approval_state: IssueApprovalState,
     pub priority: Option<i32>,
     pub labels: Vec<String>,
     #[serde(default)]
@@ -132,6 +134,8 @@ pub struct VisibleTriggerRow {
     pub identifier: String,
     pub title: String,
     pub status: String,
+    #[serde(default)]
+    pub approval_state: IssueApprovalState,
     pub priority: Option<i32>,
     pub labels: Vec<String>,
     #[serde(default)]
@@ -160,6 +164,8 @@ pub struct RuntimeSnapshot {
     pub visible_issues: Vec<VisibleIssueRow>,
     #[serde(default)]
     pub visible_triggers: Vec<VisibleTriggerRow>,
+    #[serde(default)]
+    pub approved_issue_keys: Vec<String>,
     pub running: Vec<RunningRow>,
     #[serde(default)]
     pub agent_history: Vec<AgentHistoryRow>,
@@ -521,6 +527,7 @@ pub struct PullRequestRequest {
 pub struct WorkspaceCommitRequest {
     pub workspace_path: PathBuf,
     pub branch_name: String,
+    pub base_branch: Option<String>,
     pub commit_message: String,
     pub remote_name: String,
     pub auth_token: Option<String>,
@@ -541,6 +548,8 @@ pub struct CachedSnapshot {
     pub visible_issues: Vec<VisibleIssueRow>,
     #[serde(default)]
     pub visible_triggers: Vec<VisibleTriggerRow>,
+    #[serde(default)]
+    pub approved_issue_keys: Vec<String>,
     pub budgets: Vec<BudgetSnapshot>,
     pub agent_catalogs: Vec<AgentModelCatalog>,
     #[serde(default)]

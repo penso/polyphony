@@ -1,5 +1,17 @@
 use crate::{prelude::*, *};
 
+use {
+    serde::Serialize,
+    tokio::{fs::OpenOptions, io::AsyncWriteExt},
+};
+
+pub(crate) const MAX_RECENT_EVENTS: usize = 256;
+pub(crate) const MAX_RECENT_EVENT_MESSAGE_CHARS: usize = 512;
+pub(crate) const MAX_RUN_HISTORY: usize = 256;
+pub(crate) const MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES: usize = 24;
+pub(crate) const MAX_PERSISTED_RUN_CONTEXT_TRANSCRIPT_ENTRIES: usize = 12;
+pub(crate) const MAX_SAVED_CONTEXT_MESSAGE_CHARS: usize = 2_048;
+
 fn path_fingerprint(path: &Path) -> Result<WorkflowFileFingerprint, std::io::Error> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(WorkflowFileFingerprint::Present {
@@ -491,6 +503,7 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
         cadence: RuntimeCadence::default(),
         visible_issues: Vec::new(),
         visible_triggers: Vec::new(),
+        approved_issue_keys: Vec::new(),
         running: Vec::new(),
         agent_history: Vec::new(),
         retrying: Vec::new(),
@@ -541,8 +554,112 @@ pub(crate) fn build_persisted_run_record(
         tokens: running.tokens.clone(),
         workspace_path: Some(running.workspace_path.clone()),
         error,
-        saved_context,
+        saved_context: compact_saved_context_for_history(saved_context),
     }
+}
+
+pub(crate) fn compact_saved_context_in_place(context: &mut AgentContextSnapshot) {
+    for entry in &mut context.transcript {
+        entry.message = truncate_chars(&entry.message, MAX_SAVED_CONTEXT_MESSAGE_CHARS);
+    }
+    if context.transcript.len() > MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES {
+        let drain = context
+            .transcript
+            .len()
+            .saturating_sub(MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES);
+        context.transcript.drain(..drain);
+    }
+}
+
+pub(crate) fn compact_saved_context_for_history(
+    saved_context: Option<AgentContextSnapshot>,
+) -> Option<AgentContextSnapshot> {
+    saved_context.map(|mut context| {
+        compact_saved_context_in_place(&mut context);
+        if context.transcript.len() > MAX_PERSISTED_RUN_CONTEXT_TRANSCRIPT_ENTRIES {
+            let drain = context
+                .transcript
+                .len()
+                .saturating_sub(MAX_PERSISTED_RUN_CONTEXT_TRANSCRIPT_ENTRIES);
+            context.transcript.drain(..drain);
+        }
+        context
+    })
+}
+
+pub(crate) fn saved_context_metadata(mut context: AgentContextSnapshot) -> AgentContextSnapshot {
+    context.transcript.clear();
+    context
+}
+
+pub(crate) fn persisted_run_metadata(mut run: PersistedRunRecord) -> PersistedRunRecord {
+    run.saved_context = None;
+    run
+}
+
+pub(crate) fn truncate_runtime_event_message(message: String) -> String {
+    truncate_chars(&message, MAX_RECENT_EVENT_MESSAGE_CHARS)
+}
+
+pub(crate) async fn append_workspace_agent_event_artifact(
+    workspace_path: &Path,
+    event: &AgentEvent,
+) -> Result<(), Error> {
+    append_workspace_jsonl_record(&workspace_agent_events_artifact_path(workspace_path), event)
+        .await
+}
+
+pub(crate) async fn append_workspace_run_record_artifact(
+    workspace_path: &Path,
+    run: &PersistedRunRecord,
+) -> Result<(), Error> {
+    append_workspace_jsonl_record(&workspace_run_history_artifact_path(workspace_path), run).await
+}
+
+pub(crate) async fn persist_workspace_saved_context_artifact(
+    workspace_path: &Path,
+    context: &AgentContextSnapshot,
+) -> Result<(), Error> {
+    let artifact_dir = workspace_runtime_artifact_dir(workspace_path);
+    tokio::fs::create_dir_all(&artifact_dir).await?;
+    let payload = serde_json::to_vec_pretty(context)
+        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    tokio::fs::write(
+        workspace_saved_context_artifact_path(workspace_path),
+        payload,
+    )
+    .await?;
+    Ok(())
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let end = value
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len());
+    let mut truncated = value[..end].to_string();
+    truncated.push('…');
+    truncated
+}
+
+async fn append_workspace_jsonl_record<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+    let payload =
+        serde_json::to_vec(value).map_err(|error| CoreError::Adapter(error.to_string()))?;
+    file.write_all(&payload).await?;
+    file.write_all(b"\n").await?;
+    Ok(())
 }
 
 pub(crate) fn issue_trigger_source(
@@ -557,12 +674,52 @@ pub(crate) fn issue_trigger_source(
         .unwrap_or_else(|| tracker_kind.to_string())
 }
 
+pub(crate) fn issue_key_for_source(source: &str, issue_id: &str) -> String {
+    if issue_id
+        .split(':')
+        .next()
+        .is_some_and(|prefix| matches!(prefix, "github" | "beads" | "gitlab" | "linear" | "mock"))
+    {
+        issue_id.to_string()
+    } else {
+        format!("{source}:{issue_id}")
+    }
+}
+
+pub(crate) fn approval_key_for_issue(
+    tracker_kind: polyphony_core::TrackerKind,
+    issue: &Issue,
+) -> String {
+    issue_key_for_source(&issue_source_for_issue(tracker_kind, issue), &issue.id)
+}
+
+pub(crate) fn approval_key_for_row(
+    tracker_kind: polyphony_core::TrackerKind,
+    row: &VisibleIssueRow,
+) -> String {
+    issue_key_for_source(&issue_trigger_source(tracker_kind, row), &row.issue_id)
+}
+
+pub(crate) fn issue_source_for_issue(
+    tracker_kind: polyphony_core::TrackerKind,
+    issue: &Issue,
+) -> String {
+    issue
+        .id
+        .split(':')
+        .next()
+        .filter(|prefix| matches!(*prefix, "github" | "beads" | "gitlab" | "linear" | "mock"))
+        .map(str::to_string)
+        .unwrap_or_else(|| tracker_kind.to_string())
+}
+
 pub(crate) fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
     VisibleIssueRow {
         issue_id: issue.id.clone(),
         issue_identifier: issue.identifier.clone(),
         title: issue.title.clone(),
         state: issue.state.clone(),
+        approval_state: issue.approval_state,
         priority: issue.priority,
         labels: issue.labels.clone(),
         description: issue.description.clone(),
@@ -644,4 +801,186 @@ pub(crate) fn rotate_agent_candidates(
         .chain(candidate_agents[..=previous_index].iter())
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn compact_saved_context_trims_old_entries_and_long_messages() {
+        let now = Utc::now();
+        let mut context = AgentContextSnapshot {
+            issue_id: "1".into(),
+            issue_identifier: "ISSUE-1".into(),
+            updated_at: now,
+            agent_name: "router".into(),
+            model: None,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            status: None,
+            error: None,
+            usage: TokenUsage::default(),
+            transcript: (0..40)
+                .map(|index| AgentContextEntry {
+                    at: now,
+                    kind: AgentEventKind::Notification,
+                    message: format!("{index}-{}", "x".repeat(3_000)),
+                })
+                .collect(),
+        };
+
+        compact_saved_context_in_place(&mut context);
+
+        assert_eq!(
+            context.transcript.len(),
+            MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES
+        );
+        assert!(context.transcript[0].message.starts_with("16-"));
+        assert!(
+            context
+                .transcript
+                .iter()
+                .all(|entry| entry.message.chars().count() <= MAX_SAVED_CONTEXT_MESSAGE_CHARS + 1)
+        );
+    }
+
+    #[test]
+    fn compact_saved_context_for_history_keeps_only_recent_tail() {
+        let now = Utc::now();
+        let saved_context = AgentContextSnapshot {
+            issue_id: "1".into(),
+            issue_identifier: "ISSUE-1".into(),
+            updated_at: now,
+            agent_name: "implementer".into(),
+            model: None,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            status: None,
+            error: None,
+            usage: TokenUsage::default(),
+            transcript: (0..20)
+                .map(|index| AgentContextEntry {
+                    at: now,
+                    kind: AgentEventKind::Notification,
+                    message: format!("entry-{index}"),
+                })
+                .collect(),
+        };
+
+        let compacted = compact_saved_context_for_history(Some(saved_context)).unwrap();
+
+        assert_eq!(
+            compacted.transcript.len(),
+            MAX_PERSISTED_RUN_CONTEXT_TRANSCRIPT_ENTRIES
+        );
+        assert_eq!(compacted.transcript[0].message, "entry-8");
+        assert_eq!(compacted.transcript.last().unwrap().message, "entry-19");
+    }
+
+    #[tokio::test]
+    async fn workspace_runtime_artifacts_are_written_under_polyphony_dir() {
+        let workspace_path = std::env::temp_dir().join(format!(
+            "polyphony-artifacts-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        if workspace_path.exists() {
+            std::fs::remove_dir_all(&workspace_path).unwrap();
+        }
+        tokio::fs::create_dir_all(&workspace_path).await.unwrap();
+        let now = Utc::now();
+        let event = AgentEvent {
+            issue_id: "issue-7".into(),
+            issue_identifier: "DOG-7".into(),
+            agent_name: "implementer".into(),
+            session_id: Some("sess-1".into()),
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            kind: AgentEventKind::Notification,
+            at: now,
+            message: Some("hello".into()),
+            usage: None,
+            rate_limits: None,
+            raw: None,
+        };
+        let context = AgentContextSnapshot {
+            issue_id: "issue-7".into(),
+            issue_identifier: "DOG-7".into(),
+            updated_at: now,
+            agent_name: "implementer".into(),
+            model: None,
+            session_id: Some("sess-1".into()),
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            status: Some(AttemptStatus::Succeeded),
+            error: None,
+            usage: TokenUsage::default(),
+            transcript: vec![AgentContextEntry {
+                at: now,
+                kind: AgentEventKind::Notification,
+                message: "hello".into(),
+            }],
+        };
+        let run = PersistedRunRecord {
+            issue_id: "issue-7".into(),
+            issue_identifier: "DOG-7".into(),
+            agent_name: "implementer".into(),
+            model: None,
+            session_id: Some("sess-1".into()),
+            thread_id: None,
+            turn_id: None,
+            codex_app_server_pid: None,
+            status: AttemptStatus::Succeeded,
+            attempt: Some(1),
+            max_turns: 3,
+            turn_count: 1,
+            last_event: Some("Notification".into()),
+            last_message: Some("hello".into()),
+            started_at: now,
+            finished_at: Some(now),
+            last_event_at: Some(now),
+            tokens: TokenUsage::default(),
+            workspace_path: Some(workspace_path.clone()),
+            error: None,
+            saved_context: Some(context.clone()),
+        };
+
+        append_workspace_agent_event_artifact(&workspace_path, &event)
+            .await
+            .unwrap();
+        persist_workspace_saved_context_artifact(&workspace_path, &context)
+            .await
+            .unwrap();
+        append_workspace_run_record_artifact(&workspace_path, &run)
+            .await
+            .unwrap();
+
+        let artifact_dir = workspace_path.join(".polyphony").join("runtime");
+        let events: String = tokio::fs::read_to_string(artifact_dir.join("agent-events.jsonl"))
+            .await
+            .unwrap();
+        let saved_context: String =
+            tokio::fs::read_to_string(artifact_dir.join("saved-context.json"))
+                .await
+                .unwrap();
+        let runs: String = tokio::fs::read_to_string(artifact_dir.join("run-history.jsonl"))
+            .await
+            .unwrap();
+
+        assert!(events.contains("\"issue_identifier\":\"DOG-7\""));
+        assert!(saved_context.contains("\"issue_identifier\": \"DOG-7\""));
+        assert!(runs.contains("\"issue_identifier\":\"DOG-7\""));
+        std::fs::remove_dir_all(&workspace_path).unwrap();
+    }
 }

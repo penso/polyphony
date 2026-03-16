@@ -4,9 +4,9 @@ pub(crate) use {
     graphql_client::GraphQLQuery,
     octocrab::models::{Author, AuthorAssociation},
     polyphony_core::{
-        Error as CoreError, IssueAuthor, PullRequestCommentTrigger, PullRequestCommenter,
-        PullRequestConflictTrigger, PullRequestManager, PullRequestRef, PullRequestRequest,
-        PullRequestReviewComment, PullRequestReviewTrigger, PullRequestTrigger,
+        Error as CoreError, IssueApprovalState, IssueAuthor, PullRequestCommentTrigger,
+        PullRequestCommenter, PullRequestConflictTrigger, PullRequestManager, PullRequestRef,
+        PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger, PullRequestTrigger,
         PullRequestTriggerSource, RateLimitSignal, ReviewProviderKind,
     },
     reqwest::{Response, header::RETRY_AFTER},

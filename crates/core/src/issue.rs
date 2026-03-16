@@ -68,6 +68,24 @@ pub struct IssueComment {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueApprovalState {
+    #[default]
+    Approved,
+    Waiting,
+}
+
+impl fmt::Display for IssueApprovalState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Approved => "approved",
+            Self::Waiting => "waiting",
+        };
+        f.write_str(label)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Issue {
     pub id: String,
@@ -82,6 +100,8 @@ pub struct Issue {
     pub labels: Vec<String>,
     pub comments: Vec<IssueComment>,
     pub blocked_by: Vec<BlockerRef>,
+    #[serde(default)]
+    pub approval_state: IssueApprovalState,
     #[serde(default)]
     pub parent_id: Option<String>,
     pub created_at: Option<DateTime<Utc>>,

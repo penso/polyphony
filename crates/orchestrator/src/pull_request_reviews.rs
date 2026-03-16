@@ -429,6 +429,17 @@ impl RuntimeService {
         self.state.totals.seconds_running = self.state.ended_runtime_seconds;
         let finished_at = Utc::now();
         self.finalize_saved_context(&issue_id, &issue_identifier, &running, &outcome);
+        if let Some(context) = self.state.saved_contexts.get(&issue_id)
+            && let Err(error) =
+                persist_workspace_saved_context_artifact(&running.workspace_path, context).await
+        {
+            warn!(
+                %error,
+                workspace_path = %running.workspace_path.display(),
+                issue_identifier = %issue_identifier,
+                "persisting workspace saved context failed"
+            );
+        }
         let persisted_run = build_persisted_run_record(
             &running,
             outcome.status,
@@ -796,6 +807,11 @@ impl RuntimeService {
                 )
             },
         );
+        let workflow = self.workflow();
+        let manager = self.build_workspace_manager(&workflow);
+        manager
+            .run_after_outcome_best_effort(&workflow.config.hooks, &running.workspace_path)
+            .await;
         Ok(())
     }
 }

@@ -1,3 +1,5 @@
+mod budget;
+
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
@@ -17,6 +19,8 @@ use {
         sync::mpsc,
     },
 };
+
+pub use crate::budget::fetch_budget_for_agent;
 
 #[derive(Clone, Copy)]
 pub enum BudgetField {
@@ -544,34 +548,6 @@ pub fn apply_budget_probe(
         "unable to parse budget command output for {}",
         snapshot.component
     )))
-}
-
-pub async fn fetch_budget_for_agent(
-    agent: &AgentDefinition,
-) -> Result<Option<BudgetSnapshot>, CoreError> {
-    if agent.credits_command.is_none() && agent.spending_command.is_none() {
-        return Ok(None);
-    }
-    let mut snapshot = BudgetSnapshot {
-        component: format!("agent:{}", agent.name),
-        captured_at: Utc::now(),
-        credits_remaining: None,
-        credits_total: None,
-        spent_usd: None,
-        soft_limit_usd: None,
-        hard_limit_usd: None,
-        reset_at: None,
-        raw: None,
-    };
-    if let Some(command) = &agent.credits_command {
-        let output = run_shell_capture(command, None, &agent.env).await?;
-        apply_budget_probe(&mut snapshot, &output, BudgetField::Credits)?;
-    }
-    if let Some(command) = &agent.spending_command {
-        let output = run_shell_capture(command, None, &agent.env).await?;
-        apply_budget_probe(&mut snapshot, &output, BudgetField::Spending)?;
-    }
-    Ok(Some(snapshot))
 }
 
 pub fn sanitize_session_fragment(value: &str) -> String {

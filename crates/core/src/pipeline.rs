@@ -166,11 +166,33 @@ impl fmt::Display for DeliverableStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableDecision {
+    #[default]
+    Waiting,
+    Accepted,
+    Rejected,
+}
+
+impl fmt::Display for DeliverableDecision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Waiting => "waiting",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+        };
+        f.write_str(s)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Deliverable {
     pub kind: DeliverableKind,
     pub status: DeliverableStatus,
     pub url: Option<String>,
+    #[serde(default)]
+    pub decision: DeliverableDecision,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -510,6 +532,8 @@ pub struct MovementRow {
     pub status: MovementStatus,
     pub task_count: usize,
     pub tasks_completed: usize,
+    #[serde(default)]
+    pub deliverable: Option<Deliverable>,
     pub has_deliverable: bool,
     #[serde(default)]
     pub review_target: Option<ReviewTarget>,
@@ -525,10 +549,20 @@ pub struct TaskRow {
     pub id: TaskId,
     pub movement_id: MovementId,
     pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub category: TaskCategory,
     pub status: TaskStatus,
     pub ordinal: u32,
     pub agent_name: Option<String>,
     pub turns_completed: u32,
     pub total_tokens: u64,
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub finished_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }

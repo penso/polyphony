@@ -30,4 +30,6 @@ polyphony-agent-local = { path = "../agent-local", optional = true }
 polyphony-agent-pi = { path = "../agent-pi", optional = true }
 
 [dev-dependencies]
+chrono.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true

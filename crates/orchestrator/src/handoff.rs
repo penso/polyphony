@@ -54,6 +54,7 @@ impl RuntimeService {
                 kind: event.kind,
                 message: message.clone(),
             });
+            compact_saved_context_in_place(context);
         }
     }
 
@@ -101,6 +102,7 @@ impl RuntimeService {
                 message: format!("run ended with error: {error}"),
             });
         }
+        compact_saved_context_in_place(context);
     }
 
     pub(crate) async fn run_success_handoff(
@@ -111,13 +113,19 @@ impl RuntimeService {
         if !workflow.config.automation.enabled {
             return Ok(());
         }
+        info!(
+            issue_identifier = %running.issue.identifier,
+            workspace_path = %running.workspace_path.display(),
+            agent = %running.agent_name,
+            "starting automated handoff"
+        );
         let committer = self
             .committer
-            .as_ref()
+            .clone()
             .ok_or_else(|| CoreError::Adapter("workspace committer is not configured".into()))?;
         let pull_request_manager = self
             .pull_request_manager
-            .as_ref()
+            .clone()
             .ok_or_else(|| CoreError::Adapter("pull request manager is not configured".into()))?;
         let repository = workflow
             .config
@@ -152,6 +160,7 @@ impl RuntimeService {
             .commit_and_push(&WorkspaceCommitRequest {
                 workspace_path: running.workspace_path.clone(),
                 branch_name: branch_name.clone(),
+                base_branch: Some(base_branch.clone()),
                 commit_message,
                 remote_name: workflow.config.automation.git.remote_name.clone(),
                 auth_token: workflow.config.tracker.api_key.clone(),
@@ -169,6 +178,20 @@ impl RuntimeService {
             );
             return Ok(());
         };
+        info!(
+            issue_identifier = %running.issue.identifier,
+            branch_name = %commit_result.branch_name,
+            head_sha = %commit_result.head_sha,
+            changed_files = commit_result.changed_files,
+            "workspace changes committed and pushed"
+        );
+        self.push_event(
+            EventScope::Handoff,
+            format!(
+                "{} pushed {} on {}",
+                running.issue.identifier, commit_result.head_sha, commit_result.branch_name
+            ),
+        );
 
         let pr_title = render_issue_template_with_strings(
             workflow
@@ -210,6 +233,27 @@ impl RuntimeService {
                 draft: workflow.config.automation.draft_pull_requests,
             })
             .await?;
+        info!(
+            issue_identifier = %running.issue.identifier,
+            pull_request_number = pull_request.number,
+            pull_request_url = pull_request.url.as_deref().unwrap_or(""),
+            "pull request ensured for handoff"
+        );
+        if let Some(movement_id) = running.movement_id.as_ref()
+            && let Some(movement) = self.state.movements.get_mut(movement_id)
+        {
+            movement.status = MovementStatus::Delivered;
+            movement.deliverable = Some(polyphony_core::Deliverable {
+                kind: polyphony_core::DeliverableKind::GithubPullRequest,
+                status: polyphony_core::DeliverableStatus::Open,
+                url: pull_request.url.clone(),
+                decision: polyphony_core::DeliverableDecision::Waiting,
+            });
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+        }
 
         if let Some(review_body) = self
             .run_review_pass(workflow, running, &pull_request)
@@ -229,6 +273,10 @@ impl RuntimeService {
                 running.issue.identifier, pull_request.number, commit_result.branch_name
             ),
         );
+        let manager = self.build_workspace_manager(workflow);
+        manager
+            .run_after_outcome_best_effort(&workflow.config.hooks, &running.workspace_path)
+            .await;
         Ok(())
     }
 
@@ -249,6 +297,12 @@ impl RuntimeService {
                     .find(|agent| agent.name == running.agent_name)
             })
             .ok_or_else(|| CoreError::Adapter("review agent is not available".into()))?;
+        info!(
+            issue_identifier = %running.issue.identifier,
+            review_agent = %review_agent.name,
+            pull_request_number = pull_request.number,
+            "starting automated PR review pass"
+        );
         let review_path = running.workspace_path.join(".polyphony").join("review.md");
         if let Some(parent) = review_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -321,6 +375,12 @@ impl RuntimeService {
             Ok(result) if matches!(result.status, AttemptStatus::Succeeded) => {
                 let review = tokio::fs::read_to_string(&review_path).await.ok();
                 let _ = tokio::fs::remove_file(&review_path).await;
+                info!(
+                    issue_identifier = %running.issue.identifier,
+                    pull_request_number = pull_request.number,
+                    review_generated = review.as_ref().is_some_and(|body| !body.trim().is_empty()),
+                    "automated PR review pass completed"
+                );
                 Ok(review.and_then(|body| {
                     let trimmed = body.trim();
                     if trimmed.is_empty() {

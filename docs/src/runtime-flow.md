@@ -53,6 +53,7 @@ When an issue is dispatched:
 8. agent events stream back into the orchestrator with live session metadata such as `session_id`, `thread_id`, `turn_id`, and the app-server PID when available
 9. the orchestrator updates snapshots, saved context, retry state, and budgets from those streamed events
 10. optional handoff automation can commit the branch, open a PR, run a review pass, and notify humans
+11. once an outcome has been published, `polyphony-workspace` can run an optional `after_outcome` hook, for example `cargo clean`
 
 When `WORKFLOW.md` changes successfully, future dispatch, retry handling, model discovery, budget
 polling, and feedback/automation surfaces use the rebuilt runtime components. In-flight agent

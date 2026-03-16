@@ -1,6 +1,7 @@
+use std::collections::{HashMap, HashSet};
+
 use {
-    chrono::{DateTime, Utc},
-    polyphony_core::{RuntimeSnapshot, VisibleTriggerKind},
+    polyphony_core::{IssueApprovalState, RuntimeSnapshot, VisibleTriggerKind},
     ratatui::{
         layout::{Alignment, Constraint, Rect},
         style::{Modifier, Style},
@@ -15,7 +16,8 @@ use {
 use crate::app::AppState;
 
 const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const GITHUB_ICON: &str = "";
+const APPROVED_ICON: &str = "✓";
+const WAITING_ICON: &str = "◷";
 
 pub fn draw_triggers_tab(
     frame: &mut ratatui::Frame<'_>,
@@ -25,7 +27,22 @@ pub fn draw_triggers_tab(
 ) {
     let theme = app.theme;
     let indices = &app.sorted_issue_indices;
-    let now = Utc::now();
+
+    // Build a map of trigger_id → task_count from movements
+    let mut task_counts: HashMap<&str, usize> = HashMap::new();
+    for movement in &snapshot.movements {
+        if let Some(ref identifier) = movement.issue_identifier {
+            // Match against trigger_id
+            *task_counts.entry(identifier.as_str()).or_default() += movement.task_count;
+        }
+    }
+
+    // Build set of currently running trigger IDs
+    let running_ids: HashSet<&str> = snapshot
+        .running
+        .iter()
+        .map(|r| r.issue_id.as_str())
+        .collect();
 
     let trigger_data: Vec<_> = indices
         .iter()
@@ -34,9 +51,6 @@ pub fn draw_triggers_tab(
             None::<String>,
             |current_parent_identifier, (display_index, &index)| {
                 let trigger = snapshot.visible_triggers.get(index)?;
-                let age = trigger
-                    .created_at
-                    .map(|created| format_relative_time(created, now));
                 let depth = app.tree_depth.get(display_index).copied().unwrap_or(0);
                 let is_last = app
                     .tree_last_child
@@ -52,25 +66,28 @@ pub fn draw_triggers_tab(
                         &trigger.identifier,
                     )
                 };
-                Some((trigger, age, depth, is_last, display_identifier))
+                Some((trigger, depth, is_last, display_identifier))
             },
         )
         .collect();
+    let max_child_identifier_len = trigger_data
+        .iter()
+        .filter(|(_, depth, ..)| *depth > 0)
+        .map(|(_, _, _, display_identifier)| display_identifier.chars().count())
+        .max()
+        .unwrap_or(0);
 
     let max_id_len = trigger_data
         .iter()
-        .map(|(trigger, .., display_identifier)| {
-            display_identifier.len()
-                + if trigger.source == "github" {
-                    GITHUB_ICON.len() + 1
-                } else {
-                    0
-                }
+        .map(|(trigger, _, _, display_identifier)| {
+            format_display_identifier(display_identifier, false, max_child_identifier_len)
+                .chars()
+                .count()
+                + issue_id_prefix_width(trigger)
         })
         .max()
         .unwrap_or(2)
-        .max(2) as u16
-        + 1;
+        .max(2) as u16;
     let max_kind_len = trigger_data
         .iter()
         .map(|(trigger, ..)| trigger.kind.to_string().len())
@@ -78,34 +95,15 @@ pub fn draw_triggers_tab(
         .unwrap_or(4)
         .max(4) as u16
         + 1;
-    let any_has_workspace = trigger_data
-        .iter()
-        .any(|(trigger, ..)| trigger.has_workspace);
-    let workspace_indicator_width: u16 = if any_has_workspace {
-        2
-    } else {
-        0
-    };
-    let max_status_len = trigger_data
-        .iter()
-        .map(|(trigger, ..)| trigger.status.len())
-        .max()
-        .unwrap_or(6)
-        .max(6) as u16
-        + 1
-        + workspace_indicator_width;
-    let max_age_len = trigger_data
-        .iter()
-        .filter_map(|(_, age, ..)| age.as_ref().map(|value| value.len()))
-        .max()
-        .unwrap_or(3)
-        .max(3) as u16
-        + 1;
+    let status_col_width: u16 = 3; // emoji + space
+    let time_col_width: u16 = 16; // "YYYY-MM-DD HH:MM"
 
     let header = Row::new(vec![
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(
             Line::from(Span::styled("ID", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Left),
+                .alignment(Alignment::Right),
         ),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(
@@ -113,47 +111,45 @@ pub fn draw_triggers_tab(
                 .alignment(Alignment::Right),
         ),
         Cell::from(
-            Line::from(Span::styled("Status", Style::default().fg(theme.muted)))
+            Line::from(Span::styled("", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
         ),
         Cell::from(
-            Line::from(vec![
-                Span::styled("Age", Style::default().fg(theme.muted)),
-                Span::raw(" "),
-            ])
-            .alignment(Alignment::Right),
+            Line::from(Span::styled("Tasks", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
         ),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
+    let workspace_col_width: u16 = 2; // "● " or empty
+    let tasks_col_width: u16 = 6; // "Tasks" + space
     let title_max_width = (area.width as usize).saturating_sub(
         2 + 1
             + 2
+            + workspace_col_width as usize
+            + time_col_width as usize
             + max_id_len as usize
             + max_kind_len as usize
-            + max_status_len as usize
-            + max_age_len as usize
+            + status_col_width as usize
+            + tasks_col_width as usize
             + 4,
     );
 
     let rows: Vec<Row> = trigger_data
         .iter()
-        .map(|(trigger, age, depth, is_last, display_identifier)| {
-            let state_color = state_color(&trigger.status, theme);
+        .map(|(trigger, depth, is_last, display_identifier)| {
             let kind_color = kind_color(trigger.kind, theme);
-            let id_spans = if trigger.source == "github" {
-                vec![
-                    Span::styled(GITHUB_ICON, Style::default().fg(theme.info)),
-                    Span::raw(" "),
-                    Span::styled(display_identifier.clone(), Style::default().fg(theme.info)),
-                ]
-            } else {
-                vec![Span::styled(
-                    display_identifier.clone(),
-                    Style::default().fg(theme.info),
-                )]
-            };
+            let formatted_identifier =
+                format_display_identifier(display_identifier, *depth > 0, max_child_identifier_len);
+            let mut id_spans = Vec::new();
+            if let Some((icon, color)) = approval_marker(trigger, theme) {
+                id_spans.push(Span::styled(icon, Style::default().fg(color)));
+            }
+            id_spans.push(Span::styled(
+                formatted_identifier,
+                Style::default().fg(theme.muted),
+            ));
 
             let (tree_prefix, tree_prefix_width) = if *depth > 0 {
                 let connector = if *is_last {
@@ -180,8 +176,35 @@ pub fn draw_triggers_tab(
                 )]
             };
 
+            let time_label = trigger
+                .created_at
+                .map(super::format_listing_time)
+                .unwrap_or_else(|| "—".into());
+
+            // Workspace indicator: spinner if running, dot if workspace, empty otherwise
+            let is_running = running_ids.contains(trigger.trigger_id.as_str());
+            let workspace_indicator = if is_running {
+                let spinner =
+                    BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
+                Span::styled(
+                    spinner.to_string(),
+                    Style::default().fg(theme.highlight),
+                )
+            } else if trigger.has_workspace {
+                Span::styled("●", Style::default().fg(theme.highlight))
+            } else {
+                Span::styled(" ", Style::default())
+            };
+
+            let (status_icon, status_color) = status_emoji(&trigger.status, theme);
+
             Row::new(vec![
-                Cell::from(Line::from(id_spans)),
+                Cell::from(workspace_indicator),
+                Cell::from(Span::styled(
+                    time_label,
+                    Style::default().fg(theme.muted),
+                )),
+                Cell::from(Line::from(id_spans).alignment(Alignment::Right)),
                 Cell::from(Line::from(title_spans)),
                 Cell::from(
                     Line::from(Span::styled(
@@ -191,30 +214,27 @@ pub fn draw_triggers_tab(
                     .alignment(Alignment::Right),
                 ),
                 Cell::from(
-                    Line::from(if trigger.has_workspace {
-                        vec![
-                            Span::styled("● ", Style::default().fg(theme.highlight)),
-                            Span::styled(trigger.status.clone(), Style::default().fg(state_color)),
-                            Span::raw(" "),
-                        ]
+                    Line::from(Span::styled(status_icon, Style::default().fg(status_color)))
+                        .alignment(Alignment::Right),
+                ),
+                Cell::from({
+                    let count = task_counts
+                        .get(trigger.trigger_id.as_str())
+                        .copied()
+                        .unwrap_or(0);
+                    let label = if count > 0 {
+                        count.to_string()
                     } else {
-                        vec![
-                            Span::styled(trigger.status.clone(), Style::default().fg(state_color)),
-                            Span::raw(" "),
-                        ]
-                    })
-                    .alignment(Alignment::Right),
-                ),
-                Cell::from(
-                    Line::from(vec![
-                        Span::styled(
-                            age.clone().unwrap_or_default(),
-                            Style::default().fg(theme.muted),
-                        ),
-                        Span::raw(" "),
-                    ])
-                    .alignment(Alignment::Right),
-                ),
+                        "—".into()
+                    };
+                    let color = if count > 0 {
+                        theme.foreground
+                    } else {
+                        theme.muted
+                    };
+                    Line::from(Span::styled(label, Style::default().fg(color)))
+                        .alignment(Alignment::Right)
+                }),
             ])
         })
         .collect();
@@ -263,16 +283,17 @@ pub fn draw_triggers_tab(
     };
 
     let table = Table::new(rows, [
+        Constraint::Length(workspace_col_width),
+        Constraint::Length(time_col_width),
         Constraint::Length(max_id_len),
         Constraint::Fill(1),
         Constraint::Length(max_kind_len),
-        Constraint::Length(max_status_len),
-        Constraint::Length(max_age_len),
+        Constraint::Length(status_col_width),
+        Constraint::Length(tasks_col_width),
     ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
     .block({
         let mut block = Block::default().title(Line::from(title_spans));
         if app.refresh_requested || snapshot.loading.fetching_issues {
@@ -328,12 +349,56 @@ fn compact_root_identifier(source: &str, identifier: &str) -> String {
     identifier.to_string()
 }
 
+fn format_display_identifier(identifier: &str, is_child: bool, child_width: usize) -> String {
+    if !is_child || child_width <= identifier.chars().count() {
+        return identifier.to_string();
+    }
+    format!("{identifier:>width$}", width = child_width)
+}
+
+fn issue_id_prefix_width(trigger: &polyphony_core::VisibleTriggerRow) -> usize {
+    let mut width = 0;
+    if approval_marker(trigger, crate::theme::default_theme()).is_some() {
+        width += APPROVED_ICON.chars().count();
+    }
+    width
+}
+
+fn approval_marker(
+    trigger: &polyphony_core::VisibleTriggerRow,
+    theme: crate::theme::Theme,
+) -> Option<(&'static str, ratatui::style::Color)> {
+    if trigger.kind != VisibleTriggerKind::Issue
+        || !matches!(trigger.source.as_str(), "github" | "gitlab")
+    {
+        return None;
+    }
+    Some(match trigger.approval_state {
+        IssueApprovalState::Approved => (APPROVED_ICON, theme.success),
+        IssueApprovalState::Waiting => (WAITING_ICON, theme.warning),
+    })
+}
+
 fn kind_color(kind: VisibleTriggerKind, theme: crate::theme::Theme) -> ratatui::style::Color {
     match kind {
         VisibleTriggerKind::Issue => theme.success,
         VisibleTriggerKind::PullRequestReview => theme.highlight,
         VisibleTriggerKind::PullRequestComment => theme.warning,
         VisibleTriggerKind::PullRequestConflict => theme.warning,
+    }
+}
+
+fn status_emoji(state: &str, theme: crate::theme::Theme) -> (&'static str, ratatui::style::Color) {
+    match state.to_ascii_lowercase().as_str() {
+        "open" | "in progress" | "started" | "in_progress" | "ready" => ("●", theme.success),
+        "todo" | "unstarted" | "backlog" => ("○", theme.info),
+        "debouncing" | "waiting_label" => ("◷", theme.info),
+        "closed" | "done" | "completed" | "reviewed" | "already_fixed" => ("✓", theme.muted),
+        "cancelled" | "canceled" => ("⊘", theme.muted),
+        "retrying" => ("↻", theme.warning),
+        "draft" => ("◌", theme.warning),
+        "ignored_author" | "ignored_bot" | "ignored_label" => ("⊘", theme.muted),
+        _ => ("·", theme.foreground),
     }
 }
 
@@ -367,25 +432,6 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = now.signed_duration_since(dt).num_seconds().max(0) as u64;
-    if secs < 60 {
-        "now".into()
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else if secs < 604_800 {
-        format!("{}d", secs / 86_400)
-    } else if secs < 2_592_000 {
-        format!("{}w", secs / 604_800)
-    } else if secs < 31_536_000 {
-        format!("{}mo", secs / 2_592_000)
-    } else {
-        format!("{}y", secs / 31_536_000)
-    }
-}
-
 fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, position: usize) {
     let content_height = area.height.saturating_sub(3) as usize;
     if count > content_height {
@@ -403,5 +449,17 @@ fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, posi
             scrollbar_area,
             &mut scrollbar_state,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_display_identifier;
+
+    #[test]
+    fn child_identifiers_are_right_aligned_to_widest_suffix() {
+        assert_eq!(format_display_identifier("2", true, 2), " 2");
+        assert_eq!(format_display_identifier("10", true, 2), "10");
+        assert_eq!(format_display_identifier("#7", false, 2), "#7");
     }
 }

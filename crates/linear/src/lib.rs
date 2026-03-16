@@ -445,6 +445,7 @@ fn linear_issue_from_node(node: &linear_issues_page::LinearIssuesPageIssuesNodes
                 state: Some(relation.related_issue.state.name.clone()),
             })
             .collect(),
+        approval_state: polyphony_core::IssueApprovalState::Approved,
         parent_id: None,
         created_at: parse_rfc3339(&node.created_at),
         updated_at: parse_rfc3339(&node.updated_at),
@@ -480,6 +481,7 @@ fn linear_issue_from_id_node(node: &linear_issues_by_ids::LinearIssuesByIdsIssue
                 state: Some(relation.related_issue.state.name.clone()),
             })
             .collect(),
+        approval_state: polyphony_core::IssueApprovalState::Approved,
         parent_id: None,
         created_at: parse_rfc3339(&node.created_at),
         updated_at: parse_rfc3339(&node.updated_at),
@@ -627,6 +629,7 @@ fn linear_issue_from_create_node(
             .collect(),
         comments: Vec::new(),
         blocked_by: Vec::new(),
+        approval_state: polyphony_core::IssueApprovalState::Approved,
         parent_id: None,
         created_at: parse_rfc3339(&node.created_at),
         updated_at: parse_rfc3339(&node.updated_at),
@@ -657,6 +660,7 @@ fn linear_issue_from_update_node(
             .collect(),
         comments: Vec::new(),
         blocked_by: Vec::new(),
+        approval_state: polyphony_core::IssueApprovalState::Approved,
         parent_id: None,
         created_at: parse_rfc3339(&node.created_at),
         updated_at: parse_rfc3339(&node.updated_at),

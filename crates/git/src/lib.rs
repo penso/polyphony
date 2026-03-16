@@ -143,54 +143,64 @@ fn commit_and_push_sync(
         ))
         .map_err(|error| CoreError::Adapter(format!("git status failed: {error}")))?;
     let changed_files = statuses.iter().count();
-    if changed_files == 0 {
+    if changed_files > 0 {
+        let mut index = repo
+            .index()
+            .map_err(|error| CoreError::Adapter(format!("open git index failed: {error}")))?;
+        index
+            .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .map_err(|error| CoreError::Adapter(format!("stage changes failed: {error}")))?;
+        let tree_id = index
+            .write_tree()
+            .map_err(|error| CoreError::Adapter(format!("write git tree failed: {error}")))?;
+        index
+            .write()
+            .map_err(|error| CoreError::Adapter(format!("persist git index failed: {error}")))?;
+        let tree = repo
+            .find_tree(tree_id)
+            .map_err(|error| CoreError::Adapter(format!("find git tree failed: {error}")))?;
+        let signature = resolve_signature(
+            &repo,
+            request.author_name.as_deref(),
+            request.author_email.as_deref(),
+        )?;
+        let parents = repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok())
+            .map(|commit| vec![commit])
+            .unwrap_or_default();
+        let parent_refs = parents.iter().collect::<Vec<_>>();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &request.commit_message,
+            &tree,
+            &parent_refs,
+        )
+        .map_err(|error| CoreError::Adapter(format!("create git commit failed: {error}")))?;
+    }
+
+    let head_commit = repo
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(|error| CoreError::Adapter(format!("resolve pushed head failed: {error}")))?;
+    let head_sha = head_commit.id().to_string();
+    let has_deliverable = if changed_files > 0 {
+        true
+    } else {
+        branch_is_ahead_of_base(&repo, head_commit.id(), request.base_branch.as_deref())?
+    };
+    if !has_deliverable {
         debug!(
             workspace_path = %request.workspace_path.display(),
             branch_name = %request.branch_name,
-            "workspace commit skipped because there are no changes"
+            base_branch = request.base_branch.as_deref().unwrap_or("<none>"),
+            "workspace handoff skipped because branch matches base and there are no changes"
         );
         return Ok(None);
     }
-
-    let mut index = repo
-        .index()
-        .map_err(|error| CoreError::Adapter(format!("open git index failed: {error}")))?;
-    index
-        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
-        .map_err(|error| CoreError::Adapter(format!("stage changes failed: {error}")))?;
-    let tree_id = index
-        .write_tree()
-        .map_err(|error| CoreError::Adapter(format!("write git tree failed: {error}")))?;
-    let tree = repo
-        .find_tree(tree_id)
-        .map_err(|error| CoreError::Adapter(format!("find git tree failed: {error}")))?;
-    let signature = resolve_signature(
-        &repo,
-        request.author_name.as_deref(),
-        request.author_email.as_deref(),
-    )?;
-    let parents = repo
-        .head()
-        .ok()
-        .and_then(|head| head.peel_to_commit().ok())
-        .map(|commit| vec![commit])
-        .unwrap_or_default();
-    let parent_refs = parents.iter().collect::<Vec<_>>();
-    repo.commit(
-        Some("HEAD"),
-        &signature,
-        &signature,
-        &request.commit_message,
-        &tree,
-        &parent_refs,
-    )
-    .map_err(|error| CoreError::Adapter(format!("create git commit failed: {error}")))?;
-    let head_sha = repo
-        .head()
-        .and_then(|head| head.peel_to_commit())
-        .map_err(|error| CoreError::Adapter(format!("resolve pushed head failed: {error}")))?
-        .id()
-        .to_string();
 
     let mut remote = repo
         .find_remote(&request.remote_name)
@@ -227,6 +237,31 @@ fn commit_and_push_sync(
         head_sha,
         changed_files,
     }))
+}
+
+fn branch_is_ahead_of_base(
+    repo: &git2::Repository,
+    head_oid: git2::Oid,
+    base_branch: Option<&str>,
+) -> Result<bool, CoreError> {
+    let base_commit = resolve_base_commit(repo, base_branch)?;
+    if head_oid == base_commit.id() {
+        return Ok(false);
+    }
+    let mut revwalk = repo
+        .revwalk()
+        .map_err(|error| CoreError::Adapter(format!("create revwalk failed: {error}")))?;
+    revwalk
+        .push(head_oid)
+        .map_err(|error| CoreError::Adapter(format!("walk branch head failed: {error}")))?;
+    revwalk
+        .hide(base_commit.id())
+        .map_err(|error| CoreError::Adapter(format!("hide base branch failed: {error}")))?;
+    Ok(revwalk
+        .next()
+        .transpose()
+        .map_err(|error| CoreError::Adapter(format!("walk branch commits failed: {error}")))?
+        .is_some())
 }
 
 fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> {
@@ -698,7 +733,7 @@ mod tests {
     };
 
     use super::{
-        GitWorkspaceCommitter, GitWorkspaceProvisioner, detect_github_remote,
+        GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch, detect_github_remote,
         parse_github_owner_repo,
     };
 
@@ -948,6 +983,7 @@ mod tests {
             .commit_and_push(&WorkspaceCommitRequest {
                 workspace_path: repo_path.clone(),
                 branch_name: "main".into(),
+                base_branch: Some("main".into()),
                 commit_message: "test handoff".into(),
                 remote_name: "origin".into(),
                 auth_token: None,
@@ -964,6 +1000,77 @@ mod tests {
         let remote = git2::Repository::open_bare(&remote_path).unwrap();
         let remote_head = remote
             .find_reference("refs/heads/main")
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        assert_eq!(remote_head, result.head_sha);
+    }
+
+    #[tokio::test]
+    async fn committer_skips_clean_branch_when_it_matches_base() {
+        let temp = tempdir().unwrap();
+        let remote_path = temp.path().join("remote.git");
+        git2::Repository::init_bare(&remote_path).unwrap();
+        let repo_path = temp.path().join("repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", &remote_path.display().to_string())
+            .unwrap();
+        std::fs::write(repo_path.join("README.md"), "updated\n").unwrap();
+
+        let committer = GitWorkspaceCommitter;
+        let request = WorkspaceCommitRequest {
+            workspace_path: repo_path,
+            branch_name: "main".into(),
+            base_branch: Some("main".into()),
+            commit_message: "test handoff".into(),
+            remote_name: "origin".into(),
+            auth_token: None,
+            author_name: Some("polyphony".into()),
+            author_email: Some("polyphony@example.com".into()),
+        };
+        let first_result = committer.commit_and_push(&request).await.unwrap().unwrap();
+        assert_eq!(first_result.changed_files, 1);
+
+        let result = committer.commit_and_push(&request).await.unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn committer_pushes_clean_branch_that_is_ahead_of_base() {
+        let temp = tempdir().unwrap();
+        let remote_path = temp.path().join("remote.git");
+        git2::Repository::init_bare(&remote_path).unwrap();
+
+        let repo_path = temp.path().join("repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", &remote_path.display().to_string())
+            .unwrap();
+        checkout_branch(&repo, "issue-2", Some("main")).unwrap();
+        std::fs::write(repo_path.join("foobar.txt"), "dogfood ok\n").unwrap();
+        let committer = GitWorkspaceCommitter;
+        let request = WorkspaceCommitRequest {
+            workspace_path: repo_path.clone(),
+            branch_name: "issue-2".into(),
+            base_branch: Some("main".into()),
+            commit_message: "docs(dogfood): add foobar.txt for issue #2".into(),
+            remote_name: "origin".into(),
+            auth_token: None,
+            author_name: Some("polyphony".into()),
+            author_email: Some("polyphony@example.com".into()),
+        };
+        let first_result = committer.commit_and_push(&request).await.unwrap().unwrap();
+
+        let result = committer.commit_and_push(&request).await.unwrap().unwrap();
+
+        assert_eq!(result.branch_name, "issue-2");
+        assert_eq!(result.changed_files, 0);
+        assert_eq!(result.head_sha, first_result.head_sha);
+
+        let remote = git2::Repository::open_bare(&remote_path).unwrap();
+        let remote_head = remote
+            .find_reference("refs/heads/issue-2")
             .unwrap()
             .target()
             .unwrap()

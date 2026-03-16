@@ -84,15 +84,23 @@ Feature:
 Features list: one after another
 
 In existing codebase
+
  - proper lint tool
- - deterministic tests: proper testing, unit testing, in place, e2e testing to have the same guarantees in place, on top of the user testing perspective defined in the feature
+
+ - deterministic tests: proper testing, unit testing, in place, e2e testing to
+ have the same guarantees in place, on top of the user testing perspective
+ defined in the feature
 
  - TDD for workers, if possible it write tests first, then implement.
 
- - mission: initial planning phase should think about everything. models are very good at delegation, separation of concerns. Rewrite the features files defining what workers will do.
+ - mission: initial planning phase should think about everything. models are
+ very good at delegation, separation of concerns. Rewrite the features files
+ defining what workers will do.
 
  Upgrade the rigor of specification and validation criterias. Vet through all
  of them. What is correctness mean.
+
+normal mode, spec mode, autonomy level.
 
 # Interesting links
 

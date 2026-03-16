@@ -6,9 +6,11 @@
 # this file, then POLYPHONY__... env vars.
 
 [tracker]
-kind = "beads"
-active_states = ["Open", "In Progress", "Blocked"]
-terminal_states = ["Closed", "Deferred"]
+kind = "github"
+repository = "penso/polyphony"
+api_key = "$GITHUB_TOKEN"
+active_states = ["open", "todo", "in progress"]
+terminal_states = ["closed"]
 # Optional shared tracker profile from ~/.config/polyphony/config.toml:
 # profile = "github_personal"
 # GitHub example:
@@ -24,10 +26,11 @@ terminal_states = ["Closed", "Deferred"]
 # api_key = "$LINEAR_API_KEY"
 
 [workspace]
-checkout_kind = "linked_worktree"
+checkout_kind = "discrete_clone"
 source_repo_path = "/Users/penso/code/polyphony"
-sync_on_reuse = true
-# default_branch = "main"
+clone_url = "https://github.com/penso/polyphony.git"
+sync_on_reuse = false
+default_branch = "main"
 
 # ── Agent routing for this repo ─────────────────────────────────────────────
 # Profiles (opus, codex, kimi) are defined in ~/.config/polyphony/config.toml.
@@ -35,12 +38,52 @@ sync_on_reuse = true
 [hooks]
 after_create = "mise trust"
 
+[agent]
+max_concurrent_agents = 6
+
 [agents]
-default = "opus"
+default = "implementer"
+reviewer = "reviewer"
 
 [agents.by_label]
-research = "kimi"
-investigation = "kimi"
-testing = "codex"
-validation = "codex"
-review = "codex"
+research = "researcher"
+investigation = "researcher"
+testing = "tester"
+validation = "tester"
+review = "reviewer"
+
+[orchestration]
+router_agent = "router"
+dispatch_mode = "manual"
+
+[pipeline]
+enabled = true
+replan_on_failure = true
+validation_agent = "reviewer"
+
+[[pipeline.stages]]
+category = "research"
+agent = "researcher"
+
+[[pipeline.stages]]
+category = "coding"
+agent = "implementer"
+
+[[pipeline.stages]]
+category = "testing"
+agent = "tester"
+
+[[pipeline.stages]]
+category = "documentation"
+agent = "implementer"
+
+[[pipeline.stages]]
+category = "review"
+agent = "reviewer"
+
+[automation]
+enabled = true
+draft_pull_requests = true
+review_agent = "reviewer"
+commit_message = "fix({{ issue.identifier }}): {{ issue.title }}"
+pr_title = "{{ issue.identifier }}: {{ issue.title }}"

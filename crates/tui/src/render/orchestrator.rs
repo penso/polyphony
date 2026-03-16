@@ -2,7 +2,7 @@ use {
     chrono::Utc,
     polyphony_core::RuntimeSnapshot,
     ratatui::{
-        layout::{Constraint, Direction, Layout, Rect},
+        layout::{Alignment, Constraint, Direction, Layout, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::{
@@ -24,16 +24,12 @@ pub fn draw_orchestrator_tab(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(6), // Status panel
-            Constraint::Length(8), // Movements table
-            Constraint::Min(8),    // Movement detail
-            Constraint::Min(8),    // Recent events
+            Constraint::Min(8),    // Movements table (fills remaining space)
         ])
         .split(area);
 
     draw_status_panel(frame, sections[0], snapshot, app);
     draw_movements_table(frame, sections[1], snapshot, app);
-    draw_movement_detail(frame, sections[2], snapshot, app);
-    draw_events_panel(frame, sections[3], snapshot, app);
 }
 
 fn draw_status_panel(
@@ -217,12 +213,22 @@ fn draw_movements_table(
     let movements = &snapshot.movements;
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("Kind", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Target", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Tasks", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Out", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Target", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Kind", Style::default().fg(theme.muted))),
+        Cell::from(
+            Line::from(Span::styled("St", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
+        Cell::from(
+            Line::from(Span::styled("Out", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
+        Cell::from(
+            Line::from(Span::styled("Tasks", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
@@ -230,47 +236,49 @@ fn draw_movements_table(
     let rows: Vec<Row> = movements
         .iter()
         .map(|m| {
-            let status_color = movement_status_color(&m.status, theme);
+            let (status_icon, status_icon_color) = movement_status_emoji(&m.status, theme);
             let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
-            let output_icon = if m.has_deliverable {
-                "✓"
-            } else if matches!(m.kind, polyphony_core::MovementKind::PullRequestReview) {
-                "R"
-            } else {
-                "—"
-            };
+            let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
+            let (kind_icon, kind_label) = movement_kind_icon_label(m.kind);
 
             Row::new(vec![
                 Cell::from(Span::styled(
-                    movement_kind_label(m.kind),
-                    Style::default().fg(theme.info),
-                )),
-                Cell::from(Span::styled(
-                    movement_target_label(m),
-                    Style::default().fg(theme.info),
+                    super::format_listing_time(m.created_at),
+                    Style::default().fg(theme.muted),
                 )),
                 Cell::from(Span::styled(
                     m.title.clone(),
                     Style::default().fg(theme.foreground),
                 )),
                 Cell::from(Span::styled(
-                    m.status.to_string(),
-                    Style::default().fg(status_color),
+                    movement_target_label(m),
+                    Style::default().fg(theme.info),
                 )),
                 Cell::from(Span::styled(
-                    task_info,
-                    Style::default().fg(theme.foreground),
+                    format!("{kind_icon} {kind_label}"),
+                    Style::default().fg(theme.info),
                 )),
-                Cell::from(Span::styled(
-                    output_icon,
-                    Style::default().fg(if m.has_deliverable {
-                        theme.success
-                    } else if matches!(m.kind, polyphony_core::MovementKind::PullRequestReview) {
-                        theme.highlight
-                    } else {
-                        theme.muted
-                    }),
-                )),
+                Cell::from(
+                    Line::from(Span::styled(
+                        status_icon,
+                        Style::default().fg(status_icon_color),
+                    ))
+                    .alignment(Alignment::Right),
+                ),
+                Cell::from(
+                    Line::from(Span::styled(
+                        output_icon,
+                        Style::default().fg(output_icon_color),
+                    ))
+                    .alignment(Alignment::Right),
+                ),
+                Cell::from(
+                    Line::from(Span::styled(
+                        task_info,
+                        Style::default().fg(theme.foreground),
+                    ))
+                    .alignment(Alignment::Right),
+                ),
             ])
         })
         .collect();
@@ -291,17 +299,17 @@ fn draw_movements_table(
     };
 
     let table = Table::new(rows, [
-        Constraint::Length(10),
-        Constraint::Length(14),
+        Constraint::Length(16),
         Constraint::Fill(1),
         Constraint::Length(14),
-        Constraint::Length(8),
+        Constraint::Length(14),
+        Constraint::Length(3),
         Constraint::Length(4),
+        Constraint::Length(6),
     ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
     .block(
         Block::default()
             .title(Line::from(Span::styled(
@@ -323,87 +331,29 @@ fn draw_movements_table(
     );
 
     frame.render_stateful_widget(table, area, &mut app.movements_state);
-}
 
-fn draw_movement_detail(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    snapshot: &RuntimeSnapshot,
-    app: &mut AppState,
-) {
-    let theme = app.theme;
-    app.movement_detail_area = area;
-
-    let lines = snapshot
-        .movements
-        .get(app.movements_state.selected().unwrap_or_default())
-        .map(|movement| build_movement_detail_lines(snapshot, movement, theme))
-        .unwrap_or_else(|| {
-            vec![
-                Line::from(Span::styled(
-                    "No movement selected.",
-                    Style::default().fg(theme.muted),
-                )),
-                Line::from(Span::styled(
-                    "Use j/k to choose a movement, Shift+J/Shift+K or the mouse wheel to scroll this pane.",
-                    Style::default().fg(theme.muted),
-                )),
-            ]
-        });
-
-    let content_height = area.height.saturating_sub(2) as usize;
-    let content_width = area.width.saturating_sub(2).max(1);
-    let total_lines = wrapped_line_count(&lines, content_width);
-    let max_scroll = total_lines.saturating_sub(content_height) as u16;
-    if app.movement_detail_scroll > max_scroll {
-        app.movement_detail_scroll = max_scroll;
-    }
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((app.movement_detail_scroll, 0))
-            .block(
-                Block::default()
-                    .title(Line::from(Span::styled(
-                        " Movement Detail ",
-                        Style::default()
-                            .fg(theme.foreground)
-                            .add_modifier(Modifier::BOLD),
-                    )))
-                    .title(
-                        Line::from(vec![
-                            Span::styled("Shift+J/K", Style::default().fg(theme.highlight)),
-                            Span::styled(" scroll ", Style::default().fg(theme.muted)),
-                        ])
-                        .right_aligned(),
-                    )
-                    .borders(ratatui::widgets::Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border)),
-            ),
-        area,
-    );
-
-    if total_lines > content_height {
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(app.movement_detail_scroll as usize)
-            .viewport_content_length(content_height);
-        let scrollbar_area = Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: area.height.saturating_sub(2),
-        };
-        frame.render_stateful_widget(
-            Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
-            scrollbar_area,
-            &mut scrollbar_state,
-        );
+    if count > 0 {
+        let content_height = area.height.saturating_sub(3) as usize;
+        if count > content_height {
+            let mut scrollbar_state = ScrollbarState::new(count)
+                .position(app.movements_state.selected().unwrap_or(0))
+                .viewport_content_length(content_height);
+            let scrollbar_area = Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: area.height.saturating_sub(2),
+            };
+            frame.render_stateful_widget(
+                Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
+                scrollbar_area,
+                &mut scrollbar_state,
+            );
+        }
     }
 }
 
-fn movement_kind_label(kind: polyphony_core::MovementKind) -> &'static str {
+pub(crate) fn movement_kind_label(kind: polyphony_core::MovementKind) -> &'static str {
     match kind {
         polyphony_core::MovementKind::IssueDelivery => "issue",
         polyphony_core::MovementKind::PullRequestReview => "pr_review",
@@ -411,7 +361,7 @@ fn movement_kind_label(kind: polyphony_core::MovementKind) -> &'static str {
     }
 }
 
-fn movement_target_label(movement: &polyphony_core::MovementRow) -> String {
+pub(crate) fn movement_target_label(movement: &polyphony_core::MovementRow) -> String {
     if let Some(target) = &movement.review_target {
         format!("{}#{}", target.repository, target.number)
     } else {
@@ -419,144 +369,48 @@ fn movement_target_label(movement: &polyphony_core::MovementRow) -> String {
     }
 }
 
-fn build_movement_detail_lines(
-    snapshot: &RuntimeSnapshot,
-    movement: &polyphony_core::MovementRow,
-    theme: crate::theme::Theme,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled(
-            movement_kind_label(movement.kind).to_string(),
-            Style::default().fg(theme.highlight),
-        ),
-        Span::styled(" | ", Style::default().fg(theme.border)),
-        Span::styled(
-            movement_target_label(movement),
-            Style::default().fg(theme.info),
-        ),
-        Span::styled(" | ", Style::default().fg(theme.border)),
-        Span::styled(
-            movement.status.to_string(),
-            Style::default().fg(movement_status_color(&movement.status, theme)),
-        ),
-    ]));
-    lines.push(Line::from(Span::styled(
-        movement.title.clone(),
-        Style::default()
-            .fg(theme.foreground)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::default());
-
-    lines.push(section_heading("Summary", theme));
-    lines.push(Line::from(vec![
-        Span::styled("Tasks ", Style::default().fg(theme.muted)),
-        Span::styled(
-            format!("{}/{}", movement.tasks_completed, movement.task_count),
-            Style::default().fg(theme.foreground),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Output ", Style::default().fg(theme.muted)),
-        Span::styled(
-            movement_output_label(movement),
-            Style::default().fg(theme.foreground),
-        ),
-    ]));
-    if let Some(workspace_key) = &movement.workspace_key {
-        lines.push(Line::from(vec![
-            Span::styled("Workspace ", Style::default().fg(theme.muted)),
-            Span::styled(workspace_key.clone(), Style::default().fg(theme.info)),
-        ]));
+fn movement_kind_icon_label(kind: polyphony_core::MovementKind) -> (&'static str, &'static str) {
+    match kind {
+        polyphony_core::MovementKind::IssueDelivery => ("📋", "issue"),
+        polyphony_core::MovementKind::PullRequestReview => ("🔍", "review"),
+        polyphony_core::MovementKind::PullRequestCommentReview => ("💬", "comment"),
     }
-    if let Some(workspace_path) = &movement.workspace_path {
-        lines.push(Line::from(vec![
-            Span::styled("Path ", Style::default().fg(theme.muted)),
-            Span::styled(
-                workspace_path.display().to_string(),
-                Style::default().fg(theme.foreground),
-            ),
-        ]));
-    }
-
-    if let Some(target) = &movement.review_target {
-        lines.push(Line::default());
-        lines.push(section_heading("Review Target", theme));
-        lines.push(Line::from(vec![
-            Span::styled("Repository ", Style::default().fg(theme.muted)),
-            Span::styled(target.repository.clone(), Style::default().fg(theme.info)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("PR ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("#{}", target.number),
-                Style::default().fg(theme.info),
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("Head SHA ", Style::default().fg(theme.muted)),
-            Span::styled(
-                target.head_sha.clone(),
-                Style::default().fg(theme.foreground),
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("Branches ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{} -> {}", target.head_branch, target.base_branch),
-                Style::default().fg(theme.foreground),
-            ),
-        ]));
-        if let Some(url) = &target.url {
-            lines.push(Line::from(vec![
-                Span::styled("URL ", Style::default().fg(theme.muted)),
-                Span::styled(url.clone(), Style::default().fg(theme.info)),
-            ]));
-        }
-    }
-
-    lines.push(Line::default());
-    lines.push(section_heading("Recent Events", theme));
-    let movement_identifier = movement_target_label(movement);
-    let mut event_count = 0usize;
-    for event in snapshot.recent_events.iter().rev() {
-        if !event_mentions_movement(event, movement, &movement_identifier) {
-            continue;
-        }
-        event_count += 1;
-        lines.push(render_event_line(event, theme));
-    }
-    if event_count == 0 {
-        lines.push(Line::from(Span::styled(
-            "No recent events for this movement.",
-            Style::default().fg(theme.muted),
-        )));
-    }
-
-    lines
 }
 
-fn movement_output_label(movement: &polyphony_core::MovementRow) -> &'static str {
-    if movement.has_deliverable {
-        "deliverable"
+fn movement_status_emoji(
+    status: &polyphony_core::MovementStatus,
+    theme: crate::theme::Theme,
+) -> (&'static str, ratatui::style::Color) {
+    use polyphony_core::MovementStatus;
+    match status {
+        MovementStatus::Pending => ("…", theme.info),
+        MovementStatus::Planning => ("◌", theme.info),
+        MovementStatus::InProgress => ("◐", theme.success),
+        MovementStatus::Review => ("◑", theme.highlight),
+        MovementStatus::Delivered => ("✓", theme.success),
+        MovementStatus::Failed => ("✕", theme.danger),
+        MovementStatus::Cancelled => ("⊘", theme.muted),
+    }
+}
+
+fn movement_output_emoji(
+    movement: &polyphony_core::MovementRow,
+    theme: crate::theme::Theme,
+) -> (&'static str, ratatui::style::Color) {
+    if let Some(deliverable) = &movement.deliverable {
+        match deliverable.decision {
+            polyphony_core::DeliverableDecision::Waiting => ("◷", theme.warning),
+            polyphony_core::DeliverableDecision::Accepted => ("✓", theme.success),
+            polyphony_core::DeliverableDecision::Rejected => ("✕", theme.danger),
+        }
     } else if matches!(
         movement.kind,
         polyphony_core::MovementKind::PullRequestReview
     ) {
-        "PR comment"
+        ("🔍", theme.highlight)
     } else {
-        "none"
+        ("—", theme.muted)
     }
-}
-
-fn section_heading(title: &str, theme: crate::theme::Theme) -> Line<'static> {
-    Line::from(Span::styled(
-        title.to_string(),
-        Style::default()
-            .fg(theme.highlight)
-            .add_modifier(Modifier::BOLD),
-    ))
 }
 
 fn event_mentions_movement(
@@ -591,7 +445,7 @@ fn render_event_line(
     Line::from(vec![
         Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
         Span::styled(
-            format!("{:<10}", event.scope),
+            format!("{:<10} ", event.scope),
             Style::default().fg(scope_color),
         ),
         Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
@@ -641,6 +495,28 @@ fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
         .sum()
 }
 
+pub(crate) fn movement_status_color_pub(
+    status: &polyphony_core::MovementStatus,
+    theme: crate::theme::Theme,
+) -> ratatui::style::Color {
+    movement_status_color(status, theme)
+}
+
+pub(crate) fn event_mentions_movement_pub(
+    event: &polyphony_core::RuntimeEvent,
+    movement: &polyphony_core::MovementRow,
+    movement_identifier: &str,
+) -> bool {
+    event_mentions_movement(event, movement, movement_identifier)
+}
+
+pub(crate) fn render_event_line_pub(
+    event: &polyphony_core::RuntimeEvent,
+    theme: crate::theme::Theme,
+) -> ratatui::text::Line<'static> {
+    render_event_line(event, theme)
+}
+
 fn movement_status_color(
     status: &polyphony_core::MovementStatus,
     theme: crate::theme::Theme,
@@ -656,7 +532,8 @@ fn movement_status_color(
     }
 }
 
-fn draw_events_panel(
+#[allow(dead_code)]
+fn _draw_events_panel(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
@@ -735,12 +612,10 @@ fn draw_events_panel(
 
 #[cfg(test)]
 mod tests {
-    use polyphony_core::{
-        MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget,
-    };
+    use polyphony_core::{MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget};
 
     use crate::render::orchestrator::{
-        message_mentions_identifier, movement_target_label, wrapped_line_count,
+        message_mentions_identifier, movement_target_label, render_event_line,
     };
 
     #[test]
@@ -765,6 +640,7 @@ mod tests {
             status: MovementStatus::InProgress,
             task_count: 0,
             tasks_completed: 0,
+            deliverable: None,
             has_deliverable: false,
             review_target: Some(ReviewTarget {
                 provider: ReviewProviderKind::Github,
@@ -784,10 +660,22 @@ mod tests {
         assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
     }
 
-    #[test]
-    fn wrapped_line_count_accounts_for_wrapping() {
-        let lines = vec![ratatui::text::Line::from("0123456789")];
 
-        assert_eq!(wrapped_line_count(&lines, 4), 3);
+    #[test]
+    fn render_event_line_inserts_separator_between_scope_and_message() {
+        let event = polyphony_core::RuntimeEvent {
+            at: chrono::Utc::now(),
+            scope: polyphony_core::EventScope::Dispatch,
+            message: "manual dispatch: w1b -> default".to_string(),
+        };
+
+        let line = render_event_line(&event, crate::theme::default_theme());
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("dispatch manual dispatch: w1b -> default"));
     }
 }

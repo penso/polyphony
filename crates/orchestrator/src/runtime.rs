@@ -1,5 +1,7 @@
 use crate::{prelude::*, *};
 
+const SLOW_TRACKER_FETCH_WARN_THRESHOLD: Duration = Duration::from_millis(750);
+
 impl RuntimeService {
     pub fn new(
         tracker: Arc<dyn IssueTracker>,
@@ -17,6 +19,11 @@ impl RuntimeService {
         let (snapshot_tx, snapshot_rx) = watch::channel(empty_snapshot());
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (external_command_tx, external_command_rx) = mpsc::unbounded_channel();
+        let initial_dispatch_mode = workflow_rx.borrow().config.startup_dispatch_mode();
+        let state = RuntimeState {
+            dispatch_mode: initial_dispatch_mode,
+            ..RuntimeState::default()
+        };
         (
             Self {
                 tracker,
@@ -35,10 +42,12 @@ impl RuntimeService {
                 command_rx,
                 external_command_rx,
                 pending_refresh: false,
+                pending_issue_approvals: Vec::new(),
+                pending_deliverable_resolutions: Vec::new(),
                 pending_manual_dispatches: Vec::new(),
                 pending_manual_pull_request_trigger_dispatches: Vec::new(),
                 reload_support: None,
-                state: RuntimeState::default(),
+                state,
             },
             RuntimeHandle {
                 snapshot_rx,
@@ -79,6 +88,7 @@ impl RuntimeService {
         {
             self.restore_cache(cached);
         }
+        self.state.dispatch_mode = self.workflow_rx.borrow().config.startup_dispatch_mode();
         self.refresh_tracker_connection(true).await;
         self.emit_snapshot().await?;
         // startup_cleanup is deferred to the first tick so the select loop
@@ -130,6 +140,21 @@ impl RuntimeService {
                             self.state.dispatch_mode = mode;
                             let _ = self.emit_snapshot().await;
                         }
+                        RuntimeCommand::ApproveIssueTrigger { issue_id, source } => {
+                            info!(%issue_id, %source, "issue approval queued (event loop)");
+                            self.pending_issue_approvals.push((issue_id, source));
+                            self.process_pending_issue_approvals().await;
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::ResolveMovementDeliverable {
+                            movement_id,
+                            decision,
+                        } => {
+                            self.pending_deliverable_resolutions
+                                .push((movement_id, decision));
+                            self.process_pending_deliverable_resolutions().await;
+                            let _ = self.emit_snapshot().await;
+                        }
                         RuntimeCommand::DispatchIssue { issue_id, agent_name } => {
                             info!(%issue_id, ?agent_name, "manual dispatch queued (event loop)");
                             self.pending_manual_dispatches.push((issue_id, agent_name));
@@ -149,16 +174,16 @@ impl RuntimeService {
                 _ = &mut sleep => {
                     let now = Instant::now();
                     if now >= next_tick {
-                        if !startup_cleanup_done {
-                            startup_cleanup_done = true;
-                            self.startup_cleanup().await;
-                            let _ = self.emit_snapshot().await;
-                        }
                         let shutdown = self.tick().await;
                         if shutdown {
                             self.abort_all().await;
                             let _ = self.emit_snapshot().await;
                             return Ok(());
+                        }
+                        if !startup_cleanup_done {
+                            startup_cleanup_done = true;
+                            self.startup_cleanup().await;
+                            let _ = self.emit_snapshot().await;
                         }
                         let interval = Duration::from_millis(self.workflow_rx.borrow().config.polling.interval_ms);
                         next_tick = Instant::now() + interval;
@@ -213,7 +238,11 @@ impl RuntimeService {
             saved_context.map(|context| context.agent_name.as_str()),
             prefer_alternate_agent,
         );
-        ordered_candidates
+        let ordered_names = ordered_candidates
+            .iter()
+            .map(|agent| agent.name.clone())
+            .collect::<Vec<_>>();
+        let selected = ordered_candidates
             .into_iter()
             .find(|agent| !self.is_throttled(&format!("agent:{}", agent.name)))
             .ok_or_else(|| {
@@ -221,7 +250,16 @@ impl RuntimeService {
                     "all candidate agents are throttled for issue `{}`",
                     issue.identifier
                 )))
-            })
+            })?;
+        info!(
+            issue_identifier = %issue.identifier,
+            selected_agent = %selected.name,
+            candidates = %ordered_names.join(","),
+            saved_context_agent = saved_context.map(|context| context.agent_name.as_str()).unwrap_or("none"),
+            prefer_alternate_agent,
+            "selected dispatch agent"
+        );
+        Ok(selected)
     }
 
     /// Drain pending external commands. Returns `true` if shutdown was requested.
@@ -238,6 +276,17 @@ impl RuntimeService {
                     self.push_event(EventScope::Dispatch, format!("dispatch mode set to {mode}"));
                     self.state.dispatch_mode = mode;
                 },
+                Ok(RuntimeCommand::ApproveIssueTrigger { issue_id, source }) => {
+                    info!(%issue_id, %source, "issue approval queued");
+                    self.pending_issue_approvals.push((issue_id, source));
+                },
+                Ok(RuntimeCommand::ResolveMovementDeliverable {
+                    movement_id,
+                    decision,
+                }) => {
+                    self.pending_deliverable_resolutions
+                        .push((movement_id, decision));
+                },
                 Ok(RuntimeCommand::DispatchIssue {
                     issue_id,
                     agent_name,
@@ -253,6 +302,57 @@ impl RuntimeService {
                 Err(_) => return false,
             }
         }
+    }
+
+    pub(crate) async fn process_pending_issue_approvals(&mut self) {
+        let approvals = std::mem::take(&mut self.pending_issue_approvals);
+        if approvals.is_empty() {
+            return;
+        }
+        let workflow = self.workflow();
+        for (issue_id, source) in approvals {
+            let approval_key = issue_key_for_source(&source, &issue_id);
+            if !self.state.approved_issue_keys.insert(approval_key.clone()) {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("{source} issue {issue_id} is already approved"),
+                );
+                continue;
+            }
+            self.push_event(
+                EventScope::Dispatch,
+                format!("{source} issue {issue_id} approved for dispatch"),
+            );
+            if let Some(store) = &self.store {
+                let snapshot = self.snapshot();
+                if let Err(error) = store.save_snapshot(&snapshot).await {
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!(
+                            "{source} issue {issue_id} approved but failed to persist: {error}"
+                        ),
+                    );
+                }
+            }
+            if self.state.dispatch_mode != polyphony_core::DispatchMode::Manual {
+                continue;
+            }
+            if let Some(row) = self
+                .state
+                .visible_issues
+                .iter()
+                .find(|row| approval_key_for_row(workflow.config.tracker.kind, row) == approval_key)
+                .map(|row| self.resolved_issue_row(workflow.config.tracker.kind, row))
+                && self.should_dispatch_visible_row(&row)
+            {
+                let issue_identifier = row.issue_identifier.clone();
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("{issue_identifier} approved and ready for manual dispatch"),
+                );
+            }
+        }
+        self.save_cache().await;
     }
 
     pub(crate) async fn process_manual_dispatches(&mut self) {
@@ -296,6 +396,51 @@ impl RuntimeService {
         }
     }
 
+    pub(crate) async fn process_pending_deliverable_resolutions(&mut self) {
+        let resolutions = std::mem::take(&mut self.pending_deliverable_resolutions);
+        if resolutions.is_empty() {
+            return;
+        }
+
+        for (movement_id, decision) in resolutions {
+            let Some(movement) = self.state.movements.get_mut(&movement_id) else {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("deliverable decision ignored: movement {movement_id} not found"),
+                );
+                continue;
+            };
+            let movement_label = Self::movement_target_label(movement);
+            let Some(deliverable) = movement.deliverable.as_mut() else {
+                let message = format!(
+                    "deliverable decision ignored: movement {movement_label} has no deliverable"
+                );
+                self.push_event(EventScope::Handoff, message);
+                continue;
+            };
+
+            deliverable.decision = decision;
+            movement.updated_at = Utc::now();
+            let persist_error = if let Some(store) = &self.store {
+                store
+                    .save_movement(movement)
+                    .await
+                    .err()
+                    .map(|error| error.to_string())
+            } else {
+                None
+            };
+            let message = if let Some(error) = persist_error {
+                format!(
+                    "{movement_label} deliverable marked {decision} but failed to persist: {error}"
+                )
+            } else {
+                format!("{movement_label} deliverable marked {decision}")
+            };
+            self.push_event(EventScope::Handoff, message);
+        }
+    }
+
     pub(crate) fn visible_pull_request_trigger(
         &self,
         trigger_id: &str,
@@ -327,12 +472,60 @@ impl RuntimeService {
         chrono::Duration::milliseconds(clamped_ms as i64)
     }
 
+    pub(crate) fn issue_is_approved(
+        &self,
+        tracker_kind: polyphony_core::TrackerKind,
+        issue: &Issue,
+    ) -> bool {
+        self.issue_approval_state(tracker_kind, issue) == IssueApprovalState::Approved
+    }
+
+    pub(crate) fn issue_approval_state(
+        &self,
+        tracker_kind: polyphony_core::TrackerKind,
+        issue: &Issue,
+    ) -> IssueApprovalState {
+        let approval_key = approval_key_for_issue(tracker_kind, issue);
+        if self.state.approved_issue_keys.contains(&approval_key) {
+            IssueApprovalState::Approved
+        } else {
+            issue.approval_state
+        }
+    }
+
+    pub(crate) fn visible_issue_approval_state(
+        &self,
+        tracker_kind: polyphony_core::TrackerKind,
+        row: &VisibleIssueRow,
+    ) -> IssueApprovalState {
+        let approval_key = approval_key_for_row(tracker_kind, row);
+        if self.state.approved_issue_keys.contains(&approval_key) {
+            IssueApprovalState::Approved
+        } else {
+            row.approval_state
+        }
+    }
+
+    pub(crate) fn resolved_issue_row(
+        &self,
+        tracker_kind: polyphony_core::TrackerKind,
+        row: &VisibleIssueRow,
+    ) -> VisibleIssueRow {
+        let mut row = row.clone();
+        row.approval_state = self.visible_issue_approval_state(tracker_kind, &row);
+        row
+    }
+
+    pub(crate) fn should_dispatch_visible_row(&self, row: &VisibleIssueRow) -> bool {
+        row.approval_state == IssueApprovalState::Approved
+    }
+
     pub(crate) fn issue_trigger_row(
         &self,
         tracker_kind: polyphony_core::TrackerKind,
         row: &VisibleIssueRow,
     ) -> VisibleTriggerRow {
-        let mut row = row.clone();
+        let mut row = self.resolved_issue_row(tracker_kind, row);
         let key = sanitize_workspace_key(&row.issue_identifier);
         row.has_workspace = self.state.worktree_keys.contains(&key);
         VisibleTriggerRow {
@@ -342,6 +535,7 @@ impl RuntimeService {
             identifier: row.issue_identifier.clone(),
             title: row.title.clone(),
             status: row.state.clone(),
+            approval_state: row.approval_state,
             priority: row.priority,
             labels: row.labels.clone(),
             description: row.description.clone(),
@@ -352,6 +546,15 @@ impl RuntimeService {
             created_at: row.created_at,
             has_workspace: row.has_workspace,
         }
+    }
+
+    fn movement_target_label(movement: &Movement) -> String {
+        movement
+            .review_target
+            .as_ref()
+            .map(|target| format!("{}#{}", target.repository, target.number))
+            .or_else(|| movement.issue_identifier.clone())
+            .unwrap_or_else(|| movement.id.clone())
     }
 
     pub(crate) fn pull_request_trigger_row(
@@ -367,6 +570,7 @@ impl RuntimeService {
                 title: trigger.title.clone(),
                 status: self
                     .pull_request_trigger_status(&PullRequestTrigger::Review(trigger.clone())),
+                approval_state: IssueApprovalState::Approved,
                 priority: None,
                 labels: trigger.labels.clone(),
                 description: Some(format!(
@@ -403,6 +607,7 @@ impl RuntimeService {
                 ),
                 status: self
                     .pull_request_trigger_status(&PullRequestTrigger::Comment(trigger.clone())),
+                approval_state: IssueApprovalState::Approved,
                 priority: None,
                 labels: trigger.labels.clone(),
                 description: Some(format!(
@@ -443,6 +648,7 @@ impl RuntimeService {
                 ),
                 status: self
                     .pull_request_trigger_status(&PullRequestTrigger::Conflict(trigger.clone())),
+                approval_state: IssueApprovalState::Approved,
                 priority: None,
                 labels: trigger.labels.clone(),
                 description: Some(format!(
@@ -658,6 +864,9 @@ impl RuntimeService {
             return true;
         }
 
+        self.process_pending_issue_approvals().await;
+        self.process_pending_deliverable_resolutions().await;
+
         self.process_manual_dispatches().await;
         self.process_manual_pull_request_trigger_dispatches().await;
 
@@ -718,6 +927,8 @@ impl RuntimeService {
             return false;
         }
         let query = workflow.config.tracker_query();
+        let tracker_component = self.tracker.component_key();
+        let tracker_fetch_started = Instant::now();
         self.state.last_tracker_poll_at = Some(Utc::now());
         self.state.loading.fetching_issues = true;
         info!("tick: fetching issues from tracker");
@@ -726,33 +937,68 @@ impl RuntimeService {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
                 self.state.loading.fetching_issues = false;
+                let elapsed = tracker_fetch_started.elapsed();
                 warn!("tick: tracker returned rate-limited, re-throttling");
+                if elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
+                    warn!(
+                        component = %tracker_component,
+                        elapsed_ms = elapsed.as_millis(),
+                        "tracker candidate fetch was slow before rate limiting"
+                    );
+                }
                 self.register_throttle(*signal);
                 let _ = self.emit_snapshot().await;
                 return false;
             },
             Err(error) => {
                 self.state.loading.fetching_issues = false;
+                let elapsed = tracker_fetch_started.elapsed();
                 self.push_event(
                     EventScope::Tracker,
                     format!("candidate fetch failed: {error}"),
                 );
+                if elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
+                    warn!(
+                        component = %tracker_component,
+                        elapsed_ms = elapsed.as_millis(),
+                        %error,
+                        "tracker candidate fetch failed after a slow request"
+                    );
+                }
                 error!(%error, "candidate fetch failed");
                 let _ = self.emit_snapshot().await;
                 return false;
             },
         };
+        let tracker_fetch_elapsed = tracker_fetch_started.elapsed();
         self.state.loading.fetching_issues = false;
         self.state.from_cache = false;
         self.state.cached_at = None;
-        info!(count = issues.len(), "tick: fetched issues from tracker");
+        info!(
+            component = %tracker_component,
+            count = issues.len(),
+            elapsed_ms = tracker_fetch_elapsed.as_millis(),
+            "tick: fetched issues from tracker"
+        );
+        if tracker_fetch_elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
+            warn!(
+                component = %tracker_component,
+                count = issues.len(),
+                elapsed_ms = tracker_fetch_elapsed.as_millis(),
+                "tracker candidate fetch exceeded the slow-fetch threshold"
+            );
+        }
 
         let previous_issue_rows = self.state.visible_issues.clone();
         let mut issues = issues;
         issues.sort_by(dispatch_order);
         self.state.issue_snapshot_loaded = true;
-        self.state.visible_issues = issues.iter().map(summarize_issue).collect();
         let tracker_kind = workflow.config.tracker.kind;
+        self.state.visible_issues = issues
+            .iter()
+            .map(summarize_issue)
+            .map(|row| self.resolved_issue_row(tracker_kind, &row))
+            .collect();
         let current_issue_ids = self
             .state
             .visible_issues
@@ -775,9 +1021,13 @@ impl RuntimeService {
         // Auto-dispatch issues whose orphaned workspaces were found at startup.
         if !self.state.orphan_dispatch_keys.is_empty() {
             let orphan_keys = std::mem::take(&mut self.state.orphan_dispatch_keys);
+            let mut pending_orphan_keys = orphan_keys.clone();
             for issue in &issues {
                 let key = sanitize_workspace_key(&issue.identifier);
-                if orphan_keys.contains(&key) && !self.is_claimed(&issue.id) {
+                if orphan_keys.contains(&key)
+                    && !self.is_claimed(&issue.id)
+                    && self.issue_is_approved(tracker_kind, issue)
+                {
                     info!(
                         issue_identifier = %issue.identifier,
                         workspace_key = %key,
@@ -794,8 +1044,10 @@ impl RuntimeService {
                         "orphan auto-dispatch",
                     )
                     .await;
+                    pending_orphan_keys.remove(&key);
                 }
             }
+            self.state.orphan_dispatch_keys = pending_orphan_keys;
             // Emit snapshot so orphan events and dispatch state updates become visible immediately.
             let _ = self.emit_snapshot().await;
         }
@@ -831,6 +1083,9 @@ impl RuntimeService {
             return false;
         }
         for issue in issues {
+            if !self.issue_is_approved(tracker_kind, &issue) {
+                continue;
+            }
             if !self.should_dispatch(&workflow, &issue) {
                 continue;
             }

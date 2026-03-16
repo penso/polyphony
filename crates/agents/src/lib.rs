@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use {
     async_trait::async_trait,
@@ -98,10 +98,36 @@ impl AgentRuntime for AgentRegistryRuntime {
         agents: &[AgentDefinition],
     ) -> Result<Vec<BudgetSnapshot>, CoreError> {
         let mut snapshots = Vec::new();
+        let mut cached: BTreeMap<String, BudgetSnapshot> = BTreeMap::new();
         for agent in agents {
-            if let Some(snapshot) = self.provider_for(agent)?.fetch_budget(agent).await? {
-                snapshots.push(snapshot);
+            let provider = self.provider_for(agent)?;
+            let cache_key = format!(
+                "{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                provider.runtime_key(),
+                agent.kind,
+                agent.base_url,
+                agent.api_key,
+                agent.credits_command,
+                agent.spending_command,
+                agent.env,
+            );
+            let fetched = if let Some(snapshot) = cached.get(&cache_key) {
+                snapshot.clone()
+            } else {
+                let Some(snapshot) = provider.fetch_budget(agent).await? else {
+                    continue;
+                };
+                cached.insert(cache_key, snapshot.clone());
+                snapshot
+            };
+            let mut snapshot = fetched;
+            snapshot.component = format!("agent:{}", agent.name);
+            if let Some(raw) = snapshot.raw.as_mut()
+                && raw.get("agent_name").is_none()
+            {
+                raw["agent_name"] = agent.name.clone().into();
             }
+            snapshots.push(snapshot);
         }
         Ok(snapshots)
     }
@@ -124,7 +150,16 @@ impl AgentRuntime for AgentRegistryRuntime {
 mod tests {
     use {
         super::AgentRegistryRuntime,
-        polyphony_core::{AgentDefinition, AgentRuntime, AgentTransport},
+        async_trait::async_trait,
+        polyphony_core::{
+            AgentDefinition, AgentProviderRuntime, AgentRuntime, AgentTransport, BudgetSnapshot,
+            Error as CoreError,
+        },
+        serde_json::json,
+        std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     #[tokio::test]
@@ -143,5 +178,77 @@ mod tests {
             .unwrap();
         assert_eq!(catalogs.len(), 1);
         assert_eq!(catalogs[0].models[0].id, "claude-sonnet");
+    }
+
+    #[derive(Default)]
+    struct CountingBudgetProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl AgentProviderRuntime for CountingBudgetProvider {
+        fn runtime_key(&self) -> String {
+            "agent:test".into()
+        }
+
+        fn supports(&self, agent: &AgentDefinition) -> bool {
+            agent.kind == "test"
+        }
+
+        async fn run(
+            &self,
+            _spec: polyphony_core::AgentRunSpec,
+            _event_tx: tokio::sync::mpsc::UnboundedSender<polyphony_core::AgentEvent>,
+        ) -> Result<polyphony_core::AgentRunResult, CoreError> {
+            Err(CoreError::Adapter("unused".into()))
+        }
+
+        async fn fetch_budget(
+            &self,
+            _agent: &AgentDefinition,
+        ) -> Result<Option<BudgetSnapshot>, CoreError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(BudgetSnapshot {
+                component: "agent:shared".into(),
+                captured_at: chrono::Utc::now(),
+                credits_remaining: Some(42.0),
+                credits_total: Some(100.0),
+                spent_usd: None,
+                soft_limit_usd: None,
+                hard_limit_usd: None,
+                reset_at: None,
+                raw: Some(json!({"provider": "test"})),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_reuses_shared_budget_fetches_for_equivalent_agents() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = AgentRegistryRuntime {
+            providers: vec![Arc::new(CountingBudgetProvider {
+                calls: Arc::clone(&calls),
+            })],
+        };
+        let budgets = runtime
+            .fetch_budgets(&[
+                AgentDefinition {
+                    name: "router".into(),
+                    kind: "test".into(),
+                    ..AgentDefinition::default()
+                },
+                AgentDefinition {
+                    name: "reviewer".into(),
+                    kind: "test".into(),
+                    ..AgentDefinition::default()
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(budgets.len(), 2);
+        assert_eq!(budgets[0].component, "agent:router");
+        assert_eq!(budgets[1].component, "agent:reviewer");
     }
 }

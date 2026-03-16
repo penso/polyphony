@@ -1,0 +1,9 @@
+[package]
+name = "polyphony-metrics"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true

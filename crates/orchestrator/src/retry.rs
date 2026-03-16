@@ -170,6 +170,34 @@ impl RuntimeService {
                     running_model = running.model.clone();
                 }
                 self.update_saved_context_from_event(&event, running_model);
+                if let Some(workspace_path) = self
+                    .state
+                    .running
+                    .get(&event.issue_id)
+                    .map(|running| running.workspace_path.clone())
+                {
+                    if let Err(error) =
+                        append_workspace_agent_event_artifact(&workspace_path, &event).await
+                    {
+                        warn!(
+                            %error,
+                            workspace_path = %workspace_path.display(),
+                            issue_identifier = %event.issue_identifier,
+                            "persisting workspace agent event failed"
+                        );
+                    }
+                    if let Some(context) = self.state.saved_contexts.get(&event.issue_id)
+                        && let Err(error) =
+                            persist_workspace_saved_context_artifact(&workspace_path, context).await
+                    {
+                        warn!(
+                            %error,
+                            workspace_path = %workspace_path.display(),
+                            issue_identifier = %event.issue_identifier,
+                            "persisting workspace saved context failed"
+                        );
+                    }
+                }
                 self.push_event(
                     EventScope::Agent,
                     format!(

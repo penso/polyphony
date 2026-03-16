@@ -6,7 +6,10 @@ mod logs;
 mod orchestrator;
 pub(crate) mod popups;
 mod tasks;
+mod time;
 mod triggers;
+
+pub(crate) use time::*;
 
 use polyphony_core::RuntimeSnapshot;
 
@@ -46,7 +49,29 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
     if app.show_issue_detail
         && let Some(issue) = app.selected_trigger(snapshot).cloned()
     {
-        popups::draw_issue_detail_modal(frame, &issue, app);
+        popups::draw_issue_detail_modal(frame, &issue, snapshot, app);
+    }
+
+    if app.show_task_detail
+        && let Some(task) = app.selected_task(snapshot).cloned()
+    {
+        popups::draw_task_detail_modal(frame, &task, app);
+    }
+
+    if app.show_movement_detail
+        && let Some(movement) = app.selected_movement(snapshot).cloned()
+    {
+        popups::draw_movement_detail_modal(frame, &movement, snapshot, app);
+    }
+
+    if app.show_deliverable_detail
+        && let Some(movement) = app.selected_deliverable(snapshot).cloned()
+    {
+        popups::draw_deliverable_detail_modal(frame, &movement, app);
+    }
+
+    if app.show_agent_detail {
+        popups::draw_agent_detail_modal(frame, snapshot, app);
     }
 
     if app.show_mode_modal {

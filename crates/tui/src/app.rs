@@ -4,7 +4,10 @@ use std::{
 };
 
 use {
-    polyphony_core::{AgentHistoryRow, RunningRow, RuntimeSnapshot, VisibleTriggerRow},
+    polyphony_core::{
+        AgentContextSnapshot, AgentHistoryRow, MovementRow, RunningRow, RuntimeSnapshot, TaskRow,
+        VisibleTriggerRow,
+    },
     ratatui::{layout::Rect, widgets::TableState},
 };
 
@@ -18,6 +21,12 @@ use crate::{LogBuffer, theme::Theme};
 pub(crate) enum SelectedAgentRow<'a> {
     Running(&'a RunningRow),
     History(&'a AgentHistoryRow),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentDetailArtifactCache {
+    pub key: String,
+    pub saved_context: Option<AgentContextSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +54,7 @@ impl ActiveTab {
             Self::Triggers => "Triggers",
             Self::Orchestrator => "Orchestration",
             Self::Tasks => "Tasks",
-            Self::Deliverables => "Outputs",
+            Self::Deliverables => "Outcomes",
             Self::Agents => "Agents",
             Self::Logs => "Logs",
         }
@@ -111,7 +120,9 @@ pub struct AppState {
     pub deliverables_state: TableState,
     pub movements_state: TableState,
     pub show_issue_detail: bool,
+    pub show_task_detail: bool,
     pub detail_scroll: u16,
+    pub task_detail_scroll: u16,
     pub movement_detail_scroll: u16,
     pub agents_detail_scroll: u16,
     pub issue_sort: IssueSortKey,
@@ -156,10 +167,15 @@ pub struct AppState {
     pub events_scroll: u16,
     /// Bounding rect of the events panel (set each frame by draw_events_panel).
     pub events_area: Rect,
-    /// Bounding rect of the agent detail panel (set each frame by draw_agent_detail).
-    pub agents_detail_area: Rect,
     /// Bounding rect of the movement detail panel (set each frame by draw_movement_detail).
     pub movement_detail_area: Rect,
+    pub agent_detail_artifact: Option<AgentDetailArtifactCache>,
+    /// Sorted task indices: sorted_task_indices[display_index] = original snapshot index
+    pub sorted_task_indices: Vec<usize>,
+    pub show_movement_detail: bool,
+    pub show_deliverable_detail: bool,
+    pub deliverable_detail_scroll: u16,
+    pub show_agent_detail: bool,
 }
 
 impl AppState {
@@ -173,7 +189,9 @@ impl AppState {
             deliverables_state: TableState::default(),
             movements_state: TableState::default(),
             show_issue_detail: false,
+            show_task_detail: false,
             detail_scroll: 0,
+            task_detail_scroll: 0,
             movement_detail_scroll: 0,
             agents_detail_scroll: 0,
             issue_sort: IssueSortKey::Newest,
@@ -208,8 +226,13 @@ impl AppState {
             last_scroll_at: None,
             events_scroll: 0,
             events_area: Rect::default(),
-            agents_detail_area: Rect::default(),
             movement_detail_area: Rect::default(),
+            agent_detail_artifact: None,
+            sorted_task_indices: Vec::new(),
+            show_movement_detail: false,
+            show_deliverable_detail: false,
+            deliverable_detail_scroll: 0,
+            show_agent_detail: false,
         }
     }
 
@@ -227,12 +250,13 @@ impl AppState {
         );
         if self.agents_state.selected() != previous_agent_selection {
             self.agents_detail_scroll = 0;
+            self.agent_detail_artifact = None;
         }
         sync_selection(&mut self.tasks_state, snapshot.tasks.len());
         let deliverable_count = snapshot
             .movements
             .iter()
-            .filter(|m| m.has_deliverable)
+            .filter(|m| m.deliverable.is_some())
             .count();
         sync_selection(&mut self.deliverables_state, deliverable_count);
         let previous_movement_selection = self.movements_state.selected();
@@ -446,6 +470,31 @@ impl AppState {
             .map(SelectedAgentRow::History)
     }
 
+    pub fn selected_movement<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a MovementRow> {
+        self.movements_state
+            .selected()
+            .and_then(|index| snapshot.movements.get(index))
+    }
+
+    pub fn selected_task<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a TaskRow> {
+        self.tasks_state
+            .selected()
+            .and_then(|display_idx| self.sorted_task_indices.get(display_idx))
+            .and_then(|&orig_idx| snapshot.tasks.get(orig_idx))
+    }
+
+    pub fn selected_deliverable<'a>(
+        &self,
+        snapshot: &'a RuntimeSnapshot,
+    ) -> Option<&'a MovementRow> {
+        let selected = self.deliverables_state.selected()?;
+        snapshot
+            .movements
+            .iter()
+            .filter(|movement| movement.deliverable.is_some())
+            .nth(selected)
+    }
+
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {
         match self.active_tab {
             ActiveTab::Triggers => self.sorted_issue_indices.len(),
@@ -455,7 +504,7 @@ impl AppState {
             ActiveTab::Deliverables => snapshot
                 .movements
                 .iter()
-                .filter(|m| m.has_deliverable)
+                .filter(|m| m.deliverable.is_some())
                 .count(),
             ActiveTab::Logs => self.filtered_log_count(),
         }
@@ -497,6 +546,7 @@ impl AppState {
             && self.agents_state.selected() != previous_agent
         {
             self.agents_detail_scroll = 0;
+            self.agent_detail_artifact = None;
         }
         if matches!(self.active_tab, ActiveTab::Orchestrator)
             && self.movements_state.selected() != previous_movement
@@ -517,6 +567,7 @@ impl AppState {
             && self.agents_state.selected() != previous_agent
         {
             self.agents_detail_scroll = 0;
+            self.agent_detail_artifact = None;
         }
         if matches!(self.active_tab, ActiveTab::Orchestrator)
             && self.movements_state.selected() != previous_movement
@@ -535,6 +586,22 @@ impl AppState {
         let clicked_row = (row - area.y - 2) as usize;
         let index = clicked_row + self.issues_state.offset();
         if index < self.sorted_issue_indices.len() {
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    /// Return the task table row index for a click position, if valid.
+    /// The table has: 1 border + 1 header row before data rows.
+    pub fn table_row_at_position(&self, row: u16) -> Option<usize> {
+        let area = self.content_area;
+        if area.height == 0 || row < area.y + 2 || row >= area.y + area.height - 1 {
+            return None;
+        }
+        let clicked_row = (row - area.y - 2) as usize;
+        let index = clicked_row + self.tasks_state.offset();
+        if index < self.sorted_task_indices.len() {
             Some(index)
         } else {
             None

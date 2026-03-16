@@ -1,8 +1,8 @@
 use {
     crate::{
         convert::{
-            find_status_field_option, github_rate_limit_signal, parse_rate_limit_reset,
-            parse_retry_after_ms, project_id_from_context,
+            find_status_field_option, github_issue_approval_state, github_rate_limit_signal,
+            parse_rate_limit_reset, parse_retry_after_ms, project_id_from_context,
         },
         fetch_pull_request_triggers,
         pull_requests::{GithubIssueCommentResponse, find_issue_comment_id_with_marker},
@@ -14,6 +14,8 @@ use {
         },
     },
     chrono::{TimeZone, Utc},
+    octocrab::models::AuthorAssociation,
+    polyphony_core::IssueApprovalState,
     reqwest::{
         StatusCode,
         header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -221,5 +223,25 @@ fn find_issue_comment_id_with_marker_matches_existing_review_comment() {
             "<!-- polyphony:pr-review github penso/polyphony#42 sha=abc123 -->",
         ),
         Some(2)
+    );
+}
+
+#[test]
+fn github_issue_approval_waits_for_outsiders_and_approves_collaborators() {
+    assert_eq!(
+        github_issue_approval_state(&AuthorAssociation::Owner),
+        IssueApprovalState::Approved
+    );
+    assert_eq!(
+        github_issue_approval_state(&AuthorAssociation::Collaborator),
+        IssueApprovalState::Approved
+    );
+    assert_eq!(
+        github_issue_approval_state(&AuthorAssociation::Contributor),
+        IssueApprovalState::Waiting
+    );
+    assert_eq!(
+        github_issue_approval_state(&AuthorAssociation::FirstTimer),
+        IssueApprovalState::Waiting
     );
 }

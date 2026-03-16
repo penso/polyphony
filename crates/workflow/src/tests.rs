@@ -10,7 +10,8 @@ use {
         render_turn_template, repo_config_path,
     },
     polyphony_core::{
-        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, TrackerKind,
+        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, DispatchMode, Issue,
+        TrackerKind,
     },
     serde_yaml::Value as YamlValue,
 };
@@ -1379,4 +1380,30 @@ agents:
 
     assert!(config.pipeline_active());
     assert_eq!(config.router_agent_name(), Some("router"));
+}
+
+#[test]
+fn orchestration_dispatch_mode_parses_startup_mode() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+orchestration:
+  dispatch_mode: automatic
+agents:
+  default: implementer
+  profiles:
+    implementer:
+      kind: claude
+      transport: local_cli
+      command: claude -p
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+    assert_eq!(config.startup_dispatch_mode(), DispatchMode::Automatic);
 }

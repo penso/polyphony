@@ -1,5 +1,7 @@
 use crate::{prelude::*, *};
 
+const SLOW_STARTUP_CLEANUP_WARN_THRESHOLD: Duration = Duration::from_millis(750);
+
 impl RuntimeService {
     pub(crate) async fn record_run_history(
         &mut self,
@@ -8,13 +10,28 @@ impl RuntimeService {
         if let Some(store) = &self.store {
             store.record_run(&run).await?;
         }
+        if let Some(workspace_path) = run.workspace_path.as_deref()
+            && let Err(error) = append_workspace_run_record_artifact(workspace_path, &run).await
+        {
+            warn!(
+                %error,
+                workspace_path = %workspace_path.display(),
+                issue_identifier = %run.issue_identifier,
+                "persisting workspace run artifact failed"
+            );
+        }
         self.state.run_history.push_front(run);
+        while self.state.run_history.len() > MAX_RUN_HISTORY {
+            self.state.run_history.pop_back();
+        }
         Ok(())
     }
 
     pub(crate) async fn startup_cleanup(&mut self) {
         let workflow = self.workflow();
         let terminal = workflow.config.tracker.terminal_states.clone();
+        let cleanup_started = Instant::now();
+        let terminal_fetch_started = Instant::now();
         let issues = match self
             .tracker
             .fetch_issues_by_states(workflow.config.tracker.project_slug.as_deref(), &terminal)
@@ -30,6 +47,14 @@ impl RuntimeService {
                 return;
             },
         };
+        let terminal_fetch_elapsed = terminal_fetch_started.elapsed();
+        if terminal_fetch_elapsed >= SLOW_STARTUP_CLEANUP_WARN_THRESHOLD {
+            warn!(
+                elapsed_ms = terminal_fetch_elapsed.as_millis(),
+                issue_count = issues.len(),
+                "startup terminal issue fetch was slow"
+            );
+        }
         let manager = self.build_workspace_manager(&workflow);
         for issue in issues {
             if let Err(error) = manager
@@ -45,7 +70,16 @@ impl RuntimeService {
         }
 
         // Scan remaining workspaces on disk and cache the keys.
+        let workspace_scan_started = Instant::now();
         let existing = manager.list_workspaces().await;
+        let workspace_scan_elapsed = workspace_scan_started.elapsed();
+        if workspace_scan_elapsed >= SLOW_STARTUP_CLEANUP_WARN_THRESHOLD {
+            warn!(
+                elapsed_ms = workspace_scan_elapsed.as_millis(),
+                workspace_count = existing.len(),
+                "startup workspace scan was slow"
+            );
+        }
         let running_keys: HashSet<String> = self
             .state
             .running
@@ -63,6 +97,14 @@ impl RuntimeService {
                 );
                 self.state.orphan_dispatch_keys.insert(key.clone());
             }
+        }
+        let cleanup_elapsed = cleanup_started.elapsed();
+        if cleanup_elapsed >= SLOW_STARTUP_CLEANUP_WARN_THRESHOLD {
+            warn!(
+                elapsed_ms = cleanup_elapsed.as_millis(),
+                worktree_count = self.state.worktree_keys.len(),
+                "startup cleanup exceeded the slow-start threshold"
+            );
         }
     }
 
@@ -108,6 +150,17 @@ impl RuntimeService {
                 final_issue_state: None,
             };
             self.finalize_saved_context(issue_id, &running.issue.identifier, &running, &outcome);
+            if let Some(context) = self.state.saved_contexts.get(issue_id)
+                && let Err(error) =
+                    persist_workspace_saved_context_artifact(&running.workspace_path, context).await
+            {
+                warn!(
+                    %error,
+                    workspace_path = %running.workspace_path.display(),
+                    issue_identifier = %running.issue.identifier,
+                    "persisting workspace saved context failed"
+                );
+            }
             let run = build_persisted_run_record(
                 &running,
                 outcome.status,

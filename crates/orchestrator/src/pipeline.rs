@@ -80,6 +80,14 @@ impl RuntimeService {
             store.save_movement(&movement).await?;
         }
         self.state.movements.insert(movement_id.clone(), movement);
+        info!(
+            issue_identifier = %issue.identifier,
+            movement_id,
+            workspace_path = %workspace.path.display(),
+            has_planner,
+            initial_status = ?initial_status,
+            "pipeline movement created"
+        );
 
         if has_planner {
             self.dispatch_planner_task(
@@ -99,6 +107,12 @@ impl RuntimeService {
                     store.save_task(task).await?;
                 }
             }
+            info!(
+                issue_identifier = %issue.identifier,
+                movement_id,
+                stage_tasks = tasks.len(),
+                "pipeline stages expanded without planner"
+            );
             self.state.tasks.insert(movement_id.clone(), tasks);
             self.dispatch_next_task(
                 workflow,
@@ -177,6 +191,13 @@ impl RuntimeService {
                 )))
             })?;
         let selected_agent = agent_definition(planner_agent_name, profile);
+        info!(
+            issue_identifier = %issue.identifier,
+            movement_id,
+            planner_agent = %selected_agent.name,
+            attempt = attempt.unwrap_or(0),
+            "dispatching pipeline planner"
+        );
 
         let prompt = workflow
             .config
@@ -264,6 +285,17 @@ impl RuntimeService {
                 )))
             })?;
         let selected_agent = agent_definition(&agent_name, profile);
+        info!(
+            issue_identifier = %issue.identifier,
+            movement_id,
+            task_id = %task.id,
+            task_title = %task.title,
+            task_category = %task.category,
+            task_ordinal = task.ordinal,
+            task_count = self.state.tasks.get(movement_id).map(|tasks| tasks.len()).unwrap_or(0),
+            selected_agent = %selected_agent.name,
+            "dispatching next pipeline task"
+        );
 
         // Build task prompt with pipeline context
         let prompt = self.build_task_prompt(
@@ -539,6 +571,13 @@ impl RuntimeService {
                 "failed to parse plan.json: {error}"
             )))
         })?;
+        info!(
+            issue_identifier = %issue.identifier,
+            movement_id,
+            plan_path = %plan_path.display(),
+            planned_tasks = plan.tasks.len(),
+            "planner output loaded"
+        );
 
         if plan.tasks.is_empty() {
             warn!(
@@ -555,21 +594,26 @@ impl RuntimeService {
             return Ok(());
         }
 
-        // Validate agent names
-        for planned_task in &plan.tasks {
-            if let Some(agent_name) = &planned_task.agent
-                && !workflow.config.agents.profiles.contains_key(agent_name)
-            {
-                warn!(
-                    issue_identifier = %issue.identifier,
-                    agent = agent_name,
-                    "planner referenced unknown agent, ignoring agent hint"
-                );
-            }
-        }
-
-        let tasks: Vec<Task> = plan
+        let planned_tasks = plan
             .tasks
+            .iter()
+            .cloned()
+            .map(|mut planned_task| {
+                if let Some(agent_name) = &planned_task.agent
+                    && !workflow.config.agents.profiles.contains_key(agent_name)
+                {
+                    warn!(
+                        issue_identifier = %issue.identifier,
+                        agent = agent_name,
+                        "planner referenced unknown agent, ignoring agent hint"
+                    );
+                    planned_task.agent = None;
+                }
+                planned_task
+            })
+            .collect::<Vec<_>>();
+
+        let tasks: Vec<Task> = planned_tasks
             .iter()
             .enumerate()
             .map(|(index, planned)| planned.to_task(movement_id, (index + 1) as u32))
@@ -579,6 +623,18 @@ impl RuntimeService {
             for task in &tasks {
                 store.save_task(task).await?;
             }
+        }
+        for task in &tasks {
+            info!(
+                issue_identifier = %issue.identifier,
+                movement_id,
+                task_id = %task.id,
+                task_title = %task.title,
+                task_category = %task.category,
+                task_ordinal = task.ordinal,
+                assigned_agent = task.agent_name.as_deref().unwrap_or("auto"),
+                "planner task registered"
+            );
         }
         self.state.tasks.insert(movement_id.to_string(), tasks);
 
@@ -625,6 +681,23 @@ impl RuntimeService {
         attempt: Option<u32>,
     ) -> Result<(), Error> {
         let now = Utc::now();
+        let task_snapshot = self
+            .state
+            .tasks
+            .get(movement_id)
+            .and_then(|tasks| tasks.iter().find(|t| t.id == task_id))
+            .cloned();
+        info!(
+            issue_identifier = %issue.identifier,
+            movement_id,
+            task_id,
+            task_title = task_snapshot.as_ref().map(|task| task.title.as_str()).unwrap_or("unknown"),
+            task_category = task_snapshot.as_ref().map(|task| task.category.to_string()).unwrap_or_else(|| "unknown".into()),
+            status = ?outcome.status,
+            turns_completed = outcome.turns_completed,
+            error = outcome.error.as_deref().unwrap_or("none"),
+            "pipeline task finished"
+        );
         if let Some(tasks) = self.state.tasks.get_mut(movement_id)
             && let Some(task) = tasks.iter_mut().find(|t| t.id == task_id)
         {
@@ -710,6 +783,13 @@ impl RuntimeService {
         } else {
             MovementStatus::Delivered
         };
+        info!(
+            issue_identifier = %issue.identifier,
+            movement_id,
+            automation_enabled = workflow.config.automation.enabled,
+            movement_status = ?status,
+            "pipeline completed"
+        );
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
             movement.status = status;
             movement.updated_at = Utc::now();

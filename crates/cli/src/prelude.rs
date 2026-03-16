@@ -6,7 +6,7 @@ pub(crate) use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex, MutexGuard},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub(crate) use {
@@ -21,7 +21,7 @@ pub(crate) use {
         seed_repo_config_with_github,
     },
     tokio::sync::{mpsc, watch},
-    tracing::warn,
+    tracing::{info, warn},
 };
 
 #[cfg(feature = "tracing")]

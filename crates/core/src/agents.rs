@@ -108,7 +108,7 @@ pub enum AgentTransport {
     OpenAiChat,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentInteractionMode {
     #[default]

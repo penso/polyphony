@@ -56,6 +56,7 @@ timeout_ms = 60000
 # after_create = "just bootstrap"
 # before_run = "just test"
 # after_run = "just lint"
+# after_outcome = "cargo clean"
 # before_remove = "rm -rf node_modules/.cache"
 
 [tools]

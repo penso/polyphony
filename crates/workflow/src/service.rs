@@ -168,6 +168,8 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("orchestration", HashMap::<String, i64>::new())
             .map_err(config_error)?
+            .set_default("orchestration.dispatch_mode", "manual")
+            .map_err(config_error)?
             .set_default("agents", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .set_default("automation.enabled", false)
@@ -185,6 +187,10 @@ impl ServiceConfig {
             .set_default("feedback", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .set_default("server", HashMap::<String, i64>::new())
+            .map_err(config_error)?
+            .set_default("daemon.listen_address", "127.0.0.1")
+            .map_err(config_error)?
+            .set_default("daemon.listen_port", 0)
             .map_err(config_error)?;
         if let Some(path) = user_config_path {
             let path = path.to_string_lossy().to_string();
@@ -221,6 +227,7 @@ impl ServiceConfig {
             review_triggers: raw.review_triggers,
             feedback: raw.feedback,
             server: raw.server,
+            daemon: raw.daemon,
         };
         config.hydrate_agents(raw.codex, raw.provider)?;
         config.resolve();
@@ -465,6 +472,11 @@ impl ServiceConfig {
         if self.orchestration.mode.is_empty() {
             self.orchestration.mode = "advisory".into();
         }
+        self.orchestration.dispatch_mode =
+            self.orchestration.dispatch_mode.trim().to_ascii_lowercase();
+        if self.orchestration.dispatch_mode.is_empty() {
+            self.orchestration.dispatch_mode = "manual".into();
+        }
         self.feedback.offered = self
             .feedback
             .offered
@@ -644,6 +656,14 @@ impl ServiceConfig {
                 "orchestration.mode must be `advisory` or `enforced`".into(),
             ));
         }
+        if !matches!(
+            self.orchestration.dispatch_mode.as_str(),
+            "manual" | "automatic" | "nightshift" | "idle"
+        ) {
+            return Err(Error::InvalidConfig(
+                "orchestration.dispatch_mode must be `manual`, `automatic`, `nightshift`, or `idle`".into(),
+            ));
+        }
         if self.tracker.kind == TrackerKind::Github {
             if self.review_triggers.pr_reviews.provider != "github" {
                 return Err(Error::InvalidConfig(
@@ -817,6 +837,15 @@ impl ServiceConfig {
             .router_agent
             .as_deref()
             .or(self.pipeline.planner_agent.as_deref())
+    }
+
+    pub fn startup_dispatch_mode(&self) -> polyphony_core::DispatchMode {
+        match self.orchestration.dispatch_mode.as_str() {
+            "automatic" => polyphony_core::DispatchMode::Automatic,
+            "nightshift" => polyphony_core::DispatchMode::Nightshift,
+            "idle" => polyphony_core::DispatchMode::Idle,
+            _ => polyphony_core::DispatchMode::Manual,
+        }
     }
 
     pub fn candidate_agents_for_issue(&self, issue: &Issue) -> Result<Vec<AgentDefinition>, Error> {

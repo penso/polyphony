@@ -84,6 +84,11 @@ impl RuntimeService {
         skip_workspace_sync: bool,
     ) -> Result<(), Error> {
         if workflow.config.pipeline_active() {
+            info!(
+                issue_identifier = %issue.identifier,
+                attempt = attempt.unwrap_or(0),
+                "dispatching issue via pipeline orchestration"
+            );
             return self
                 .dispatch_pipeline(
                     workflow,

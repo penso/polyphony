@@ -5,8 +5,10 @@ use {
     },
     chrono::Utc,
     polyphony_core::{
-        CodexTotals, DispatchMode, RuntimeCadence, RuntimeSnapshot, SnapshotCounts,
-        TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
+        BudgetSnapshot, CodexTotals, Deliverable, DeliverableDecision, DeliverableKind,
+        DeliverableStatus, DispatchMode, IssueApprovalState, RuntimeCadence, RuntimeSnapshot,
+        SnapshotCounts, TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerKind,
+        VisibleTriggerRow,
     },
     ratatui::{Terminal, backend::TestBackend, buffer::Buffer},
 };
@@ -26,6 +28,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
                 issue_identifier: format!("GH-{i}"),
                 title: format!("Test issue {i}"),
                 state: "open".into(),
+                approval_state: IssueApprovalState::Approved,
                 priority: Some(2),
                 labels: vec![],
                 description: None,
@@ -45,6 +48,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
                 identifier: format!("GH-{i}"),
                 title: format!("Test issue {i}"),
                 status: "open".into(),
+                approval_state: IssueApprovalState::Approved,
                 priority: Some(2),
                 labels: vec![],
                 description: None,
@@ -56,6 +60,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
                 has_workspace: false,
             })
             .collect(),
+        approved_issue_keys: vec![],
         running: vec![],
         agent_history: vec![],
         retrying: vec![],
@@ -120,6 +125,27 @@ fn render_does_not_panic() {
 }
 
 #[test]
+fn leaving_modal_blanks_previous_ui() {
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let snapshot = test_snapshot(3);
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.leaving = true;
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("Leaving..."), "{screen}");
+    assert!(!screen.contains("Triggers"), "{screen}");
+    assert!(!screen.contains("Test issue 0"), "{screen}");
+}
+
+#[test]
 fn render_mode_modal_with_idle_selection_does_not_panic() {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -156,6 +182,7 @@ fn child_triggers_are_sorted_by_local_number_under_parent() {
             identifier: "1ru".into(),
             title: "Parent".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -173,6 +200,7 @@ fn child_triggers_are_sorted_by_local_number_under_parent() {
             identifier: "1ru.18".into(),
             title: "Child 18".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -190,6 +218,7 @@ fn child_triggers_are_sorted_by_local_number_under_parent() {
             identifier: "1ru.2".into(),
             title: "Child 2".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -207,6 +236,7 @@ fn child_triggers_are_sorted_by_local_number_under_parent() {
             identifier: "1ru.10".into(),
             title: "Child 10".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -247,6 +277,7 @@ fn render_triggers_uses_compact_child_identifiers() {
             identifier: "1ru".into(),
             title: "Parent".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -264,6 +295,7 @@ fn render_triggers_uses_compact_child_identifiers() {
             identifier: "1ru.18".into(),
             title: "Child".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -304,6 +336,7 @@ fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
             identifier: "penso/arbor#74".into(),
             title: "Trigger title".into(),
             status: "Todo".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -321,6 +354,7 @@ fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
             identifier: "8k9".into(),
             title: "Beads title".into(),
             status: "Open".into(),
+            approval_state: IssueApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -342,9 +376,152 @@ fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
         .unwrap();
 
     let screen = buffer_text(terminal.backend().buffer());
-    assert!(screen.contains(" #74"), "{screen}");
+    assert!(screen.contains("✓#74"), "{screen}");
     assert!(!screen.contains("penso/arbor#74"), "{screen}");
     assert!(!screen.contains("Source"), "{screen}");
+}
+
+#[test]
+fn render_logs_footer_shows_provider_budgets() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    let now = Utc::now();
+    snapshot.budgets = vec![
+        BudgetSnapshot {
+            component: "agent:router".into(),
+            captured_at: now,
+            credits_remaining: Some(93.0),
+            credits_total: Some(100.0),
+            spent_usd: None,
+            soft_limit_usd: None,
+            hard_limit_usd: None,
+            reset_at: Some(now + chrono::TimeDelta::hours(2)),
+            raw: Some(serde_json::json!({
+                "provider": "codex",
+                "session": {
+                    "remaining_percent": 93.0,
+                    "reset_at": (now + chrono::TimeDelta::hours(2)).to_rfc3339(),
+                },
+                "weekly": {
+                    "remaining_percent": 1.0,
+                    "deficit_percent": 28.0,
+                    "reset_at": (now + chrono::TimeDelta::days(2)).to_rfc3339(),
+                }
+            })),
+        },
+        BudgetSnapshot {
+            component: "agent:reviewer".into(),
+            captured_at: now,
+            credits_remaining: Some(11.0),
+            credits_total: Some(100.0),
+            spent_usd: None,
+            soft_limit_usd: None,
+            hard_limit_usd: None,
+            reset_at: Some(now + chrono::TimeDelta::hours(2)),
+            raw: Some(serde_json::json!({
+                "provider": "claude",
+                "session": {
+                    "remaining_percent": 11.0,
+                    "reset_at": (now + chrono::TimeDelta::hours(2)).to_rfc3339(),
+                },
+                "weekly": {
+                    "remaining_percent": 48.0,
+                    "deficit_percent": 13.0,
+                    "reset_at": (now + chrono::TimeDelta::days(4)).to_rfc3339(),
+                }
+            })),
+        },
+    ];
+
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.active_tab = app::ActiveTab::Logs;
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("Budgets"), "{screen}");
+    assert!(screen.contains("Codex"), "{screen}");
+    assert!(screen.contains("Claude"), "{screen}");
+    assert!(screen.contains("Δ28%"), "{screen}");
+    assert!(screen.contains("Δ13%"), "{screen}");
+}
+
+#[test]
+fn render_triggers_show_clock_icon_for_waiting_issue_approval() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.visible_triggers = vec![VisibleTriggerRow {
+        trigger_id: "github-75".into(),
+        kind: VisibleTriggerKind::Issue,
+        source: "github".into(),
+        identifier: "penso/polyphony#75".into(),
+        title: "Waiting for approval".into(),
+        status: "Todo".into(),
+        approval_state: IssueApprovalState::Waiting,
+        priority: Some(2),
+        labels: vec![],
+        description: None,
+        url: None,
+        author: Some("outsider".into()),
+        parent_id: None,
+        updated_at: None,
+        created_at: None,
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("◷#75"), "{screen}");
+}
+
+#[test]
+fn render_triggers_show_approved_icon_for_verified_github_issue() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.visible_triggers = vec![VisibleTriggerRow {
+        trigger_id: "github-76".into(),
+        kind: VisibleTriggerKind::Issue,
+        source: "github".into(),
+        identifier: "penso/polyphony#76".into(),
+        title: "Approved issue".into(),
+        status: "Todo".into(),
+        approval_state: IssueApprovalState::Approved,
+        priority: Some(2),
+        labels: vec![],
+        description: None,
+        url: None,
+        author: Some("penso".into()),
+        parent_id: None,
+        updated_at: None,
+        created_at: None,
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("✓#76"), "{screen}");
 }
 
 #[test]
@@ -364,6 +541,46 @@ fn render_shows_connected_github_login_in_header() {
 
     let screen = buffer_text(terminal.backend().buffer());
     assert!(screen.contains("penso"), "{screen}");
+}
+
+#[test]
+fn render_outputs_shows_flow_output_and_decision() {
+    let backend = TestBackend::new(120, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.movements = vec![polyphony_core::MovementRow {
+        id: "mov-1".into(),
+        kind: polyphony_core::MovementKind::IssueDelivery,
+        issue_identifier: Some("#7".into()),
+        title: "Repository root is missing e2e-live.txt".into(),
+        status: polyphony_core::MovementStatus::Delivered,
+        task_count: 1,
+        tasks_completed: 1,
+        deliverable: Some(Deliverable {
+            kind: DeliverableKind::GithubPullRequest,
+            status: DeliverableStatus::Open,
+            url: Some("https://github.com/penso/polyphony/pull/8".into()),
+            decision: DeliverableDecision::Waiting,
+        }),
+        has_deliverable: true,
+        review_target: None,
+        workspace_key: Some("_7".into()),
+        workspace_path: Some(std::path::PathBuf::from(".polyphony/workspaces/_7")),
+        created_at: Utc::now(),
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.active_tab = app::ActiveTab::Deliverables;
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("#7"), "{screen}");
+    assert!(screen.contains("PR #8"), "{screen}");
 }
 
 #[test]

@@ -175,7 +175,7 @@ mod error_tests {
 mod command_parse_tests {
     use clap::Parser;
 
-    use crate::{Cli, Commands, DataAction, IssueAction};
+    use crate::{Cli, Commands, DaemonAction, DataAction, DispatchModeArg, IssueAction};
 
     #[test]
     fn parses_data_events_command() {
@@ -253,6 +253,64 @@ mod command_parse_tests {
                 assert_eq!(identifier, "GH-42");
                 assert_eq!(body, "hello world");
             },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_daemon_dispatch_command() {
+        let cli = Cli::try_parse_from([
+            "polyphony",
+            "daemon",
+            "dispatch",
+            "github:#74",
+            "--agent",
+            "reviewer",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Daemon {
+                action: DaemonAction::Dispatch { issue_id, agent },
+            }) => {
+                assert_eq!(issue_id, "github:#74");
+                assert_eq!(agent.as_deref(), Some("reviewer"));
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_daemon_approve_command() {
+        let cli = Cli::try_parse_from([
+            "polyphony",
+            "daemon",
+            "approve",
+            "#74",
+            "--source",
+            "gitlab",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Daemon {
+                action: DaemonAction::Approve { issue_id, source },
+            }) => {
+                assert_eq!(issue_id, "#74");
+                assert_eq!(source.as_deref(), Some("gitlab"));
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_daemon_mode_command() {
+        let cli = Cli::try_parse_from(["polyphony", "daemon", "mode", "automatic"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Daemon {
+                action: DaemonAction::Mode { mode },
+            }) => assert!(matches!(mode, DispatchModeArg::Automatic)),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -478,6 +536,16 @@ mod tracing_tests {
         let _ = fs::remove_dir_all(&repo_root);
 
         assert!(log_path.starts_with(repo_root.join(".polyphony").join("logs")));
+        assert_eq!(
+            log_path.extension().and_then(|ext| ext.to_str()),
+            Some("jsonl")
+        );
         assert!(contents.contains("persist this line"));
     }
+}
+
+#[test]
+fn rustls_crypto_provider_install_is_idempotent() {
+    crate::install_rustls_crypto_provider();
+    crate::install_rustls_crypto_provider();
 }

@@ -1,46 +1,20 @@
 use {
     chrono::Utc,
-    polyphony_core::{AgentHistoryRow, EventScope, RunningRow, RuntimeSnapshot},
+    polyphony_core::{AgentHistoryRow, RuntimeSnapshot, RunningRow},
     ratatui::{
-        layout::{Constraint, Direction, Layout, Rect},
+        layout::{Constraint, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar,
-            ScrollbarOrientation, ScrollbarState, Table, Wrap,
+            Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
+            ScrollbarState, Table,
         },
     },
 };
 
-use crate::app::{AppState, SelectedAgentRow};
+use crate::app::AppState;
 
 pub fn draw_agents_tab(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    snapshot: &RuntimeSnapshot,
-    app: &mut AppState,
-) {
-    let has_retrying = !snapshot.retrying.is_empty();
-
-    let mut constraints = vec![Constraint::Length(10), Constraint::Min(6)];
-    if has_retrying {
-        constraints.push(Constraint::Length(6));
-    }
-
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-
-    draw_agent_table(frame, sections[0], snapshot, app);
-    draw_agent_detail(frame, sections[1], snapshot, app);
-
-    if has_retrying {
-        draw_retrying_table(frame, sections[2], snapshot, app);
-    }
-}
-
-fn draw_agent_table(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
@@ -113,6 +87,13 @@ fn draw_agent_table(
         )
     };
 
+    let has_retrying = !snapshot.retrying.is_empty();
+    let retrying_suffix = if has_retrying {
+        format!(" | {} retrying", snapshot.retrying.len())
+    } else {
+        String::new()
+    };
+
     let table = Table::new(rows, [
         Constraint::Length(14),
         Constraint::Length(16),
@@ -126,7 +107,6 @@ fn draw_agent_table(
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
     .block(
         Block::default()
             .title(Line::from(Span::styled(
@@ -137,7 +117,7 @@ fn draw_agent_table(
             )))
             .title_bottom(
                 Line::from(Span::styled(
-                    format!("─{footer_info}─"),
+                    format!("─{footer_info}{retrying_suffix}─"),
                     Style::default().fg(theme.muted),
                 ))
                 .right_aligned(),
@@ -148,6 +128,26 @@ fn draw_agent_table(
     );
 
     frame.render_stateful_widget(table, area, &mut app.agents_state);
+
+    if count > 0 {
+        let content_height = area.height.saturating_sub(3) as usize;
+        if count > content_height {
+            let mut scrollbar_state = ScrollbarState::new(count)
+                .position(app.agents_state.selected().unwrap_or(0))
+                .viewport_content_length(content_height);
+            let scrollbar_area = Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: area.height.saturating_sub(2),
+            };
+            frame.render_stateful_widget(
+                Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
+                scrollbar_area,
+                &mut scrollbar_state,
+            );
+        }
+    }
 }
 
 fn agent_table_row(
@@ -182,172 +182,23 @@ fn agent_table_row(
     ])
 }
 
-fn format_history_span(agent: &AgentHistoryRow, now: chrono::DateTime<Utc>) -> String {
+pub(crate) fn format_history_span(agent: &AgentHistoryRow, now: chrono::DateTime<Utc>) -> String {
     let finished_at = agent.finished_at.unwrap_or(now);
     format_duration(finished_at.signed_duration_since(agent.started_at))
 }
 
-fn draw_agent_detail(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
+pub(crate) fn build_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
-    app: &mut AppState,
-) {
-    let theme = app.theme;
-    app.agents_detail_area = area;
-
-    let lines = app
-        .selected_agent(snapshot)
-        .map(|agent| build_agent_detail_lines(snapshot, agent, theme))
-        .unwrap_or_else(|| {
-            vec![
-                Line::from(Span::styled(
-                    "No agent run selected.",
-                    Style::default().fg(theme.muted),
-                )),
-                Line::from(Span::styled(
-                    "Use j/k to choose an agent, Shift+J/Shift+K or the mouse wheel to scroll this pane.",
-                    Style::default().fg(theme.muted),
-                )),
-            ]
-        });
-
-    let content_height = area.height.saturating_sub(2) as usize;
-    let content_width = area.width.saturating_sub(2).max(1);
-    let total_lines = wrapped_line_count(&lines, content_width);
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((app.agents_detail_scroll, 0))
-        .block(
-            Block::default()
-                .title(Line::from(Span::styled(
-                    " Agent Detail ",
-                    Style::default()
-                        .fg(theme.foreground)
-                        .add_modifier(Modifier::BOLD),
-                )))
-                .title(
-                    Line::from(vec![
-                        Span::styled("Shift+J/K", Style::default().fg(theme.highlight)),
-                        Span::styled(" scroll ", Style::default().fg(theme.muted)),
-                    ])
-                    .right_aligned(),
-                )
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.border)),
-        );
-
-    let max_scroll = total_lines.saturating_sub(content_height) as u16;
-    if app.agents_detail_scroll > max_scroll {
-        app.agents_detail_scroll = max_scroll;
-    }
-
-    frame.render_widget(paragraph, area);
-
-    if total_lines > content_height {
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(app.agents_detail_scroll as usize)
-            .viewport_content_length(content_height);
-        let scrollbar_area = Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: area.height.saturating_sub(2),
-        };
-        frame.render_stateful_widget(
-            Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight),
-            scrollbar_area,
-            &mut scrollbar_state,
-        );
-    }
-}
-
-fn draw_retrying_table(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    snapshot: &RuntimeSnapshot,
-    app: &AppState,
-) {
-    let theme = app.theme;
-
-    let header = Row::new(vec![
-        Cell::from(Span::styled("Issue", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Attempt", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Due In", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Error", Style::default().fg(theme.muted))),
-    ])
-    .height(1)
-    .style(Style::default().add_modifier(Modifier::BOLD));
-
-    let now = Utc::now();
-    let rows: Vec<Row> = snapshot
-        .retrying
-        .iter()
-        .map(|r| {
-            let due_in = {
-                let remaining = r.due_at.signed_duration_since(now);
-                if remaining.num_seconds() <= 0 {
-                    "due now".into()
-                } else {
-                    format_duration(remaining)
-                }
-            };
-            let error = r
-                .error
-                .as_deref()
-                .map(|e| truncate(e, 40))
-                .unwrap_or_default();
-
-            Row::new(vec![
-                Cell::from(Span::styled(
-                    r.issue_identifier.clone(),
-                    Style::default().fg(theme.info),
-                )),
-                Cell::from(Span::styled(
-                    r.attempt.to_string(),
-                    Style::default().fg(theme.warning),
-                )),
-                Cell::from(Span::styled(due_in, Style::default().fg(theme.foreground))),
-                Cell::from(Span::styled(error, Style::default().fg(theme.danger))),
-            ])
-        })
-        .collect();
-
-    let table = Table::new(rows, [
-        Constraint::Length(14),
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Fill(1),
-    ])
-    .header(header)
-    .block(
-        Block::default()
-            .title(Line::from(Span::styled(
-                " Retrying ",
-                Style::default()
-                    .fg(theme.warning)
-                    .add_modifier(Modifier::BOLD),
-            )))
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border)),
-    );
-
-    frame.render_widget(table, area);
-}
-
-fn build_agent_detail_lines(
-    snapshot: &RuntimeSnapshot,
-    agent: SelectedAgentRow<'_>,
+    agent: crate::app::SelectedAgentRow<'_>,
+    artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
 ) -> Vec<Line<'static>> {
     match agent {
-        SelectedAgentRow::Running(agent) => {
-            build_running_agent_detail_lines(snapshot, agent, theme)
+        crate::app::SelectedAgentRow::Running(agent) => {
+            build_running_agent_detail_lines(snapshot, agent, artifact_saved_context, theme)
         },
-        SelectedAgentRow::History(agent) => {
-            build_history_agent_detail_lines(snapshot, agent, theme)
+        crate::app::SelectedAgentRow::History(agent) => {
+            build_history_agent_detail_lines(snapshot, agent, artifact_saved_context, theme)
         },
     }
 }
@@ -355,6 +206,7 @@ fn build_agent_detail_lines(
 fn build_running_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
     agent: &RunningRow,
+    artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -401,31 +253,35 @@ fn build_running_agent_detail_lines(
         )));
     }
 
+    if let Some(saved_context) = artifact_saved_context
+        && !saved_context.transcript.is_empty()
+    {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Transcript",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for entry in &saved_context.transcript {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", entry.at.format("%H:%M:%S")),
+                    Style::default().fg(theme.muted),
+                ),
+                Span::styled(
+                    format!("{:?} ", entry.kind),
+                    Style::default().fg(theme.info),
+                ),
+                Span::styled(entry.message.clone(), Style::default().fg(theme.foreground)),
+            ]));
+        }
+    }
+
     lines.push(Line::default());
     append_agent_availability_lines(&mut lines, snapshot, agent, theme);
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "Recent Events",
-        Style::default()
-            .fg(theme.highlight)
-            .add_modifier(Modifier::BOLD),
-    )));
-
-    let mut event_count = 0usize;
-    for event in snapshot.recent_events.iter().rev() {
-        if !message_mentions_issue(&event.message, &agent.issue_identifier) {
-            continue;
-        }
-        event_count += 1;
-        lines.push(render_event_line(event, theme));
-    }
-
-    if event_count == 0 {
-        lines.push(Line::from(Span::styled(
-            "No recent events for this issue.",
-            Style::default().fg(theme.muted),
-        )));
-    }
+    append_recent_events(&mut lines, snapshot, &agent.issue_identifier, theme);
 
     lines
 }
@@ -433,6 +289,7 @@ fn build_running_agent_detail_lines(
 fn build_history_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
     agent: &AgentHistoryRow,
+    artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -509,7 +366,7 @@ fn build_history_agent_detail_lines(
         extend_plain_lines(&mut lines, error, theme.danger);
     }
 
-    if let Some(saved_context) = &agent.saved_context
+    if let Some(saved_context) = artifact_saved_context.or(agent.saved_context.as_ref())
         && !saved_context.transcript.is_empty()
     {
         lines.push(Line::default());
@@ -535,6 +392,19 @@ fn build_history_agent_detail_lines(
     }
 
     lines.push(Line::default());
+    append_recent_events(&mut lines, snapshot, &agent.issue_identifier, theme);
+
+    lines
+}
+
+fn append_recent_events(
+    lines: &mut Vec<Line<'static>>,
+    snapshot: &RuntimeSnapshot,
+    issue_identifier: &str,
+    theme: crate::theme::Theme,
+) {
+    use polyphony_core::EventScope;
+
     lines.push(Line::from(Span::styled(
         "Recent Events",
         Style::default()
@@ -544,11 +414,27 @@ fn build_history_agent_detail_lines(
 
     let mut event_count = 0usize;
     for event in snapshot.recent_events.iter().rev() {
-        if !message_mentions_issue(&event.message, &agent.issue_identifier) {
+        if !message_mentions_issue(&event.message, issue_identifier) {
             continue;
         }
         event_count += 1;
-        lines.push(render_event_line(event, theme));
+        let ts = event.at.format("%H:%M:%S");
+        let scope_color = match event.scope {
+            EventScope::Dispatch => theme.info,
+            EventScope::Handoff => theme.highlight,
+            EventScope::Worker | EventScope::Agent => theme.success,
+            EventScope::Retry => theme.warning,
+            EventScope::Throttle => theme.danger,
+            _ => theme.muted,
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{:<10}", event.scope),
+                Style::default().fg(scope_color),
+            ),
+            Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
+        ]));
     }
 
     if event_count == 0 {
@@ -557,8 +443,6 @@ fn build_history_agent_detail_lines(
             Style::default().fg(theme.muted),
         )));
     }
-
-    lines
 }
 
 fn append_agent_availability_lines(
@@ -658,30 +542,6 @@ fn extend_plain_lines(lines: &mut Vec<Line<'static>>, content: &str, color: rata
     }
 }
 
-fn render_event_line(
-    event: &polyphony_core::RuntimeEvent,
-    theme: crate::theme::Theme,
-) -> Line<'static> {
-    let ts = event.at.format("%H:%M:%S");
-    let scope_color = match event.scope {
-        EventScope::Dispatch => theme.info,
-        EventScope::Handoff => theme.highlight,
-        EventScope::Worker | EventScope::Agent => theme.success,
-        EventScope::Retry => theme.warning,
-        EventScope::Throttle => theme.danger,
-        _ => theme.muted,
-    };
-
-    Line::from(vec![
-        Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
-        Span::styled(
-            format!("{:<10}", event.scope),
-            Style::default().fg(scope_color),
-        ),
-        Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
-    ])
-}
-
 fn message_mentions_issue(message: &str, issue_identifier: &str) -> bool {
     if issue_identifier.is_empty() {
         return false;
@@ -710,22 +570,7 @@ fn message_mentions_issue(message: &str, issue_identifier: &str) -> bool {
     false
 }
 
-fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
-    let width = usize::from(width.max(1));
-    lines
-        .iter()
-        .map(|line| {
-            let line_width: usize = line
-                .spans
-                .iter()
-                .map(|span| span.content.chars().count())
-                .sum();
-            line_width.max(1).div_ceil(width)
-        })
-        .sum()
-}
-
-fn format_duration(duration: chrono::Duration) -> String {
+pub(crate) fn format_duration(duration: chrono::Duration) -> String {
     let total_secs = duration.num_seconds().max(0);
     if total_secs < 60 {
         format!("{total_secs}s")

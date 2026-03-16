@@ -322,6 +322,7 @@ fn demo_issue(identifier: &str, title: &str, priority: Option<i32>, state: &str)
             updated_at: Some(Utc::now()),
         }],
         blocked_by: Vec::new(),
+        approval_state: polyphony_core::IssueApprovalState::Approved,
         parent_id: None,
         created_at: Some(Utc::now()),
         updated_at: Some(Utc::now()),

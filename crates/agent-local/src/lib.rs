@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
+    process::Output,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -319,7 +320,7 @@ async fn run_terminal_session(
         }
 
         if matches!(
-            spec.agent.interaction_mode,
+            effective_interaction_mode(&spec.agent),
             AgentInteractionMode::Interactive
         ) && Instant::now().duration_since(last_change) >= idle_limit
         {
@@ -399,12 +400,15 @@ async fn spawn_tmux_session(
     for (key, value) in &spec.agent.env {
         tmux.env(key, value);
     }
-    let status = tmux
-        .status()
+    let output = tmux
+        .output()
         .await
         .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    if !status.success() {
-        return Err(CoreError::Adapter("failed to create tmux session".into()));
+    if !output.status.success() {
+        return Err(CoreError::Adapter(format_tmux_failure(
+            "failed to create tmux session",
+            &output,
+        )));
     }
 
     Ok(SpawnedSession {
@@ -433,8 +437,10 @@ async fn spawn_pty_session(
     remove_file_if_exists(&output_path).await?;
 
     let model = selected_model_hint(&spec.agent);
+    let prompt_delivery = pty_prompt_delivery(&spec.agent);
+    let launch_command = tmux_launch_command(command, prompt_file, prompt_delivery);
     let command_builder = build_pty_command(
-        command,
+        &launch_command,
         workspace_path,
         &spec.agent.env,
         spec,
@@ -492,7 +498,6 @@ async fn spawn_pty_session(
         "starting pty-backed agent turn"
     );
 
-    let prompt_delivery = pty_prompt_delivery(&spec.agent);
     let writer = if matches!(prompt_delivery, PromptDelivery::None) {
         None
     } else {
@@ -523,26 +528,25 @@ impl TerminalSession for TmuxSession {
     }
 
     async fn resize(&mut self, rows: u16, cols: u16) -> Result<(), CoreError> {
-        let status = Command::new("tmux")
-            .arg("resize-window")
-            .arg("-t")
-            .arg(&self.session_name)
-            .arg("-x")
-            .arg(cols.to_string())
-            .arg("-y")
-            .arg(rows.to_string())
-            .status()
-            .await
-            .map_err(|error| CoreError::Adapter(error.to_string()))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(CoreError::Adapter("failed to resize tmux window".into()))
-        }
+        let cols = cols.to_string();
+        let rows = rows.to_string();
+        ensure_tmux_success(
+            [
+                "resize-window",
+                "-t",
+                self.session_name.as_str(),
+                "-x",
+                cols.as_str(),
+                "-y",
+                rows.as_str(),
+            ],
+            "failed to resize tmux window",
+        )
+        .await
     }
 
     async fn snapshot(&mut self) -> Result<String, CoreError> {
-        capture_tmux_pane(&self.session_name).await
+        capture_tmux_snapshot(&self.session_name, &self.exit_path, &self.output_path).await
     }
 
     async fn transcript(&mut self) -> Result<String, CoreError> {
@@ -671,36 +675,21 @@ async fn send_prompt_to_tmux(
     session_name: &str,
     prompt_file: &std::path::Path,
 ) -> Result<(), CoreError> {
-    let load_status = Command::new("tmux")
-        .arg("load-buffer")
-        .arg(prompt_file)
-        .status()
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    if !load_status.success() {
-        return Err(CoreError::Adapter("failed to load tmux buffer".into()));
-    }
-    let paste_status = Command::new("tmux")
-        .arg("paste-buffer")
-        .arg("-t")
-        .arg(session_name)
-        .status()
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    if !paste_status.success() {
-        return Err(CoreError::Adapter("failed to paste tmux buffer".into()));
-    }
-    let enter_status = Command::new("tmux")
-        .arg("send-keys")
-        .arg("-t")
-        .arg(session_name)
-        .arg("Enter")
-        .status()
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    if !enter_status.success() {
-        return Err(CoreError::Adapter("failed to submit tmux prompt".into()));
-    }
+    ensure_tmux_success(
+        ["load-buffer", prompt_file.to_string_lossy().as_ref()],
+        "failed to load tmux buffer",
+    )
+    .await?;
+    ensure_tmux_success(
+        ["paste-buffer", "-t", session_name],
+        "failed to paste tmux buffer",
+    )
+    .await?;
+    ensure_tmux_success(
+        ["send-keys", "-t", session_name, "Enter"],
+        "failed to submit tmux prompt",
+    )
+    .await?;
     Ok(())
 }
 
@@ -728,6 +717,20 @@ async fn capture_tmux_pane(session_name: &str) -> Result<String, CoreError> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+async fn capture_tmux_snapshot(
+    session_name: &str,
+    exit_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> Result<String, CoreError> {
+    match capture_tmux_pane(session_name).await {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) if read_tmux_exit_code(exit_path).await.is_some() => {
+            Ok(read_tmux_output(output_path).await.unwrap_or_default())
+        },
+        Err(error) => Err(error),
+    }
+}
+
 fn tmux_prompt_delivery(agent: &polyphony_core::AgentDefinition) -> PromptDelivery {
     match agent.prompt_mode {
         AgentPromptMode::Stdin => PromptDelivery::RedirectStdinAtLaunch,
@@ -739,7 +742,10 @@ fn tmux_prompt_delivery(agent: &polyphony_core::AgentDefinition) -> PromptDelive
             }
         },
         AgentPromptMode::Env => {
-            if matches!(agent.interaction_mode, AgentInteractionMode::Interactive) {
+            if matches!(
+                effective_interaction_mode(agent),
+                AgentInteractionMode::Interactive
+            ) {
                 PromptDelivery::WriteAfterLaunch
             } else {
                 PromptDelivery::None
@@ -751,28 +757,51 @@ fn tmux_prompt_delivery(agent: &polyphony_core::AgentDefinition) -> PromptDelive
 fn pty_prompt_delivery(agent: &polyphony_core::AgentDefinition) -> PromptDelivery {
     match agent.prompt_mode {
         AgentPromptMode::Env => {
-            if matches!(agent.interaction_mode, AgentInteractionMode::Interactive) {
+            if matches!(
+                effective_interaction_mode(agent),
+                AgentInteractionMode::Interactive
+            ) {
                 PromptDelivery::WriteAfterLaunch
             } else {
                 PromptDelivery::None
             }
         },
-        AgentPromptMode::Stdin | AgentPromptMode::TmuxPaste => PromptDelivery::WriteAfterLaunch,
+        AgentPromptMode::Stdin | AgentPromptMode::TmuxPaste => {
+            if command_requires_launch_stdin(agent) {
+                PromptDelivery::RedirectStdinAtLaunch
+            } else {
+                PromptDelivery::WriteAfterLaunch
+            }
+        },
+    }
+}
+
+fn effective_interaction_mode(
+    agent: &polyphony_core::AgentDefinition,
+) -> polyphony_core::AgentInteractionMode {
+    if command_requires_launch_stdin(agent) {
+        AgentInteractionMode::OneShot
+    } else {
+        agent.interaction_mode
     }
 }
 
 fn command_requires_launch_stdin(agent: &polyphony_core::AgentDefinition) -> bool {
-    agent.kind.eq_ignore_ascii_case("claude")
-        && agent
-            .command
-            .as_deref()
-            .is_some_and(claude_command_uses_print_mode)
+    agent.command.as_deref().is_some_and(|command| {
+        (agent.kind.eq_ignore_ascii_case("claude") && claude_command_uses_print_mode(command))
+            || codex_command_uses_exec_mode(command)
+    })
 }
 
 fn claude_command_uses_print_mode(command: &str) -> bool {
     command
         .split_whitespace()
         .any(|token| token == "-p" || token == "--print")
+}
+
+fn codex_command_uses_exec_mode(command: &str) -> bool {
+    let mut tokens = command.split_whitespace();
+    matches!(tokens.next(), Some("codex")) && matches!(tokens.next(), Some("exec"))
 }
 
 fn build_pty_command(
@@ -945,12 +974,44 @@ async fn remove_file_if_exists(path: &std::path::Path) -> Result<(), CoreError> 
 }
 
 async fn kill_tmux_session(session_name: &str) {
-    let _ = Command::new("tmux")
-        .arg("kill-session")
-        .arg("-t")
-        .arg(session_name)
-        .status()
-        .await;
+    let _ = run_tmux_command(["kill-session", "-t", session_name]).await;
+}
+
+async fn run_tmux_command(
+    args: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<Output, CoreError> {
+    let mut command = Command::new("tmux");
+    for arg in args {
+        command.arg(arg.as_ref());
+    }
+    command
+        .output()
+        .await
+        .map_err(|error| CoreError::Adapter(error.to_string()))
+}
+
+async fn ensure_tmux_success(
+    args: impl IntoIterator<Item = impl AsRef<str>>,
+    failure_context: &str,
+) -> Result<(), CoreError> {
+    let output = run_tmux_command(args).await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(CoreError::Adapter(format_tmux_failure(
+        failure_context,
+        &output,
+    )))
+}
+
+fn format_tmux_failure(failure_context: &str, output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    if detail.is_empty() {
+        failure_context.to_string()
+    } else {
+        format!("{failure_context}: {detail}")
+    }
 }
 
 fn diff_tail(previous: &str, current: &str) -> String {
@@ -963,12 +1024,15 @@ fn diff_tail(previous: &str, current: &str) -> String {
 #[cfg(test)]
 mod tests {
     use {
-        super::LocalCliRuntime,
+        super::{LocalCliRuntime, codex_command_uses_exec_mode},
         polyphony_core::{
             AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
             AgentRunSpec, AgentTransport, Error as CoreError, Issue,
         },
-        std::os::unix::fs::PermissionsExt,
+        std::{
+            os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+            process::{ExitStatus, Output},
+        },
         tempfile::tempdir,
         tokio::sync::mpsc,
     };
@@ -1027,6 +1091,42 @@ mod tests {
             }
         }
         assert!(saw_terminal_output);
+    }
+
+    #[test]
+    fn codex_exec_commands_require_launch_stdin() {
+        assert!(codex_command_uses_exec_mode(
+            "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check"
+        ));
+        assert!(!codex_command_uses_exec_mode("codex review --json"));
+    }
+
+    #[test]
+    fn codex_exec_forces_one_shot_interaction_mode() {
+        let agent = AgentDefinition {
+            name: "implementer".into(),
+            kind: "local".into(),
+            command: Some(
+                "codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check"
+                    .into(),
+            ),
+            interaction_mode: AgentInteractionMode::Interactive,
+            prompt_mode: AgentPromptMode::Env,
+            ..AgentDefinition::default()
+        };
+
+        assert_eq!(
+            crate::effective_interaction_mode(&agent),
+            AgentInteractionMode::OneShot
+        );
+        assert_eq!(
+            crate::tmux_prompt_delivery(&agent),
+            crate::PromptDelivery::None
+        );
+        assert_eq!(
+            crate::pty_prompt_delivery(&agent),
+            crate::PromptDelivery::None
+        );
     }
 
     #[tokio::test]
@@ -1090,6 +1190,23 @@ mod tests {
         assert!(super::claude_command_uses_print_mode(
             agent.command.as_deref().unwrap()
         ));
+    }
+
+    #[test]
+    fn claude_print_pty_uses_launch_stdin() {
+        let agent = AgentDefinition {
+            name: "opus".into(),
+            kind: "claude".into(),
+            command: Some("claude -p --verbose".into()),
+            interaction_mode: AgentInteractionMode::Interactive,
+            prompt_mode: AgentPromptMode::Stdin,
+            ..AgentDefinition::default()
+        };
+
+        assert_eq!(
+            super::pty_prompt_delivery(&agent),
+            super::PromptDelivery::RedirectStdinAtLaunch
+        );
     }
 
     #[test]
@@ -1255,6 +1372,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pty_claude_print_mode_reads_prompt_before_launch() {
+        let runtime = LocalCliRuntime::fallback_transport();
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        tokio::fs::create_dir_all(&bin_dir).await.unwrap();
+        let output = dir.path().join("captured-pty.txt");
+        let claude = bin_dir.join("claude");
+        let script = format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \" $* \" == *\" -p \"* || \" $* \" == *\" --print \"* ]]; then\n  line=$(cat)\n  if [[ -z \"$line\" ]]; then\n    echo \"Error: Input must be provided either through stdin or as a prompt argument when using --print\" >&2\n    exit 2\n  fi\n  printf '%s\\n' \"$line\" > {}\n  exit 0\nfi\nexit 3\n",
+            output.display()
+        );
+        tokio::fs::write(&claude, script).await.unwrap();
+        let mut perms = tokio::fs::metadata(&claude).await.unwrap().permissions();
+        perms.set_mode(0o755);
+        tokio::fs::set_permissions(&claude, perms).await.unwrap();
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: test_issue(),
+                    attempt: Some(0),
+                    workspace_path: dir.path().to_path_buf(),
+                    prompt: "hello from pty".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "opus".into(),
+                        kind: "claude".into(),
+                        transport: AgentTransport::LocalCli,
+                        command: Some(format!("{} -p --verbose", claude.display())),
+                        interaction_mode: AgentInteractionMode::Interactive,
+                        prompt_mode: AgentPromptMode::Stdin,
+                        turn_timeout_ms: 5_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            matches!(result.status, polyphony_core::AttemptStatus::Succeeded),
+            "result={result:?} events={events:?}"
+        );
+        let captured = tokio::fs::read_to_string(output).await.unwrap();
+        assert_eq!(captured.trim(), "hello from pty");
+    }
+
+    #[tokio::test]
     async fn tmux_claude_rate_limit_returns_rate_limited_error() {
         let tmux_available = tokio::process::Command::new("tmux")
             .arg("-V")
@@ -1390,6 +1562,51 @@ mod tests {
                     != Some("run ended with error: failed to capture tmux pane")
             }),
             "events={events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tmux_snapshot_falls_back_to_output_after_session_exit() {
+        let tmux_available = tokio::process::Command::new("tmux")
+            .arg("-V")
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !tmux_available {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let exit_path = dir.path().join("router-exit.txt");
+        let output_path = dir.path().join("router-tmux.log");
+        tokio::fs::write(&exit_path, "0").await.unwrap();
+        tokio::fs::write(&output_path, "finished output")
+            .await
+            .unwrap();
+
+        let snapshot = super::capture_tmux_snapshot(
+            "definitely-not-a-real-polyphony-session",
+            &exit_path,
+            &output_path,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(snapshot, "finished output");
+    }
+
+    #[test]
+    fn tmux_failure_includes_trimmed_stderr_detail() {
+        let output = Output {
+            status: ExitStatus::from_raw(256),
+            stdout: Vec::new(),
+            stderr: b"duplicate session: router-w1b-4\n".to_vec(),
+        };
+
+        assert_eq!(
+            crate::format_tmux_failure("failed to create tmux session", &output),
+            "failed to create tmux session: duplicate session: router-w1b-4"
         );
     }
 }

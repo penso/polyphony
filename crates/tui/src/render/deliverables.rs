@@ -1,7 +1,9 @@
 use {
-    polyphony_core::RuntimeSnapshot,
+    polyphony_core::{
+        Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus, RuntimeSnapshot,
+    },
     ratatui::{
-        layout::{Constraint, Rect},
+        layout::{Alignment, Constraint, Rect},
         style::{Modifier, Style},
         text::{Line, Span},
         widgets::{
@@ -21,38 +23,66 @@ pub fn draw_deliverables_tab(
 ) {
     let theme = app.theme;
 
-    let deliverables: Vec<_> = snapshot
+    // Collect and sort by most recent first
+    let mut deliverables: Vec<_> = snapshot
         .movements
         .iter()
-        .filter(|m| m.has_deliverable)
+        .filter(|movement| movement.deliverable.is_some())
         .collect();
+    deliverables.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("Issue", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Flow", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Output", Style::default().fg(theme.muted))),
+        Cell::from(
+            Line::from(Span::styled("PR", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
+        Cell::from(
+            Line::from(Span::styled("Dec", Style::default().fg(theme.muted)))
+                .alignment(Alignment::Right),
+        ),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = deliverables
         .iter()
-        .map(|m| {
-            let status_color = movement_status_color(&m.status, theme);
-
+        .map(|movement| {
+            let deliverable = movement.deliverable.as_ref().expect("filtered");
+            let (status_icon, status_color) = status_indicator(deliverable.status, theme);
+            let (decision_icon, decision_color) =
+                decision_indicator(deliverable.decision, theme);
             Row::new(vec![
                 Cell::from(Span::styled(
-                    m.issue_identifier.clone().unwrap_or_default(),
+                    super::format_listing_time(movement.created_at),
+                    Style::default().fg(theme.muted),
+                )),
+                Cell::from(Span::styled(
+                    flow_label(movement),
                     Style::default().fg(theme.info),
                 )),
                 Cell::from(Span::styled(
-                    m.title.clone(),
+                    movement.title.clone(),
                     Style::default().fg(theme.foreground),
                 )),
                 Cell::from(Span::styled(
-                    m.status.to_string(),
-                    Style::default().fg(status_color),
+                    output_label(deliverable),
+                    Style::default().fg(theme.foreground),
                 )),
+                Cell::from(
+                    Line::from(Span::styled(status_icon, Style::default().fg(status_color)))
+                        .alignment(Alignment::Right),
+                ),
+                Cell::from(
+                    Line::from(Span::styled(
+                        decision_icon,
+                        Style::default().fg(decision_color),
+                    ))
+                    .alignment(Alignment::Right),
+                ),
             ])
         })
         .collect();
@@ -73,18 +103,21 @@ pub fn draw_deliverables_tab(
     };
 
     let table = Table::new(rows, [
-        Constraint::Length(14),
+        Constraint::Length(16),
+        Constraint::Length(18),
         Constraint::Fill(1),
-        Constraint::Length(14),
+        Constraint::Length(10),
+        Constraint::Length(4),
+        Constraint::Length(4),
     ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
+
     .block(
         Block::default()
             .title(Line::from(Span::styled(
-                " Outputs ",
+                " Outcomes ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -124,17 +157,84 @@ pub fn draw_deliverables_tab(
     }
 }
 
-fn movement_status_color(
-    status: &polyphony_core::MovementStatus,
+fn flow_label(movement: &polyphony_core::MovementRow) -> String {
+    movement
+        .review_target
+        .as_ref()
+        .map(|target| format!("{}#{}", target.repository, target.number))
+        .or_else(|| movement.issue_identifier.clone())
+        .unwrap_or_else(|| movement.id.clone())
+}
+
+pub(crate) fn flow_label_pub(movement: &polyphony_core::MovementRow) -> String {
+    flow_label(movement)
+}
+
+fn output_label(deliverable: &Deliverable) -> String {
+    match deliverable.kind {
+        DeliverableKind::GithubPullRequest => deliverable
+            .url
+            .as_deref()
+            .and_then(github_pull_request_number)
+            .map(|number| format!("PR #{number}"))
+            .unwrap_or_else(|| "PR".into()),
+        DeliverableKind::GitlabMergeRequest => "MR".into(),
+        DeliverableKind::Patch => "Patch".into(),
+    }
+}
+
+fn deliverable_label(deliverable: &Deliverable) -> String {
+    let base = output_label(deliverable);
+    format!("{base} ({})", deliverable.status)
+}
+
+pub(crate) fn deliverable_label_pub(deliverable: &Deliverable) -> String {
+    deliverable_label(deliverable)
+}
+
+fn github_pull_request_number(url: &str) -> Option<&str> {
+    url.rsplit("/pull/").next().filter(|suffix| *suffix != url)
+}
+
+fn status_indicator(
+    status: DeliverableStatus,
     theme: crate::theme::Theme,
-) -> ratatui::style::Color {
-    use polyphony_core::MovementStatus;
+) -> (&'static str, ratatui::style::Color) {
     match status {
-        MovementStatus::Pending | MovementStatus::Planning => theme.info,
-        MovementStatus::InProgress => theme.success,
-        MovementStatus::Review => theme.highlight,
-        MovementStatus::Delivered => theme.success,
-        MovementStatus::Failed => theme.danger,
-        MovementStatus::Cancelled => theme.muted,
+        DeliverableStatus::Pending => ("…", theme.info),
+        DeliverableStatus::Open => ("●", theme.success),
+        DeliverableStatus::Merged => ("✓", theme.highlight),
+        DeliverableStatus::Closed => ("✕", theme.muted),
+    }
+}
+
+fn decision_indicator(
+    decision: DeliverableDecision,
+    theme: crate::theme::Theme,
+) -> (&'static str, ratatui::style::Color) {
+    match decision {
+        DeliverableDecision::Waiting => ("◷", theme.warning),
+        DeliverableDecision::Accepted => ("✓", theme.success),
+        DeliverableDecision::Rejected => ("✕", theme.danger),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use polyphony_core::{Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus};
+
+    #[test]
+    fn deliverable_label_uses_pr_number_when_available() {
+        let deliverable = Deliverable {
+            kind: DeliverableKind::GithubPullRequest,
+            status: DeliverableStatus::Open,
+            url: Some("https://github.com/penso/polyphony/pull/8".into()),
+            decision: DeliverableDecision::Waiting,
+        };
+
+        assert_eq!(
+            crate::render::deliverables::deliverable_label(&deliverable),
+            "PR #8 (open)"
+        );
     }
 }

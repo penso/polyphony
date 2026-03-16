@@ -2,6 +2,11 @@ use crate::{prelude::*, *};
 
 pub(crate) fn to_issue(issue: GithubIssue, comments: Vec<GithubComment>) -> Issue {
     let state = normalize_issue_state(&issue);
+    let approval_state = issue
+        .author_association
+        .as_ref()
+        .map(github_issue_approval_state)
+        .unwrap_or(IssueApprovalState::Waiting);
     Issue {
         id: issue.number.to_string(),
         identifier: format!("#{}", issue.number),
@@ -22,6 +27,7 @@ pub(crate) fn to_issue(issue: GithubIssue, comments: Vec<GithubComment>) -> Issu
             .collect(),
         comments: comments.into_iter().map(github_comment).collect(),
         blocked_by: Vec::new(),
+        approval_state,
         parent_id: None,
         created_at: Some(issue.created_at.with_timezone(&Utc)),
         updated_at: Some(issue.updated_at.with_timezone(&Utc)),
@@ -83,6 +89,21 @@ pub(crate) fn github_trust_level(association: &AuthorAssociation) -> String {
         AuthorAssociation::None => "outsider".into(),
         AuthorAssociation::Other(_) => "unknown".into(),
         _ => "unknown".into(),
+    }
+}
+
+pub(crate) fn github_issue_approval_state(association: &AuthorAssociation) -> IssueApprovalState {
+    match association {
+        AuthorAssociation::Owner | AuthorAssociation::Member | AuthorAssociation::Collaborator => {
+            IssueApprovalState::Approved
+        },
+        AuthorAssociation::Contributor
+        | AuthorAssociation::FirstTimer
+        | AuthorAssociation::FirstTimeContributor
+        | AuthorAssociation::Mannequin
+        | AuthorAssociation::None
+        | AuthorAssociation::Other(_) => IssueApprovalState::Waiting,
+        _ => IssueApprovalState::Waiting,
     }
 }
 

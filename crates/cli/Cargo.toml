@@ -57,7 +57,9 @@ agent-pi = ["pi"]
 
 [dependencies]
 async-trait.workspace = true
+axum.workspace = true
 clap.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
