@@ -176,7 +176,7 @@ impl RuntimeService {
                     "unknown planner agent `{planner_agent_name}`"
                 )))
             })?;
-        let selected_agent = agent_definition(planner_agent_name, profile);
+        let selected_agent = agent_definition(planner_agent_name, profile)?;
 
         let prompt = workflow
             .config
@@ -263,7 +263,7 @@ impl RuntimeService {
                     "unknown agent `{agent_name}` for pipeline task"
                 )))
             })?;
-        let selected_agent = agent_definition(&agent_name, profile);
+        let selected_agent = agent_definition(&agent_name, profile)?;
 
         // Build task prompt with pipeline context
         let prompt = self.build_task_prompt(

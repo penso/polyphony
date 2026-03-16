@@ -367,6 +367,11 @@ pub(crate) fn shorthand_agent_profile(config: CodexConfig) -> (String, AgentProf
         approval_policy: config.approval_policy,
         thread_sandbox: config.thread_sandbox,
         turn_sandbox_policy: config.turn_sandbox_policy,
+        sandbox_backend: None,
+        sandbox_image: None,
+        sandbox_profile: None,
+        sandbox_volumes: None,
+        sandbox_network_access: None,
         turn_timeout_ms: config.turn_timeout_ms,
         read_timeout_ms: config.read_timeout_ms,
         stall_timeout_ms: config.stall_timeout_ms,
@@ -424,9 +429,40 @@ pub(crate) fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransp
     }
 }
 
-pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition {
+pub(crate) fn parse_sandbox_backend(value: Option<&str>) -> Result<Option<SandboxBackend>, Error> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some("none") => Ok(Some(SandboxBackend::None)),
+        Some("apple") => Ok(Some(SandboxBackend::Apple)),
+        Some("docker") => Ok(Some(SandboxBackend::Docker)),
+        Some("podman") => Ok(Some(SandboxBackend::Podman)),
+        Some(other) => Err(Error::InvalidConfig(format!(
+            "sandbox_backend must be one of `none`, `apple`, `docker`, or `podman`, got `{other}`"
+        ))),
+    }
+}
+
+pub(crate) fn render_sandbox_config(
+    profile: &AgentProfileConfig,
+) -> Result<Option<SandboxConfig>, Error> {
+    let Some(backend) = parse_sandbox_backend(profile.sandbox_backend.as_deref())? else {
+        return Ok(None);
+    };
+    Ok(Some(SandboxConfig {
+        backend,
+        container_image: normalize_optional_string(profile.sandbox_image.clone()),
+        apple_profile_path: profile.sandbox_profile.clone().map(PathBuf::from),
+        extra_volumes: profile.sandbox_volumes.clone().unwrap_or_default(),
+        network_access: profile.sandbox_network_access.unwrap_or(true),
+    }))
+}
+
+pub fn agent_definition(
+    name: &str,
+    profile: &AgentProfileConfig,
+) -> Result<AgentDefinition, Error> {
     let transport = infer_agent_transport(profile);
-    AgentDefinition {
+    Ok(AgentDefinition {
         name: name.to_string(),
         kind: profile.kind.clone(),
         transport,
@@ -446,6 +482,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
         approval_policy: profile.approval_policy.clone(),
         thread_sandbox: profile.thread_sandbox.clone(),
         turn_sandbox_policy: profile.turn_sandbox_policy.clone(),
+        sandbox: render_sandbox_config(profile)?,
         turn_timeout_ms: profile.turn_timeout_ms,
         read_timeout_ms: profile.read_timeout_ms,
         stall_timeout_ms: profile.stall_timeout_ms.unwrap_or(300_000),
@@ -462,7 +499,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
         idle_timeout_ms: profile.idle_timeout_ms,
         completion_sentinel: profile.completion_sentinel.clone(),
         env: profile.env.clone(),
-    }
+    })
 }
 
 pub(crate) fn default_agent_base_url(kind: &str) -> Option<String> {

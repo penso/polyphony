@@ -5,12 +5,13 @@ use std::{
 
 use {
     crate::{
-        AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig, WorkflowDefinition,
-        files::*, load_workflow_with_user_config, render::*, render_issue_template,
-        render_turn_template, repo_config_path,
+        AgentProfileConfig, AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig,
+        WorkflowDefinition, files::*, load_workflow_with_user_config, render::*,
+        render_issue_template, render_turn_template, repo_config_path,
     },
     polyphony_core::{
-        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, TrackerKind,
+        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, SandboxBackend,
+        TrackerKind,
     },
     serde_yaml::Value as YamlValue,
 };
@@ -470,8 +471,8 @@ agents:
     let claude = config.agents.profiles.get("claude").unwrap();
     let claude_tmux = config.agents.profiles.get("claude_tmux").unwrap();
 
-    let claude_agent = agent_definition("claude", claude);
-    let claude_tmux_agent = agent_definition("claude_tmux", claude_tmux);
+    let claude_agent = agent_definition("claude", claude).unwrap();
+    let claude_tmux_agent = agent_definition("claude_tmux", claude_tmux).unwrap();
 
     assert!(matches!(
         claude_agent.interaction_mode,
@@ -486,6 +487,199 @@ agents:
         claude_tmux_agent.prompt_mode,
         AgentPromptMode::TmuxPaste
     ));
+}
+
+#[test]
+fn sandbox_profile_fields_render_into_typed_agent_definition() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+      sandbox_backend: docker
+      sandbox_image: ghcr.io/openai/codex:latest
+      sandbox_volumes:
+        - /tmp/cache:/cache
+      sandbox_network_access: false
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let selected = ServiceConfig::from_workflow(&workflow)
+        .unwrap()
+        .select_agent_for_issue(&sample_issue())
+        .unwrap();
+    let sandbox = selected.sandbox.expect("sandbox should render");
+
+    assert_eq!(sandbox.backend, SandboxBackend::Docker);
+    assert_eq!(
+        sandbox.container_image.as_deref(),
+        Some("ghcr.io/openai/codex:latest")
+    );
+    assert_eq!(sandbox.extra_volumes, vec!["/tmp/cache:/cache"]);
+    assert!(!sandbox.network_access);
+}
+
+#[test]
+fn sandbox_fields_parse_from_user_toml() {
+    let user_config_path = unique_temp_path("sandbox-user-config", "toml");
+    fs::write(
+        &user_config_path,
+        r#"
+[agents]
+default = "codex"
+
+[agents.profiles.codex]
+kind = "codex"
+transport = "app_server"
+command = "codex app-server"
+sandbox_backend = "apple"
+sandbox_profile = "~/sandbox/polyphony.sb"
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config: YamlValue::Mapping(Default::default()),
+        prompt_template: String::new(),
+    };
+
+    let selected =
+        ServiceConfig::from_workflow_with_configs(&workflow, Some(&user_config_path), None)
+            .unwrap()
+            .select_agent_for_issue(&sample_issue())
+            .unwrap();
+    let _ = fs::remove_file(&user_config_path);
+    let sandbox = selected.sandbox.expect("sandbox should render");
+
+    assert_eq!(sandbox.backend, SandboxBackend::Apple);
+    assert!(
+        sandbox
+            .apple_profile_path
+            .as_deref()
+            .unwrap()
+            .to_string_lossy()
+            .contains("sandbox/polyphony.sb")
+    );
+}
+
+#[test]
+fn sandbox_container_fields_parse_from_user_toml() {
+    let user_config_path = unique_temp_path("sandbox-container-user-config", "toml");
+    fs::write(
+        &user_config_path,
+        r#"
+[agents]
+default = "codex"
+
+[agents.profiles.codex]
+kind = "codex"
+transport = "app_server"
+command = "codex app-server"
+sandbox_backend = "docker"
+sandbox_image = "ghcr.io/openai/codex:latest"
+sandbox_volumes = ["/tmp/cache:/cache", "/tmp/artifacts:/artifacts"]
+sandbox_network_access = false
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config: YamlValue::Mapping(Default::default()),
+        prompt_template: String::new(),
+    };
+
+    let selected =
+        ServiceConfig::from_workflow_with_configs(&workflow, Some(&user_config_path), None)
+            .unwrap()
+            .select_agent_for_issue(&sample_issue())
+            .unwrap();
+    let _ = fs::remove_file(&user_config_path);
+    let sandbox = selected.sandbox.expect("sandbox should render");
+
+    assert_eq!(sandbox.backend, SandboxBackend::Docker);
+    assert_eq!(
+        sandbox.container_image.as_deref(),
+        Some("ghcr.io/openai/codex:latest")
+    );
+    assert_eq!(sandbox.extra_volumes, vec![
+        "/tmp/cache:/cache",
+        "/tmp/artifacts:/artifacts"
+    ]);
+    assert!(!sandbox.network_access);
+}
+
+#[test]
+fn sandbox_override_and_merge_update_all_sandbox_fields() {
+    let mut profile = AgentProfileConfig {
+        kind: "codex".into(),
+        sandbox_backend: Some("docker".into()),
+        sandbox_image: Some("ghcr.io/openai/codex:base".into()),
+        sandbox_profile: Some("/tmp/original.sb".into()),
+        sandbox_volumes: Some(vec!["/tmp/base:/base".into()]),
+        sandbox_network_access: Some(true),
+        ..AgentProfileConfig::default()
+    };
+    let mut merged = AgentProfileOverride {
+        sandbox_backend: Some("apple".into()),
+        ..AgentProfileOverride::default()
+    };
+    merged.merge(AgentProfileOverride {
+        sandbox_image: Some("ghcr.io/openai/codex:override".into()),
+        sandbox_profile: Some("/tmp/override.sb".into()),
+        sandbox_volumes: Some(vec!["/tmp/override:/override".into()]),
+        sandbox_network_access: Some(false),
+        ..AgentProfileOverride::default()
+    });
+
+    profile.apply_override(&merged);
+
+    assert_eq!(profile.sandbox_backend.as_deref(), Some("apple"));
+    assert_eq!(
+        profile.sandbox_image.as_deref(),
+        Some("ghcr.io/openai/codex:override")
+    );
+    assert_eq!(profile.sandbox_profile.as_deref(), Some("/tmp/override.sb"));
+    assert_eq!(
+        profile.sandbox_volumes,
+        Some(vec!["/tmp/override:/override".into()])
+    );
+    assert_eq!(profile.sandbox_network_access, Some(false));
+}
+
+#[test]
+fn sandbox_auxiliary_fields_require_backend() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+      sandbox_image: ghcr.io/openai/codex:latest
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("sandbox_backend is required when sandbox_image")
+    );
 }
 
 #[test]

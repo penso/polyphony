@@ -245,6 +245,9 @@ impl RuntimeService {
                 workflow
                     .config
                     .all_agents()
+                    .ok()
+                    .into_iter()
+                    .flatten()
                     .into_iter()
                     .find(|agent| agent.name == running.agent_name)
             })
@@ -294,7 +297,7 @@ impl RuntimeService {
         )?;
         let manager = self.build_workspace_manager(workflow);
         manager
-            .run_before_run(&workflow.config.hooks, &running.workspace_path)
+            .run_before_run(&workflow.config.hooks, &running.workspace_path, None)
             .await?;
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let drain = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
@@ -315,7 +318,7 @@ impl RuntimeService {
             .await;
         drain.abort();
         manager
-            .run_after_run_best_effort(&workflow.config.hooks, &running.workspace_path)
+            .run_after_run_best_effort(&workflow.config.hooks, &running.workspace_path, None)
             .await;
         match result {
             Ok(result) if matches!(result.status, AttemptStatus::Succeeded) => {
