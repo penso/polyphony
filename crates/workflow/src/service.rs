@@ -545,6 +545,18 @@ impl ServiceConfig {
             }
         }
         for (agent_name, profile) in &self.agents.profiles {
+            infer_runtime_backend(profile).map_err(|error| {
+                Error::InvalidConfig(format!(
+                    "agents.profiles.{agent_name}.{}",
+                    error.to_string().trim_start_matches("invalid config: ")
+                ))
+            })?;
+            infer_sandbox_backend(profile, infer_agent_transport(profile)).map_err(|error| {
+                Error::InvalidConfig(format!(
+                    "agents.profiles.{agent_name}.{}",
+                    error.to_string().trim_start_matches("invalid config: ")
+                ))
+            })?;
             if matches!(
                 infer_agent_transport(profile),
                 AgentTransport::AppServer | AgentTransport::LocalCli | AgentTransport::Acp
@@ -796,7 +808,7 @@ impl ServiceConfig {
             .copied()
     }
 
-    pub fn all_agents(&self) -> Vec<AgentDefinition> {
+    pub fn all_agents(&self) -> Result<Vec<AgentDefinition>, Error> {
         self.agents
             .profiles
             .iter()
@@ -858,7 +870,7 @@ impl ServiceConfig {
             self.agents.profiles.get(agent_name).ok_or_else(|| {
                 Error::InvalidConfig(format!("unknown review agent `{agent_name}`"))
             })?;
-        Ok(Some(agent_definition(agent_name, profile)))
+        Ok(Some(agent_definition(agent_name, profile)?))
     }
 
     pub fn pr_review_agent(&self) -> Result<Option<AgentDefinition>, Error> {
@@ -881,7 +893,7 @@ impl ServiceConfig {
         let profile = self.agents.profiles.get(agent_name).ok_or_else(|| {
             Error::InvalidConfig(format!("unknown PR review agent `{agent_name}`"))
         })?;
-        Ok(Some(agent_definition(agent_name, profile)))
+        Ok(Some(agent_definition(agent_name, profile)?))
     }
 
     pub fn expand_agent_candidates(
@@ -899,7 +911,7 @@ impl ServiceConfig {
                 Error::InvalidConfig(format!("unknown selected agent `{agent_name}`"))
             })?;
             stack.extend(profile.fallbacks.iter().rev().cloned());
-            candidates.push(agent_definition(&agent_name, profile));
+            candidates.push(agent_definition(&agent_name, profile)?);
         }
         Ok(candidates)
     }
@@ -953,6 +965,12 @@ impl AgentProfileConfig {
         }
         if let Some(value) = &override_config.api_key {
             self.api_key = Some(value.clone());
+        }
+        if let Some(value) = &override_config.sandbox {
+            self.sandbox.merge_from(value.clone());
+        }
+        if let Some(value) = &override_config.runtime {
+            self.runtime.merge_from(value.clone());
         }
         if let Some(value) = &override_config.approval_policy {
             self.approval_policy = Some(value.clone());
@@ -1034,6 +1052,20 @@ impl AgentProfileOverride {
         if other.api_key.is_some() {
             self.api_key = other.api_key;
         }
+        if other.sandbox.is_some() {
+            match (self.sandbox.as_mut(), other.sandbox) {
+                (Some(current), Some(other)) => current.merge_from(other),
+                (None, Some(other)) => self.sandbox = Some(other),
+                _ => {},
+            }
+        }
+        if other.runtime.is_some() {
+            match (self.runtime.as_mut(), other.runtime) {
+                (Some(current), Some(other)) => current.merge_from(other),
+                (None, Some(other)) => self.runtime = Some(other),
+                _ => {},
+            }
+        }
         if other.approval_policy.is_some() {
             self.approval_policy = other.approval_policy;
         }
@@ -1077,6 +1109,43 @@ impl AgentProfileOverride {
             self.completion_sentinel = other.completion_sentinel;
         }
         if other.env.is_some() {
+            self.env = other.env;
+        }
+    }
+}
+
+impl AgentSandboxProfileConfig {
+    fn merge_from(&mut self, other: Self) {
+        if other.backend.is_some() {
+            self.backend = other.backend;
+        }
+        if other.profile.is_some() {
+            self.profile = other.profile;
+        }
+        if other.policy.is_some() {
+            self.policy = other.policy;
+        }
+        if !other.env.is_empty() {
+            self.env = other.env;
+        }
+    }
+}
+
+impl AgentRuntimeProfileConfig {
+    fn merge_from(&mut self, other: Self) {
+        if other.backend.is_some() {
+            self.backend = other.backend;
+        }
+        if other.endpoint.is_some() {
+            self.endpoint = other.endpoint;
+        }
+        if other.model.is_some() {
+            self.model = other.model;
+        }
+        if other.model_source.is_some() {
+            self.model_source = other.model_source;
+        }
+        if !other.env.is_empty() {
             self.env = other.env;
         }
     }

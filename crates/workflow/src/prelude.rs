@@ -12,8 +12,9 @@ pub(crate) use {
         object,
     },
     polyphony_core::{
-        AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind,
-        Issue, TrackerKind, TrackerQuery,
+        AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentRuntimeConfig,
+        AgentSandboxConfig, AgentTransport, CheckoutKind, Issue, RuntimeBackendKind,
+        SandboxBackendKind, TrackerKind, TrackerQuery,
     },
     serde_yaml::{Mapping, Value as YamlValue},
 };

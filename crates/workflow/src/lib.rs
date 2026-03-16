@@ -133,6 +133,8 @@ pub struct OrchestrationConfig {
 pub struct CodexConfig {
     pub kind: Option<String>,
     pub command: Option<String>,
+    pub sandbox: Option<AgentSandboxProfileConfig>,
+    pub runtime: Option<AgentRuntimeProfileConfig>,
     pub approval_policy: Option<String>,
     pub thread_sandbox: Option<String>,
     pub turn_sandbox_policy: Option<String>,
@@ -141,6 +143,25 @@ pub struct CodexConfig {
     pub stall_timeout_ms: Option<i64>,
     pub credits_command: Option<String>,
     pub spending_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct AgentSandboxProfileConfig {
+    pub backend: Option<String>,
+    pub profile: Option<String>,
+    pub policy: Option<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct AgentRuntimeProfileConfig {
+    pub backend: Option<String>,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub model_source: Option<String>,
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -157,6 +178,8 @@ pub struct AgentProfileConfig {
     pub fetch_models: bool,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub sandbox: AgentSandboxProfileConfig,
+    pub runtime: AgentRuntimeProfileConfig,
     pub approval_policy: Option<String>,
     pub thread_sandbox: Option<String>,
     pub turn_sandbox_policy: Option<String>,
@@ -187,6 +210,8 @@ pub struct AgentProfileOverride {
     pub fetch_models: Option<bool>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub sandbox: Option<AgentSandboxProfileConfig>,
+    pub runtime: Option<AgentRuntimeProfileConfig>,
     pub approval_policy: Option<String>,
     pub thread_sandbox: Option<String>,
     pub turn_sandbox_policy: Option<String>,

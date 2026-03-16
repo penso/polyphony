@@ -111,6 +111,19 @@ max_turns = 20
 # fetch_models = true
 # base_url = "https://api.openai.com/v1"
 # api_key = "$OPENAI_API_KEY"
+# [agents.profiles.example.sandbox]
+# backend = "host"
+# profile = "workspace-write"
+# policy = "allow-network"
+# [agents.profiles.example.sandbox.env]
+# POLYPHONY_SANDBOX_LABEL = "implementer"
+# [agents.profiles.example.runtime]
+# backend = "provider"
+# endpoint = "http://127.0.0.1:8080/v1"
+# model = "qwen2.5-coder"
+# model_source = "hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
+# [agents.profiles.example.runtime.env]
+# LLAMA_ARG_THREADS = "8"
 # approval_policy = "auto"
 # thread_sandbox = "workspace-write"
 # turn_sandbox_policy = "workspace-write"

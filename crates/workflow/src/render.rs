@@ -364,6 +364,8 @@ pub(crate) fn shorthand_agent_profile(config: CodexConfig) -> (String, AgentProf
         fetch_models: true,
         base_url: None,
         api_key: None,
+        sandbox: config.sandbox.unwrap_or_default(),
+        runtime: config.runtime.unwrap_or_default(),
         approval_policy: config.approval_policy,
         thread_sandbox: config.thread_sandbox,
         turn_sandbox_policy: config.turn_sandbox_policy,
@@ -424,9 +426,57 @@ pub(crate) fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransp
     }
 }
 
-pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition {
+pub(crate) fn parse_sandbox_backend_kind(value: Option<&str>) -> Result<SandboxBackendKind, Error> {
+    match value {
+        Some("host") => Ok(SandboxBackendKind::Host),
+        Some("codex") => Ok(SandboxBackendKind::Codex),
+        Some(other) => Err(Error::InvalidConfig(format!(
+            "sandbox.backend must be one of `host` or `codex`, got `{other}`"
+        ))),
+        None => Ok(SandboxBackendKind::Host),
+    }
+}
+
+pub(crate) fn infer_sandbox_backend(
+    profile: &AgentProfileConfig,
+    transport: AgentTransport,
+) -> Result<SandboxBackendKind, Error> {
+    if let Some(value) = profile.sandbox.backend.as_deref() {
+        return parse_sandbox_backend_kind(Some(value));
+    }
+    Ok(if matches!(transport, AgentTransport::AppServer) {
+        SandboxBackendKind::Codex
+    } else {
+        SandboxBackendKind::Host
+    })
+}
+
+pub(crate) fn parse_runtime_backend_kind(value: Option<&str>) -> Result<RuntimeBackendKind, Error> {
+    match value {
+        Some("provider") => Ok(RuntimeBackendKind::Provider),
+        Some("openai_compatible") => Ok(RuntimeBackendKind::OpenAiCompatible),
+        Some("llama_cpp") => Ok(RuntimeBackendKind::LlamaCpp),
+        Some("ollama") => Ok(RuntimeBackendKind::Ollama),
+        Some("lm_studio") => Ok(RuntimeBackendKind::LmStudio),
+        Some(other) => Err(Error::InvalidConfig(format!(
+            "runtime.backend must be one of `provider`, `openai_compatible`, `llama_cpp`, `ollama`, or `lm_studio`, got `{other}`"
+        ))),
+        None => Ok(RuntimeBackendKind::Provider),
+    }
+}
+
+pub(crate) fn infer_runtime_backend(
+    profile: &AgentProfileConfig,
+) -> Result<RuntimeBackendKind, Error> {
+    parse_runtime_backend_kind(profile.runtime.backend.as_deref())
+}
+
+pub fn agent_definition(
+    name: &str,
+    profile: &AgentProfileConfig,
+) -> Result<AgentDefinition, Error> {
     let transport = infer_agent_transport(profile);
-    AgentDefinition {
+    Ok(AgentDefinition {
         name: name.to_string(),
         kind: profile.kind.clone(),
         transport,
@@ -443,6 +493,44 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
             .clone()
             .or_else(|| default_agent_base_url(&profile.kind)),
         api_key: profile.api_key.clone(),
+        sandbox: AgentSandboxConfig {
+            backend: infer_sandbox_backend(profile, transport)?,
+            profile: normalize_optional_string(
+                profile
+                    .sandbox
+                    .profile
+                    .clone()
+                    .or_else(|| profile.thread_sandbox.clone()),
+            ),
+            policy: normalize_optional_string(
+                profile
+                    .sandbox
+                    .policy
+                    .clone()
+                    .or_else(|| profile.turn_sandbox_policy.clone()),
+            ),
+            env: profile.sandbox.env.clone(),
+        },
+        runtime: AgentRuntimeConfig {
+            backend: infer_runtime_backend(profile)?,
+            endpoint: normalize_optional_string(
+                profile
+                    .runtime
+                    .endpoint
+                    .clone()
+                    .or_else(|| profile.base_url.clone())
+                    .or_else(|| default_agent_base_url(&profile.kind)),
+            ),
+            model: normalize_optional_string(
+                profile
+                    .runtime
+                    .model
+                    .clone()
+                    .or_else(|| profile.model.clone()),
+            ),
+            model_source: normalize_optional_string(profile.runtime.model_source.clone()),
+            env: profile.runtime.env.clone(),
+        },
         approval_policy: profile.approval_policy.clone(),
         thread_sandbox: profile.thread_sandbox.clone(),
         turn_sandbox_policy: profile.turn_sandbox_policy.clone(),
@@ -462,7 +550,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
         idle_timeout_ms: profile.idle_timeout_ms,
         completion_sentinel: profile.completion_sentinel.clone(),
         env: profile.env.clone(),
-    }
+    })
 }
 
 pub(crate) fn default_agent_base_url(kind: &str) -> Option<String> {

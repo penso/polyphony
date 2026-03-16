@@ -108,6 +108,65 @@ pub enum AgentTransport {
     OpenAiChat,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxBackendKind {
+    #[default]
+    Host,
+    Codex,
+}
+
+impl fmt::Display for SandboxBackendKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Host => "host",
+            Self::Codex => "codex",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBackendKind {
+    #[default]
+    Provider,
+    OpenAiCompatible,
+    LlamaCpp,
+    Ollama,
+    LmStudio,
+}
+
+impl fmt::Display for RuntimeBackendKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Provider => "provider",
+            Self::OpenAiCompatible => "openai_compatible",
+            Self::LlamaCpp => "llama_cpp",
+            Self::Ollama => "ollama",
+            Self::LmStudio => "lm_studio",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AgentSandboxConfig {
+    pub backend: SandboxBackendKind,
+    pub profile: Option<String>,
+    pub policy: Option<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct AgentRuntimeConfig {
+    pub backend: RuntimeBackendKind,
+    pub endpoint: Option<String>,
+    pub model: Option<String>,
+    pub model_source: Option<String>,
+    pub env: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentInteractionMode {
@@ -138,6 +197,8 @@ pub struct AgentDefinition {
     pub fetch_models: bool,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub sandbox: AgentSandboxConfig,
+    pub runtime: AgentRuntimeConfig,
     pub approval_policy: Option<String>,
     pub thread_sandbox: Option<String>,
     pub turn_sandbox_policy: Option<String>,
