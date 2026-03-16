@@ -559,18 +559,26 @@ impl ServiceConfig {
                     "agents.profiles.{agent_name}.command must be non-empty"
                 )));
             }
-            if matches!(infer_agent_transport(profile), AgentTransport::OpenAiChat)
-                && profile
-                    .model
-                    .as_deref()
-                    .unwrap_or_default()
-                    .trim()
-                    .is_empty()
+            let transport = infer_agent_transport(profile);
+            if matches!(
+                transport,
+                AgentTransport::OpenAiChat | AgentTransport::LlamaCpp
+            ) && profile
+                .model
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
                 && profile.models.is_empty()
                 && !profile.fetch_models
             {
+                let transport_name = match transport {
+                    AgentTransport::OpenAiChat => "openai_chat",
+                    AgentTransport::LlamaCpp => "llama_cpp",
+                    _ => unreachable!(),
+                };
                 return Err(Error::InvalidConfig(format!(
-                    "agents.profiles.{agent_name}.model is required for openai_chat agents when automatic model discovery is disabled"
+                    "agents.profiles.{agent_name}.model is required for {transport_name} agents when automatic model discovery is disabled"
                 )));
             }
             for fallback in &profile.fallbacks {
@@ -954,6 +962,12 @@ impl AgentProfileConfig {
         if let Some(value) = &override_config.api_key {
             self.api_key = Some(value.clone());
         }
+        if let Some(value) = override_config.gpu_layers {
+            self.gpu_layers = Some(value);
+        }
+        if let Some(value) = override_config.context_size {
+            self.context_size = Some(value);
+        }
         if let Some(value) = &override_config.approval_policy {
             self.approval_policy = Some(value.clone());
         }
@@ -1033,6 +1047,12 @@ impl AgentProfileOverride {
         }
         if other.api_key.is_some() {
             self.api_key = other.api_key;
+        }
+        if other.gpu_layers.is_some() {
+            self.gpu_layers = other.gpu_layers;
+        }
+        if other.context_size.is_some() {
+            self.context_size = other.context_size;
         }
         if other.approval_policy.is_some() {
             self.approval_policy = other.approval_policy;

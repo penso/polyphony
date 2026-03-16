@@ -9,6 +9,7 @@ members = [
   "crates/agent-pi",
   "crates/agent-codex",
   "crates/agent-openai",
+  "crates/agent-llama",
   "crates/agent-claude",
   "crates/agent-copilot",
   "crates/agents",
@@ -66,3 +67,4 @@ tracing = "0.1"
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 vt100 = "0.15.2"
+polyphony-agent-llama = { path = "crates/agent-llama" }

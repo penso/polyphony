@@ -45,6 +45,9 @@ impl AgentRegistryRuntime {
         providers.push(Arc::new(polyphony_agent_openai::OpenAiRuntime::new(
             tool_executor.clone(),
         )) as Arc<dyn AgentProviderRuntime>);
+        #[cfg(feature = "llama")]
+        providers.push(Arc::new(polyphony_agent_llama::LlamaRuntime::default())
+            as Arc<dyn AgentProviderRuntime>);
         #[cfg(feature = "local")]
         providers.push(
             Arc::new(polyphony_agent_local::LocalCliRuntime::fallback_transport())
