@@ -21,6 +21,9 @@ pub(crate) fn workflow_inputs_fingerprint(
         workflow_path.to_path_buf(),
         path_fingerprint(workflow_path)?,
     )];
+    if let Some(ucp) = user_config_path {
+        entries.push((ucp.to_path_buf(), path_fingerprint(ucp)?));
+    }
 
     if let Ok(repo_config) = repo_config_path(workflow_path) {
         entries.push((repo_config.clone(), path_fingerprint(&repo_config)?));
