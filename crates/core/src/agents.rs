@@ -105,6 +105,7 @@ pub enum AgentTransport {
     LocalCli,
     Acp,
     Acpx,
+    LlamaCpp,
     OpenAiChat,
 }
 
@@ -138,6 +139,8 @@ pub struct AgentDefinition {
     pub fetch_models: bool,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub gpu_layers: Option<i64>,
+    pub context_size: Option<u32>,
     pub approval_policy: Option<String>,
     pub thread_sandbox: Option<String>,
     pub turn_sandbox_policy: Option<String>,

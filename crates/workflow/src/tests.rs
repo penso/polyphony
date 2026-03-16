@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -521,6 +523,48 @@ agents:
     assert!(matches!(kimi.transport, AgentTransport::OpenAiChat));
     assert_eq!(kimi.base_url.as_deref(), Some("https://api.moonshot.ai/v1"));
     assert_eq!(kimi.model.as_deref(), Some("kimi-2.5"));
+}
+
+#[test]
+fn llama_profiles_infer_llama_transport_and_defaults() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: llama
+  profiles:
+    llama:
+      kind: llama
+      model: /models/tiny.gguf
+      gpu_layers: 24
+      context_size: 8192
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    let selected = config
+        .select_agent_for_issue(&Issue {
+            id: "1".into(),
+            identifier: "ISSUE-1".into(),
+            title: "Title".into(),
+            state: "Todo".into(),
+            ..Issue::default()
+        })
+        .unwrap();
+
+    assert!(matches!(selected.transport, AgentTransport::LlamaCpp));
+    assert_eq!(selected.command.as_deref(), Some("llama-server"));
+    assert_eq!(
+        selected.base_url.as_deref(),
+        Some("http://127.0.0.1:8012/v1")
+    );
+    assert_eq!(selected.model.as_deref(), Some("/models/tiny.gguf"));
+    assert_eq!(selected.gpu_layers, Some(24));
+    assert_eq!(selected.context_size, Some(8192));
+    assert!(selected.fetch_models);
 }
 
 #[test]

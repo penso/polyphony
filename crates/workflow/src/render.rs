@@ -364,6 +364,8 @@ pub(crate) fn shorthand_agent_profile(config: CodexConfig) -> (String, AgentProf
         fetch_models: true,
         base_url: None,
         api_key: None,
+        gpu_layers: None,
+        context_size: None,
         approval_policy: config.approval_policy,
         thread_sandbox: config.thread_sandbox,
         turn_sandbox_policy: config.turn_sandbox_policy,
@@ -409,6 +411,7 @@ pub(crate) fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransp
         Some("local_cli") => AgentTransport::LocalCli,
         Some("acp") => AgentTransport::Acp,
         Some("acpx") => AgentTransport::Acpx,
+        Some("llama") | Some("llama_cpp") | Some("llama.cpp") => AgentTransport::LlamaCpp,
         Some("openai_chat") => AgentTransport::OpenAiChat,
         _ => match profile.kind.as_str() {
             "mock" => AgentTransport::Mock,
@@ -416,6 +419,7 @@ pub(crate) fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransp
             "pi" => AgentTransport::Rpc,
             "acp" => AgentTransport::Acp,
             "acpx" => AgentTransport::Acpx,
+            "llama" | "llama.cpp" => AgentTransport::LlamaCpp,
             "openai" | "openai-compatible" | "openrouter" | "kimi" | "kimi-2.5" | "kimi-k2"
             | "moonshot" | "moonshotai" | "mistral" | "deepseek" | "cerebras" | "gemini"
             | "zai" | "minimax" | "venice" | "groq" => AgentTransport::OpenAiChat,
@@ -432,7 +436,10 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
         transport,
         command: normalize_optional_string(profile.command.clone())
             .or_else(|| matches!(transport, AgentTransport::Rpc).then(|| "pi".to_string()))
-            .or_else(|| matches!(transport, AgentTransport::Acpx).then(|| "acpx".to_string())),
+            .or_else(|| matches!(transport, AgentTransport::Acpx).then(|| "acpx".to_string()))
+            .or_else(|| {
+                matches!(transport, AgentTransport::LlamaCpp).then(|| "llama-server".to_string())
+            }),
         fallback_agents: profile.fallbacks.clone(),
         model: profile.model.clone(),
         models: profile.models.clone(),
@@ -443,6 +450,8 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
             .clone()
             .or_else(|| default_agent_base_url(&profile.kind)),
         api_key: profile.api_key.clone(),
+        gpu_layers: profile.gpu_layers,
+        context_size: profile.context_size,
         approval_policy: profile.approval_policy.clone(),
         thread_sandbox: profile.thread_sandbox.clone(),
         turn_sandbox_policy: profile.turn_sandbox_policy.clone(),
@@ -467,6 +476,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
 
 pub(crate) fn default_agent_base_url(kind: &str) -> Option<String> {
     let url = match kind {
+        "llama" | "llama.cpp" => "http://127.0.0.1:8012/v1",
         "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => "https://api.moonshot.ai/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
         "mistral" => "https://api.mistral.ai/v1",
