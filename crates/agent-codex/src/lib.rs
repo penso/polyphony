@@ -397,11 +397,12 @@ async fn launch_codex_session(
         &command,
         &spec.workspace_path,
         &spec.agent.env,
+        spec.agent.sandbox.as_ref(),
         &spec,
         &prompt_file,
         context_file.as_deref(),
         model.as_deref(),
-    )
+    )?
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())

@@ -72,8 +72,9 @@ pub(crate) async fn run_worker_attempt(
         max_turns,
         "starting worker attempt"
     );
+    let sandbox = selected_agent.sandbox.clone();
     workspace_manager
-        .run_before_run(hooks, &workspace_path)
+        .run_before_run(hooks, &workspace_path, sandbox.as_ref())
         .await?;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let issue_id = issue.id.clone();
@@ -193,7 +194,7 @@ pub(crate) async fn run_worker_attempt(
     };
     forwarder.abort();
     workspace_manager
-        .run_after_run_best_effort(hooks, &workspace_path)
+        .run_after_run_best_effort(hooks, &workspace_path, sandbox.as_ref())
         .await;
     match result {
         Ok(result) => Ok(result),

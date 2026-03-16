@@ -1,13 +1,15 @@
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use {
+    polyphony_agent_common::wrap_command,
     polyphony_core::{
-        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
-        sanitize_workspace_key,
+        CheckoutKind, Error as CoreError, SandboxConfig, Workspace, WorkspaceProvisioner,
+        WorkspaceRequest, sanitize_workspace_key,
     },
     polyphony_workflow::HooksConfig,
     thiserror::Error,
@@ -137,6 +139,7 @@ impl WorkspaceManager {
                     hooks.after_create.as_deref(),
                     &workspace.path,
                     hooks.timeout_ms,
+                    None,
                 )
                 .await
         {
@@ -159,6 +162,7 @@ impl WorkspaceManager {
         &self,
         hooks: &HooksConfig,
         workspace_path: &Path,
+        sandbox: Option<&SandboxConfig>,
     ) -> Result<(), Error> {
         ensure_contained(&self.root, workspace_path)?;
         self.cleanup_transient_artifacts(workspace_path).await?;
@@ -168,17 +172,24 @@ impl WorkspaceManager {
             hooks.before_run.as_deref(),
             workspace_path,
             hooks.timeout_ms,
+            sandbox,
         )
         .await
     }
 
-    pub async fn run_after_run_best_effort(&self, hooks: &HooksConfig, workspace_path: &Path) {
+    pub async fn run_after_run_best_effort(
+        &self,
+        hooks: &HooksConfig,
+        workspace_path: &Path,
+        sandbox: Option<&SandboxConfig>,
+    ) {
         if let Err(error) = self
             .run_hook(
                 "after_run",
                 hooks.after_run.as_deref(),
                 workspace_path,
                 hooks.timeout_ms,
+                sandbox,
             )
             .await
         {
@@ -207,6 +218,7 @@ impl WorkspaceManager {
                 hooks.before_remove.as_deref(),
                 &request.workspace_path,
                 hooks.timeout_ms,
+                None,
             )
             .await
         {
@@ -262,6 +274,7 @@ impl WorkspaceManager {
         script: Option<&str>,
         cwd: &Path,
         timeout_ms: u64,
+        sandbox: Option<&SandboxConfig>,
     ) -> Result<(), Error> {
         let Some(script) = script else {
             return Ok(());
@@ -273,14 +286,15 @@ impl WorkspaceManager {
             timeout_ms,
             "starting workspace hook"
         );
-        let mut command = Command::new("bash");
+        let wrapped = wrap_command(sandbox, cwd, &BTreeMap::new(), script, false)?;
+        let mut command = Command::new(&wrapped.program);
         command
-            .arg("-lc")
-            .arg(script)
+            .args(&wrapped.args)
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        command.env_remove("CLAUDECODE");
         let mut child = command.spawn()?;
         let stdout = child
             .stdout
@@ -579,7 +593,7 @@ mod tests {
         hooks.before_run = Some("[ ! -e tmp ]".into());
 
         manager
-            .run_before_run(&hooks, &workspace.path)
+            .run_before_run(&hooks, &workspace.path, None)
             .await
             .unwrap();
 

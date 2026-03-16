@@ -9,6 +9,7 @@ async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+polyphony-agent-common = { path = "../agent-common" }
 polyphony-core = { path = "../core" }
 polyphony-workflow = { path = "../workflow" }
 

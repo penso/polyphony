@@ -136,18 +136,26 @@ impl RuntimeService {
             .map(|source| source.component_key());
         let old_agent_runtime_key = self.agent.component_key();
         let new_agent_runtime_key = components.agent.component_key();
-        let old_agent_names = current_workflow
-            .config
-            .all_agents()
-            .into_iter()
-            .map(|agent| agent.name)
-            .collect::<HashSet<_>>();
-        let new_agent_names = new_workflow
-            .config
-            .all_agents()
-            .into_iter()
-            .map(|agent| agent.name)
-            .collect::<HashSet<_>>();
+        let old_agent_names = match current_workflow.config.all_agents() {
+            Ok(agents) => agents
+                .into_iter()
+                .map(|agent| agent.name)
+                .collect::<HashSet<_>>(),
+            Err(error) => {
+                warn!(%error, "failed to resolve existing agent names during workflow reload");
+                HashSet::new()
+            },
+        };
+        let new_agent_names = match new_workflow.config.all_agents() {
+            Ok(agents) => agents
+                .into_iter()
+                .map(|agent| agent.name)
+                .collect::<HashSet<_>>(),
+            Err(error) => {
+                warn!(%error, "failed to resolve new agent names during workflow reload");
+                HashSet::new()
+            },
+        };
         let removed_agents = old_agent_names
             .difference(&new_agent_names)
             .cloned()

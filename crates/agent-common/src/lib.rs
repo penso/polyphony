@@ -18,6 +18,10 @@ use {
     },
 };
 
+mod sandbox;
+
+pub use crate::sandbox::*;
+
 #[derive(Clone, Copy)]
 pub enum BudgetField {
     Credits,
@@ -149,27 +153,43 @@ pub fn base_agent_env(
     envs
 }
 
-pub fn shell_command(
-    command: &str,
-    cwd: &Path,
-    extra_env: &BTreeMap<String, String>,
+pub fn merged_agent_env(
     spec: &AgentRunSpec,
     prompt_file: &Path,
     context_file: Option<&Path>,
     model: Option<&str>,
-) -> Command {
-    let mut cmd = Command::new("bash");
-    cmd.arg("-lc").arg(command).current_dir(cwd);
+    extra_env: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut envs = base_agent_env(spec, prompt_file, context_file, model);
+    for (key, value) in extra_env {
+        envs.insert(key.clone(), value.clone());
+    }
+    envs
+}
+
+pub fn shell_command(
+    command: &str,
+    cwd: &Path,
+    extra_env: &BTreeMap<String, String>,
+    sandbox: Option<&polyphony_core::SandboxConfig>,
+    spec: &AgentRunSpec,
+    prompt_file: &Path,
+    context_file: Option<&Path>,
+    model: Option<&str>,
+) -> Result<Command, CoreError> {
+    let envs = merged_agent_env(spec, prompt_file, context_file, model, extra_env);
+    let wrapped = wrap_command(sandbox, cwd, &envs, command, false)?;
+    let mut cmd = Command::new(&wrapped.program);
+    cmd.args(&wrapped.args).current_dir(cwd);
     // Clear nesting-guard env vars so child CLI agents can start their own
     // sessions (e.g. Claude Code's CLAUDECODE check).
     cmd.env_remove("CLAUDECODE");
-    for (key, value) in base_agent_env(spec, prompt_file, context_file, model) {
-        cmd.env(key, value);
+    if wrapped.host_env_needed {
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
     }
-    for (key, value) in extra_env {
-        cmd.env(key, value);
-    }
-    cmd
+    Ok(cmd)
 }
 
 pub async fn run_shell_capture(

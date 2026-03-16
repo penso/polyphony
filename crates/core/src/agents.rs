@@ -125,6 +125,31 @@ pub enum AgentPromptMode {
     TmuxPaste,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxBackend {
+    #[default]
+    None,
+    Apple,
+    Docker,
+    Podman,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SandboxConfig {
+    pub backend: SandboxBackend,
+    pub container_image: Option<String>,
+    pub apple_profile_path: Option<PathBuf>,
+    #[serde(default)]
+    pub extra_volumes: Vec<String>,
+    #[serde(default = "default_network_access")]
+    pub network_access: bool,
+}
+
+const fn default_network_access() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentDefinition {
     pub name: String,
@@ -141,6 +166,7 @@ pub struct AgentDefinition {
     pub approval_policy: Option<String>,
     pub thread_sandbox: Option<String>,
     pub turn_sandbox_policy: Option<String>,
+    pub sandbox: Option<SandboxConfig>,
     pub turn_timeout_ms: u64,
     pub read_timeout_ms: u64,
     pub stall_timeout_ms: i64,
@@ -172,5 +198,34 @@ pub trait AgentSession: Send {
 
     async fn stop(&mut self) -> Result<(), Error> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{AgentDefinition, SandboxBackend, SandboxConfig},
+        std::path::PathBuf,
+    };
+
+    #[test]
+    fn agent_definition_sandbox_round_trips_through_yaml() {
+        let agent = AgentDefinition {
+            name: "codex".into(),
+            kind: "codex".into(),
+            sandbox: Some(SandboxConfig {
+                backend: SandboxBackend::Docker,
+                container_image: Some("ghcr.io/openai/codex:latest".into()),
+                apple_profile_path: Some(PathBuf::from("/tmp/profile.sb")),
+                extra_volumes: vec!["/tmp/cache:/cache".into()],
+                network_access: false,
+            }),
+            ..AgentDefinition::default()
+        };
+
+        let yaml = serde_yaml::to_string(&agent).unwrap();
+        let decoded: AgentDefinition = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(decoded.sandbox, agent.sandbox);
     }
 }

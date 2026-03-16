@@ -8,9 +8,10 @@ use std::{
 use {
     async_trait::async_trait,
     polyphony_agent_common::{
-        base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
-        fetch_budget_for_agent, prepare_context_file, prepare_prompt_file,
+        discover_models_from_command, emit, extract_text_rate_limit_signal, fetch_budget_for_agent,
+        merged_agent_env, prepare_context_file, prepare_prompt_file, sandboxed_command_to_shell,
         sanitize_session_fragment, selected_model_hint, shell_escape, status_to_result,
+        wrap_command,
     },
     polyphony_core::{
         AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
@@ -363,6 +364,22 @@ async fn spawn_tmux_session(
         sanitize_session_fragment(&spec.issue.identifier),
         spec.attempt.unwrap_or(0)
     );
+    let model = selected_model_hint(&spec.agent);
+    let envs = merged_agent_env(
+        spec,
+        prompt_file,
+        context_file,
+        model.as_deref(),
+        &spec.agent.env,
+    );
+    let sandboxed_launch = wrap_command(
+        spec.agent.sandbox.as_ref(),
+        workspace_path,
+        &envs,
+        &launch_command,
+        true,
+    )?;
+    let launch_command = sandboxed_command_to_shell(&sandboxed_launch);
     let wrapped = tmux_wrapped_command(workspace_path, &launch_command, &output_path, &exit_path);
     info!(
         issue_identifier = %spec.issue.identifier,
@@ -383,7 +400,6 @@ async fn spawn_tmux_session(
         "tmux-backed agent command prepared"
     );
 
-    let model = selected_model_hint(&spec.agent);
     let mut tmux = Command::new("tmux");
     tmux.env_remove("CLAUDECODE");
     tmux.arg("new-session")
@@ -393,11 +409,10 @@ async fn spawn_tmux_session(
         .arg("bash")
         .arg("-lc")
         .arg(wrapped);
-    for (key, value) in base_agent_env(spec, prompt_file, context_file, model.as_deref()) {
-        tmux.env(key, value);
-    }
-    for (key, value) in &spec.agent.env {
-        tmux.env(key, value);
+    if sandboxed_launch.host_env_needed {
+        for (key, value) in envs {
+            tmux.env(key, value);
+        }
     }
     let status = tmux
         .status()
@@ -437,11 +452,12 @@ async fn spawn_pty_session(
         command,
         workspace_path,
         &spec.agent.env,
+        spec.agent.sandbox.as_ref(),
         spec,
         prompt_file,
         context_file,
         model.as_deref(),
-    );
+    )?;
     let capture_state = Arc::new(Mutex::new(PtyCaptureState {
         parser: vt100::Parser::new(24, 80, 2_000),
         transcript: String::new(),
@@ -779,23 +795,26 @@ fn build_pty_command(
     command: &str,
     cwd: &Path,
     extra_env: &std::collections::BTreeMap<String, String>,
+    sandbox: Option<&polyphony_core::SandboxConfig>,
     spec: &AgentRunSpec,
     prompt_file: &Path,
     context_file: Option<&Path>,
     model: Option<&str>,
-) -> CommandBuilder {
-    let mut builder = CommandBuilder::new("bash");
-    builder.arg("-lc");
-    builder.arg(command);
+) -> Result<CommandBuilder, CoreError> {
+    let envs = merged_agent_env(spec, prompt_file, context_file, model, extra_env);
+    let wrapped = wrap_command(sandbox, cwd, &envs, command, true)?;
+    let mut builder = CommandBuilder::new(&wrapped.program);
+    for arg in &wrapped.args {
+        builder.arg(arg);
+    }
     builder.cwd(cwd.as_os_str());
     builder.env_remove("CLAUDECODE");
-    for (key, value) in base_agent_env(spec, prompt_file, context_file, model) {
-        builder.env(key, value);
+    if wrapped.host_env_needed {
+        for (key, value) in envs {
+            builder.env(key, value);
+        }
     }
-    for (key, value) in extra_env {
-        builder.env(key, value);
-    }
-    builder
+    Ok(builder)
 }
 
 fn spawn_pty_reader(

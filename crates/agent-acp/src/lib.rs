@@ -723,11 +723,12 @@ async fn run_acp_controller(
         &command,
         &spec.workspace_path,
         &spec.agent.env,
+        spec.agent.sandbox.as_ref(),
         &spec,
         &prompt_file,
         context_file.as_deref(),
         model.as_deref(),
-    );
+    )?;
     child
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -344,6 +344,20 @@ impl ServiceConfig {
             profile.models_command = resolve_env_token(profile.models_command.take());
             profile.credits_command = resolve_env_token(profile.credits_command.take());
             profile.spending_command = resolve_env_token(profile.spending_command.take());
+            profile.sandbox_backend = resolve_env_token(profile.sandbox_backend.take());
+            profile.sandbox_image = resolve_env_token(profile.sandbox_image.take());
+            profile.sandbox_profile =
+                resolve_env_token(profile.sandbox_profile.take()).map(|path| {
+                    expand_path_like(Path::new(&path))
+                        .to_string_lossy()
+                        .to_string()
+                });
+            profile.sandbox_volumes = profile.sandbox_volumes.take().map(|volumes| {
+                volumes
+                    .into_iter()
+                    .filter_map(|volume| resolve_env_token(Some(volume)))
+                    .collect()
+            });
             profile.env = profile
                 .env
                 .iter()
@@ -412,6 +426,12 @@ impl ServiceConfig {
                 .drain(..)
                 .filter(|fallback| !fallback.trim().is_empty() && fallback != name)
                 .collect();
+            profile.sandbox_volumes = profile.sandbox_volumes.take().map(|volumes| {
+                volumes
+                    .into_iter()
+                    .filter(|volume| !volume.trim().is_empty())
+                    .collect()
+            });
         }
         if self.automation.git.remote_name.trim().is_empty() {
             self.automation.git.remote_name = "origin".into();
@@ -572,6 +592,55 @@ impl ServiceConfig {
                 return Err(Error::InvalidConfig(format!(
                     "agents.profiles.{agent_name}.model is required for openai_chat agents when automatic model discovery is disabled"
                 )));
+            }
+            let sandbox_backend = parse_sandbox_backend(profile.sandbox_backend.as_deref())?;
+            let has_sandbox_fields = profile
+                .sandbox_image
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+                || profile
+                    .sandbox_profile
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                || profile
+                    .sandbox_volumes
+                    .as_ref()
+                    .is_some_and(|volumes| !volumes.is_empty())
+                || profile.sandbox_network_access.is_some();
+            if sandbox_backend.is_none() && has_sandbox_fields {
+                return Err(Error::InvalidConfig(format!(
+                    "agents.profiles.{agent_name}.sandbox_backend is required when sandbox_image, sandbox_profile, sandbox_volumes, or sandbox_network_access is set"
+                )));
+            }
+            match sandbox_backend {
+                Some(polyphony_core::SandboxBackend::Apple) => {
+                    if profile
+                        .sandbox_profile
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty()
+                    {
+                        return Err(Error::InvalidConfig(format!(
+                            "agents.profiles.{agent_name}.sandbox_profile is required for apple sandboxes"
+                        )));
+                    }
+                },
+                Some(polyphony_core::SandboxBackend::Docker)
+                | Some(polyphony_core::SandboxBackend::Podman) => {
+                    if profile
+                        .sandbox_image
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty()
+                    {
+                        return Err(Error::InvalidConfig(format!(
+                            "agents.profiles.{agent_name}.sandbox_image is required for container sandboxes"
+                        )));
+                    }
+                },
+                Some(polyphony_core::SandboxBackend::None) | None => {},
             }
             for fallback in &profile.fallbacks {
                 if fallback == agent_name {
@@ -796,7 +865,7 @@ impl ServiceConfig {
             .copied()
     }
 
-    pub fn all_agents(&self) -> Vec<AgentDefinition> {
+    pub fn all_agents(&self) -> Result<Vec<AgentDefinition>, Error> {
         self.agents
             .profiles
             .iter()
@@ -858,7 +927,7 @@ impl ServiceConfig {
             self.agents.profiles.get(agent_name).ok_or_else(|| {
                 Error::InvalidConfig(format!("unknown review agent `{agent_name}`"))
             })?;
-        Ok(Some(agent_definition(agent_name, profile)))
+        Ok(Some(agent_definition(agent_name, profile)?))
     }
 
     pub fn pr_review_agent(&self) -> Result<Option<AgentDefinition>, Error> {
@@ -881,7 +950,7 @@ impl ServiceConfig {
         let profile = self.agents.profiles.get(agent_name).ok_or_else(|| {
             Error::InvalidConfig(format!("unknown PR review agent `{agent_name}`"))
         })?;
-        Ok(Some(agent_definition(agent_name, profile)))
+        Ok(Some(agent_definition(agent_name, profile)?))
     }
 
     pub fn expand_agent_candidates(
@@ -899,7 +968,7 @@ impl ServiceConfig {
                 Error::InvalidConfig(format!("unknown selected agent `{agent_name}`"))
             })?;
             stack.extend(profile.fallbacks.iter().rev().cloned());
-            candidates.push(agent_definition(&agent_name, profile));
+            candidates.push(agent_definition(&agent_name, profile)?);
         }
         Ok(candidates)
     }
@@ -962,6 +1031,21 @@ impl AgentProfileConfig {
         }
         if let Some(value) = &override_config.turn_sandbox_policy {
             self.turn_sandbox_policy = Some(value.clone());
+        }
+        if let Some(value) = &override_config.sandbox_backend {
+            self.sandbox_backend = Some(value.clone());
+        }
+        if let Some(value) = &override_config.sandbox_image {
+            self.sandbox_image = Some(value.clone());
+        }
+        if let Some(value) = &override_config.sandbox_profile {
+            self.sandbox_profile = Some(value.clone());
+        }
+        if let Some(value) = &override_config.sandbox_volumes {
+            self.sandbox_volumes = Some(value.clone());
+        }
+        if let Some(value) = override_config.sandbox_network_access {
+            self.sandbox_network_access = Some(value);
         }
         if let Some(value) = override_config.turn_timeout_ms {
             self.turn_timeout_ms = value;
@@ -1042,6 +1126,21 @@ impl AgentProfileOverride {
         }
         if other.turn_sandbox_policy.is_some() {
             self.turn_sandbox_policy = other.turn_sandbox_policy;
+        }
+        if other.sandbox_backend.is_some() {
+            self.sandbox_backend = other.sandbox_backend;
+        }
+        if other.sandbox_image.is_some() {
+            self.sandbox_image = other.sandbox_image;
+        }
+        if other.sandbox_profile.is_some() {
+            self.sandbox_profile = other.sandbox_profile;
+        }
+        if other.sandbox_volumes.is_some() {
+            self.sandbox_volumes = other.sandbox_volumes;
+        }
+        if other.sandbox_network_access.is_some() {
+            self.sandbox_network_access = other.sandbox_network_access;
         }
         if other.turn_timeout_ms.is_some() {
             self.turn_timeout_ms = other.turn_timeout_ms;
