@@ -241,12 +241,11 @@ impl RuntimeService {
         let review_agent = workflow
             .config
             .review_agent()?
-            .or_else(|| {
-                workflow
-                    .config
-                    .all_agents()
+            .or_else(|| match workflow.config.all_agents() {
+                Ok(agents) => agents
                     .into_iter()
-                    .find(|agent| agent.name == running.agent_name)
+                    .find(|agent| agent.name == running.agent_name),
+                Err(_) => None,
             })
             .ok_or_else(|| CoreError::Adapter("review agent is not available".into()))?;
         let review_path = running.workspace_path.join(".polyphony").join("review.md");

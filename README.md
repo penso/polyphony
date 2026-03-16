@@ -98,7 +98,8 @@ Agent-specific prompt files live outside TOML:
 
 Each file may include YAML front matter to override profile fields such as `kind`, `model`, or
 `command`, plus a Markdown body that is appended as agent-specific instructions whenever that agent
-is selected.
+is selected. Profile front matter also understands nested `sandbox` and `runtime` blocks for
+backend-driven execution setup, for example `sandbox.backend: docker` or `runtime.backend: llama_cpp`.
 
 Dispatch mode now has an `idle` option in the TUI. It behaves like opportunistic auto-dispatch,
 but only when no other agent is currently running and the selected agent's budget snapshot still

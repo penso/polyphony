@@ -530,11 +530,14 @@ impl RuntimeService {
         }
 
         let workflow = self.workflow();
-        match self
-            .agent
-            .fetch_budgets(&workflow.config.all_agents())
-            .await
-        {
+        let agents = match workflow.config.all_agents() {
+            Ok(agents) => agents,
+            Err(error) => {
+                warn!(%error, "agent budget poll skipped because workflow agents are invalid");
+                return;
+            },
+        };
+        match self.agent.fetch_budgets(&agents).await {
             Ok(snapshots) => {
                 for snapshot in snapshots {
                     self.record_budget(snapshot).await;
@@ -624,11 +627,14 @@ impl RuntimeService {
         }
         self.state.last_model_discovery_at = Some(Utc::now());
         let workflow = self.workflow();
-        match self
-            .agent
-            .discover_models(&workflow.config.all_agents())
-            .await
-        {
+        let agents = match workflow.config.all_agents() {
+            Ok(agents) => agents,
+            Err(error) => {
+                warn!(%error, "agent model discovery skipped because workflow agents are invalid");
+                return;
+            },
+        };
+        match self.agent.discover_models(&agents).await {
             Ok(catalogs) => {
                 self.state.agent_catalogs = catalogs
                     .into_iter()

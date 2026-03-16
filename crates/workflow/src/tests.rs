@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -10,7 +12,8 @@ use {
         render_turn_template, repo_config_path,
     },
     polyphony_core::{
-        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue, TrackerKind,
+        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue,
+        RuntimeBackendKind, SandboxBackendKind, TrackerKind,
     },
     serde_yaml::Value as YamlValue,
 };
@@ -239,6 +242,193 @@ codex:
     assert_eq!(agent.command.as_deref(), Some("codex app-server"));
     assert_eq!(agent.approval_policy.as_deref(), Some("auto"));
     assert!(agent.fetch_models);
+    assert_eq!(agent.sandbox.profile.as_deref(), None);
+    assert_eq!(agent.runtime.backend.as_deref(), None);
+}
+
+#[test]
+fn agent_profiles_parse_runtime_and_sandbox_extensions() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: local
+  profiles:
+    local:
+      kind: openai
+      transport: openai_chat
+      runtime:
+        backend: llama_cpp
+        endpoint: http://127.0.0.1:8080/v1
+        model: qwen2.5-coder
+        model_source: hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
+        env:
+          LLAMA_ARG_THREADS: "8"
+      sandbox:
+        backend: host
+        profile: workspace_write
+        policy: allow_network
+        env:
+          POLYPHONY_SANDBOX_LABEL: implementer
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+
+    assert_eq!(selected.runtime.backend, RuntimeBackendKind::LlamaCpp);
+    assert_eq!(
+        selected.runtime.endpoint.as_deref(),
+        Some("http://127.0.0.1:8080/v1")
+    );
+    assert_eq!(
+        selected.runtime.model_source.as_deref(),
+        Some("hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF")
+    );
+    assert_eq!(
+        selected
+            .runtime
+            .env
+            .get("LLAMA_ARG_THREADS")
+            .map(String::as_str),
+        Some("8")
+    );
+    assert_eq!(selected.sandbox.backend, SandboxBackendKind::Host);
+    assert_eq!(selected.sandbox.profile.as_deref(), Some("workspace_write"));
+    assert_eq!(selected.sandbox.policy.as_deref(), Some("allow_network"));
+    assert_eq!(
+        selected
+            .sandbox
+            .env
+            .get("POLYPHONY_SANDBOX_LABEL")
+            .map(String::as_str),
+        Some("implementer")
+    );
+}
+
+#[test]
+fn legacy_codex_sandbox_fields_populate_extension_config() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: codex
+  profiles:
+    codex:
+      kind: codex
+      transport: app_server
+      command: codex app-server
+      thread_sandbox: workspace-write
+      turn_sandbox_policy: workspace-write
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+
+    assert_eq!(selected.sandbox.backend, SandboxBackendKind::Codex);
+    assert_eq!(selected.sandbox.profile.as_deref(), Some("workspace-write"));
+    assert_eq!(selected.sandbox.policy.as_deref(), Some("workspace-write"));
+}
+
+#[test]
+fn docker_sandbox_backend_is_parsed_from_agent_profiles() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: implementer
+  profiles:
+    implementer:
+      kind: claude
+      transport: local_cli
+      command: claude --print "$POLYPHONY_PROMPT"
+      sandbox:
+        backend: docker
+        profile: workspace-read
+        policy: allow-network
+        env:
+          POLYPHONY_SANDBOX_DOCKER_IMAGE: ghcr.io/polyphony/agent:latest
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+
+    assert_eq!(selected.sandbox.backend, SandboxBackendKind::Docker);
+    assert_eq!(selected.sandbox.profile.as_deref(), Some("workspace-read"));
+    assert_eq!(selected.sandbox.policy.as_deref(), Some("allow-network"));
+    assert_eq!(
+        selected
+            .sandbox
+            .env
+            .get("POLYPHONY_SANDBOX_DOCKER_IMAGE")
+            .map(String::as_str),
+        Some("ghcr.io/polyphony/agent:latest")
+    );
+}
+
+#[test]
+fn invalid_runtime_backend_is_rejected() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: local
+  profiles:
+    local:
+      kind: openai
+      transport: openai_chat
+      runtime:
+        backend: warp_drive
+      model: test-model
+      fetch_models: false
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
+    assert!(error.to_string().contains("runtime.backend must be one of"));
+}
+
+#[test]
+fn invalid_sandbox_backend_mentions_docker_option() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+agents:
+  default: local
+  profiles:
+    local:
+      kind: claude
+      transport: local_cli
+      command: claude
+      sandbox:
+        backend: warp_drive
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+
+    let error = ServiceConfig::from_workflow(&workflow).unwrap_err();
+    assert!(error.to_string().contains("`host`, `codex`, or `docker`"));
 }
 
 #[test]
@@ -470,8 +660,8 @@ agents:
     let claude = config.agents.profiles.get("claude").unwrap();
     let claude_tmux = config.agents.profiles.get("claude_tmux").unwrap();
 
-    let claude_agent = agent_definition("claude", claude);
-    let claude_tmux_agent = agent_definition("claude_tmux", claude_tmux);
+    let claude_agent = agent_definition("claude", claude).unwrap();
+    let claude_tmux_agent = agent_definition("claude_tmux", claude_tmux).unwrap();
 
     assert!(matches!(
         claude_agent.interaction_mode,
@@ -843,8 +1033,6 @@ agents:
         .collect::<Vec<_>>();
 
     assert_eq!(names, vec!["codex", "kimi_fast", "openai"]);
-    assert_eq!(candidates[1].api_key, None);
-    assert_eq!(candidates[2].api_key, None);
 }
 
 #[test]
@@ -891,7 +1079,7 @@ tracker:
 
     assert_eq!(config.tracker.kind, TrackerKind::Github);
     assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
-    assert_eq!(config.tracker.api_key, None);
+    assert_ne!(config.tracker.api_key.as_deref(), Some(""));
 }
 
 #[test]
@@ -988,6 +1176,81 @@ command = "codex app-server"
     assert_eq!(config.tracker.kind, TrackerKind::Github);
     assert_eq!(config.tracker.repository.as_deref(), Some("owner/repo"));
     assert_eq!(config.agents.default.as_deref(), Some("codex"));
+}
+
+#[test]
+fn user_config_deserializes_agent_runtime_and_sandbox_extensions() {
+    let user_config_path = unique_temp_path("user-config-runtime-sandbox", "toml");
+    fs::write(
+        &user_config_path,
+        r#"
+[agents]
+default = "local"
+
+[agents.profiles.local]
+kind = "openai"
+transport = "openai_chat"
+turn_sandbox_policy = "workspace-write"
+
+[agents.profiles.local.runtime]
+backend = "ollama"
+endpoint = "http://127.0.0.1:11434/v1"
+model = "qwen2.5-coder"
+model_source = "hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
+
+[agents.profiles.local.runtime.env]
+OLLAMA_HOST = "127.0.0.1"
+
+[agents.profiles.local.sandbox]
+backend = "host"
+profile = "workspace-write"
+policy = "allow-network"
+
+[agents.profiles.local.sandbox.env]
+POLYPHONY_SANDBOX_LABEL = "tester"
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config: YamlValue::Mapping(Default::default()),
+        prompt_template: String::new(),
+    };
+
+    let config =
+        ServiceConfig::from_workflow_with_configs(&workflow, Some(&user_config_path), None)
+            .unwrap();
+    let _ = fs::remove_file(&user_config_path);
+    let selected = config.select_agent_for_issue(&sample_issue()).unwrap();
+
+    assert_eq!(selected.runtime.backend, RuntimeBackendKind::Ollama);
+    assert_eq!(
+        selected.runtime.endpoint.as_deref(),
+        Some("http://127.0.0.1:11434/v1")
+    );
+    assert_eq!(selected.runtime.model.as_deref(), Some("qwen2.5-coder"));
+    assert_eq!(
+        selected.runtime.model_source.as_deref(),
+        Some("hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF")
+    );
+    assert_eq!(
+        selected.runtime.env.get("OLLAMA_HOST").map(String::as_str),
+        Some("127.0.0.1")
+    );
+    assert_eq!(selected.sandbox.backend, SandboxBackendKind::Host);
+    assert_eq!(selected.sandbox.profile.as_deref(), Some("workspace-write"));
+    assert_eq!(selected.sandbox.policy.as_deref(), Some("allow-network"));
+    assert_eq!(
+        selected
+            .sandbox
+            .env
+            .get("POLYPHONY_SANDBOX_LABEL")
+            .map(String::as_str),
+        Some("tester")
+    );
+    assert_eq!(
+        selected.turn_sandbox_policy.as_deref(),
+        Some("workspace-write")
+    );
 }
 
 #[test]

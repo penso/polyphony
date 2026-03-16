@@ -114,6 +114,41 @@ pub trait AgentProviderRuntime: Send + Sync {
 }
 
 #[async_trait]
+pub trait SandboxBackend: Send + Sync {
+    fn backend_key(&self) -> String;
+    fn kind(&self) -> SandboxBackendKind;
+
+    fn supports(&self, agent: &AgentDefinition) -> bool {
+        agent.sandbox.backend == self.kind()
+    }
+
+    async fn prepare_run(&self, spec: AgentRunSpec) -> Result<AgentRunSpec, Error> {
+        Ok(spec)
+    }
+}
+
+#[async_trait]
+pub trait RuntimeBackend: Send + Sync {
+    fn backend_key(&self) -> String;
+    fn kind(&self) -> RuntimeBackendKind;
+
+    fn supports(&self, agent: &AgentDefinition) -> bool {
+        agent.runtime.backend == self.kind()
+    }
+
+    async fn prepare_run(&self, spec: AgentRunSpec) -> Result<AgentRunSpec, Error> {
+        Ok(spec)
+    }
+
+    async fn discover_models(
+        &self,
+        _agent: &AgentDefinition,
+    ) -> Result<Option<AgentModelCatalog>, Error> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
 pub trait WorkspaceProvisioner: Send + Sync {
     fn component_key(&self) -> String;
     async fn ensure_workspace(&self, request: WorkspaceRequest) -> Result<Workspace, Error>;

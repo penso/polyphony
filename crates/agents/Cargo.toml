@@ -17,8 +17,15 @@ pi = ["dep:polyphony-agent-pi"]
 
 [dependencies]
 async-trait.workspace = true
+bollard.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+polyphony-agent-common = { path = "../agent-common" }
 polyphony-core = { path = "../core" }
 polyphony-agent-acp = { path = "../agent-acp", optional = true }
 polyphony-agent-acpx = { path = "../agent-acpx", optional = true }

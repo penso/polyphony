@@ -138,15 +138,17 @@ impl RuntimeService {
         let new_agent_runtime_key = components.agent.component_key();
         let old_agent_names = current_workflow
             .config
-            .all_agents()
-            .into_iter()
-            .map(|agent| agent.name)
+            .agents
+            .profiles
+            .keys()
+            .cloned()
             .collect::<HashSet<_>>();
         let new_agent_names = new_workflow
             .config
-            .all_agents()
-            .into_iter()
-            .map(|agent| agent.name)
+            .agents
+            .profiles
+            .keys()
+            .cloned()
             .collect::<HashSet<_>>();
         let removed_agents = old_agent_names
             .difference(&new_agent_names)
