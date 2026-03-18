@@ -10,7 +10,7 @@ use {
     },
 };
 
-use super::detail_common::{build_breadcrumb, kv_line, render_scroll_indicator, render_separator};
+use super::detail_common::{kv_line, render_scroll_indicator, render_separator};
 use crate::app::AppState;
 
 pub(crate) fn draw_deliverable_detail(
@@ -32,8 +32,6 @@ pub(crate) fn draw_deliverable_detail(
         return;
     };
 
-    let breadcrumb = build_breadcrumb(app, snapshot);
-
     let block = Block::default()
         .title(Line::from(vec![
             Span::styled(" Outcome ", Style::default().fg(theme.info)),
@@ -44,7 +42,6 @@ pub(crate) fn draw_deliverable_detail(
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
-        .title(breadcrumb.right_aligned())
         .title_bottom(
             Line::from(vec![
                 Span::styled("j/k", Style::default().fg(theme.highlight)),

@@ -199,6 +199,11 @@ pub async fn run(
                                 app.pop_detail();
                                 app.split_focus = crate::app::SplitFocus::default();
                             },
+                            KeyCode::Enter => {
+                                // In split mode the detail pane already shows the
+                                // selected item — Enter is a no-op to avoid pushing
+                                // duplicate details onto the stack.
+                            },
                             _ => {
                                 if let Some(command) =
                                     handle_key(&mut app, key.code, &snapshot)
@@ -841,9 +846,7 @@ fn handle_detail_key(
                                 }
                             }
                         },
-                        _ => {
-                            app.pop_detail();
-                        },
+                        _ => {},
                     }
                 },
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -914,31 +917,26 @@ fn handle_detail_key(
                     }
                 },
                 KeyCode::Enter => {
-                    match focus {
-                        crate::app::DetailSection::Section(0) => {
-                            // Tasks section — push Task detail
-                            if let Some(crate::app::DetailView::Movement {
-                                tasks_selected,
-                                movement_id,
-                                ..
-                            }) = app.current_detail().cloned()
-                            {
-                                let related: Vec<_> = snapshot
-                                    .tasks
-                                    .iter()
-                                    .filter(|t| t.movement_id == movement_id)
-                                    .collect();
-                                if let Some(task) = related.get(tasks_selected) {
-                                    app.push_detail(crate::app::DetailView::Task {
-                                        task_id: task.id.clone(),
-                                        scroll: 0,
-                                    });
-                                }
+                    if let crate::app::DetailSection::Section(0) = focus {
+                        // Tasks section — push Task detail
+                        if let Some(crate::app::DetailView::Movement {
+                            tasks_selected,
+                            movement_id,
+                            ..
+                        }) = app.current_detail().cloned()
+                        {
+                            let related: Vec<_> = snapshot
+                                .tasks
+                                .iter()
+                                .filter(|t| t.movement_id == movement_id)
+                                .collect();
+                            if let Some(task) = related.get(tasks_selected) {
+                                app.push_detail(crate::app::DetailView::Task {
+                                    task_id: task.id.clone(),
+                                    scroll: 0,
+                                });
                             }
-                        },
-                        _ => {
-                            app.pop_detail();
-                        },
+                        }
                     }
                 },
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -996,9 +994,7 @@ fn handle_detail_key(
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
-            KeyCode::Enter => {
-                app.pop_detail();
-            },
+            KeyCode::Enter => {},
             KeyCode::Char('j') | KeyCode::Down => {
                 scroll_detail(app, 1);
             },
@@ -1017,9 +1013,7 @@ fn handle_detail_key(
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
-            KeyCode::Enter => {
-                app.pop_detail();
-            },
+            KeyCode::Enter => {},
             KeyCode::Char('j') | KeyCode::Down => {
                 scroll_detail(app, 1);
             },
@@ -1040,9 +1034,7 @@ fn handle_detail_key(
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
-            KeyCode::Enter => {
-                app.pop_detail();
-            },
+            KeyCode::Enter => {},
             KeyCode::Char('j') | KeyCode::Down => {
                 scroll_detail(app, 1);
             },

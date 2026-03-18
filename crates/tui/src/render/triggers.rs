@@ -57,54 +57,31 @@ pub fn draw_triggers_tab(
                     .get(display_index)
                     .copied()
                     .unwrap_or(false);
-                let display_identifier = if depth == 0 {
+                if depth == 0 {
                     current_parent_identifier.replace(trigger.identifier.clone());
-                    compact_root_identifier(&trigger.source, &trigger.identifier)
-                } else {
-                    compact_child_identifier(
-                        current_parent_identifier.as_deref(),
-                        &trigger.identifier,
-                    )
-                };
-                Some((trigger, depth, is_last, display_identifier))
+                }
+                Some((trigger, depth, is_last))
             },
         )
         .collect();
-    let max_child_identifier_len = trigger_data
-        .iter()
-        .filter(|(_, depth, ..)| *depth > 0)
-        .map(|(_, _, _, display_identifier)| display_identifier.chars().count())
-        .max()
-        .unwrap_or(0);
-
-    let max_id_len = trigger_data
-        .iter()
-        .map(|(trigger, _, _, display_identifier)| {
-            format_display_identifier(display_identifier, false, max_child_identifier_len)
-                .chars()
-                .count()
-                + issue_id_prefix_width(trigger)
-        })
-        .max()
-        .unwrap_or(2)
-        .max(2) as u16;
-    let max_kind_len = trigger_data
-        .iter()
-        .map(|(trigger, ..)| trigger.kind.to_string().len())
-        .max()
-        .unwrap_or(4)
-        .max(4) as u16
-        + 1;
+    let compact = area.width < 80;
+    let kind_col_width: u16 = if compact {
+        2 // single emoji + space
+    } else {
+        trigger_data
+            .iter()
+            .map(|(trigger, ..)| trigger.kind.to_string().len())
+            .max()
+            .unwrap_or(4)
+            .max(4) as u16
+            + 1
+    };
     let status_col_width: u16 = 3; // emoji + space
-    let time_col_width: u16 = 16; // "YYYY-MM-DD HH:MM"
+    let time_col_width: u16 = if compact { 5 } else { 16 }; // "3d" vs "YYYY-MM-DD HH:MM"
 
-    let header = Row::new(vec![
+    let mut header_cells = vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
-        Cell::from(
-            Line::from(Span::styled("ID", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
-        ),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(
             Line::from(Span::styled("Kind", Style::default().fg(theme.muted)))
@@ -114,23 +91,26 @@ pub fn draw_triggers_tab(
             Line::from(Span::styled("", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
         ),
-        Cell::from(
+    ];
+    if !compact {
+        header_cells.push(Cell::from(
             Line::from(Span::styled("Tasks", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
-        ),
-    ])
-    .height(1)
-    .style(Style::default().add_modifier(Modifier::BOLD));
+        ));
+    }
+
+    let header = Row::new(header_cells)
+        .height(1)
+        .style(Style::default().add_modifier(Modifier::BOLD));
 
     let workspace_col_width: u16 = 2; // "● " or empty
-    let tasks_col_width: u16 = 6; // "Tasks" + space
+    let tasks_col_width: u16 = if compact { 0 } else { 6 }; // "Tasks" + space
     let title_max_width = (area.width as usize).saturating_sub(
         2 + 1
             + 2
             + workspace_col_width as usize
             + time_col_width as usize
-            + max_id_len as usize
-            + max_kind_len as usize
+            + kind_col_width as usize
             + status_col_width as usize
             + tasks_col_width as usize
             + 4,
@@ -138,18 +118,8 @@ pub fn draw_triggers_tab(
 
     let rows: Vec<Row> = trigger_data
         .iter()
-        .map(|(trigger, depth, is_last, display_identifier)| {
+        .map(|(trigger, depth, is_last)| {
             let kind_color = kind_color(trigger.kind, theme);
-            let formatted_identifier =
-                format_display_identifier(display_identifier, *depth > 0, max_child_identifier_len);
-            let mut id_spans = Vec::new();
-            if let Some((icon, color)) = approval_marker(trigger, theme) {
-                id_spans.push(Span::styled(icon, Style::default().fg(color)));
-            }
-            id_spans.push(Span::styled(
-                formatted_identifier,
-                Style::default().fg(theme.muted),
-            ));
 
             let (tree_prefix, tree_prefix_width) = if *depth > 0 {
                 let connector = if *is_last {
@@ -161,25 +131,38 @@ pub fn draw_triggers_tab(
             } else {
                 ("", 0)
             };
-            let effective_title_width = title_max_width.saturating_sub(tree_prefix_width);
+
+            // Approval marker takes 1 char when present
+            let approval = approval_marker(trigger, theme);
+            let approval_width = if approval.is_some() { 1 } else { 0 };
+            let effective_title_width = title_max_width
+                .saturating_sub(tree_prefix_width)
+                .saturating_sub(approval_width);
             let display_title = truncate_with_ellipsis(&trigger.title, effective_title_width);
 
-            let title_spans = if tree_prefix_width > 0 {
-                vec![
-                    Span::styled(tree_prefix, Style::default().fg(theme.muted)),
-                    Span::styled(display_title, Style::default().fg(theme.foreground)),
-                ]
-            } else {
-                vec![Span::styled(
-                    display_title,
-                    Style::default().fg(theme.foreground),
-                )]
-            };
+            let mut title_spans: Vec<Span<'_>> = Vec::new();
+            if tree_prefix_width > 0 {
+                title_spans.push(Span::styled(tree_prefix, Style::default().fg(theme.muted)));
+            }
+            if let Some((icon, color)) = approval {
+                title_spans.push(Span::styled(icon, Style::default().fg(color)));
+            }
+            title_spans.push(Span::styled(
+                display_title,
+                Style::default().fg(theme.foreground),
+            ));
 
-            let time_label = trigger
-                .created_at
-                .map(super::format_listing_time)
-                .unwrap_or_else(|| "—".into());
+            let time_label = if compact {
+                trigger
+                    .created_at
+                    .map(|dt| super::detail_common::format_relative_time(dt, chrono::Utc::now()))
+                    .unwrap_or_else(|| "—".into())
+            } else {
+                trigger
+                    .created_at
+                    .map(super::format_listing_time)
+                    .unwrap_or_else(|| "—".into())
+            };
 
             // Workspace indicator: spinner if running, dot if workspace, empty otherwise
             let is_running = running_ids.contains(trigger.trigger_id.as_str());
@@ -198,17 +181,22 @@ pub fn draw_triggers_tab(
 
             let (status_icon, status_color) = status_emoji(&trigger.status, theme);
 
-            Row::new(vec![
+            let kind_label = if compact {
+                kind_emoji(trigger.kind).to_string()
+            } else {
+                trigger.kind.to_string()
+            };
+
+            let mut cells = vec![
                 Cell::from(workspace_indicator),
                 Cell::from(Span::styled(
                     time_label,
                     Style::default().fg(theme.muted),
                 )),
-                Cell::from(Line::from(id_spans).alignment(Alignment::Right)),
                 Cell::from(Line::from(title_spans)),
                 Cell::from(
                     Line::from(Span::styled(
-                        trigger.kind.to_string(),
+                        kind_label,
                         Style::default().fg(kind_color),
                     ))
                     .alignment(Alignment::Right),
@@ -217,7 +205,9 @@ pub fn draw_triggers_tab(
                     Line::from(Span::styled(status_icon, Style::default().fg(status_color)))
                         .alignment(Alignment::Right),
                 ),
-                Cell::from({
+            ];
+            if !compact {
+                cells.push(Cell::from({
                     let count = task_counts
                         .get(trigger.trigger_id.as_str())
                         .copied()
@@ -234,8 +224,10 @@ pub fn draw_triggers_tab(
                     };
                     Line::from(Span::styled(label, Style::default().fg(color)))
                         .alignment(Alignment::Right)
-                }),
-            ])
+                }));
+            }
+
+            Row::new(cells)
         })
         .collect();
 
@@ -282,15 +274,18 @@ pub fn draw_triggers_tab(
         )]
     };
 
-    let table = Table::new(rows, [
+    let mut col_constraints = vec![
         Constraint::Length(workspace_col_width),
         Constraint::Length(time_col_width),
-        Constraint::Length(max_id_len),
         Constraint::Fill(1),
-        Constraint::Length(max_kind_len),
+        Constraint::Length(kind_col_width),
         Constraint::Length(status_col_width),
-        Constraint::Length(tasks_col_width),
-    ])
+    ];
+    if !compact {
+        col_constraints.push(Constraint::Length(tasks_col_width));
+    }
+
+    let table = Table::new(rows, col_constraints)
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
@@ -326,44 +321,6 @@ pub fn draw_triggers_tab(
     draw_scrollbar(frame, area, count, app.issues_state.selected().unwrap_or(0));
 }
 
-fn compact_child_identifier(parent_identifier: Option<&str>, identifier: &str) -> String {
-    if let Some(parent_identifier) = parent_identifier {
-        for separator in ['.', '/', ':', '-'] {
-            let prefix = format!("{parent_identifier}{separator}");
-            if let Some(local_identifier) = identifier.strip_prefix(&prefix)
-                && !local_identifier.is_empty()
-            {
-                return local_identifier.to_string();
-            }
-        }
-    }
-    identifier.to_string()
-}
-
-fn compact_root_identifier(source: &str, identifier: &str) -> String {
-    if source == "github"
-        && let Some((_, suffix)) = identifier.split_once('#')
-    {
-        return format!("#{suffix}");
-    }
-    identifier.to_string()
-}
-
-fn format_display_identifier(identifier: &str, is_child: bool, child_width: usize) -> String {
-    if !is_child || child_width <= identifier.chars().count() {
-        return identifier.to_string();
-    }
-    format!("{identifier:>width$}", width = child_width)
-}
-
-fn issue_id_prefix_width(trigger: &polyphony_core::VisibleTriggerRow) -> usize {
-    let mut width = 0;
-    if approval_marker(trigger, crate::theme::default_theme()).is_some() {
-        width += APPROVED_ICON.chars().count();
-    }
-    width
-}
-
 fn approval_marker(
     trigger: &polyphony_core::VisibleTriggerRow,
     theme: crate::theme::Theme,
@@ -377,6 +334,15 @@ fn approval_marker(
         IssueApprovalState::Approved => (APPROVED_ICON, theme.success),
         IssueApprovalState::Waiting => (WAITING_ICON, theme.warning),
     })
+}
+
+fn kind_emoji(kind: VisibleTriggerKind) -> &'static str {
+    match kind {
+        VisibleTriggerKind::Issue => "◆",
+        VisibleTriggerKind::PullRequestReview => "⟐",
+        VisibleTriggerKind::PullRequestComment => "◇",
+        VisibleTriggerKind::PullRequestConflict => "⊘",
+    }
 }
 
 fn kind_color(kind: VisibleTriggerKind, theme: crate::theme::Theme) -> ratatui::style::Color {
@@ -452,14 +418,3 @@ fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, posi
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::format_display_identifier;
-
-    #[test]
-    fn child_identifiers_are_right_aligned_to_widest_suffix() {
-        assert_eq!(format_display_identifier("2", true, 2), " 2");
-        assert_eq!(format_display_identifier("10", true, 2), "10");
-        assert_eq!(format_display_identifier("#7", false, 2), "#7");
-    }
-}

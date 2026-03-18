@@ -10,7 +10,7 @@ use {
     },
 };
 
-use super::detail_common::{build_breadcrumb, render_scroll_indicator};
+use super::detail_common::render_scroll_indicator;
 use crate::app::AppState;
 
 pub(crate) fn draw_agent_detail(
@@ -21,7 +21,6 @@ pub(crate) fn draw_agent_detail(
     app: &mut AppState,
 ) {
     let theme = app.theme;
-    let breadcrumb = build_breadcrumb(app, snapshot);
 
     let block = Block::default()
         .title(Line::from(Span::styled(
@@ -30,7 +29,6 @@ pub(crate) fn draw_agent_detail(
                 .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
         )))
-        .title(breadcrumb.right_aligned())
         .title_bottom(
             Line::from(vec![
                 Span::styled("j/k", Style::default().fg(theme.highlight)),

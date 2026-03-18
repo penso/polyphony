@@ -81,6 +81,13 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
     let mut spans: Vec<Span<'a>> = Vec::new();
     let theme = app.theme;
 
+    // Give each breadcrumb entry more room when there are fewer entries.
+    let max_title = match app.detail_stack.len() {
+        0 | 1 => 80,
+        2 => 40,
+        _ => 25,
+    };
+
     for (i, view) in app.detail_stack.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" › ", Style::default().fg(theme.muted)));
@@ -91,10 +98,10 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .visible_triggers
                     .iter()
                     .find(|t| t.trigger_id == *trigger_id)
-                    .map(|t| truncate_str(&t.title, 30))
+                    .map(|t| truncate_str(&t.title, max_title))
                     .unwrap_or_else(|| trigger_id.clone());
                 spans.push(Span::styled(
-                    format!("Trigger: {title}"),
+                    title,
                     Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
                 ));
             },
@@ -103,10 +110,10 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .movements
                     .iter()
                     .find(|m| m.id == *movement_id)
-                    .map(|m| truncate_str(&m.title, 30))
+                    .map(|m| truncate_str(&m.title, max_title))
                     .unwrap_or_else(|| movement_id.clone());
                 spans.push(Span::styled(
-                    format!("Movement: {title}"),
+                    title,
                     Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
                 ));
             },
@@ -115,10 +122,10 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .tasks
                     .iter()
                     .find(|t| t.id == *task_id)
-                    .map(|t| truncate_str(&t.title, 30))
+                    .map(|t| truncate_str(&t.title, max_title))
                     .unwrap_or_else(|| task_id.clone());
                 spans.push(Span::styled(
-                    format!("Task: {title}"),
+                    title,
                     Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
                 ));
             },
@@ -133,7 +140,7 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     format!("Agent #{agent_index}")
                 };
                 spans.push(Span::styled(
-                    format!("Agent: {label}"),
+                    label,
                     Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
                 ));
             },
@@ -142,10 +149,10 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .movements
                     .iter()
                     .find(|m| m.id == *movement_id)
-                    .map(|m| truncate_str(&m.title, 30))
+                    .map(|m| truncate_str(&m.title, max_title))
                     .unwrap_or_else(|| movement_id.clone());
                 spans.push(Span::styled(
-                    format!("Outcome: {title}"),
+                    title,
                     Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
                 ));
             },

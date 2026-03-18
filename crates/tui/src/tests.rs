@@ -317,9 +317,10 @@ fn render_triggers_uses_compact_child_identifiers() {
         .unwrap();
 
     let screen = buffer_text(terminal.backend().buffer());
-    assert!(screen.contains("1ru"), "{screen}");
-    assert!(screen.contains("18"), "{screen}");
-    assert!(!screen.contains("1ru.18"), "{screen}");
+    // ID column removed; verify parent/child titles render and tree connector is shown
+    assert!(screen.contains("Parent"), "{screen}");
+    assert!(screen.contains("Child"), "{screen}");
+    assert!(screen.contains("└"), "child should have tree connector: {screen}");
 }
 
 #[test]
@@ -376,8 +377,9 @@ fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
         .unwrap();
 
     let screen = buffer_text(terminal.backend().buffer());
-    assert!(screen.contains("✓#74"), "{screen}");
-    assert!(!screen.contains("penso/arbor#74"), "{screen}");
+    // ID column removed; approval icon should appear before the title
+    assert!(screen.contains("✓"), "approval icon should be visible: {screen}");
+    assert!(screen.contains("Trigger title"), "{screen}");
     assert!(!screen.contains("Source"), "{screen}");
 }
 
@@ -485,7 +487,8 @@ fn render_triggers_show_clock_icon_for_waiting_issue_approval() {
         .unwrap();
 
     let screen = buffer_text(terminal.backend().buffer());
-    assert!(screen.contains("◷#75"), "{screen}");
+    // ID column removed; approval icon now appears before the title
+    assert!(screen.contains("◷Waiting for approval"), "{screen}");
 }
 
 #[test]
@@ -521,7 +524,8 @@ fn render_triggers_show_approved_icon_for_verified_github_issue() {
         .unwrap();
 
     let screen = buffer_text(terminal.backend().buffer());
-    assert!(screen.contains("✓#76"), "{screen}");
+    // ID column removed; approval icon now appears before the title
+    assert!(screen.contains("✓Approved issue"), "{screen}");
 }
 
 #[test]
