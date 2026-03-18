@@ -343,6 +343,8 @@ pub(crate) fn resolve_agent_api_key(kind: &str, api_key: Option<String>) -> Opti
         "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => env::var("KIMI_API_KEY")
             .ok()
             .or_else(|| env::var("MOONSHOT_API_KEY").ok()),
+        "ollama" => env::var("OLLAMA_API_KEY").ok(),
+        "lmstudio" => env::var("LMSTUDIO_API_KEY").ok(),
         _ => None,
     };
     resolve_env_token(api_key.or(fallback))
@@ -418,7 +420,9 @@ pub(crate) fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransp
             "acpx" => AgentTransport::Acpx,
             "openai" | "openai-compatible" | "openrouter" | "kimi" | "kimi-2.5" | "kimi-k2"
             | "moonshot" | "moonshotai" | "mistral" | "deepseek" | "cerebras" | "gemini"
-            | "zai" | "minimax" | "venice" | "groq" => AgentTransport::OpenAiChat,
+            | "zai" | "minimax" | "venice" | "groq" | "ollama" | "lmstudio" => {
+                AgentTransport::OpenAiChat
+            },
             _ => AgentTransport::LocalCli,
         },
     }
@@ -466,6 +470,12 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
 }
 
 pub(crate) fn default_agent_base_url(kind: &str) -> Option<String> {
+    if let Some(env_var) = local_agent_base_url_env_var(kind)
+        && let Some(base_url) = normalize_optional_string(env::var(env_var).ok())
+    {
+        return Some(base_url);
+    }
+
     let url = match kind {
         "kimi" | "kimi-2.5" | "kimi-k2" | "moonshot" | "moonshotai" => "https://api.moonshot.ai/v1",
         "openrouter" => "https://openrouter.ai/api/v1",
@@ -477,9 +487,19 @@ pub(crate) fn default_agent_base_url(kind: &str) -> Option<String> {
         "minimax" => "https://api.minimax.io/v1",
         "venice" => "https://api.venice.ai/api/v1",
         "groq" => "https://api.groq.com/openai/v1",
+        "ollama" => "http://localhost:11434/v1",
+        "lmstudio" => "http://127.0.0.1:1234/v1",
         _ => return None,
     };
     Some(url.into())
+}
+
+fn local_agent_base_url_env_var(kind: &str) -> Option<&'static str> {
+    match kind {
+        "ollama" => Some("OLLAMA_BASE_URL"),
+        "lmstudio" => Some("LMSTUDIO_BASE_URL"),
+        _ => None,
+    }
 }
 
 pub(crate) fn parse_interaction_mode(value: Option<&str>) -> AgentInteractionMode {

@@ -168,6 +168,21 @@ max_turns = 20
 # api_key = "$OPENAI_API_KEY"
 # fetch_models = true
 
+# Ollama local server example.
+# [agents.profiles.ollama]
+# kind = "ollama"
+# `transport = "openai_chat"`, `base_url = "http://localhost:11434/v1"`,
+# and `fetch_models = true` are inferred automatically.
+# Set `base_url` or `OLLAMA_BASE_URL` only if you need a non-default endpoint.
+
+# LM Studio local server example.
+# [agents.profiles.lmstudio]
+# kind = "lmstudio"
+# `transport = "openai_chat"`, `base_url = "http://127.0.0.1:1234/v1"`,
+# and `fetch_models = true` are inferred automatically.
+# Set `base_url` or `LMSTUDIO_BASE_URL` only if you need a non-default endpoint.
+# model = "local-model"
+
 # ACP agent example.
 # [agents.profiles.acp_agent]
 # kind = "custom"

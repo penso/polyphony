@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error as StdError,
+    io::ErrorKind,
+    sync::Arc,
+};
 
 use {
     async_trait::async_trait,
@@ -34,6 +39,71 @@ fn resolve_base_url(agent: &AgentDefinition) -> String {
         .base_url
         .clone()
         .unwrap_or_else(|| "https://api.openai.com/v1".into())
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OllamaTagsModel {
+    name: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OllamaTagsResponse {
+    #[serde(default)]
+    models: Vec<OllamaTagsModel>,
+}
+
+fn configured_api_key(agent: &AgentDefinition) -> Option<&str> {
+    agent
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn provider_requires_api_key(agent: &AgentDefinition) -> bool {
+    !matches!(agent.kind.as_str(), "ollama" | "lmstudio")
+}
+
+fn local_provider_discovery_error(agent: &AgentDefinition, error: &reqwest::Error) -> bool {
+    is_local_provider(agent) && (error.is_timeout() || is_connection_refused(error))
+}
+
+fn is_local_provider(agent: &AgentDefinition) -> bool {
+    matches!(agent.kind.as_str(), "ollama" | "lmstudio")
+}
+
+fn is_connection_refused(error: &reqwest::Error) -> bool {
+    if !error.is_connect() {
+        return false;
+    }
+
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if let Some(io_error) = cause.downcast_ref::<std::io::Error>()
+            && io_error.kind() == ErrorKind::ConnectionRefused
+        {
+            return true;
+        }
+        source = cause.source();
+    }
+
+    false
+}
+
+fn maybe_bearer_auth(
+    request: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match api_key {
+        Some(api_key) => request.bearer_auth(api_key),
+        None => request,
+    }
+}
+
+fn ollama_root_url(agent: &AgentDefinition) -> String {
+    let base_url = resolve_base_url(agent);
+    let trimmed = base_url.trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
 
 #[derive(Clone)]
@@ -123,7 +193,10 @@ async fn discover_models_for_agent(
         polyphony_agent_common::parse_model_list(
             &run_shell_capture(command, None, &agent.env).await?,
         )?
-    } else if agent.fetch_models && agent.api_key.is_none() {
+    } else if agent.fetch_models
+        && provider_requires_api_key(agent)
+        && configured_api_key(agent).is_none()
+    {
         debug!(
             agent_name = %agent.name,
             provider_kind = %agent.kind,
@@ -152,12 +225,53 @@ async fn discover_openai_models(
     client: &reqwest::Client,
     agent: &AgentDefinition,
 ) -> Result<Vec<AgentModel>, CoreError> {
-    let api_key = agent.api_key.clone().ok_or_else(|| {
-        CoreError::Adapter(format!(
+    if provider_requires_api_key(agent) && configured_api_key(agent).is_none() {
+        return Err(CoreError::Adapter(format!(
             "agent `{}` api_key is required for model discovery",
             agent.name
-        ))
-    })?;
+        )));
+    }
+
+    if agent.kind == "ollama" {
+        let openai_models = discover_models_from_openai_endpoint(client, agent).await;
+        let ollama_models = discover_models_from_ollama_tags(client, agent).await;
+        return match (openai_models, ollama_models) {
+            (Ok(openai_models), Ok(ollama_models)) => {
+                Ok(merge_models(openai_models, ollama_models))
+            },
+            (Ok(openai_models), Err(error)) => {
+                warn!(
+                    agent_name = %agent.name,
+                    provider_kind = %agent.kind,
+                    error = %error,
+                    "Ollama /api/tags discovery failed, using /v1/models only"
+                );
+                Ok(openai_models)
+            },
+            (Err(error), Ok(ollama_models)) => {
+                warn!(
+                    agent_name = %agent.name,
+                    provider_kind = %agent.kind,
+                    error = %error,
+                    "Ollama /v1/models discovery failed, using /api/tags only"
+                );
+                Ok(ollama_models)
+            },
+            (Err(openai_error), Err(ollama_error)) => Err(CoreError::Adapter(format!(
+                "model discovery failed for {}: /v1/models: {openai_error}; /api/tags: {ollama_error}",
+                agent.name
+            ))),
+        };
+    }
+
+    discover_models_from_openai_endpoint(client, agent).await
+}
+
+async fn discover_models_from_openai_endpoint(
+    client: &reqwest::Client,
+    agent: &AgentDefinition,
+) -> Result<Vec<AgentModel>, CoreError> {
+    let api_key = configured_api_key(agent);
     let base_url = resolve_base_url(agent);
     info!(
         agent_name = %agent.name,
@@ -165,13 +279,26 @@ async fn discover_openai_models(
         base_url,
         "discovering OpenAI-compatible models"
     );
-    let response = client
-        .get(format!("{}/models", base_url.trim_end_matches('/')))
-        .bearer_auth(api_key)
-        .header("User-Agent", "polyphony")
-        .send()
-        .await
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    let request = maybe_bearer_auth(
+        client
+            .get(format!("{}/models", base_url.trim_end_matches('/')))
+            .header("User-Agent", "polyphony"),
+        api_key,
+    );
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) if local_provider_discovery_error(agent, &error) => {
+            warn!(
+                agent_name = %agent.name,
+                provider_kind = %agent.kind,
+                base_url,
+                error = %error,
+                "local OpenAI-compatible model discovery skipped because the provider is unreachable"
+            );
+            return Ok(Vec::new());
+        },
+        Err(error) => return Err(CoreError::Adapter(error.to_string())),
+    };
     let status = response.status();
     if status.as_u16() == 429 {
         warn!(
@@ -214,17 +341,81 @@ async fn discover_openai_models(
     Ok(models)
 }
 
+async fn discover_models_from_ollama_tags(
+    client: &reqwest::Client,
+    agent: &AgentDefinition,
+) -> Result<Vec<AgentModel>, CoreError> {
+    let api_key = configured_api_key(agent);
+    let base_url = ollama_root_url(agent);
+    info!(
+        agent_name = %agent.name,
+        provider_kind = %agent.kind,
+        base_url,
+        "discovering Ollama models via /api/tags"
+    );
+    let request = maybe_bearer_auth(
+        client
+            .get(format!("{}/api/tags", base_url.trim_end_matches('/')))
+            .header("User-Agent", "polyphony"),
+        api_key,
+    );
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) if local_provider_discovery_error(agent, &error) => {
+            warn!(
+                agent_name = %agent.name,
+                provider_kind = %agent.kind,
+                base_url,
+                error = %error,
+                "local Ollama /api/tags discovery skipped because the provider is unreachable"
+            );
+            return Ok(Vec::new());
+        },
+        Err(error) => return Err(CoreError::Adapter(error.to_string())),
+    };
+    let status = response.status();
+    let payload = response
+        .json::<OllamaTagsResponse>()
+        .await
+        .map_err(|error| CoreError::Adapter(error.to_string()))?;
+    if !status.is_success() {
+        return Err(CoreError::Adapter(format!(
+            "model discovery failed for {}: {status}",
+            agent.name
+        )));
+    }
+
+    let models = payload
+        .models
+        .into_iter()
+        .map(|model| model.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|id| AgentModel {
+            display_name: Some(id.clone()),
+            id,
+            created_at: None,
+        })
+        .collect::<Vec<_>>();
+    debug!(
+        agent_name = %agent.name,
+        discovered_models = models.len(),
+        "discovered Ollama models via /api/tags"
+    );
+    Ok(models)
+}
+
 async fn run_openai_chat(
     client: &reqwest::Client,
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
     tool_executor: Option<&Arc<dyn ToolExecutor>>,
 ) -> Result<AgentRunResult, CoreError> {
-    let api_key = spec
-        .agent
-        .api_key
-        .clone()
-        .ok_or_else(|| CoreError::Adapter("openai_chat api_key is required".into()))?;
+    let api_key = configured_api_key(&spec.agent);
+    if provider_requires_api_key(&spec.agent) && api_key.is_none() {
+        return Err(CoreError::Adapter("openai_chat api_key is required".into()));
+    }
     let model_catalog = discover_models_for_agent(client, &spec.agent).await?;
     let model = spec
         .agent
@@ -287,14 +478,14 @@ async fn run_openai_chat(
         );
         let response = client
             .post(&url)
-            .bearer_auth(&api_key)
             .header("User-Agent", "polyphony")
             .json(&json!({
                 "model": model,
                 "messages": messages,
                 "stream": true,
                 "stream_options": {"include_usage": true},
-            }))
+            }));
+        let response = maybe_bearer_auth(response, api_key)
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;
@@ -695,7 +886,7 @@ fn parse_openai_usage(payload: &Value) -> Option<TokenUsage> {
 #[cfg(test)]
 mod tests {
     use {
-        super::{OpenAiRuntime, parse_openai_usage},
+        super::{OllamaTagsResponse, OpenAiRuntime, parse_openai_usage},
         async_trait::async_trait,
         polyphony_core::{
             AgentDefinition, AgentEventKind, AgentProviderRuntime, AgentRunSpec, AgentTransport,
@@ -745,6 +936,24 @@ mod tests {
         assert_eq!(usage.total_tokens, 20);
     }
 
+    #[test]
+    fn parses_ollama_tags_payload() {
+        let payload = serde_json::from_value::<OllamaTagsResponse>(serde_json::json!({
+            "models": [
+                {"name": "llama3.2"},
+                {"name": "qwen2.5:latest"}
+            ]
+        }))
+        .unwrap();
+
+        let names = payload
+            .models
+            .into_iter()
+            .map(|model| model.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["llama3.2", "qwen2.5:latest"]);
+    }
+
     #[tokio::test]
     async fn discovers_models_from_command() {
         let runtime = OpenAiRuntime::default();
@@ -784,6 +993,123 @@ mod tests {
         assert_eq!(catalog.agent_name, "kimi_fast");
         assert_eq!(catalog.selected_model.as_deref(), Some("kimi-2.5"));
         assert!(catalog.models.is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_model_discovery_returns_empty_when_provider_is_unreachable() {
+        let ollama_addr = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let lmstudio_addr = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+
+        let runtime = OpenAiRuntime::default();
+        let ollama_catalog = runtime
+            .discover_models(&AgentDefinition {
+                name: "ollama".into(),
+                kind: "ollama".into(),
+                transport: AgentTransport::OpenAiChat,
+                base_url: Some(format!("http://{ollama_addr}/v1")),
+                fetch_models: true,
+                ..AgentDefinition::default()
+            })
+            .await
+            .unwrap();
+        let lmstudio_catalog = runtime
+            .discover_models(&AgentDefinition {
+                name: "lmstudio".into(),
+                kind: "lmstudio".into(),
+                transport: AgentTransport::OpenAiChat,
+                base_url: Some(format!("http://{lmstudio_addr}/v1")),
+                fetch_models: true,
+                ..AgentDefinition::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(ollama_catalog.is_none());
+        assert!(lmstudio_catalog.is_none());
+    }
+
+    #[tokio::test]
+    async fn ollama_model_discovery_queries_tags_without_auth_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut paths = Vec::new();
+            let mut authorization_headers = Vec::new();
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0u8; 8192];
+                let read = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..read]).to_string();
+                authorization_headers.push(
+                    request
+                        .lines()
+                        .any(|line| line.starts_with("Authorization: Bearer ")),
+                );
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap()
+                    .to_string();
+                paths.push(path.clone());
+                let payload = if path == "/v1/models" {
+                    serde_json::json!({
+                        "data": [{"id": "llama3.2"}]
+                    })
+                } else {
+                    serde_json::json!({
+                        "models": [
+                            {"name": " llama3.2 "},
+                            {"name": "qwen2.5"},
+                            {"name": "qwen2.5"}
+                        ]
+                    })
+                }
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            (paths, authorization_headers)
+        });
+
+        let runtime = OpenAiRuntime::default();
+        let catalog = runtime
+            .discover_models(&AgentDefinition {
+                name: "ollama".into(),
+                kind: "ollama".into(),
+                transport: AgentTransport::OpenAiChat,
+                base_url: Some(format!("http://{addr}/v1")),
+                fetch_models: true,
+                ..AgentDefinition::default()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let (paths, authorization_headers) = server.await.unwrap();
+
+        assert_eq!(paths, vec!["/v1/models", "/api/tags"]);
+        assert_eq!(authorization_headers, vec![false, false]);
+        assert_eq!(catalog.selected_model.as_deref(), Some("llama3.2"));
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["llama3.2", "qwen2.5"]
+        );
     }
 
     #[tokio::test]
@@ -878,6 +1204,78 @@ mod tests {
             }
         }
         assert!(saw_tool_warning);
+    }
+
+    #[tokio::test]
+    async fn local_openai_runner_skips_authorization_header_when_api_key_is_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 8192];
+            let read = socket.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..read]).to_string();
+            let payload = serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": "done"
+                    }
+                }]
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+
+        let runtime = OpenAiRuntime::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let result = runtime
+            .run(
+                AgentRunSpec {
+                    issue: Issue {
+                        id: "1".into(),
+                        identifier: "TEST-1".into(),
+                        title: "Test".into(),
+                        state: "Todo".into(),
+                        ..Issue::default()
+                    },
+                    attempt: None,
+                    workspace_path: std::env::temp_dir(),
+                    prompt: "hello".into(),
+                    max_turns: 1,
+                    prior_context: None,
+                    agent: AgentDefinition {
+                        name: "lmstudio".into(),
+                        kind: "lmstudio".into(),
+                        transport: AgentTransport::OpenAiChat,
+                        base_url: Some(format!("http://{addr}/v1")),
+                        api_key: Some("   ".into()),
+                        model: Some("local-model".into()),
+                        fetch_models: false,
+                        turn_timeout_ms: 5_000,
+                        read_timeout_ms: 1_000,
+                        stall_timeout_ms: 60_000,
+                        idle_timeout_ms: 1_000,
+                        ..AgentDefinition::default()
+                    },
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+
+        assert!(matches!(
+            result.status,
+            polyphony_core::AttemptStatus::Succeeded
+        ));
+        assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+        assert!(!request.contains("\r\nAuthorization: Bearer "));
     }
 
     #[tokio::test]
