@@ -75,7 +75,7 @@ Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): descripti
 ## Module Organization
 
 - Split large files by domain: types, constants, helpers, actions. Keep files under ~800 lines where practical.
-- **Do not add implementation code in `main.rs`, `lib.rs`, or `mod.rs`.** These files are for module declarations, re-exports, and top-level wiring only. Put implementation logic in dedicated modules.
+- **Do not add implementation code in `main.rs`, `lib.rs`, or `mod.rs`.** These files are for module declarations, re-exports, and top-level wiring only. Put implementation logic in dedicated modules. A `mod.rs` filename conveys no meaning about what it contains — always use named files (e.g., `render/triggers.rs` instead of putting trigger code in `render/mod.rs`).
 - Use `pub(crate)` visibility for items shared within a crate but not exported. Apply to struct fields, methods, and free functions in submodules.
 - Use `pub(crate) use module::*` glob re-exports in parent modules to keep call sites clean after extraction.
 - When splitting `impl` blocks across files, the struct definition stays in `types.rs` and method impls go in the relevant domain file.
