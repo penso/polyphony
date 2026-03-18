@@ -12,8 +12,7 @@ use {
 };
 
 use super::detail_common::{
-    build_breadcrumb, format_relative_time, label_color, render_scroll_indicator,
-    render_separator, strip_html_tags,
+    format_relative_time, label_color, render_scroll_indicator, render_separator, strip_html_tags,
 };
 use crate::app::{AppState, DetailSection, DetailView};
 
@@ -35,7 +34,6 @@ pub(crate) fn draw_trigger_detail(
         return;
     };
 
-    let breadcrumb = build_breadcrumb(app, snapshot);
     let hint_spans = detail_hint_spans(issue, theme);
 
     let block = Block::default()
@@ -52,7 +50,6 @@ pub(crate) fn draw_trigger_detail(
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
-        .title(breadcrumb.right_aligned())
         .title_bottom(Line::from(hint_spans).right_aligned())
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -144,44 +141,55 @@ pub(crate) fn draw_trigger_detail(
         _ => theme.muted,
     };
 
+    let approval_icon = match issue.approval_state {
+        IssueApprovalState::Approved => "✓",
+        IssueApprovalState::Waiting => "◷",
+    };
+    let approval_color = match issue.approval_state {
+        IssueApprovalState::Approved => theme.success,
+        IssueApprovalState::Waiting => theme.warning,
+    };
+
+    let sep = Span::styled("  ", Style::default());
     let mut meta_spans: Vec<Span<'_>> = vec![
-        Span::styled(format!(" {} ", issue.status), Style::default().fg(state_color)),
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            format!("approval {}", issue.approval_state),
-            Style::default().fg(match issue.approval_state {
-                IssueApprovalState::Approved => theme.success,
-                IssueApprovalState::Waiting => theme.warning,
-            }),
-        ),
-        Span::styled("  ", Style::default()),
-        Span::styled(priority_str, Style::default().fg(priority_color)),
+        Span::styled(" status:", Style::default().fg(theme.muted)),
+        Span::styled(format!("{} ", issue.status), Style::default().fg(state_color)),
+        sep.clone(),
+        Span::styled("approval:", Style::default().fg(theme.muted)),
+        Span::styled(format!("{approval_icon} "), Style::default().fg(approval_color)),
+        sep.clone(),
+        Span::styled("priority:", Style::default().fg(theme.muted)),
+        Span::styled(format!("{priority_str} "), Style::default().fg(priority_color)),
     ];
 
     if !issue.labels.is_empty() {
-        meta_spans.push(Span::styled("  ", Style::default()));
+        meta_spans.push(sep.clone());
+        meta_spans.push(Span::styled("labels:", Style::default().fg(theme.muted)));
         for (i, label) in issue.labels.iter().enumerate() {
             if i > 0 {
-                meta_spans.push(Span::styled(" ", Style::default()));
+                meta_spans.push(Span::styled(",", Style::default().fg(theme.muted)));
             }
             meta_spans.push(Span::styled(
                 label.clone(),
                 Style::default().fg(label_color(label, theme)),
             ));
         }
+        meta_spans.push(Span::styled(" ", Style::default()));
     }
     if let Some(author) = &issue.author {
-        meta_spans.push(Span::styled("  ", Style::default()));
+        meta_spans.push(sep.clone());
+        meta_spans.push(Span::styled("author:", Style::default().fg(theme.muted)));
         meta_spans.push(Span::styled(
-            format!("@{author}"),
+            format!("@{author} "),
             Style::default().fg(theme.highlight),
         ));
     }
     if let Some(updated) = issue.updated_at {
         let age = format_relative_time(updated, Utc::now());
-        meta_spans.push(Span::styled("  ", Style::default()));
+        meta_spans.push(sep);
+        meta_spans.push(Span::styled("updated:", Style::default().fg(theme.muted)));
         meta_spans.push(Span::styled(
-            format!("updated {age} ago"),
+            format!("{age} ago "),
             Style::default().fg(theme.muted),
         ));
     }
@@ -246,7 +254,37 @@ pub(crate) fn draw_trigger_detail(
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
+
+        // Pre-compute max column widths for alignment
+        let max_kind_len = related_movements
+            .iter()
+            .map(|m| super::orchestrator::movement_kind_label(m.kind).len())
+            .max()
+            .unwrap_or(0);
+        let max_target_len = related_movements
+            .iter()
+            .map(|m| super::orchestrator::movement_target_label(m).len())
+            .max()
+            .unwrap_or(0);
+        let max_status_len = related_movements
+            .iter()
+            .map(|m| m.status.to_string().len())
+            .max()
+            .unwrap_or(0);
+        let max_completed_len = related_movements
+            .iter()
+            .map(|m| format!("{}", m.tasks_completed).len())
+            .max()
+            .unwrap_or(1);
+        let max_total_len = related_movements
+            .iter()
+            .map(|m| format!("{}", m.task_count).len())
+            .max()
+            .unwrap_or(1);
+
         for (i, m) in related_movements.iter().enumerate() {
+            let (status_emoji, emoji_color) =
+                super::orchestrator::movement_status_emoji_pub(&m.status, theme);
             let status_color =
                 super::orchestrator::movement_status_color_pub(&m.status, theme);
             let is_selected = movements_focused && i == movements_selected;
@@ -258,23 +296,29 @@ pub(crate) fn draw_trigger_detail(
             } else {
                 Style::default().fg(theme.foreground)
             };
+            let kind_label = super::orchestrator::movement_kind_label(m.kind);
+            let target = super::orchestrator::movement_target_label(m);
+            let status_str = m.status.to_string();
             body_lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(theme.highlight)),
+                Span::styled(format!("{status_emoji} "), Style::default().fg(emoji_color)),
                 Span::styled(
-                    format!("{} ", super::orchestrator::movement_kind_label(m.kind)),
+                    format!("{kind_label:<max_kind_len$}  "),
                     Style::default().fg(theme.info),
                 ),
                 Span::styled(
-                    super::orchestrator::movement_target_label(m),
+                    format!("{target:<max_target_len$}  "),
                     name_style,
                 ),
-                Span::styled("  ", Style::default()),
                 Span::styled(
-                    m.status.to_string(),
+                    format!("{status_str:<max_status_len$}  "),
                     Style::default().fg(status_color),
                 ),
                 Span::styled(
-                    format!("  {}/{} tasks", m.tasks_completed, m.task_count),
+                    format!(
+                        "{:>max_completed_len$}/{:<max_total_len$}",
+                        m.tasks_completed, m.task_count
+                    ),
                     Style::default().fg(theme.muted),
                 ),
             ]));

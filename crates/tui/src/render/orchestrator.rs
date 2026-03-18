@@ -495,6 +495,13 @@ fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
         .sum()
 }
 
+pub(crate) fn movement_status_emoji_pub(
+    status: &polyphony_core::MovementStatus,
+    theme: crate::theme::Theme,
+) -> (&'static str, ratatui::style::Color) {
+    movement_status_emoji(status, theme)
+}
+
 pub(crate) fn movement_status_color_pub(
     status: &polyphony_core::MovementStatus,
     theme: crate::theme::Theme,
