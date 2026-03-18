@@ -342,8 +342,9 @@ fn parse_dispatch_mode(mode: &str) -> Result<polyphony_core::DispatchMode, Error
         "automatic" => Ok(polyphony_core::DispatchMode::Automatic),
         "nightshift" => Ok(polyphony_core::DispatchMode::Nightshift),
         "idle" => Ok(polyphony_core::DispatchMode::Idle),
+        "stop" => Ok(polyphony_core::DispatchMode::Stop),
         other => Err(Error::Config(format!(
-            "unknown dispatch mode `{other}`; expected manual, automatic, nightshift, or idle"
+            "unknown dispatch mode `{other}`; expected manual, automatic, nightshift, idle, or stop"
         ))),
     }
 }

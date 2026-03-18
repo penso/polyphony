@@ -2,6 +2,9 @@ use crate::{prelude::*, *};
 
 impl RuntimeService {
     pub(crate) async fn process_due_retries(&mut self) {
+        if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
+            return;
+        }
         if self.workflow_reload_error().is_some() {
             return;
         }

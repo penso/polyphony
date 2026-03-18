@@ -130,6 +130,7 @@ pub enum DispatchMode {
     Automatic,
     Nightshift,
     Idle,
+    Stop,
 }
 
 impl fmt::Display for DispatchMode {
@@ -139,6 +140,7 @@ impl fmt::Display for DispatchMode {
             Self::Automatic => "automatic",
             Self::Nightshift => "nightshift",
             Self::Idle => "idle",
+            Self::Stop => "stop",
         };
         f.write_str(s)
     }

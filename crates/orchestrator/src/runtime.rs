@@ -138,6 +138,9 @@ impl RuntimeService {
                                 format!("dispatch mode set to {mode}"),
                             );
                             self.state.dispatch_mode = mode;
+                            if mode == polyphony_core::DispatchMode::Stop {
+                                self.abort_all().await;
+                            }
                             let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::ApproveIssueTrigger { issue_id, source } => {
@@ -358,6 +361,14 @@ impl RuntimeService {
     pub(crate) async fn process_manual_dispatches(&mut self) {
         let dispatches = std::mem::take(&mut self.pending_manual_dispatches);
         if dispatches.is_empty() {
+            return;
+        }
+        if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
+            info!("manual dispatches dropped (stop mode)");
+            self.push_event(
+                EventScope::Dispatch,
+                "manual dispatch blocked: orchestrator is in stop mode".into(),
+            );
             return;
         }
         info!(count = dispatches.len(), "processing manual dispatches");
@@ -712,6 +723,14 @@ impl RuntimeService {
         if trigger_ids.is_empty() {
             return;
         }
+        if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
+            info!("manual PR trigger dispatches dropped (stop mode)");
+            self.push_event(
+                EventScope::Dispatch,
+                "manual PR trigger dispatch blocked: orchestrator is in stop mode".into(),
+            );
+            return;
+        }
         info!(
             count = trigger_ids.len(),
             "processing manual pull request trigger dispatches"
@@ -1019,7 +1038,10 @@ impl RuntimeService {
         self.save_cache().await;
 
         // Auto-dispatch issues whose orphaned workspaces were found at startup.
-        if !self.state.orphan_dispatch_keys.is_empty() {
+        // Skip in stop mode — nothing should start.
+        if !self.state.orphan_dispatch_keys.is_empty()
+            && self.state.dispatch_mode != polyphony_core::DispatchMode::Stop
+        {
             let orphan_keys = std::mem::take(&mut self.state.orphan_dispatch_keys);
             let mut pending_orphan_keys = orphan_keys.clone();
             for issue in &issues {
@@ -1054,7 +1076,7 @@ impl RuntimeService {
 
         if self.pull_request_trigger_source.is_some() {
             let allow_pull_request_dispatch = match self.state.dispatch_mode {
-                polyphony_core::DispatchMode::Manual => false,
+                polyphony_core::DispatchMode::Manual | polyphony_core::DispatchMode::Stop => false,
                 polyphony_core::DispatchMode::Automatic
                 | polyphony_core::DispatchMode::Nightshift => true,
                 polyphony_core::DispatchMode::Idle => {
@@ -1077,8 +1099,11 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
             return false;
         }
-        if self.state.dispatch_mode == polyphony_core::DispatchMode::Manual {
-            debug!("tick: dispatch skipped (manual mode)");
+        if matches!(
+            self.state.dispatch_mode,
+            polyphony_core::DispatchMode::Manual | polyphony_core::DispatchMode::Stop
+        ) {
+            debug!("tick: dispatch skipped ({} mode)", self.state.dispatch_mode);
             let _ = self.emit_snapshot().await;
             return false;
         }
