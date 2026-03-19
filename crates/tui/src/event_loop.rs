@@ -793,86 +793,33 @@ fn handle_detail_key(
 
     match detail {
         crate::app::DetailView::Trigger {
-            ref trigger_id,
-            focus,
-            ..
+            ref trigger_id, ..
         } => match key {
-            KeyCode::Tab => {
-                // Cycle: Body -> Section(0) movements -> Section(1) agents -> Body
-                if let Some(crate::app::DetailView::Trigger { focus, .. }) =
-                    app.current_detail_mut()
-                {
-                    *focus = match *focus {
-                        crate::app::DetailSection::Body => crate::app::DetailSection::Section(0),
-                        crate::app::DetailSection::Section(0) => {
-                            crate::app::DetailSection::Section(1)
-                        },
-                        _ => crate::app::DetailSection::Body,
-                    };
-                }
+            KeyCode::Tab if in_split => {
+                app.split_focus = crate::app::SplitFocus::List;
             },
             KeyCode::Enter => {
-                // Drill down into selected section item
-                match focus {
-                    crate::app::DetailSection::Section(0) => {
-                        // Movements section — push Movement detail
-                        if let Some(crate::app::DetailView::Trigger {
-                            movements_selected,
-                            trigger_id,
-                            ..
-                        }) = app.current_detail().cloned()
-                        {
-                            let trigger = find_trigger_by_id(snapshot, &trigger_id);
-                            let related: Vec<_> = snapshot
-                                .movements
-                                .iter()
-                                .filter(|m| {
-                                    trigger.is_some_and(|t| {
-                                        m.issue_identifier.as_deref() == Some(&*t.identifier)
-                                    })
-                                })
-                                .collect();
-                            if let Some(movement) = related.get(movements_selected) {
-                                app.push_detail(crate::app::DetailView::Movement {
-                                    movement_id: movement.id.clone(),
-                                    scroll: 0,
-                                    focus: Default::default(),
-                                    tasks_selected: 0,
-                                });
-                            }
-                        }
-                    },
-                    crate::app::DetailSection::Section(1) => {
-                        // Agents section — push Agent detail
-                        if let Some(crate::app::DetailView::Trigger {
-                            agents_selected,
-                            trigger_id,
-                            ..
-                        }) = app.current_detail().cloned()
-                        {
-                            let running_agents: Vec<_> = snapshot
-                                .running
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, r)| r.issue_id == trigger_id)
-                                .collect();
-                            if let Some(&(idx, _)) = running_agents.get(agents_selected) {
-                                app.push_detail(crate::app::DetailView::Agent {
-                                    agent_index: idx,
-                                    scroll: 0,
-                                    artifact_cache: Box::new(None),
-                                });
-                            }
-                        }
-                    },
-                    _ => {},
+                // Open the single movement detail if one exists
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
+                    if let Some(movement) = snapshot
+                        .movements
+                        .iter()
+                        .find(|m| m.issue_identifier.as_deref() == Some(&*trigger.identifier))
+                    {
+                        app.push_detail(crate::app::DetailView::Movement {
+                            movement_id: movement.id.clone(),
+                            scroll: 0,
+                            focus: Default::default(),
+                            tasks_selected: 0,
+                        });
+                    }
                 }
             },
             KeyCode::Char('j') | KeyCode::Down => {
-                navigate_section_or_scroll(app, snapshot, focus, 1, true);
+                scroll_detail(app, 1);
             },
             KeyCode::Char('k') | KeyCode::Up => {
-                navigate_section_or_scroll(app, snapshot, focus, 1, false);
+                scroll_detail_back(app, 1);
             },
             KeyCode::PageDown => {
                 scroll_detail(app, 8);
@@ -926,49 +873,17 @@ fn handle_detail_key(
             _ => {},
         },
         crate::app::DetailView::Movement {
-            ref movement_id,
-            focus,
-            ..
+            ref movement_id, ..
         } => match key {
-            KeyCode::Tab => {
-                // Cycle: Body -> Section(0) tasks -> Body
-                if let Some(crate::app::DetailView::Movement { focus, .. }) =
-                    app.current_detail_mut()
-                {
-                    *focus = match *focus {
-                        crate::app::DetailSection::Body => crate::app::DetailSection::Section(0),
-                        _ => crate::app::DetailSection::Body,
-                    };
-                }
+            KeyCode::Tab if in_split => {
+                app.split_focus = crate::app::SplitFocus::List;
             },
-            KeyCode::Enter => {
-                if let crate::app::DetailSection::Section(0) = focus {
-                    // Tasks section — push Task detail
-                    if let Some(crate::app::DetailView::Movement {
-                        tasks_selected,
-                        movement_id,
-                        ..
-                    }) = app.current_detail().cloned()
-                    {
-                        let related: Vec<_> = snapshot
-                            .tasks
-                            .iter()
-                            .filter(|t| t.movement_id == movement_id)
-                            .collect();
-                        if let Some(task) = related.get(tasks_selected) {
-                            app.push_detail(crate::app::DetailView::Task {
-                                task_id: task.id.clone(),
-                                scroll: 0,
-                            });
-                        }
-                    }
-                }
-            },
+            KeyCode::Enter => {},
             KeyCode::Char('j') | KeyCode::Down => {
-                navigate_movement_section_or_scroll(app, snapshot, focus, true);
+                scroll_detail(app, 1);
             },
             KeyCode::Char('k') | KeyCode::Up => {
-                navigate_movement_section_or_scroll(app, snapshot, focus, false);
+                scroll_detail_back(app, 1);
             },
             KeyCode::PageDown => {
                 scroll_detail(app, 8);
