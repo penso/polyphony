@@ -122,10 +122,15 @@ pub(crate) fn draw_movement_detail(
     let gauge_label = format!("{}/{} tasks", movement.tasks_completed, movement.task_count);
     frame.render_widget(
         LineGauge::default()
-            .filled_style(Style::default().fg(status_color))
-            .unfilled_style(Style::default().fg(theme.border))
-            .filled_symbol("▰")
-            .unfilled_symbol("▱")
+            .filled_style(
+                Style::default()
+                    .fg(theme.background)
+                    .bg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .unfilled_style(Style::default().fg(theme.border).bg(theme.background))
+            .filled_symbol(ratatui::symbols::line::THICK_HORIZONTAL)
+            .unfilled_symbol(ratatui::symbols::line::THICK_HORIZONTAL)
             .label(Line::from(Span::styled(
                 gauge_label,
                 Style::default().fg(theme.foreground),
