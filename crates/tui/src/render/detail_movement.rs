@@ -124,7 +124,8 @@ pub(crate) fn draw_movement_detail(
         LineGauge::default()
             .filled_style(Style::default().fg(status_color))
             .unfilled_style(Style::default().fg(theme.border))
-            .line_set(ratatui::symbols::line::THICK)
+            .filled_symbol("▰")
+            .unfilled_symbol("▱")
             .label(Line::from(Span::styled(
                 gauge_label,
                 Style::default().fg(theme.foreground),

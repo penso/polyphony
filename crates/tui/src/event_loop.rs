@@ -813,6 +813,14 @@ fn handle_detail_key(
             }
             return None;
         },
+        KeyCode::Home | KeyCode::Char('g') => {
+            *app.current_detail_mut()?.scroll_mut() = 0;
+            return None;
+        },
+        KeyCode::End | KeyCode::Char('G') => {
+            *app.current_detail_mut()?.scroll_mut() = u16::MAX;
+            return None;
+        },
         _ => {},
     }
 
@@ -1065,12 +1073,6 @@ fn handle_detail_key(
             },
             KeyCode::PageUp => {
                 scroll_detail_back(app, 8);
-            },
-            KeyCode::Char('G') | KeyCode::End => {
-                *app.current_detail_mut()?.scroll_mut() = u16::MAX;
-            },
-            KeyCode::Char('g') | KeyCode::Home => {
-                *app.current_detail_mut()?.scroll_mut() = 0;
             },
             _ => {},
         },
