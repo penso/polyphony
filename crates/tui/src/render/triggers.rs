@@ -63,8 +63,15 @@ pub fn draw_triggers_tab(
         )
         .collect();
     let compact = area.width < 80;
-    let kind_col_width: u16 = if compact {
-        2 // single emoji + space
+    // Hide the Kind column when all triggers are the same kind (e.g. all issues).
+    let all_same_kind = trigger_data
+        .first()
+        .map(|(first, ..)| trigger_data.iter().all(|(t, ..)| t.kind == first.kind))
+        .unwrap_or(true);
+    let kind_col_width: u16 = if all_same_kind {
+        0
+    } else if compact {
+        2
     } else {
         trigger_data
             .iter()
@@ -85,15 +92,14 @@ pub fn draw_triggers_tab(
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-        Cell::from(
-            Line::from(Span::styled("", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
-        ),
-        Cell::from(
-            Line::from(Span::styled("", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
-        ),
     ];
+    if !all_same_kind {
+        header_cells.push(Cell::from(Span::styled("", Style::default().fg(theme.muted))));
+    }
+    header_cells.push(Cell::from(
+        Line::from(Span::styled("", Style::default().fg(theme.muted)))
+            .alignment(Alignment::Right),
+    ));
     if !compact {
         header_cells.push(Cell::from(
             Line::from(Span::styled("Tasks", Style::default().fg(theme.muted)))
@@ -125,8 +131,6 @@ pub fn draw_triggers_tab(
     let rows: Vec<Row> = trigger_data
         .iter()
         .map(|(trigger, depth, is_last)| {
-            let kind_color = kind_color(trigger.kind, theme);
-
             let (tree_prefix, tree_prefix_width) = if *depth > 0 {
                 let connector = if *is_last {
                     "└── "
@@ -188,25 +192,27 @@ pub fn draw_triggers_tab(
 
             let (status_icon, status_color) = status_emoji(&trigger.status, theme);
 
-            let kind_label = if compact {
-                kind_emoji(trigger.kind).to_string()
-            } else {
-                trigger.kind.to_string()
-            };
-
             let mut cells = vec![
                 Cell::from(workspace_indicator),
                 Cell::from(Span::styled(time_label, Style::default().fg(theme.muted))),
                 Cell::from(Line::from(title_spans)),
-                Cell::from(
+            ];
+            if !all_same_kind {
+                let kind_color = kind_color(trigger.kind, theme);
+                let kind_label = if compact {
+                    kind_emoji(trigger.kind).to_string()
+                } else {
+                    trigger.kind.to_string()
+                };
+                cells.push(Cell::from(
                     Line::from(Span::styled(kind_label, Style::default().fg(kind_color)))
                         .alignment(Alignment::Right),
-                ),
-                Cell::from(
-                    Line::from(Span::styled(status_icon, Style::default().fg(status_color)))
-                        .alignment(Alignment::Right),
-                ),
-            ];
+                ));
+            }
+            cells.push(Cell::from(
+                Line::from(Span::styled(status_icon, Style::default().fg(status_color)))
+                    .alignment(Alignment::Right),
+            ));
             if !compact {
                 cells.push(Cell::from({
                     let count = task_counts
@@ -279,9 +285,11 @@ pub fn draw_triggers_tab(
         Constraint::Length(workspace_col_width),
         Constraint::Length(time_col_width),
         Constraint::Fill(1),
-        Constraint::Length(kind_col_width),
-        Constraint::Length(status_col_width),
     ];
+    if !all_same_kind {
+        col_constraints.push(Constraint::Length(kind_col_width));
+    }
+    col_constraints.push(Constraint::Length(status_col_width));
     if !compact {
         col_constraints.push(Constraint::Length(tasks_col_width));
     }
