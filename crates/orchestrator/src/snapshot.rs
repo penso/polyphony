@@ -484,6 +484,7 @@ impl RuntimeService {
             self.state.totals = snapshot.codex_totals;
             self.state.rate_limits = snapshot.rate_limits;
             self.state.ended_runtime_seconds = self.state.totals.seconds_running;
+            self.state.bootstrap_restored = true;
         }
         self.state.recent_events = bootstrap.recent_events.into_iter().collect();
         while self.state.recent_events.len() > MAX_RECENT_EVENTS {

@@ -88,7 +88,12 @@ impl RuntimeService {
         {
             self.restore_cache(cached);
         }
-        self.state.dispatch_mode = self.workflow_rx.borrow().config.startup_dispatch_mode();
+        // Preserve the dispatch mode restored from the persisted snapshot so that
+        // operator mode changes survive daemon restarts.  Only fall back to the
+        // config default when no snapshot was restored (i.e. first run).
+        if !self.state.bootstrap_restored {
+            self.state.dispatch_mode = self.workflow_rx.borrow().config.startup_dispatch_mode();
+        }
         self.refresh_tracker_connection(true).await;
         self.emit_snapshot().await?;
         // startup_cleanup is deferred to the first tick so the select loop

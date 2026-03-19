@@ -3055,3 +3055,66 @@ fn find_existing_movement_prefers_active_over_terminal() {
         "should return None for an issue with no movements"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch mode persistence tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn restore_bootstrap_preserves_persisted_dispatch_mode() {
+    let workspace_root = unique_workspace_root("mode-persist");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+
+    // Default before bootstrap is Manual (from config).
+    assert_eq!(service.state.dispatch_mode, DispatchMode::Manual);
+    assert!(!service.state.bootstrap_restored);
+
+    let now = Utc::now();
+    service.restore_bootstrap(StoreBootstrap {
+        snapshot: Some(RuntimeSnapshot {
+            generated_at: now,
+            counts: SnapshotCounts::default(),
+            cadence: RuntimeCadence::default(),
+            visible_issues: Vec::new(),
+            visible_triggers: Vec::new(),
+            approved_issue_keys: Vec::new(),
+            running: Vec::new(),
+            agent_history: Vec::new(),
+            retrying: Vec::new(),
+            codex_totals: CodexTotals::default(),
+            rate_limits: None,
+            throttles: Vec::new(),
+            budgets: Vec::new(),
+            agent_catalogs: Vec::new(),
+            saved_contexts: Vec::new(),
+            recent_events: Vec::new(),
+            movements: Vec::new(),
+            tasks: Vec::new(),
+            loading: LoadingState::default(),
+            dispatch_mode: DispatchMode::Stop,
+            tracker_kind: TrackerKind::default(),
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: Vec::new(),
+        }),
+        retrying: std::collections::HashMap::new(),
+        throttles: std::collections::HashMap::new(),
+        budgets: std::collections::HashMap::new(),
+        saved_contexts: std::collections::HashMap::new(),
+        recent_events: Vec::new(),
+        movements: std::collections::HashMap::new(),
+        tasks: std::collections::HashMap::new(),
+        reviewed_pull_request_heads: std::collections::HashMap::new(),
+        run_history: Vec::new(),
+    });
+
+    assert!(service.state.bootstrap_restored);
+    assert_eq!(
+        service.state.dispatch_mode,
+        DispatchMode::Stop,
+        "dispatch mode should be restored from snapshot"
+    );
+}

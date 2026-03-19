@@ -274,6 +274,10 @@ struct RuntimeState {
     reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
     pull_request_retry_triggers: HashMap<String, PullRequestTrigger>,
     review_trigger_suppressions: HashMap<String, ReviewTriggerSuppression>,
+    /// Set to `true` after `restore_bootstrap` loads a persisted snapshot,
+    /// so that `run()` preserves the restored dispatch mode instead of
+    /// overwriting it with the config default.
+    bootstrap_restored: bool,
 }
 
 impl Default for RuntimeState {
@@ -318,6 +322,7 @@ impl Default for RuntimeState {
             reviewed_pull_request_heads: HashMap::new(),
             pull_request_retry_triggers: HashMap::new(),
             review_trigger_suppressions: HashMap::new(),
+            bootstrap_restored: false,
         }
     }
 }
