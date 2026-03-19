@@ -340,14 +340,14 @@ fn draw_movements_table(
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Line::from(vec![
                         Span::styled(
-                            format!("   {connector}"),
+                            format!("  {connector}"),
                             Style::default().fg(theme.border),
                         ),
                         Span::styled(
                             format!("{status_icon} "),
                             Style::default().fg(status_color),
                         ),
-                        Span::styled(task.title.clone(), Style::default().fg(theme.muted)),
+                        Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
                     ])),
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Span::styled("", Style::default())),
