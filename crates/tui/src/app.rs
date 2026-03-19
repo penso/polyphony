@@ -251,6 +251,8 @@ pub struct AppState {
     pub events_area: Rect,
     /// Sorted task indices: sorted_task_indices[display_index] = original snapshot index
     pub sorted_task_indices: Vec<usize>,
+    /// Sorted movement indices for the Orchestration tab.
+    pub sorted_movement_indices: Vec<usize>,
 }
 
 impl AppState {
@@ -302,6 +304,7 @@ impl AppState {
             events_scroll: 0,
             events_area: Rect::default(),
             sorted_task_indices: Vec::new(),
+            sorted_movement_indices: Vec::new(),
         }
     }
 
@@ -334,6 +337,10 @@ impl AppState {
             .filter(|m| m.deliverable.is_some())
             .count();
         sync_selection(&mut self.deliverables_state, deliverable_count);
+        // Keep sorted movement indices in sync with the snapshot.
+        let mut movement_indices: Vec<usize> = (0..snapshot.movements.len()).collect();
+        movement_indices.sort_by_key(|&i| snapshot.movements[i].created_at);
+        self.sorted_movement_indices = movement_indices;
         let previous_movement_selection = self.movements_state.selected();
         sync_selection(&mut self.movements_state, snapshot.movements.len());
         if self.movements_state.selected() != previous_movement_selection
@@ -576,7 +583,8 @@ impl AppState {
     pub fn selected_movement<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a MovementRow> {
         self.movements_state
             .selected()
-            .and_then(|index| snapshot.movements.get(index))
+            .and_then(|display_idx| self.sorted_movement_indices.get(display_idx))
+            .and_then(|&orig_idx| snapshot.movements.get(orig_idx))
     }
 
     pub fn selected_task<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a TaskRow> {

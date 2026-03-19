@@ -208,8 +208,6 @@ fn draw_movements_table(
     app: &mut AppState,
 ) {
     let theme = app.theme;
-    let movements = &snapshot.movements;
-
     let header = Row::new(vec![
         Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
@@ -231,9 +229,11 @@ fn draw_movements_table(
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row> = movements
+    let rows: Vec<Row> = app
+        .sorted_movement_indices
         .iter()
-        .map(|m| {
+        .map(|&idx| {
+            let m = &snapshot.movements[idx];
             let (status_icon, status_icon_color) = movement_status_emoji(&m.status, theme);
             let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
             let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
@@ -286,7 +286,7 @@ fn draw_movements_table(
         .fg(theme.foreground)
         .add_modifier(Modifier::BOLD);
 
-    let count = movements.len();
+    let count = snapshot.movements.len();
     let footer_info = if count == 0 {
         "no movements".into()
     } else {
