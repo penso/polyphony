@@ -37,9 +37,7 @@ pub async fn run(
         }
 
         let mut key_handled = false;
-        // Drain all queued input events before drawing so held keys don't
-        // build up a backlog that takes seconds to replay.
-        while event::poll(Duration::from_millis(if key_handled { 0 } else { 16 }))? {
+        if event::poll(Duration::from_millis(16))? {
             match event::read()? {
                 Event::Mouse(mouse) => {
                     if !app.leaving {
@@ -303,6 +301,15 @@ pub async fn run(
                     key_handled = true;
                 },
                 _ => {},
+            }
+        }
+
+        // After processing one event, discard any excess queued key repeats
+        // so held keys don't build a backlog, while still drawing every frame
+        // for smooth row-by-row scrolling.
+        if key_handled {
+            while event::poll(Duration::from_millis(0))? {
+                let _ = event::read()?;
             }
         }
 
