@@ -20,7 +20,7 @@ pub fn draw_tasks_tab(
 ) {
     let theme = app.theme;
 
-    // Sort tasks by most recent first (started_at descending, fall back to created_at)
+    // Sort tasks oldest first (newest at bottom)
     let mut sorted_indices: Vec<usize> = (0..snapshot.tasks.len()).collect();
     sorted_indices.sort_by(|&a, &b| {
         let ta = snapshot.tasks[a]
@@ -29,7 +29,7 @@ pub fn draw_tasks_tab(
         let tb = snapshot.tasks[b]
             .started_at
             .unwrap_or(snapshot.tasks[b].created_at);
-        tb.cmp(&ta)
+        ta.cmp(&tb)
     });
     app.sorted_task_indices = sorted_indices;
     let tasks = &app.sorted_task_indices;
