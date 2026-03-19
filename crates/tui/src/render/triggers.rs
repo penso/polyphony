@@ -314,16 +314,14 @@ pub fn draw_triggers_tab(
             block
                 .title_bottom(
                     Line::from(vec![
-                        Span::styled(" ⠋ ", Style::default().fg(theme.info)),
-                        Span::styled("running  ", Style::default().fg(theme.muted)),
-                        Span::styled("● ", Style::default().fg(theme.success)),
-                        Span::styled("active  ", Style::default().fg(theme.muted)),
-                        Span::styled("✓ ", Style::default().fg(theme.success)),
-                        Span::styled("approved  ", Style::default().fg(theme.muted)),
-                        Span::styled("◷ ", Style::default().fg(theme.warning)),
-                        Span::styled("waiting  ", Style::default().fg(theme.muted)),
-                        Span::styled("○ ", Style::default().fg(theme.success)),
-                        Span::styled("done ", Style::default().fg(theme.muted)),
+                        Span::styled(" ●", Style::default().fg(theme.success)),
+                        Span::styled(":has workspace  ", Style::default().fg(theme.muted)),
+                        Span::styled("●", Style::default().fg(theme.success)),
+                        Span::styled(":open  ", Style::default().fg(theme.muted)),
+                        Span::styled("○", Style::default().fg(theme.info)),
+                        Span::styled(":todo  ", Style::default().fg(theme.muted)),
+                        Span::styled("✓", Style::default().fg(theme.muted)),
+                        Span::styled(":done ", Style::default().fg(theme.muted)),
                     ]),
                 )
                 .title_bottom(
