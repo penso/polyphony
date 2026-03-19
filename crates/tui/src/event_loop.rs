@@ -642,6 +642,15 @@ fn handle_key(
                             scroll: 0,
                         });
                     },
+                    Some(app::OrchestratorTreeRow::Outcome {
+                        movement_snapshot_index,
+                    }) => {
+                        let movement = &snapshot.movements[movement_snapshot_index];
+                        app.push_detail(crate::app::DetailView::Deliverable {
+                            movement_id: movement.id.clone(),
+                            scroll: 0,
+                        });
+                    },
                     None => {},
                 }
             } else if app.active_tab == app::ActiveTab::Deliverables
@@ -1295,6 +1304,14 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     }
                 })
             },
+            Some(app::OrchestratorTreeRow::Outcome {
+                movement_snapshot_index,
+            }) => snapshot.movements.get(movement_snapshot_index).map(|m| {
+                crate::app::DetailView::Deliverable {
+                    movement_id: m.id.clone(),
+                    scroll: 0,
+                }
+            }),
             None => None,
         },
         app::ActiveTab::Tasks => {

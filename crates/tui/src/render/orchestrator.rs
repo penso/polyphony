@@ -266,12 +266,14 @@ fn draw_movements_table(
                 },
                 OrchestratorTreeRow::Task { snapshot_index, .. } => {
                     let task = &snapshot.tasks[*snapshot_index];
-                    // Include tasks whose parent movement matches
                     app.sorted_movement_indices.iter().any(|&mi| {
                         matching_movements.contains(&mi)
                             && snapshot.movements[mi].id == task.movement_id
                     })
                 },
+                OrchestratorTreeRow::Outcome {
+                    movement_snapshot_index,
+                } => matching_movements.contains(movement_snapshot_index),
             })
             .collect()
     };
@@ -355,6 +357,41 @@ fn draw_movements_table(
                             Style::default().fg(status_color),
                         ),
                         Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
+                    ])),
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Span::styled("", Style::default())),
+                ])
+            },
+            OrchestratorTreeRow::Outcome {
+                movement_snapshot_index,
+            } => {
+                let m = &snapshot.movements[*movement_snapshot_index];
+                let deliverable = m.deliverable.as_ref().unwrap();
+                let (decision_icon, decision_color) = match deliverable.decision {
+                    polyphony_core::DeliverableDecision::Waiting => ("◷", theme.warning),
+                    polyphony_core::DeliverableDecision::Accepted => ("✓", theme.success),
+                    polyphony_core::DeliverableDecision::Rejected => ("✕", theme.danger),
+                };
+                let kind_label = match deliverable.kind {
+                    polyphony_core::DeliverableKind::GithubPullRequest => "PR",
+                    polyphony_core::DeliverableKind::GitlabMergeRequest => "MR",
+                    polyphony_core::DeliverableKind::Patch => "patch",
+                };
+                let label = if let Some(url) = &deliverable.url {
+                    format!("{kind_label}: {url}")
+                } else {
+                    kind_label.to_string()
+                };
+                Row::new(vec![
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Line::from(vec![
+                        Span::styled("  └─ ", Style::default().fg(theme.border)),
+                        Span::styled(
+                            format!("{decision_icon} "),
+                            Style::default().fg(decision_color),
+                        ),
+                        Span::styled(label, Style::default().fg(theme.info)),
                     ])),
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Span::styled("", Style::default())),

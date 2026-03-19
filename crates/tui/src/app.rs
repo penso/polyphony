@@ -164,11 +164,12 @@ impl ActiveTab {
     }
 }
 
-/// A row in the Orchestration tab's tree view: either a movement or one of its tasks.
+/// A row in the Orchestration tab's tree view: movement, task, or outcome summary.
 #[derive(Debug, Clone)]
 pub(crate) enum OrchestratorTreeRow {
     Movement { snapshot_index: usize },
     Task { snapshot_index: usize, is_last_child: bool },
+    Outcome { movement_snapshot_index: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,13 +520,23 @@ impl AppState {
             });
             if !self.collapsed_movements.contains(&movement.id) {
                 if let Some(task_indices) = tasks_by_movement.get(movement.id.as_str()) {
+                    let has_outcome = movement.deliverable.is_some();
                     let count = task_indices.len();
                     for (ci, &task_idx) in task_indices.iter().enumerate() {
                         rows.push(OrchestratorTreeRow::Task {
                             snapshot_index: task_idx,
-                            is_last_child: ci == count - 1,
+                            is_last_child: ci == count - 1 && !has_outcome,
                         });
                     }
+                    if has_outcome {
+                        rows.push(OrchestratorTreeRow::Outcome {
+                            movement_snapshot_index: mov_idx,
+                        });
+                    }
+                } else if movement.deliverable.is_some() {
+                    rows.push(OrchestratorTreeRow::Outcome {
+                        movement_snapshot_index: mov_idx,
+                    });
                 }
             }
         }
@@ -703,7 +714,7 @@ impl AppState {
                 OrchestratorTreeRow::Movement { snapshot_index } => {
                     snapshot.movements.get(*snapshot_index)
                 },
-                OrchestratorTreeRow::Task { .. } => None,
+                OrchestratorTreeRow::Task { .. } | OrchestratorTreeRow::Outcome { .. } => None,
             })
     }
 
