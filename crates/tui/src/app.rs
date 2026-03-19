@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     time::Instant,
 };
 
@@ -164,6 +164,13 @@ impl ActiveTab {
     }
 }
 
+/// A row in the Orchestration tab's tree view: either a movement or one of its tasks.
+#[derive(Debug, Clone)]
+pub(crate) enum OrchestratorTreeRow {
+    Movement { snapshot_index: usize },
+    Task { snapshot_index: usize, is_last_child: bool },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MovementSortKey {
     Newest,
@@ -282,6 +289,9 @@ pub struct AppState {
     pub sorted_task_indices: Vec<usize>,
     /// Sorted movement indices for the Orchestration tab.
     pub sorted_movement_indices: Vec<usize>,
+    pub orchestrator_tree_rows: Vec<OrchestratorTreeRow>,
+    pub collapsed_movements: HashSet<String>,
+    collapsed_movements_initialized: bool,
 }
 
 impl AppState {
@@ -338,6 +348,9 @@ impl AppState {
             events_area: Rect::default(),
             sorted_task_indices: Vec::new(),
             sorted_movement_indices: Vec::new(),
+            orchestrator_tree_rows: Vec::new(),
+            collapsed_movements: HashSet::new(),
+            collapsed_movements_initialized: false,
         }
     }
 
@@ -386,8 +399,9 @@ impl AppState {
             },
         }
         self.sorted_movement_indices = movement_indices;
+        self.rebuild_orchestrator_tree(snapshot);
         let previous_movement_selection = self.movements_state.selected();
-        sync_selection(&mut self.movements_state, snapshot.movements.len());
+        sync_selection(&mut self.movements_state, self.orchestrator_tree_rows.len());
         if self.movements_state.selected() != previous_movement_selection
             && let Some(DetailView::Movement { scroll, .. }) = self.detail_stack.last_mut()
         {
@@ -465,6 +479,62 @@ impl AppState {
             if missing {
                 self.detail_stack.pop();
             }
+        }
+    }
+
+    pub fn rebuild_orchestrator_tree(&mut self, snapshot: &RuntimeSnapshot) {
+        use polyphony_core::MovementStatus;
+        use std::collections::HashMap as StdMap;
+
+        // Auto-collapse terminal movements on first load
+        if !self.collapsed_movements_initialized && !snapshot.movements.is_empty() {
+            for m in &snapshot.movements {
+                if matches!(
+                    m.status,
+                    MovementStatus::Delivered | MovementStatus::Failed | MovementStatus::Cancelled
+                ) {
+                    self.collapsed_movements.insert(m.id.clone());
+                }
+            }
+            self.collapsed_movements_initialized = true;
+        }
+
+        // Group tasks by movement_id, sorted by ordinal
+        let mut tasks_by_movement: StdMap<&str, Vec<usize>> = StdMap::new();
+        for (i, task) in snapshot.tasks.iter().enumerate() {
+            tasks_by_movement
+                .entry(&task.movement_id)
+                .or_default()
+                .push(i);
+        }
+        for tasks in tasks_by_movement.values_mut() {
+            tasks.sort_by_key(|&i| snapshot.tasks[i].ordinal);
+        }
+
+        let mut rows = Vec::new();
+        for &mov_idx in &self.sorted_movement_indices {
+            let movement = &snapshot.movements[mov_idx];
+            rows.push(OrchestratorTreeRow::Movement {
+                snapshot_index: mov_idx,
+            });
+            if !self.collapsed_movements.contains(&movement.id) {
+                if let Some(task_indices) = tasks_by_movement.get(movement.id.as_str()) {
+                    let count = task_indices.len();
+                    for (ci, &task_idx) in task_indices.iter().enumerate() {
+                        rows.push(OrchestratorTreeRow::Task {
+                            snapshot_index: task_idx,
+                            is_last_child: ci == count - 1,
+                        });
+                    }
+                }
+            }
+        }
+        self.orchestrator_tree_rows = rows;
+    }
+
+    pub fn toggle_movement_collapse(&mut self, movement_id: &str) {
+        if !self.collapsed_movements.remove(movement_id) {
+            self.collapsed_movements.insert(movement_id.to_string());
         }
     }
 
@@ -628,8 +698,19 @@ impl AppState {
     pub fn selected_movement<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a MovementRow> {
         self.movements_state
             .selected()
-            .and_then(|display_idx| self.sorted_movement_indices.get(display_idx))
-            .and_then(|&orig_idx| snapshot.movements.get(orig_idx))
+            .and_then(|idx| self.orchestrator_tree_rows.get(idx))
+            .and_then(|row| match row {
+                OrchestratorTreeRow::Movement { snapshot_index } => {
+                    snapshot.movements.get(*snapshot_index)
+                },
+                OrchestratorTreeRow::Task { .. } => None,
+            })
+    }
+
+    pub fn selected_orchestrator_row(&self) -> Option<&OrchestratorTreeRow> {
+        self.movements_state
+            .selected()
+            .and_then(|idx| self.orchestrator_tree_rows.get(idx))
     }
 
     pub fn selected_task<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a TaskRow> {
@@ -655,7 +736,7 @@ impl AppState {
         match self.active_tab {
             ActiveTab::Triggers => self.sorted_issue_indices.len(),
             ActiveTab::Agents => snapshot.running.len() + snapshot.agent_history.len(),
-            ActiveTab::Orchestrator => snapshot.movements.len(),
+            ActiveTab::Orchestrator => self.orchestrator_tree_rows.len(),
             ActiveTab::Tasks => snapshot.tasks.len(),
             ActiveTab::Deliverables => snapshot
                 .movements

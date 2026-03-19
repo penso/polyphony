@@ -207,106 +207,153 @@ fn draw_movements_table(
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
+    use crate::app::OrchestratorTreeRow;
+
     let theme = app.theme;
 
-    // Hide Kind column when all movements are the same kind.
-    let all_same_kind = snapshot
-        .movements
-        .first()
-        .map(|first| snapshot.movements.iter().all(|m| m.kind == first.kind))
-        .unwrap_or(true);
+    // Build task lookup for collapse indicator
+    let has_tasks: std::collections::HashSet<&str> = snapshot
+        .tasks
+        .iter()
+        .map(|t| t.movement_id.as_str())
+        .collect();
 
-    let mut header_cells = vec![
+    let header = Row::new(vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-    ];
-    if !all_same_kind {
-        header_cells.push(Cell::from(Span::styled(
-            "Kind",
-            Style::default().fg(theme.muted),
-        )));
-    }
-    header_cells.extend([
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(
             Line::from(Span::styled("Tasks", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
         ),
-    ]);
+    ])
+    .height(1)
+    .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let header = Row::new(header_cells)
-        .height(1)
-        .style(Style::default().add_modifier(Modifier::BOLD));
-
-    // Filter movements by search query when active.
+    // Filter tree rows by search query (movement-level matching).
     let search_q = app.movements_search_query.to_lowercase();
-    let filtered_indices: Vec<usize> = if search_q.is_empty() {
-        app.sorted_movement_indices.clone()
+    let filtered_rows: Vec<&OrchestratorTreeRow> = if search_q.is_empty() {
+        app.orchestrator_tree_rows.iter().collect()
     } else {
-        app.sorted_movement_indices
+        // Find matching movement snapshot indices
+        let matching_movements: std::collections::HashSet<usize> = app
+            .orchestrator_tree_rows
             .iter()
-            .copied()
-            .filter(|&idx| {
-                let m = &snapshot.movements[idx];
-                m.title.to_lowercase().contains(&search_q)
-                    || m.issue_identifier
-                        .as_deref()
-                        .is_some_and(|id| id.to_lowercase().contains(&search_q))
-                    || m.status.to_string().to_lowercase().contains(&search_q)
+            .filter_map(|row| match row {
+                OrchestratorTreeRow::Movement { snapshot_index } => {
+                    let m = &snapshot.movements[*snapshot_index];
+                    if m.title.to_lowercase().contains(&search_q)
+                        || m.issue_identifier
+                            .as_deref()
+                            .is_some_and(|id| id.to_lowercase().contains(&search_q))
+                        || m.status.to_string().to_lowercase().contains(&search_q)
+                    {
+                        Some(*snapshot_index)
+                    } else {
+                        None
+                    }
+                },
+                _ => None,
+            })
+            .collect();
+        app.orchestrator_tree_rows
+            .iter()
+            .filter(|row| match row {
+                OrchestratorTreeRow::Movement { snapshot_index } => {
+                    matching_movements.contains(snapshot_index)
+                },
+                OrchestratorTreeRow::Task { snapshot_index, .. } => {
+                    let task = &snapshot.tasks[*snapshot_index];
+                    // Include tasks whose parent movement matches
+                    app.sorted_movement_indices.iter().any(|&mi| {
+                        matching_movements.contains(&mi)
+                            && snapshot.movements[mi].id == task.movement_id
+                    })
+                },
             })
             .collect()
     };
-    let flen = filtered_indices.len();
-    if flen == 0 {
+
+    let count = filtered_rows.len();
+    if count == 0 {
         app.movements_state.select(None);
-    } else if app.movements_state.selected().is_none_or(|i| i >= flen) {
-        app.movements_state.select(Some(flen - 1));
+    } else if app.movements_state.selected().is_none_or(|i| i >= count) {
+        app.movements_state.select(Some(count - 1));
     }
 
-    let rows: Vec<Row> = filtered_indices
+    let rows: Vec<Row> = filtered_rows
         .iter()
-        .map(|&idx| {
-            let m = &snapshot.movements[idx];
-            let (status_icon, status_icon_color) = movement_status_emoji(&m.status, theme);
-            let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
-            let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
+        .map(|row| match row {
+            OrchestratorTreeRow::Movement { snapshot_index } => {
+                let m = &snapshot.movements[*snapshot_index];
+                let (status_icon, status_icon_color) = movement_status_emoji(&m.status, theme);
+                let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
+                let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
 
-            let mut cells = vec![
-                Cell::from(Span::styled(
-                    super::format_listing_time(m.created_at),
-                    Style::default().fg(theme.muted),
-                )),
-                Cell::from(Span::styled(
-                    m.title.clone(),
-                    Style::default().fg(theme.foreground),
-                )),
-            ];
-            if !all_same_kind {
-                let (_kind_icon, kind_label) = movement_kind_icon_label(m.kind);
-                cells.push(Cell::from(Span::styled(
-                    kind_label,
-                    Style::default().fg(theme.info),
-                )));
-            }
-            cells.extend([
-                Cell::from(Span::styled(
-                    status_icon,
-                    Style::default().fg(status_icon_color),
-                )),
-                Cell::from(Span::styled(
-                    output_icon,
-                    Style::default().fg(output_icon_color),
-                )),
-                Cell::from(
-                    Line::from(Span::styled(
-                        task_info,
+                let collapse_icon = if has_tasks.contains(m.id.as_str()) {
+                    if app.collapsed_movements.contains(&m.id) {
+                        "▶ "
+                    } else {
+                        "▼ "
+                    }
+                } else {
+                    "  "
+                };
+
+                Row::new(vec![
+                    Cell::from(Span::styled(
+                        format!("{}{}", collapse_icon, super::format_listing_time(m.created_at)),
+                        Style::default().fg(theme.muted),
+                    )),
+                    Cell::from(Span::styled(
+                        m.title.clone(),
                         Style::default().fg(theme.foreground),
-                    ))
-                    .alignment(Alignment::Right),
-                ),
-            ]);
-            Row::new(cells)
+                    )),
+                    Cell::from(Span::styled(
+                        status_icon,
+                        Style::default().fg(status_icon_color),
+                    )),
+                    Cell::from(Span::styled(
+                        output_icon,
+                        Style::default().fg(output_icon_color),
+                    )),
+                    Cell::from(
+                        Line::from(Span::styled(
+                            task_info,
+                            Style::default().fg(theme.foreground),
+                        ))
+                        .alignment(Alignment::Right),
+                    ),
+                ])
+            },
+            OrchestratorTreeRow::Task {
+                snapshot_index,
+                is_last_child,
+            } => {
+                let task = &snapshot.tasks[*snapshot_index];
+                let connector = if *is_last_child { "└─ " } else { "├─ " };
+                let status_icon = super::tasks::task_status_icon(&task.status);
+                let status_color = super::tasks::task_status_color(&task.status, theme);
+
+                Row::new(vec![
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Line::from(vec![
+                        Span::styled(
+                            format!("   {connector}"),
+                            Style::default().fg(theme.border),
+                        ),
+                        Span::styled(
+                            format!("{status_icon} "),
+                            Style::default().fg(status_color),
+                        ),
+                        Span::styled(task.title.clone(), Style::default().fg(theme.muted)),
+                    ])),
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Span::styled("", Style::default())),
+                ])
+            },
         })
         .collect();
 
@@ -316,7 +363,6 @@ fn draw_movements_table(
         .add_modifier(Modifier::BOLD);
 
     let sort_label = app.movement_sort.label();
-    let count = filtered_indices.len();
     let footer_info = if count == 0 {
         "no movements".into()
     } else {
@@ -361,26 +407,17 @@ fn draw_movements_table(
         Span::styled(":delivered  ", Style::default().fg(theme.muted)),
         Span::styled("✕", Style::default().fg(theme.danger)),
         Span::styled(":failed  ", Style::default().fg(theme.muted)),
-        Span::styled("◷", Style::default().fg(theme.warning)),
-        Span::styled(":review  ", Style::default().fg(theme.muted)),
         Span::styled("⊘", Style::default().fg(theme.muted)),
         Span::styled(":cancelled ", Style::default().fg(theme.muted)),
     ]);
 
-    let mut col_constraints = vec![
-        Constraint::Length(16),
-        Constraint::Fill(1),
-    ];
-    if !all_same_kind {
-        col_constraints.push(Constraint::Length(10));
-    }
-    col_constraints.extend([
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(6),
-    ]);
-
-    let table = Table::new(rows, col_constraints)
+    let table = Table::new(rows, [
+        Constraint::Length(18), // collapse icon + time
+        Constraint::Fill(1),   // title (or task tree row)
+        Constraint::Length(2), // status
+        Constraint::Length(2), // output
+        Constraint::Length(6), // tasks x/y
+    ])
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)

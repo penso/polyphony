@@ -628,15 +628,22 @@ fn handle_key(
                     task_id: task.id.clone(),
                     scroll: 0,
                 });
-            } else if app.active_tab == app::ActiveTab::Orchestrator
-                && let Some(movement) = app.selected_movement(snapshot)
-            {
-                app.push_detail(crate::app::DetailView::Movement {
-                    movement_id: movement.id.clone(),
-                    scroll: 0,
-                    focus: Default::default(),
-                    tasks_selected: 0,
-                });
+            } else if app.active_tab == app::ActiveTab::Orchestrator {
+                match app.selected_orchestrator_row().cloned() {
+                    Some(app::OrchestratorTreeRow::Movement { snapshot_index }) => {
+                        let movement = &snapshot.movements[snapshot_index];
+                        app.toggle_movement_collapse(&movement.id.clone());
+                        app.rebuild_orchestrator_tree(snapshot);
+                    },
+                    Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) => {
+                        let task = &snapshot.tasks[snapshot_index];
+                        app.push_detail(crate::app::DetailView::Task {
+                            task_id: task.id.clone(),
+                            scroll: 0,
+                        });
+                    },
+                    None => {},
+                }
             } else if app.active_tab == app::ActiveTab::Deliverables
                 && let Some(movement) = app.selected_deliverable(snapshot)
             {
@@ -1269,14 +1276,26 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     agents_selected: 0,
                 })
         },
-        app::ActiveTab::Orchestrator => {
-            app.selected_movement(snapshot)
-                .map(|m| crate::app::DetailView::Movement {
-                    movement_id: m.id.clone(),
-                    scroll: 0,
-                    focus: Default::default(),
-                    tasks_selected: 0,
+        app::ActiveTab::Orchestrator => match app.selected_orchestrator_row().cloned() {
+            Some(app::OrchestratorTreeRow::Movement { snapshot_index }) => {
+                snapshot.movements.get(snapshot_index).map(|m| {
+                    crate::app::DetailView::Movement {
+                        movement_id: m.id.clone(),
+                        scroll: 0,
+                        focus: Default::default(),
+                        tasks_selected: 0,
+                    }
                 })
+            },
+            Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) => {
+                snapshot.tasks.get(snapshot_index).map(|t| {
+                    crate::app::DetailView::Task {
+                        task_id: t.id.clone(),
+                        scroll: 0,
+                    }
+                })
+            },
+            None => None,
         },
         app::ActiveTab::Tasks => {
             app.selected_task(snapshot)

@@ -141,7 +141,7 @@ pub fn draw_tasks_tab(
     }
 }
 
-fn task_status_icon(status: &polyphony_core::TaskStatus) -> &'static str {
+pub(crate) fn task_status_icon(status: &polyphony_core::TaskStatus) -> &'static str {
     use polyphony_core::TaskStatus;
     match status {
         TaskStatus::Pending => "…",
@@ -152,7 +152,7 @@ fn task_status_icon(status: &polyphony_core::TaskStatus) -> &'static str {
     }
 }
 
-fn task_status_color(
+pub(crate) fn task_status_color(
     status: &polyphony_core::TaskStatus,
     theme: crate::theme::Theme,
 ) -> ratatui::style::Color {

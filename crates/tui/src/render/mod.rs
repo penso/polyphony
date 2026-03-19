@@ -11,7 +11,7 @@ mod header;
 pub(crate) mod logs;
 mod orchestrator;
 pub(crate) mod popups;
-mod tasks;
+pub(crate) mod tasks;
 mod time;
 mod triggers;
 
