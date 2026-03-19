@@ -33,6 +33,28 @@ impl RuntimeService {
         true
     }
 
+    /// Find an existing movement for the given issue, preferring active ones.
+    /// Returns the movement ID if one exists, preventing duplicate movements
+    /// when the same issue is re-dispatched (e.g. via retry or continuation).
+    pub(crate) fn find_existing_movement_for_issue(&self, issue_id: &str) -> Option<String> {
+        let mut best: Option<(&str, bool)> = None;
+        for (id, m) in &self.state.movements {
+            if m.issue_id.as_deref() != Some(issue_id) {
+                continue;
+            }
+            let is_active = !matches!(
+                m.status,
+                MovementStatus::Delivered | MovementStatus::Failed | MovementStatus::Cancelled
+            );
+            match best {
+                None => best = Some((id, is_active)),
+                Some((_, false)) if is_active => best = Some((id, true)),
+                _ => {},
+            }
+        }
+        best.map(|(id, _)| id.to_string())
+    }
+
     pub(crate) fn has_available_slot(&self, workflow: &LoadedWorkflow, state: &str) -> bool {
         if self.state.running.len() >= workflow.config.agent.max_concurrent_agents {
             return false;

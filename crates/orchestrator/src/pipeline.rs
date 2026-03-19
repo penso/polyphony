@@ -54,40 +54,64 @@ impl RuntimeService {
             warn!(%error, issue_identifier = %issue.identifier, "issue workflow status sync failed");
         }
 
-        let movement_id = new_movement_id();
         let has_planner = workflow.config.router_agent_name().is_some();
         let initial_status = if has_planner {
             MovementStatus::Planning
         } else {
             MovementStatus::InProgress
         };
-        let now = Utc::now();
-        let movement = Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::IssueDelivery,
-            issue_id: Some(issue.id.clone()),
-            issue_identifier: Some(issue.identifier.clone()),
-            title: issue.title.clone(),
-            status: initial_status,
-            workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
-            workspace_path: Some(workspace.path.clone()),
-            review_target: None,
-            deliverable: None,
-            created_at: now,
-            updated_at: now,
+        // Reuse an existing active movement for this issue if one exists,
+        // otherwise create a new one.
+        let movement_id = if let Some(existing_id) =
+            self.find_existing_movement_for_issue(&issue.id)
+        {
+            if let Some(movement) = self.state.movements.get_mut(&existing_id) {
+                movement.status = initial_status;
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_movement(movement).await?;
+                }
+            }
+            info!(
+                issue_identifier = %issue.identifier,
+                movement_id = %existing_id,
+                workspace_path = %workspace.path.display(),
+                has_planner,
+                initial_status = ?initial_status,
+                "pipeline movement reused"
+            );
+            existing_id
+        } else {
+            let movement_id = new_movement_id();
+            let now = Utc::now();
+            let movement = Movement {
+                id: movement_id.clone(),
+                kind: MovementKind::IssueDelivery,
+                issue_id: Some(issue.id.clone()),
+                issue_identifier: Some(issue.identifier.clone()),
+                title: issue.title.clone(),
+                status: initial_status,
+                workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
+                workspace_path: Some(workspace.path.clone()),
+                review_target: None,
+                deliverable: None,
+                created_at: now,
+                updated_at: now,
+            };
+            if let Some(store) = &self.store {
+                store.save_movement(&movement).await?;
+            }
+            self.state.movements.insert(movement_id.clone(), movement);
+            info!(
+                issue_identifier = %issue.identifier,
+                movement_id,
+                workspace_path = %workspace.path.display(),
+                has_planner,
+                initial_status = ?initial_status,
+                "pipeline movement created"
+            );
+            movement_id
         };
-        if let Some(store) = &self.store {
-            store.save_movement(&movement).await?;
-        }
-        self.state.movements.insert(movement_id.clone(), movement);
-        info!(
-            issue_identifier = %issue.identifier,
-            movement_id,
-            workspace_path = %workspace.path.display(),
-            has_planner,
-            initial_status = ?initial_status,
-            "pipeline movement created"
-        );
 
         if has_planner {
             self.dispatch_planner_task(

@@ -146,27 +146,39 @@ impl RuntimeService {
             .worktree_keys
             .insert(workspace.workspace_key.clone());
 
-        // Create a movement so the issue appears in the Movements table immediately.
-        let movement_id = new_movement_id();
-        let now = Utc::now();
-        let movement = Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::IssueDelivery,
-            issue_id: Some(issue.id.clone()),
-            issue_identifier: Some(issue.identifier.clone()),
-            title: issue.title.clone(),
-            status: MovementStatus::InProgress,
-            workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
-            workspace_path: Some(workspace.path.clone()),
-            review_target: None,
-            deliverable: None,
-            created_at: now,
-            updated_at: now,
-        };
-        if let Some(store) = &self.store {
-            store.save_movement(&movement).await?;
+        // Reuse an existing active movement for this issue if one exists,
+        // otherwise create a new one.  This prevents duplicate movements when
+        // the same issue is re-dispatched via retry or continuation.
+        if let Some(existing_id) = self.find_existing_movement_for_issue(&issue.id) {
+            if let Some(movement) = self.state.movements.get_mut(&existing_id) {
+                movement.status = MovementStatus::InProgress;
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_movement(movement).await?;
+                }
+            }
+        } else {
+            let movement_id = new_movement_id();
+            let now = Utc::now();
+            let movement = Movement {
+                id: movement_id.clone(),
+                kind: MovementKind::IssueDelivery,
+                issue_id: Some(issue.id.clone()),
+                issue_identifier: Some(issue.identifier.clone()),
+                title: issue.title.clone(),
+                status: MovementStatus::InProgress,
+                workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
+                workspace_path: Some(workspace.path.clone()),
+                review_target: None,
+                deliverable: None,
+                created_at: now,
+                updated_at: now,
+            };
+            if let Some(store) = &self.store {
+                store.save_movement(&movement).await?;
+            }
+            self.state.movements.insert(movement_id.clone(), movement);
         }
-        self.state.movements.insert(movement_id.clone(), movement);
 
         let issue_id = issue.id.clone();
         let issue_identifier = issue.identifier.clone();
