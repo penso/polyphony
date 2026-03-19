@@ -533,9 +533,11 @@ impl AppState {
                 let has_outcome = movement.deliverable.is_some();
                 let has_children = has_tasks || has_outcome;
 
-                // Trigger row (first child)
+                // Trigger row (first child) — skip when its title matches the
+                // movement title to avoid redundant repetition.
                 if let Some(identifier) = movement.issue_identifier.as_deref()
                     && let Some(&trigger_idx) = trigger_by_identifier.get(identifier)
+                    && snapshot.visible_triggers[trigger_idx].title != movement.title
                 {
                     rows.push(OrchestratorTreeRow::Trigger {
                         trigger_index: trigger_idx,
