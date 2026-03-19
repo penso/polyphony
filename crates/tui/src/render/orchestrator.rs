@@ -352,7 +352,7 @@ fn draw_movements_table(
                     super::triggers::status_emoji_pub(&trigger.status, theme);
                 // Show "trigger" when the title matches the movement, full title otherwise
                 let display_title = if trigger.title == movement.title {
-                    format!("#{}", trigger.identifier)
+                    trigger.identifier.clone()
                 } else {
                     trigger.title.clone()
                 };
