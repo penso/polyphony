@@ -90,7 +90,7 @@ pub fn draw_triggers_tab(
 
     let mut header_cells = vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
     ];
     if !all_same_kind {

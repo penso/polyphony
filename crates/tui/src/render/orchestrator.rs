@@ -209,7 +209,7 @@ fn draw_movements_table(
 ) {
     let theme = app.theme;
     let header = Row::new(vec![
-        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Target", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Kind", Style::default().fg(theme.muted))),

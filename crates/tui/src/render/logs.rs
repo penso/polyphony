@@ -106,7 +106,7 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
 
     let header = Row::new(vec![
         Cell::from(
-            Line::from(Span::styled("Time", Style::default().fg(theme.muted)))
+            Line::from(Span::styled("", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Center),
         ),
         Cell::from(Span::styled("Level", Style::default().fg(theme.muted))),

@@ -35,7 +35,7 @@ pub fn draw_tasks_tab(
     let tasks = &app.sorted_task_indices;
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Type", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("St", Style::default().fg(theme.muted))),

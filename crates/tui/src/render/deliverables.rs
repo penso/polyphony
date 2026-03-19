@@ -30,7 +30,7 @@ pub fn draw_deliverables_tab(
     deliverables.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Flow", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Output", Style::default().fg(theme.muted))),
