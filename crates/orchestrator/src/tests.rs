@@ -2362,7 +2362,7 @@ async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github(
     let committer = RecordingCommitter::new(Some(WorkspaceCommitResult {
         branch_name: "task/dog-101".into(),
         head_sha: "abc123def".into(),
-        changed_files: 1,
+        changed_files: 1, lines_added: None, lines_removed: None,
     }));
     let committer_handle = committer.clone();
     let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
@@ -2468,7 +2468,7 @@ async fn pipeline_issue_trigger_writes_workspace_artifacts_and_runs_after_outcom
     let committer = RecordingCommitter::new(Some(WorkspaceCommitResult {
         branch_name: "task/dog-103".into(),
         head_sha: "abc123def".into(),
-        changed_files: 1,
+        changed_files: 1, lines_added: None, lines_removed: None,
     }));
     let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
         repository: "penso/polyphony".into(),
@@ -2716,7 +2716,7 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
             url: Some("https://github.com/penso/polyphony/pull/8".into()),
             decision: DeliverableDecision::Waiting,
             title: None,
-            description: None,
+            description: None, metadata: Default::default(),
         }),
         created_at: now,
         updated_at: now,

@@ -540,6 +540,10 @@ pub struct WorkspaceCommitResult {
     pub branch_name: String,
     pub head_sha: String,
     pub changed_files: usize,
+    #[serde(default)]
+    pub lines_added: Option<usize>,
+    #[serde(default)]
+    pub lines_removed: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

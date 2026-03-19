@@ -245,6 +245,25 @@ impl RuntimeService {
             && let Some(movement) = self.state.movements.get_mut(movement_id)
         {
             movement.status = MovementStatus::Delivered;
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert(
+                "changed_files".into(),
+                serde_json::Value::Number(commit_result.changed_files.into()),
+            );
+            if let Some(added) = commit_result.lines_added {
+                metadata
+                    .insert("lines_added".into(), serde_json::Value::Number(added.into()));
+            }
+            if let Some(removed) = commit_result.lines_removed {
+                metadata.insert(
+                    "lines_removed".into(),
+                    serde_json::Value::Number(removed.into()),
+                );
+            }
+            metadata.insert(
+                "head_sha".into(),
+                serde_json::Value::String(commit_result.head_sha.clone()),
+            );
             movement.deliverable = Some(polyphony_core::Deliverable {
                 kind: polyphony_core::DeliverableKind::GithubPullRequest,
                 status: polyphony_core::DeliverableStatus::Open,
@@ -252,6 +271,7 @@ impl RuntimeService {
                 decision: polyphony_core::DeliverableDecision::Waiting,
                 title: Some(pr_title_copy),
                 description: Some(pr_body_copy),
+                metadata,
             });
             movement.updated_at = Utc::now();
             if let Some(store) = &self.store {

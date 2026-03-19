@@ -422,20 +422,39 @@ fn draw_movements_table(
                     .url
                     .as_deref()
                     .unwrap_or(kind_label);
+                // Compact diff stats
+                let mut diff_spans = Vec::new();
+                if let Some(added) =
+                    deliverable.metadata.get("lines_added").and_then(|v| v.as_u64())
+                {
+                    diff_spans.push(Span::styled(
+                        format!(" +{added}"),
+                        Style::default().fg(theme.success),
+                    ));
+                }
+                if let Some(removed) = deliverable
+                    .metadata
+                    .get("lines_removed")
+                    .and_then(|v| v.as_u64())
+                {
+                    diff_spans.push(Span::styled(
+                        format!(" -{removed}"),
+                        Style::default().fg(theme.danger),
+                    ));
+                }
+                let mut spans = vec![
+                    Span::styled("  └─ ", Style::default().fg(theme.border)),
+                    Span::styled(
+                        format!("{decision_icon} "),
+                        Style::default().fg(decision_color),
+                    ),
+                    Span::styled(format!("{kind_label} "), Style::default().fg(theme.muted)),
+                    Span::styled(url_label.to_string(), Style::default().fg(theme.info)),
+                ];
+                spans.extend(diff_spans);
                 Row::new(vec![
                     Cell::from(Span::styled("", Style::default())),
-                    Cell::from(Line::from(vec![
-                        Span::styled("  └─ ", Style::default().fg(theme.border)),
-                        Span::styled(
-                            format!("{decision_icon} "),
-                            Style::default().fg(decision_color),
-                        ),
-                        Span::styled(
-                            format!("{kind_label} "),
-                            Style::default().fg(theme.muted),
-                        ),
-                        Span::styled(url_label.to_string(), Style::default().fg(theme.info)),
-                    ])),
+                    Cell::from(Line::from(spans)),
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Span::styled("", Style::default())),

@@ -1726,6 +1726,7 @@ mod tests {
                     decision: DeliverableDecision::Waiting,
                     title: None,
                     description: None,
+                    metadata: Default::default(),
                 }),
                 has_deliverable: true,
                 review_target: None,

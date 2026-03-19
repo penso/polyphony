@@ -231,7 +231,7 @@ mod tests {
             url: Some("https://github.com/penso/polyphony/pull/8".into()),
             decision: DeliverableDecision::Waiting,
             title: None,
-            description: None,
+            description: None, metadata: Default::default(),
         };
 
         assert_eq!(

@@ -197,6 +197,9 @@ pub struct Deliverable {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Freeform metadata (e.g. lines_added, lines_removed, files_changed).
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

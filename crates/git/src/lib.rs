@@ -230,10 +230,27 @@ fn commit_and_push_sync(
         head_sha = %head_sha,
         "committed and pushed workspace changes"
     );
+    // Compute diff stats (lines added/removed) from the committed changes.
+    let (lines_added, lines_removed) = head_commit
+        .parent(0)
+        .ok()
+        .and_then(|parent| {
+            let parent_tree = parent.tree().ok()?;
+            let head_tree = head_commit.tree().ok()?;
+            let diff = repo
+                .diff_tree_to_tree(Some(&parent_tree), Some(&head_tree), None)
+                .ok()?;
+            let stats = diff.stats().ok()?;
+            Some((stats.insertions(), stats.deletions()))
+        })
+        .unzip();
+
     Ok(Some(WorkspaceCommitResult {
         branch_name: request.branch_name.clone(),
         head_sha,
         changed_files,
+        lines_added,
+        lines_removed,
     }))
 }
 

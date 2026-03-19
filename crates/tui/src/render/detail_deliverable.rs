@@ -145,6 +145,27 @@ pub(crate) fn draw_deliverable_detail(
         ));
     }
 
+    // Diff stats from metadata
+    if !deliverable.metadata.is_empty() {
+        let mut stat_parts = Vec::new();
+        if let Some(files) = deliverable.metadata.get("changed_files").and_then(|v| v.as_u64()) {
+            stat_parts.push(format!("{files} files"));
+        }
+        if let Some(added) = deliverable.metadata.get("lines_added").and_then(|v| v.as_u64()) {
+            stat_parts.push(format!("+{added}"));
+        }
+        if let Some(removed) = deliverable.metadata.get("lines_removed").and_then(|v| v.as_u64())
+        {
+            stat_parts.push(format!("-{removed}"));
+        }
+        if !stat_parts.is_empty() {
+            lines.push(kv_line("Changes", &stat_parts.join("  "), theme));
+        }
+        if let Some(sha) = deliverable.metadata.get("head_sha").and_then(|v| v.as_str()) {
+            lines.push(kv_line("SHA", &sha[..sha.len().min(12)], theme));
+        }
+    }
+
     // Deliverable title & description (e.g. PR title and body)
     if let Some(title) = &deliverable.title {
         lines.push(Line::default());
