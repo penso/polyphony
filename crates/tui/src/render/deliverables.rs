@@ -21,13 +21,13 @@ pub fn draw_deliverables_tab(
 ) {
     let theme = app.theme;
 
-    // Collect and sort by most recent first
+    // Collect and sort oldest first (newest at bottom)
     let mut deliverables: Vec<_> = snapshot
         .movements
         .iter()
         .filter(|movement| movement.deliverable.is_some())
         .collect();
-    deliverables.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    deliverables.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
     let header = Row::new(vec![
         Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
