@@ -47,6 +47,10 @@ pub(crate) fn draw_trigger_detail(
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(
+                format!("[{}] ", issue.status),
+                Style::default().fg(super::triggers::state_color(&issue.status, theme)),
+            ),
         ]))
         .title_bottom(Line::from(hint_spans).right_aligned())
         .borders(ratatui::widgets::Borders::ALL)
