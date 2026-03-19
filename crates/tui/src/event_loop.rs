@@ -204,6 +204,15 @@ pub async fn run(
                                 // selected item — Enter is a no-op to avoid pushing
                                 // duplicate details onto the stack.
                             },
+                            KeyCode::Char('e') | KeyCode::Char('E') => {
+                                // Forward to detail handler so the events view
+                                // opens regardless of which pane has focus.
+                                if let Some(cmd) =
+                                    handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
+                                {
+                                    let _ = command_tx.send(cmd);
+                                }
+                            },
                             _ => {
                                 if let Some(command) =
                                     handle_key(&mut app, key.code, &snapshot)
