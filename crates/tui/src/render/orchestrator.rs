@@ -210,6 +210,7 @@ fn draw_movements_table(
     use crate::app::OrchestratorTreeRow;
 
     let theme = app.theme;
+    let compact = area.width < 80;
 
     // Build task lookup for collapse indicator
     let has_tasks: std::collections::HashSet<&str> = snapshot
@@ -301,9 +302,15 @@ fn draw_movements_table(
                     "  "
                 };
 
+                let time_label = if compact {
+                    super::detail_common::format_relative_time(m.created_at, chrono::Utc::now())
+                } else {
+                    super::format_listing_time(m.created_at)
+                };
+
                 Row::new(vec![
                     Cell::from(Span::styled(
-                        format!("{}{}", collapse_icon, super::format_listing_time(m.created_at)),
+                        format!("{collapse_icon}{time_label}"),
                         Style::default().fg(theme.muted),
                     )),
                     Cell::from(Span::styled(
@@ -413,8 +420,9 @@ fn draw_movements_table(
         Span::styled(":pending ", Style::default().fg(theme.muted)),
     ]);
 
+    let time_col_width: u16 = if compact { 7 } else { 18 }; // "▶ 6d" vs "▶ 2026-03-16 02:15"
     let table = Table::new(rows, [
-        Constraint::Length(18), // collapse icon + time
+        Constraint::Length(time_col_width), // collapse icon + time
         Constraint::Fill(1),   // title (or task tree row)
         Constraint::Length(2), // status
         Constraint::Length(2), // output
