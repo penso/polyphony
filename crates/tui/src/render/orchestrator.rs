@@ -408,7 +408,9 @@ fn draw_movements_table(
         Span::styled("✕", Style::default().fg(theme.danger)),
         Span::styled(":failed  ", Style::default().fg(theme.muted)),
         Span::styled("⊘", Style::default().fg(theme.muted)),
-        Span::styled(":cancelled ", Style::default().fg(theme.muted)),
+        Span::styled(":cancelled  ", Style::default().fg(theme.muted)),
+        Span::styled("…", Style::default().fg(theme.info)),
+        Span::styled(":pending ", Style::default().fg(theme.muted)),
     ]);
 
     let table = Table::new(rows, [
