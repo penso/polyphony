@@ -668,6 +668,19 @@ pub(crate) fn movement_status_color_pub(
     movement_status_color(status, theme)
 }
 
+pub(crate) fn movement_status_label(status: &polyphony_core::MovementStatus) -> &'static str {
+    use polyphony_core::MovementStatus;
+    match status {
+        MovementStatus::Pending => "pending",
+        MovementStatus::Planning => "planning",
+        MovementStatus::InProgress => "in progress",
+        MovementStatus::Review => "review",
+        MovementStatus::Delivered => "delivered",
+        MovementStatus::Failed => "failed",
+        MovementStatus::Cancelled => "cancelled",
+    }
+}
+
 fn movement_status_color(
     status: &polyphony_core::MovementStatus,
     theme: crate::theme::Theme,

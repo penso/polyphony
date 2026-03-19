@@ -117,26 +117,56 @@ pub(crate) fn draw_deliverable_detail(
 
     // Body
     let format_time = super::format_detail_time;
-    let mut lines = vec![
-        kv_line("ID", &movement.id, theme),
-        kv_line(
-            "Output",
-            &super::deliverables::deliverable_label_pub(deliverable),
-            theme,
-        ),
-        kv_line("Decision", &deliverable.decision.to_string(), theme),
-        kv_line("Created", &format_time(movement.created_at), theme),
-    ];
+    let mut lines = Vec::new();
 
     if let Some(url) = &deliverable.url {
         lines.push(kv_line("URL", url, theme));
     }
+    lines.push(kv_line("Decision", &deliverable.decision.to_string(), theme));
+    lines.push(kv_line(
+        "Status",
+        &super::orchestrator::movement_status_label(&movement.status),
+        theme,
+    ));
+    if let Some(identifier) = &movement.issue_identifier {
+        lines.push(kv_line("Trigger", identifier, theme));
+    }
+    lines.push(kv_line("Created", &format_time(movement.created_at), theme));
+    lines.push(kv_line(
+        "Tasks",
+        &format!("{}/{} completed", movement.tasks_completed, movement.task_count),
+        theme,
+    ));
     if let Some(workspace_path) = &movement.workspace_path {
         lines.push(kv_line(
             "Path",
             &workspace_path.display().to_string(),
             theme,
         ));
+    }
+
+    // Related tasks summary
+    let related_tasks: Vec<_> = snapshot
+        .tasks
+        .iter()
+        .filter(|t| t.movement_id == movement.id)
+        .collect();
+    if !related_tasks.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Tasks",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for task in &related_tasks {
+            let status_color = super::tasks::task_status_color(&task.status, theme);
+            let status_icon = super::tasks::task_status_icon(&task.status);
+            lines.push(Line::from(vec![
+                Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
+                Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
+            ]));
+        }
     }
 
     // Scrollable rendering
