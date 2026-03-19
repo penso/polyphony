@@ -118,14 +118,14 @@ pub fn draw_triggers_tab(
         6
     }; // "Tasks" + space
     let title_max_width = (area.width as usize).saturating_sub(
-        2 + 1
-            + 2
+        2 // borders
+            + 1 // highlight symbol
             + workspace_col_width as usize
             + time_col_width as usize
             + kind_col_width as usize
             + status_col_width as usize
             + tasks_col_width as usize
-            + 4,
+            + 1, // padding
     );
 
     let rows: Vec<Row> = trigger_data
