@@ -761,16 +761,12 @@ fn handle_detail_key(
     let in_split = app.is_split_eligible()
         && app.split_focus == crate::app::SplitFocus::Detail;
     match key {
-        KeyCode::Esc => {
+        KeyCode::Esc | KeyCode::Char('q') => {
             if in_split {
                 app.split_focus = crate::app::SplitFocus::List;
             } else {
                 app.pop_detail();
             }
-            return None;
-        },
-        KeyCode::Char('q') => {
-            app.pop_detail();
             return None;
         },
         _ => {},
