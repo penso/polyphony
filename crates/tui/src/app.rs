@@ -165,6 +165,30 @@ impl ActiveTab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovementSortKey {
+    Newest,
+    Oldest,
+    Status,
+}
+
+impl MovementSortKey {
+    pub const ALL: [Self; 3] = [Self::Newest, Self::Oldest, Self::Status];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Oldest => "oldest",
+            Self::Status => "status",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        let idx = Self::ALL.iter().position(|&s| s == self).unwrap_or(0);
+        Self::ALL[(idx + 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueSortKey {
     Newest,
     Oldest,
@@ -202,6 +226,7 @@ pub struct AppState {
     pub detail_stack: Vec<DetailView>,
     pub split_focus: SplitFocus,
     pub issue_sort: IssueSortKey,
+    pub movement_sort: MovementSortKey,
     /// Sorted index mapping: sorted_issues[display_index] = original snapshot index
     pub sorted_issue_indices: Vec<usize>,
     /// Tree depth for each entry in sorted_issue_indices (0=root, 1=child)
@@ -272,6 +297,7 @@ impl AppState {
             detail_stack: Vec::new(),
             split_focus: SplitFocus::default(),
             issue_sort: IssueSortKey::Oldest,
+            movement_sort: MovementSortKey::Oldest,
             sorted_issue_indices: Vec::new(),
             tree_depth: Vec::new(),
             tree_last_child: Vec::new(),
@@ -346,7 +372,19 @@ impl AppState {
         sync_selection(&mut self.deliverables_state, deliverable_count);
         // Keep sorted movement indices in sync with the snapshot.
         let mut movement_indices: Vec<usize> = (0..snapshot.movements.len()).collect();
-        movement_indices.sort_by_key(|&i| snapshot.movements[i].created_at);
+        match self.movement_sort {
+            MovementSortKey::Oldest => {
+                movement_indices.sort_by_key(|&i| snapshot.movements[i].created_at);
+            },
+            MovementSortKey::Newest => {
+                movement_indices
+                    .sort_by_key(|&i| std::cmp::Reverse(snapshot.movements[i].created_at));
+            },
+            MovementSortKey::Status => {
+                movement_indices
+                    .sort_by_key(|&i| snapshot.movements[i].status.to_string());
+            },
+        }
         self.sorted_movement_indices = movement_indices;
         let previous_movement_selection = self.movements_state.selected();
         sync_selection(&mut self.movements_state, snapshot.movements.len());

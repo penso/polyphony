@@ -208,26 +208,36 @@ fn draw_movements_table(
     app: &mut AppState,
 ) {
     let theme = app.theme;
-    let header = Row::new(vec![
+
+    // Hide Kind column when all movements are the same kind.
+    let all_same_kind = snapshot
+        .movements
+        .first()
+        .map(|first| snapshot.movements.iter().all(|m| m.kind == first.kind))
+        .unwrap_or(true);
+
+    let mut header_cells = vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Target", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Kind", Style::default().fg(theme.muted))),
-        Cell::from(
-            Line::from(Span::styled("St", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
-        ),
-        Cell::from(
-            Line::from(Span::styled("Out", Style::default().fg(theme.muted)))
-                .alignment(Alignment::Right),
-        ),
+    ];
+    if !all_same_kind {
+        header_cells.push(Cell::from(Span::styled(
+            "Kind",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    header_cells.extend([
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
         Cell::from(
             Line::from(Span::styled("Tasks", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
         ),
-    ])
-    .height(1)
-    .style(Style::default().add_modifier(Modifier::BOLD));
+    ]);
+
+    let header = Row::new(header_cells)
+        .height(1)
+        .style(Style::default().add_modifier(Modifier::BOLD));
 
     // Filter movements by search query when active.
     let search_q = app.movements_search_query.to_lowercase();
@@ -261,9 +271,8 @@ fn draw_movements_table(
             let (status_icon, status_icon_color) = movement_status_emoji(&m.status, theme);
             let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
             let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
-            let (kind_icon, kind_label) = movement_kind_icon_label(m.kind);
 
-            Row::new(vec![
+            let mut cells = vec![
                 Cell::from(Span::styled(
                     super::format_listing_time(m.created_at),
                     Style::default().fg(theme.muted),
@@ -272,28 +281,23 @@ fn draw_movements_table(
                     m.title.clone(),
                     Style::default().fg(theme.foreground),
                 )),
-                Cell::from(Span::styled(
-                    movement_target_label(m),
+            ];
+            if !all_same_kind {
+                let (_kind_icon, kind_label) = movement_kind_icon_label(m.kind);
+                cells.push(Cell::from(Span::styled(
+                    kind_label,
                     Style::default().fg(theme.info),
+                )));
+            }
+            cells.extend([
+                Cell::from(Span::styled(
+                    status_icon,
+                    Style::default().fg(status_icon_color),
                 )),
                 Cell::from(Span::styled(
-                    format!("{kind_icon} {kind_label}"),
-                    Style::default().fg(theme.info),
+                    output_icon,
+                    Style::default().fg(output_icon_color),
                 )),
-                Cell::from(
-                    Line::from(Span::styled(
-                        status_icon,
-                        Style::default().fg(status_icon_color),
-                    ))
-                    .alignment(Alignment::Right),
-                ),
-                Cell::from(
-                    Line::from(Span::styled(
-                        output_icon,
-                        Style::default().fg(output_icon_color),
-                    ))
-                    .alignment(Alignment::Right),
-                ),
                 Cell::from(
                     Line::from(Span::styled(
                         task_info,
@@ -301,7 +305,8 @@ fn draw_movements_table(
                     ))
                     .alignment(Alignment::Right),
                 ),
-            ])
+            ]);
+            Row::new(cells)
         })
         .collect();
 
@@ -310,6 +315,7 @@ fn draw_movements_table(
         .fg(theme.foreground)
         .add_modifier(Modifier::BOLD);
 
+    let sort_label = app.movement_sort.label();
     let count = filtered_indices.len();
     let footer_info = if count == 0 {
         "no movements".into()
@@ -345,31 +351,58 @@ fn draw_movements_table(
         ))
     };
 
-    let table = Table::new(rows, [
+    // Legend
+    let legend = Line::from(vec![
+        Span::styled(" ◌", Style::default().fg(theme.info)),
+        Span::styled(":planning  ", Style::default().fg(theme.muted)),
+        Span::styled("◐", Style::default().fg(theme.success)),
+        Span::styled(":running  ", Style::default().fg(theme.muted)),
+        Span::styled("✓", Style::default().fg(theme.success)),
+        Span::styled(":delivered  ", Style::default().fg(theme.muted)),
+        Span::styled("✕", Style::default().fg(theme.danger)),
+        Span::styled(":failed  ", Style::default().fg(theme.muted)),
+        Span::styled("◷", Style::default().fg(theme.warning)),
+        Span::styled(":review  ", Style::default().fg(theme.muted)),
+        Span::styled("⊘", Style::default().fg(theme.muted)),
+        Span::styled(":cancelled ", Style::default().fg(theme.muted)),
+    ]);
+
+    let mut col_constraints = vec![
         Constraint::Length(16),
         Constraint::Fill(1),
-        Constraint::Length(14),
-        Constraint::Length(14),
-        Constraint::Length(3),
-        Constraint::Length(4),
+    ];
+    if !all_same_kind {
+        col_constraints.push(Constraint::Length(10));
+    }
+    col_constraints.extend([
+        Constraint::Length(2),
+        Constraint::Length(2),
         Constraint::Length(6),
-    ])
+    ]);
+
+    let table = Table::new(rows, col_constraints)
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
     .block(
         Block::default()
             .title(title)
+            .title_bottom(legend)
             .title_bottom(
-                Line::from(Span::styled(
-                    format!("─{footer_info}─"),
-                    Style::default().fg(theme.muted),
-                ))
+                Line::from(vec![
+                    Span::styled("─s:", Style::default().fg(theme.muted)),
+                    Span::styled(sort_label, Style::default().fg(theme.highlight)),
+                    Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
+                ])
                 .right_aligned(),
             )
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border)),
+            .border_style(Style::default().fg(if app.list_border_focused {
+                theme.highlight
+            } else {
+                theme.border
+            })),
     );
 
     frame.render_stateful_widget(table, area, &mut app.movements_state);

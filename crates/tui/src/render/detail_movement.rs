@@ -121,12 +121,15 @@ pub(crate) fn draw_movement_detail(
     let gauge_label = format!("{}/{} tasks", movement.tasks_completed, movement.task_count);
     frame.render_widget(
         Gauge::default()
-            .gauge_style(Style::default().fg(status_color).bg(theme.border))
-            .label(Span::styled(
-                gauge_label,
-                Style::default().fg(theme.foreground),
-            ))
-            .ratio(ratio),
+            .gauge_style(
+                Style::default()
+                    .fg(theme.background)
+                    .bg(theme.border)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .label(Span::styled(gauge_label, Style::default().fg(theme.foreground)))
+            .ratio(ratio)
+            .use_unicode(true),
         rows[2],
     );
 
@@ -211,11 +214,7 @@ pub(crate) fn draw_movement_detail(
         .collect();
     if !related_tasks.is_empty() {
         lines.push(Line::default());
-        let section_marker = if tasks_focused {
-            "▸ "
-        } else {
-            "  "
-        };
+        let section_marker = if tasks_focused { "▸ " } else { "" };
         lines.push(Line::from(vec![
             Span::styled(section_marker, Style::default().fg(theme.highlight)),
             Span::styled(
@@ -236,8 +235,10 @@ pub(crate) fn draw_movement_detail(
             let is_selected = tasks_focused && i == tasks_selected;
             let prefix = if is_selected {
                 "▸ "
-            } else {
+            } else if tasks_focused {
                 "  "
+            } else {
+                ""
             };
             let title_style = if is_selected {
                 Style::default()

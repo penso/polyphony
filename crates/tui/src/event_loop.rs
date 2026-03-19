@@ -603,6 +603,9 @@ fn handle_key(
             if app.active_tab == app::ActiveTab::Triggers {
                 app.issue_sort = app.issue_sort.cycle();
                 app.rebuild_sorted_indices(snapshot);
+            } else if app.active_tab == app::ActiveTab::Orchestrator {
+                app.movement_sort = app.movement_sort.cycle();
+                app.on_snapshot(snapshot);
             }
         },
 
