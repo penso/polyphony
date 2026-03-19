@@ -79,6 +79,12 @@ pub(crate) enum DetailView {
         movement_id: String,
         scroll: u16,
     },
+    /// Full-screen filtered event log for a specific issue/trigger.
+    Events {
+        /// Filter key: events whose message contains this string are shown.
+        filter: String,
+        scroll: u16,
+    },
 }
 
 impl DetailView {
@@ -88,7 +94,8 @@ impl DetailView {
             | Self::Movement { scroll, .. }
             | Self::Task { scroll, .. }
             | Self::Agent { scroll, .. }
-            | Self::Deliverable { scroll, .. } => *scroll,
+            | Self::Deliverable { scroll, .. }
+            | Self::Events { scroll, .. } => *scroll,
         }
     }
 
@@ -98,7 +105,8 @@ impl DetailView {
             | Self::Movement { scroll, .. }
             | Self::Task { scroll, .. }
             | Self::Agent { scroll, .. }
-            | Self::Deliverable { scroll, .. } => scroll,
+            | Self::Deliverable { scroll, .. }
+            | Self::Events { scroll, .. } => scroll,
         }
     }
 }
@@ -394,6 +402,7 @@ impl AppState {
                     let total = snapshot.running.len() + snapshot.agent_history.len();
                     *agent_index >= total
                 },
+                DetailView::Events { .. } => false,
             };
             if missing {
                 self.detail_stack.pop();

@@ -374,32 +374,12 @@ pub(crate) fn draw_trigger_detail(
         }
     }
 
-    // Recent events for this trigger
-    body_lines.push(Line::default());
-    body_lines.push(Line::from(Span::styled(
-        "Recent Events",
-        Style::default()
-            .fg(theme.highlight)
-            .add_modifier(Modifier::BOLD),
-    )));
-    let mut event_count = 0usize;
-    for event in snapshot.recent_events.iter().rev() {
-        if event.message.contains(&issue.trigger_id)
-            || event.message.contains(&issue.identifier)
-        {
-            if event_count > 0 {
-                body_lines.push(Line::default());
-            }
-            event_count += 1;
-            body_lines.push(super::orchestrator::render_event_line_pub(event, theme));
-        }
-    }
-    if event_count == 0 {
-        body_lines.push(Line::from(Span::styled(
-            "No recent events for this trigger.",
-            Style::default().fg(theme.muted),
-        )));
-    }
+    // Recent events for this trigger (compact: 3 most recent)
+    body_lines.extend(super::orchestrator::compact_recent_event_lines(
+        snapshot,
+        &issue.identifier,
+        theme,
+    ));
 
     // Scrollable rendering
     let body_area = rows[4];
@@ -449,6 +429,8 @@ fn detail_hint_spans(issue: &VisibleTriggerRow, theme: crate::theme::Theme) -> V
             spans.push(Span::styled(":approve  ", Style::default().fg(theme.muted)));
         }
     }
+    spans.push(Span::styled("e", Style::default().fg(theme.highlight)));
+    spans.push(Span::styled(":events  ", Style::default().fg(theme.muted)));
     spans.push(Span::styled("Esc", Style::default().fg(theme.highlight)));
     spans.push(Span::styled(":back ", Style::default().fg(theme.muted)));
     spans

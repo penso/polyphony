@@ -413,21 +413,6 @@ fn movement_output_emoji(
     }
 }
 
-fn event_mentions_movement(
-    event: &polyphony_core::RuntimeEvent,
-    movement: &polyphony_core::MovementRow,
-    movement_identifier: &str,
-) -> bool {
-    if message_mentions_identifier(&event.message, movement_identifier) {
-        return true;
-    }
-    movement
-        .review_target
-        .as_ref()
-        .and_then(|target| target.url.as_deref())
-        .is_some_and(|url| event.message.contains(url))
-}
-
 fn render_event_line(
     event: &polyphony_core::RuntimeEvent,
     theme: crate::theme::Theme,
@@ -450,34 +435,6 @@ fn render_event_line(
         ),
         Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
     ])
-}
-
-fn message_mentions_identifier(message: &str, identifier: &str) -> bool {
-    if identifier.is_empty() {
-        return false;
-    }
-
-    let mut start = 0usize;
-    while let Some(offset) = message[start..].find(identifier) {
-        let matched = start + offset;
-        let end = matched + identifier.len();
-        let before_ok = matched == 0
-            || !message[..matched]
-                .chars()
-                .next_back()
-                .is_some_and(|ch| ch.is_ascii_alphanumeric());
-        let after_ok = end == message.len()
-            || !message[end..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_ascii_alphanumeric());
-        if before_ok && after_ok {
-            return true;
-        }
-        start = end;
-    }
-
-    false
 }
 
 fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
@@ -507,21 +464,6 @@ pub(crate) fn movement_status_color_pub(
     theme: crate::theme::Theme,
 ) -> ratatui::style::Color {
     movement_status_color(status, theme)
-}
-
-pub(crate) fn event_mentions_movement_pub(
-    event: &polyphony_core::RuntimeEvent,
-    movement: &polyphony_core::MovementRow,
-    movement_identifier: &str,
-) -> bool {
-    event_mentions_movement(event, movement, movement_identifier)
-}
-
-pub(crate) fn render_event_line_pub(
-    event: &polyphony_core::RuntimeEvent,
-    theme: crate::theme::Theme,
-) -> ratatui::text::Line<'static> {
-    render_event_line(event, theme)
 }
 
 fn movement_status_color(
@@ -621,21 +563,7 @@ fn _draw_events_panel(
 mod tests {
     use polyphony_core::{MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget};
 
-    use crate::render::orchestrator::{
-        message_mentions_identifier, movement_target_label, render_event_line,
-    };
-
-    #[test]
-    fn message_mentions_identifier_respects_boundaries() {
-        assert!(message_mentions_identifier(
-            "reviewed penso/polyphony#123 successfully",
-            "penso/polyphony#123",
-        ));
-        assert!(!message_mentions_identifier(
-            "reviewed penso/polyphony#1234 successfully",
-            "penso/polyphony#123",
-        ));
-    }
+    use crate::render::orchestrator::{movement_target_label, render_event_line};
 
     #[test]
     fn movement_target_label_prefers_review_target() {
@@ -684,5 +612,152 @@ mod tests {
             .collect::<String>();
 
         assert!(rendered.contains("dispatch manual dispatch: w1b -> default"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compact recent events (for inline detail views — 3 most recent)
+// ---------------------------------------------------------------------------
+
+const MAX_INLINE_EVENTS: usize = 3;
+
+/// Build a compact "Recent Events" section: at most 3 most-recent matching
+/// events (newest at the bottom), each truncated to a single line, plus a
+/// hint to open the full event log.
+pub(crate) fn compact_recent_event_lines(
+    snapshot: &RuntimeSnapshot,
+    filter: &str,
+    theme: crate::theme::Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "Recent Events",
+        Style::default()
+            .fg(theme.highlight)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    // Collect matching events newest-first, take 3, then reverse so newest is at bottom.
+    let matching: Vec<_> = snapshot
+        .recent_events
+        .iter()
+        .filter(|event| event.message.contains(filter))
+        .take(MAX_INLINE_EVENTS)
+        .collect();
+
+    if matching.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No recent events.",
+            Style::default().fg(theme.muted),
+        )));
+    } else {
+        for event in matching.into_iter().rev() {
+            lines.push(render_event_line(event, theme));
+        }
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("  press ", Style::default().fg(theme.muted)),
+        Span::styled("e", Style::default().fg(theme.highlight)),
+        Span::styled(" to view all events", Style::default().fg(theme.muted)),
+    ]));
+    lines
+}
+
+// ---------------------------------------------------------------------------
+// Full-screen filtered events detail view
+// ---------------------------------------------------------------------------
+
+pub(crate) fn draw_filtered_events(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    filter: &str,
+    snapshot: &RuntimeSnapshot,
+    app: &mut crate::app::AppState,
+) {
+    let theme = app.theme;
+    let content_height = area.height.saturating_sub(2) as usize;
+
+    // Oldest first, newest at bottom (log-style).
+    let lines: Vec<Line> = snapshot
+        .recent_events
+        .iter()
+        .rev()
+        .filter(|event| event.message.contains(filter))
+        .map(|event| render_event_line(event, theme))
+        .collect();
+
+    let total_lines = lines.len();
+    let max_scroll = total_lines.saturating_sub(content_height) as u16;
+
+    // Clamp / auto-scroll to bottom.
+    let scroll = app.current_detail_mut().map(|d| d.scroll_mut());
+    if let Some(s) = scroll {
+        if *s >= max_scroll || *s == u16::MAX {
+            *s = max_scroll;
+        }
+    }
+    let scroll_pos = app
+        .current_detail()
+        .map(|d| d.scroll())
+        .unwrap_or(0);
+
+    let count_label = format!(" {total_lines} events ");
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_pos, 0))
+            .block(
+                Block::default()
+                    .title(Line::from(vec![
+                        Span::styled(
+                            " Events ",
+                            Style::default()
+                                .fg(theme.foreground)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("({filter}) "),
+                            Style::default().fg(theme.muted),
+                        ),
+                    ]))
+                    .title(
+                        Line::from(Span::styled(count_label, Style::default().fg(theme.muted)))
+                            .right_aligned(),
+                    )
+                    .title_bottom(
+                        Line::from(vec![
+                            Span::styled("j/k", Style::default().fg(theme.highlight)),
+                            Span::styled(":scroll  ", Style::default().fg(theme.muted)),
+                            Span::styled("g/G", Style::default().fg(theme.highlight)),
+                            Span::styled(":top/bottom  ", Style::default().fg(theme.muted)),
+                            Span::styled("Esc", Style::default().fg(theme.highlight)),
+                            Span::styled(":back ", Style::default().fg(theme.muted)),
+                        ])
+                        .right_aligned(),
+                    )
+                    .borders(ratatui::widgets::Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme.border))
+                    .style(Style::default().bg(theme.panel_alt)),
+            ),
+        area,
+    );
+
+    // Scrollbar
+    if total_lines > content_height {
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(scroll_pos as usize)
+            .viewport_content_length(content_height);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("║"))
+                .thumb_symbol("█"),
+            area,
+            &mut scrollbar_state,
+        );
     }
 }

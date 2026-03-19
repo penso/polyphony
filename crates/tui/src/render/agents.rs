@@ -403,49 +403,11 @@ fn append_recent_events(
     issue_identifier: &str,
     theme: crate::theme::Theme,
 ) {
-    use polyphony_core::EventScope;
-
-    lines.push(Line::from(Span::styled(
-        "Recent Events",
-        Style::default()
-            .fg(theme.highlight)
-            .add_modifier(Modifier::BOLD),
-    )));
-
-    let mut event_count = 0usize;
-    for event in snapshot.recent_events.iter().rev() {
-        if !message_mentions_issue(&event.message, issue_identifier) {
-            continue;
-        }
-        if event_count > 0 {
-            lines.push(Line::default());
-        }
-        event_count += 1;
-        let ts = event.at.format("%H:%M:%S");
-        let scope_color = match event.scope {
-            EventScope::Dispatch => theme.info,
-            EventScope::Handoff => theme.highlight,
-            EventScope::Worker | EventScope::Agent => theme.success,
-            EventScope::Retry => theme.warning,
-            EventScope::Throttle => theme.danger,
-            _ => theme.muted,
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{:<10}", event.scope),
-                Style::default().fg(scope_color),
-            ),
-            Span::styled(event.message.clone(), Style::default().fg(theme.foreground)),
-        ]));
-    }
-
-    if event_count == 0 {
-        lines.push(Line::from(Span::styled(
-            "No recent events for this issue.",
-            Style::default().fg(theme.muted),
-        )));
-    }
+    lines.extend(super::orchestrator::compact_recent_event_lines(
+        snapshot,
+        issue_identifier,
+        theme,
+    ));
 }
 
 fn append_agent_availability_lines(
@@ -545,33 +507,6 @@ fn extend_plain_lines(lines: &mut Vec<Line<'static>>, content: &str, color: rata
     }
 }
 
-fn message_mentions_issue(message: &str, issue_identifier: &str) -> bool {
-    if issue_identifier.is_empty() {
-        return false;
-    }
-
-    let mut start = 0usize;
-    while let Some(offset) = message[start..].find(issue_identifier) {
-        let matched = start + offset;
-        let end = matched + issue_identifier.len();
-        let before_ok = matched == 0
-            || !message[..matched]
-                .chars()
-                .next_back()
-                .is_some_and(|ch| ch.is_ascii_alphanumeric());
-        let after_ok = end == message.len()
-            || !message[end..]
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_ascii_alphanumeric());
-        if before_ok && after_ok {
-            return true;
-        }
-        start = end;
-    }
-
-    false
-}
 
 pub(crate) fn format_duration(duration: chrono::Duration) -> String {
     let total_secs = duration.num_seconds().max(0);

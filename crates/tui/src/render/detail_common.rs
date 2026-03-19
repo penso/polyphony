@@ -156,6 +156,12 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
                 ));
             },
+            DetailView::Events { .. } => {
+                spans.push(Span::styled(
+                    "Events",
+                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                ));
+            },
         }
     }
 

@@ -50,6 +50,8 @@ pub(crate) fn draw_movement_detail(
                 Span::styled(":accept  ", Style::default().fg(theme.muted)),
                 Span::styled("x", Style::default().fg(theme.highlight)),
                 Span::styled(":reject  ", Style::default().fg(theme.muted)),
+                Span::styled("e", Style::default().fg(theme.highlight)),
+                Span::styled(":events  ", Style::default().fg(theme.muted)),
                 Span::styled("Esc", Style::default().fg(theme.highlight)),
                 Span::styled(":back ", Style::default().fg(theme.muted)),
             ])
@@ -225,29 +227,13 @@ pub(crate) fn draw_movement_detail(
         }
     }
 
-    // Recent events
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "Recent Events",
-        Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
-    )));
+    // Recent events (compact: 3 most recent)
     let movement_identifier = super::orchestrator::movement_target_label(movement);
-    let mut event_count = 0usize;
-    for event in snapshot.recent_events.iter().rev() {
-        if super::orchestrator::event_mentions_movement_pub(event, movement, &movement_identifier) {
-            if event_count > 0 {
-                lines.push(Line::default());
-            }
-            event_count += 1;
-            lines.push(super::orchestrator::render_event_line_pub(event, theme));
-        }
-    }
-    if event_count == 0 {
-        lines.push(Line::from(Span::styled(
-            "No recent events for this movement.",
-            Style::default().fg(theme.muted),
-        )));
-    }
+    lines.extend(super::orchestrator::compact_recent_event_lines(
+        snapshot,
+        &movement_identifier,
+        theme,
+    ));
 
     // Scrollable rendering
     let body_area = rows[4];

@@ -122,5 +122,8 @@ fn render_detail_view(
         crate::app::DetailView::Deliverable { movement_id, .. } => {
             detail_deliverable::draw_deliverable_detail(frame, area, movement_id, snapshot, app);
         },
+        crate::app::DetailView::Events { filter, .. } => {
+            orchestrator::draw_filtered_events(frame, area, filter, snapshot, app);
+        },
     }
 }

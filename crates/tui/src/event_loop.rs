@@ -896,6 +896,14 @@ fn handle_detail_key(
                         });
                     }
                 },
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
+                        app.push_detail(crate::app::DetailView::Events {
+                            filter: trigger.identifier.clone(),
+                            scroll: u16::MAX,
+                        });
+                    }
+                },
                 _ => {},
             },
         crate::app::DetailView::Movement {
@@ -988,6 +996,18 @@ fn handle_detail_key(
                         });
                     }
                 },
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                        let filter = movement
+                            .issue_identifier
+                            .clone()
+                            .unwrap_or_else(|| movement.id.clone());
+                        app.push_detail(crate::app::DetailView::Events {
+                            filter,
+                            scroll: u16::MAX,
+                        });
+                    }
+                },
                 _ => {},
             },
         crate::app::DetailView::Task { .. } => match key {
@@ -1070,6 +1090,27 @@ fn handle_detail_key(
                         decision: polyphony_core::DeliverableDecision::Rejected,
                     });
                 }
+            },
+            _ => {},
+        },
+        crate::app::DetailView::Events { .. } => match key {
+            KeyCode::Char('j') | KeyCode::Down => {
+                scroll_detail(app, 1);
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                scroll_detail_back(app, 1);
+            },
+            KeyCode::PageDown => {
+                scroll_detail(app, 8);
+            },
+            KeyCode::PageUp => {
+                scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('G') | KeyCode::End => {
+                *app.current_detail_mut()?.scroll_mut() = u16::MAX;
+            },
+            KeyCode::Char('g') | KeyCode::Home => {
+                *app.current_detail_mut()?.scroll_mut() = 0;
             },
             _ => {},
         },
