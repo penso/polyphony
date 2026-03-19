@@ -4,7 +4,8 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+        Block, BorderType, LineGauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Wrap,
     },
 };
 
@@ -120,16 +121,15 @@ pub(crate) fn draw_movement_detail(
     };
     let gauge_label = format!("{}/{} tasks", movement.tasks_completed, movement.task_count);
     frame.render_widget(
-        Gauge::default()
-            .gauge_style(
-                Style::default()
-                    .fg(theme.background)
-                    .bg(theme.border)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .label(Span::styled(gauge_label, Style::default().fg(theme.foreground)))
-            .ratio(ratio)
-            .use_unicode(true),
+        LineGauge::default()
+            .filled_style(Style::default().fg(status_color))
+            .unfilled_style(Style::default().fg(theme.border))
+            .line_set(ratatui::symbols::line::THICK)
+            .label(Line::from(Span::styled(
+                gauge_label,
+                Style::default().fg(theme.foreground),
+            )))
+            .ratio(ratio),
         rows[2],
     );
 
