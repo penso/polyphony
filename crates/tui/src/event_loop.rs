@@ -44,7 +44,8 @@ pub async fn run(
             break Ok(());
         }
 
-        // Wait for terminal input OR snapshot update — fully async, no blocking.
+        // Wait for terminal input, snapshot update, or a 1-second tick so
+        // live countdowns (e.g. "next poll") stay fresh.
         let terminal_event = tokio::select! {
             biased;
             event = event_stream.next() => {
@@ -61,6 +62,10 @@ pub async fn run(
                 snapshot = snapshot_rx.borrow().clone();
                 app.on_snapshot(&snapshot);
                 refresh_agent_detail_artifact(&mut app, &snapshot).await;
+                needs_draw = true;
+                continue;
+            }
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
                 needs_draw = true;
                 continue;
             }
