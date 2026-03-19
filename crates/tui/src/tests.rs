@@ -97,7 +97,7 @@ fn app_state_selection_syncs() {
     let mut app = AppState::new(default_theme(), LogBuffer::default());
     let snapshot = test_snapshot(5);
     app.on_snapshot(&snapshot);
-    assert_eq!(app.issues_state.selected(), Some(0));
+    assert_eq!(app.issues_state.selected(), Some(4));
 }
 
 #[test]

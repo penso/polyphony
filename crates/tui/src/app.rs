@@ -265,7 +265,7 @@ impl AppState {
             movements_state: TableState::default(),
             detail_stack: Vec::new(),
             split_focus: SplitFocus::default(),
-            issue_sort: IssueSortKey::Newest,
+            issue_sort: IssueSortKey::Oldest,
             sorted_issue_indices: Vec::new(),
             tree_depth: Vec::new(),
             tree_last_child: Vec::new(),
@@ -799,7 +799,7 @@ fn sync_selection(state: &mut TableState, len: usize) {
     match state.selected() {
         Some(index) if index < len => {},
         Some(_) => state.select(Some(len - 1)),
-        None => state.select(Some(0)),
+        None => state.select(Some(len - 1)),
     }
 }
 
