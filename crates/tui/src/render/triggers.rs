@@ -86,7 +86,7 @@ pub fn draw_triggers_tab(
         Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(
-            Line::from(Span::styled("Kind", Style::default().fg(theme.muted)))
+            Line::from(Span::styled("", Style::default().fg(theme.muted)))
                 .alignment(Alignment::Right),
         ),
         Cell::from(
