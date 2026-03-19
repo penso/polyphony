@@ -598,7 +598,20 @@ fn handle_key(
             }
         },
 
-        // Sort cycling (Triggers tab)
+        // Toggle collapse on movement rows (Orchestrator tab)
+        KeyCode::Char(' ') => {
+            if app.active_tab == app::ActiveTab::Orchestrator {
+                if let Some(app::OrchestratorTreeRow::Movement { snapshot_index }) =
+                    app.selected_orchestrator_row().cloned()
+                {
+                    let movement = &snapshot.movements[snapshot_index];
+                    app.toggle_movement_collapse(&movement.id.clone());
+                    app.rebuild_orchestrator_tree(snapshot);
+                }
+            }
+        },
+
+        // Sort cycling
         KeyCode::Char('s') => {
             if app.active_tab == app::ActiveTab::Triggers {
                 app.issue_sort = app.issue_sort.cycle();
@@ -632,8 +645,12 @@ fn handle_key(
                 match app.selected_orchestrator_row().cloned() {
                     Some(app::OrchestratorTreeRow::Movement { snapshot_index }) => {
                         let movement = &snapshot.movements[snapshot_index];
-                        app.toggle_movement_collapse(&movement.id.clone());
-                        app.rebuild_orchestrator_tree(snapshot);
+                        app.push_detail(crate::app::DetailView::Movement {
+                            movement_id: movement.id.clone(),
+                            scroll: 0,
+                            focus: Default::default(),
+                            tasks_selected: 0,
+                        });
                     },
                     Some(app::OrchestratorTreeRow::Trigger { trigger_index, .. }) => {
                         let trigger = &snapshot.visible_triggers[trigger_index];
