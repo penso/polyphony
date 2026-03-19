@@ -313,20 +313,32 @@ pub fn draw_triggers_tab(
             }
             block
                 .title_bottom(
-                    Line::from(vec![
-                        Span::styled(" ●", Style::default().fg(theme.highlight)),
-                        Span::styled(":workspace  ", Style::default().fg(theme.muted)),
-                        Span::styled("✓", Style::default().fg(theme.success)),
-                        Span::styled(":approved  ", Style::default().fg(theme.muted)),
-                        Span::styled("◷", Style::default().fg(theme.warning)),
-                        Span::styled(":pending  ", Style::default().fg(theme.muted)),
-                        Span::styled("●", Style::default().fg(theme.success)),
-                        Span::styled(":open  ", Style::default().fg(theme.muted)),
-                        Span::styled("○", Style::default().fg(theme.info)),
-                        Span::styled(":todo  ", Style::default().fg(theme.muted)),
-                        Span::styled("✓", Style::default().fg(theme.muted)),
-                        Span::styled(":done ", Style::default().fg(theme.muted)),
-                    ]),
+                    Line::from({
+                        let has_approval_markers = trigger_data
+                            .iter()
+                            .any(|(t, ..)| matches!(t.source.as_str(), "github" | "gitlab"));
+                        let mut legend = vec![
+                            Span::styled(" ●", Style::default().fg(theme.highlight)),
+                            Span::styled(":workspace  ", Style::default().fg(theme.muted)),
+                        ];
+                        if has_approval_markers {
+                            legend.extend([
+                                Span::styled("✓", Style::default().fg(theme.success)),
+                                Span::styled(":approved  ", Style::default().fg(theme.muted)),
+                                Span::styled("◷", Style::default().fg(theme.warning)),
+                                Span::styled(":pending  ", Style::default().fg(theme.muted)),
+                            ]);
+                        }
+                        legend.extend([
+                            Span::styled("●", Style::default().fg(theme.success)),
+                            Span::styled(":open  ", Style::default().fg(theme.muted)),
+                            Span::styled("○", Style::default().fg(theme.info)),
+                            Span::styled(":todo  ", Style::default().fg(theme.muted)),
+                            Span::styled("✓", Style::default().fg(theme.muted)),
+                            Span::styled(":done ", Style::default().fg(theme.muted)),
+                        ]);
+                        legend
+                    }),
                 )
                 .title_bottom(
                     Line::from(vec![
