@@ -315,7 +315,11 @@ pub fn draw_triggers_tab(
                 .title_bottom(
                     Line::from(vec![
                         Span::styled(" ●", Style::default().fg(theme.highlight)),
-                        Span::styled(":has workspace  ", Style::default().fg(theme.muted)),
+                        Span::styled(":workspace  ", Style::default().fg(theme.muted)),
+                        Span::styled("✓", Style::default().fg(theme.success)),
+                        Span::styled(":approved  ", Style::default().fg(theme.muted)),
+                        Span::styled("◷", Style::default().fg(theme.warning)),
+                        Span::styled(":pending  ", Style::default().fg(theme.muted)),
                         Span::styled("●", Style::default().fg(theme.success)),
                         Span::styled(":open  ", Style::default().fg(theme.muted)),
                         Span::styled("○", Style::default().fg(theme.info)),
