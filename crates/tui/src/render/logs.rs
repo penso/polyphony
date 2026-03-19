@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{
         Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph, RenderDirection,
-        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table, TableState,
+        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table,
     },
 };
 use serde_json::Value;
@@ -116,44 +116,46 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    // Only build Row widgets for a window around the selection to avoid
-    // expensive per-entry word-wrapping for thousands of off-screen rows.
-    let visible_height = area.height.saturating_sub(3) as usize; // borders + header
+    // Build all rows but only do expensive word-wrapping for the visible
+    // window around the selection.  Off-screen rows use a cheap single-line
+    // placeholder so ratatui can count them for correct scroll offsets.
+    let visible_height = area.height.saturating_sub(3) as usize;
     let selected = app.logs_state.selected().unwrap_or(0);
     let window_start = selected.saturating_sub(visible_height);
     let window_end = (selected + visible_height + 1).min(count);
 
-    let rows: Vec<Row> = filtered[window_start..window_end]
+    let rows: Vec<Row> = filtered
         .iter()
-        .map(|entry| {
-            let (level_color, msg_style) = level_styles(&entry.level, theme);
-            let (msg_cell, row_height) =
-                wrap_message_cell(&entry.message, &entry.extras, msg_width, theme, msg_style);
-            Row::new(vec![
-                Cell::from(Span::styled(
-                    entry.time.clone(),
-                    Style::default().fg(theme.muted),
-                )),
-                Cell::from(Span::styled(
-                    format_level_tag(&entry.level),
-                    Style::default()
-                        .fg(level_color)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Cell::from(Span::styled(
-                    truncate_target(&entry.target, max_target_len as usize),
-                    Style::default().fg(Color::Blue),
-                )),
-                msg_cell,
-            ])
-            .height(row_height)
+        .enumerate()
+        .map(|(i, entry)| {
+            if i >= window_start && i < window_end {
+                let (level_color, msg_style) = level_styles(&entry.level, theme);
+                let (msg_cell, row_height) =
+                    wrap_message_cell(&entry.message, &entry.extras, msg_width, theme, msg_style);
+                Row::new(vec![
+                    Cell::from(Span::styled(
+                        entry.time.clone(),
+                        Style::default().fg(theme.muted),
+                    )),
+                    Cell::from(Span::styled(
+                        format_level_tag(&entry.level),
+                        Style::default()
+                            .fg(level_color)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Cell::from(Span::styled(
+                        truncate_target(&entry.target, max_target_len as usize),
+                        Style::default().fg(Color::Blue),
+                    )),
+                    msg_cell,
+                ])
+                .height(row_height)
+            } else {
+                // Cheap placeholder for off-screen rows.
+                Row::new(vec![Cell::from(""); 4]).height(1)
+            }
         })
         .collect();
-
-    // Adjust TableState to account for the window offset so ratatui
-    // highlights the correct row within the sliced row set.
-    let mut windowed_state = TableState::default();
-    windowed_state.select(Some(selected - window_start));
 
     let title = build_logs_title(&app.logs_search_query, app.logs_search_active, theme);
     let selected_style = Style::default()
@@ -180,7 +182,7 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
             .padding(Padding::new(1, 1, 0, 0)),
     );
 
-    frame.render_stateful_widget(table, area, &mut windowed_state);
+    frame.render_stateful_widget(table, area, &mut app.logs_state);
     draw_scrollbar(frame, area, count, selected);
 }
 
