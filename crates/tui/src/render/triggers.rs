@@ -210,7 +210,7 @@ pub fn draw_triggers_tab(
             if !compact {
                 cells.push(Cell::from({
                     let count = task_counts
-                        .get(trigger.trigger_id.as_str())
+                        .get(trigger.identifier.as_str())
                         .copied()
                         .unwrap_or(0);
                     let label = if count > 0 {
