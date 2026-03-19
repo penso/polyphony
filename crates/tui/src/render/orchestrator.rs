@@ -229,8 +229,32 @@ fn draw_movements_table(
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row> = app
-        .sorted_movement_indices
+    // Filter movements by search query when active.
+    let search_q = app.movements_search_query.to_lowercase();
+    let filtered_indices: Vec<usize> = if search_q.is_empty() {
+        app.sorted_movement_indices.clone()
+    } else {
+        app.sorted_movement_indices
+            .iter()
+            .copied()
+            .filter(|&idx| {
+                let m = &snapshot.movements[idx];
+                m.title.to_lowercase().contains(&search_q)
+                    || m.issue_identifier
+                        .as_deref()
+                        .is_some_and(|id| id.to_lowercase().contains(&search_q))
+                    || m.status.to_string().to_lowercase().contains(&search_q)
+            })
+            .collect()
+    };
+    let flen = filtered_indices.len();
+    if flen == 0 {
+        app.movements_state.select(None);
+    } else if app.movements_state.selected().is_none_or(|i| i >= flen) {
+        app.movements_state.select(Some(flen - 1));
+    }
+
+    let rows: Vec<Row> = filtered_indices
         .iter()
         .map(|&idx| {
             let m = &snapshot.movements[idx];
@@ -286,7 +310,7 @@ fn draw_movements_table(
         .fg(theme.foreground)
         .add_modifier(Modifier::BOLD);
 
-    let count = snapshot.movements.len();
+    let count = filtered_indices.len();
     let footer_info = if count == 0 {
         "no movements".into()
     } else {
@@ -294,6 +318,31 @@ fn draw_movements_table(
             "{} of {count}",
             app.movements_state.selected().unwrap_or_default() + 1
         )
+    };
+
+    let title = if app.movements_search_active {
+        Line::from(vec![
+            Span::styled(" Movements ", Style::default().fg(theme.highlight)),
+            Span::styled(
+                format!("/{}\u{258F}", app.movements_search_query),
+                Style::default().fg(theme.foreground),
+            ),
+        ])
+    } else if !app.movements_search_query.is_empty() {
+        Line::from(vec![
+            Span::styled(" Movements ", Style::default().fg(theme.highlight)),
+            Span::styled(
+                format!("[{}] ", app.movements_search_query),
+                Style::default().fg(theme.info),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            " Movements ",
+            Style::default()
+                .fg(theme.foreground)
+                .add_modifier(Modifier::BOLD),
+        ))
     };
 
     let table = Table::new(rows, [
@@ -310,12 +359,7 @@ fn draw_movements_table(
     .highlight_spacing(HighlightSpacing::Always)
     .block(
         Block::default()
-            .title(Line::from(Span::styled(
-                " Movements ",
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            )))
+            .title(title)
             .title_bottom(
                 Line::from(Span::styled(
                     format!("─{footer_info}─"),

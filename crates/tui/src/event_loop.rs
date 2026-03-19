@@ -288,6 +288,23 @@ pub async fn run(
                         },
                         _ => {},
                     }
+                } else if app.movements_search_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.movements_search_active = false;
+                            app.movements_search_query.clear();
+                        },
+                        KeyCode::Enter => {
+                            app.movements_search_active = false;
+                        },
+                        KeyCode::Backspace => {
+                            app.movements_search_query.pop();
+                        },
+                        KeyCode::Char(c) => {
+                            app.movements_search_query.push(c);
+                        },
+                        _ => {},
+                    }
                 } else if app.logs_search_active {
                     match key.code {
                         KeyCode::Esc => {
@@ -671,6 +688,9 @@ fn handle_key(
             if app.active_tab == app::ActiveTab::Triggers {
                 app.search_active = true;
                 app.search_query.clear();
+            } else if app.active_tab == app::ActiveTab::Orchestrator {
+                app.movements_search_active = true;
+                app.movements_search_query.clear();
             } else if app.active_tab == app::ActiveTab::Logs {
                 app.logs_search_active = true;
                 app.logs_search_query.clear();
