@@ -37,7 +37,7 @@ pub async fn run(
         }
 
         let mut key_handled = false;
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(16))? {
             match event::read()? {
                 Event::Mouse(mouse) => {
                     if !app.leaving {
@@ -306,18 +306,23 @@ pub async fn run(
 
         refresh_agent_detail_artifact(&mut app, &snapshot).await;
 
-        // Always check for snapshot updates, whether or not a key was handled.
-        // Use a short timeout so the draw loop stays responsive.
-        tokio::select! {
-            changed = snapshot_rx.changed() => {
-                if changed.is_err() {
-                    break Ok(());
+        // After a keypress, loop back to draw immediately so the UI feels instant.
+        // Otherwise, wait for a snapshot update or a short idle timeout.
+        if !key_handled {
+            tokio::select! {
+                changed = snapshot_rx.changed() => {
+                    if changed.is_err() {
+                        break Ok(());
+                    }
+                    snapshot = snapshot_rx.borrow().clone();
+                    app.on_snapshot(&snapshot);
+                    refresh_agent_detail_artifact(&mut app, &snapshot).await;
                 }
-                snapshot = snapshot_rx.borrow().clone();
-                app.on_snapshot(&snapshot);
-                refresh_agent_detail_artifact(&mut app, &snapshot).await;
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
-            _ = tokio::time::sleep(Duration::from_millis(if key_handled { 1 } else { 100 })) => {}
+        } else if snapshot_rx.has_changed().unwrap_or(false) {
+            snapshot = snapshot_rx.borrow().clone();
+            app.on_snapshot(&snapshot);
         }
     };
 
