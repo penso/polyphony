@@ -322,7 +322,11 @@ pub fn draw_triggers_tab(
                 )
                 .borders(ratatui::widgets::Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.border))
+                .border_style(Style::default().fg(if app.list_border_focused {
+                    theme.highlight
+                } else {
+                    theme.border
+                }))
                 .padding(Padding::right(1))
                 .style(Style::default().bg(theme.panel))
         });

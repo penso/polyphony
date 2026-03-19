@@ -54,7 +54,8 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
                 .split(areas[1]);
             // The content_area for click detection maps to the list pane
             app.content_area = split[0];
-            render_tab_table(frame, split[0], snapshot, app, app.split_focus == SplitFocus::List);
+            app.list_border_focused = app.split_focus == SplitFocus::List;
+            render_tab_table(frame, split[0], snapshot, app, app.list_border_focused);
             app.detail_border_focused = true;
             render_detail_view(frame, split[1], &detail, snapshot, app);
         } else {
@@ -65,6 +66,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         }
     } else {
         app.content_area = areas[1];
+        app.list_border_focused = true;
         render_tab_table(frame, areas[1], snapshot, app, true);
     }
 

@@ -231,6 +231,8 @@ pub struct AppState {
     pub tab_inner_area: Rect,
     /// Content area (areas[1]), set each frame for mouse click row mapping.
     pub content_area: Rect,
+    /// Whether the list pane border should use the focused style.
+    pub list_border_focused: bool,
     /// Whether the detail pane border should use the focused style.
     pub detail_border_focused: bool,
     pub confirm_quit: bool,
@@ -291,6 +293,7 @@ impl AppState {
             prev_credits_used: 0.0,
             tab_inner_area: Rect::default(),
             content_area: Rect::default(),
+            list_border_focused: true,
             detail_border_focused: false,
             confirm_quit: false,
             show_mode_modal: false,
