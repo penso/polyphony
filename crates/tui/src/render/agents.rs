@@ -417,6 +417,9 @@ fn append_recent_events(
         if !message_mentions_issue(&event.message, issue_identifier) {
             continue;
         }
+        if event_count > 0 {
+            lines.push(Line::default());
+        }
         event_count += 1;
         let ts = event.at.format("%H:%M:%S");
         let scope_color = match event.scope {

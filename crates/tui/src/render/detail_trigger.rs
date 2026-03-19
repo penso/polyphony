@@ -387,6 +387,9 @@ pub(crate) fn draw_trigger_detail(
         if event.message.contains(&issue.trigger_id)
             || event.message.contains(&issue.identifier)
         {
+            if event_count > 0 {
+                body_lines.push(Line::default());
+            }
             event_count += 1;
             body_lines.push(super::orchestrator::render_event_line_pub(event, theme));
         }

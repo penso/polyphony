@@ -598,7 +598,18 @@ pub(crate) fn persisted_run_metadata(mut run: PersistedRunRecord) -> PersistedRu
 }
 
 pub(crate) fn truncate_runtime_event_message(message: String) -> String {
-    truncate_chars(&message, MAX_RECENT_EVENT_MESSAGE_CHARS)
+    // Strip multi-line noise: keep only the first meaningful line.
+    // Agent events often embed full startup banners separated by newlines
+    // or `--------` dividers, producing unreadable walls of text in the TUI.
+    let first_line = message
+        .split('\n')
+        .next()
+        .unwrap_or(&message)
+        .split("--------")
+        .next()
+        .unwrap_or(&message)
+        .trim_end();
+    truncate_chars(first_line, MAX_RECENT_EVENT_MESSAGE_CHARS)
 }
 
 pub(crate) async fn append_workspace_agent_event_artifact(

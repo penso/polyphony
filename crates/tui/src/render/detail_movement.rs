@@ -235,6 +235,9 @@ pub(crate) fn draw_movement_detail(
     let mut event_count = 0usize;
     for event in snapshot.recent_events.iter().rev() {
         if super::orchestrator::event_mentions_movement_pub(event, movement, &movement_identifier) {
+            if event_count > 0 {
+                lines.push(Line::default());
+            }
             event_count += 1;
             lines.push(super::orchestrator::render_event_line_pub(event, theme));
         }
