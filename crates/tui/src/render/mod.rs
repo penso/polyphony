@@ -8,7 +8,7 @@ pub(crate) mod detail_task;
 pub(crate) mod detail_trigger;
 mod footer;
 mod header;
-mod logs;
+pub(crate) mod logs;
 mod orchestrator;
 pub(crate) mod popups;
 mod tasks;

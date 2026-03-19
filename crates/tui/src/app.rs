@@ -222,6 +222,9 @@ pub struct AppState {
     pub logs_search_active: bool,
     pub logs_search_query: String,
     pub logs_auto_scroll: bool,
+    /// Cached parsed log entries — re-parsed only when the buffer grows.
+    pub cached_log_entries: Vec<crate::render::logs::LogEntry>,
+    pub cached_log_entry_count: usize,
     pub rps_history: VecDeque<u64>,
     pub prev_credits_used: f64,
     /// Inner area of the tab bar block, set each frame by draw_header.
@@ -280,6 +283,8 @@ impl AppState {
             logs_search_active: false,
             logs_search_query: String::new(),
             logs_auto_scroll: true,
+            cached_log_entries: Vec::new(),
+            cached_log_entry_count: 0,
             rps_history: VecDeque::with_capacity(RPS_HISTORY_CAP),
             prev_credits_used: 0.0,
             tab_inner_area: Rect::default(),

@@ -13,12 +13,13 @@ use serde_json::Value;
 
 use crate::{app::AppState, theme::Theme};
 
-struct LogEntry {
-    time: String,
-    level: String,
-    target: String,
-    message: String,
-    extras: String,
+#[derive(Debug)]
+pub struct LogEntry {
+    pub time: String,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+    pub extras: String,
 }
 
 impl LogEntry {
@@ -48,15 +49,23 @@ pub fn draw_logs_tab(
 
 fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppState) {
     let theme = app.theme;
-    let raw_lines = app.log_buffer.all_lines();
 
-    let entries: Vec<LogEntry> = raw_lines.iter().map(|l| parse_log_entry(l)).collect();
+    // Only re-parse log entries when the buffer has grown.
+    let current_len = app.log_buffer.len();
+    if current_len != app.cached_log_entry_count {
+        let raw_lines = app.log_buffer.all_lines();
+        app.cached_log_entries = raw_lines.iter().map(|l| parse_log_entry(l)).collect();
+        app.cached_log_entry_count = current_len;
+    }
 
     let filtered: Vec<&LogEntry> = if app.logs_search_query.is_empty() {
-        entries.iter().collect()
+        app.cached_log_entries.iter().collect()
     } else {
         let q = app.logs_search_query.to_lowercase();
-        entries.iter().filter(|e| e.matches(&q)).collect()
+        app.cached_log_entries
+            .iter()
+            .filter(|e| e.matches(&q))
+            .collect()
     };
 
     let count = filtered.len();
