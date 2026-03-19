@@ -153,6 +153,18 @@ pub async fn run(
                             },
                             _ => {},
                         }
+                    } else if app.confirm_quit {
+                        match key.code {
+                            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                                app.confirm_quit = false;
+                                let _ = command_tx.send(RuntimeCommand::Shutdown);
+                                app.leaving = true;
+                                app.leaving_since = Some(Instant::now());
+                            },
+                            _ => {
+                                app.confirm_quit = false;
+                            },
+                        }
                     } else if app.show_mode_modal {
                         match key.code {
                             KeyCode::Esc => {
@@ -468,7 +480,10 @@ fn handle_key(
     snapshot: &RuntimeSnapshot,
 ) -> Option<RuntimeCommand> {
     match key {
-        KeyCode::Char('q') => return Some(RuntimeCommand::Shutdown),
+        KeyCode::Char('q') => {
+            app.confirm_quit = true;
+            return None;
+        },
         KeyCode::Char('r') => return Some(RuntimeCommand::Refresh),
 
         // Tab switching

@@ -72,6 +72,10 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     footer::draw_footer(frame, areas[2], snapshot, app);
 
+    if app.confirm_quit {
+        popups::draw_confirm_quit(frame, app);
+    }
+
     if app.show_mode_modal {
         popups::draw_mode_modal(frame, snapshot, app);
     }

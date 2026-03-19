@@ -250,6 +250,29 @@ pub fn draw_agent_picker_modal(
     }
 }
 
+pub(crate) fn draw_confirm_quit(frame: &mut ratatui::Frame<'_>, app: &AppState) {
+    let theme = app.theme;
+    let area = centered_rect(frame.area(), 34, 3);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Quit? ", Style::default().fg(theme.foreground)),
+            Span::styled("y", Style::default().fg(theme.highlight)),
+            Span::styled("/", Style::default().fg(theme.muted)),
+            Span::styled("n", Style::default().fg(theme.highlight)),
+        ]))
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(
+            Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.warning))
+                .style(Style::default().bg(theme.panel_alt)),
+        ),
+        area,
+    );
+}
+
 pub(crate) fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
     let width = area.width.min(max_width).max(1);
     let height = area.height.min(max_height).max(1);

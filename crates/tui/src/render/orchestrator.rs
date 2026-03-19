@@ -655,13 +655,12 @@ pub(crate) fn compact_recent_event_lines(
         for event in matching.into_iter().rev() {
             lines.push(render_event_line(event, theme));
         }
+        lines.push(Line::from(vec![
+            Span::styled("  press ", Style::default().fg(theme.muted)),
+            Span::styled("e", Style::default().fg(theme.highlight)),
+            Span::styled(" to view all events", Style::default().fg(theme.muted)),
+        ]));
     }
-
-    lines.push(Line::from(vec![
-        Span::styled("  press ", Style::default().fg(theme.muted)),
-        Span::styled("e", Style::default().fg(theme.highlight)),
-        Span::styled(" to view all events", Style::default().fg(theme.muted)),
-    ]));
     lines
 }
 

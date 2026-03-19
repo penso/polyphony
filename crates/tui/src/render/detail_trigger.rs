@@ -307,6 +307,7 @@ pub(crate) fn draw_trigger_detail(
             let age = super::detail_common::format_relative_time(m.created_at, Utc::now());
             body_lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(theme.highlight)),
+                Span::styled(format!("{age:>4} "), Style::default().fg(theme.muted)),
                 Span::styled(format!("{status_emoji} "), Style::default().fg(emoji_color)),
                 Span::styled(
                     format!("{kind_label:<max_kind_len$}  "),
@@ -322,12 +323,11 @@ pub(crate) fn draw_trigger_detail(
                 ),
                 Span::styled(
                     format!(
-                        "{:>max_completed_len$}/{:<max_total_len$}  ",
+                        "{:>max_completed_len$}/{:<max_total_len$}",
                         m.tasks_completed, m.task_count
                     ),
                     Style::default().fg(theme.muted),
                 ),
-                Span::styled(age, Style::default().fg(theme.muted)),
             ]));
         }
     }

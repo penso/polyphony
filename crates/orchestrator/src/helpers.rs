@@ -6,7 +6,7 @@ use {
 };
 
 pub(crate) const MAX_RECENT_EVENTS: usize = 256;
-pub(crate) const MAX_RECENT_EVENT_MESSAGE_CHARS: usize = 512;
+pub(crate) const MAX_RECENT_EVENT_MESSAGE_CHARS: usize = 120;
 pub(crate) const MAX_RUN_HISTORY: usize = 256;
 pub(crate) const MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES: usize = 24;
 pub(crate) const MAX_PERSISTED_RUN_CONTEXT_TRANSCRIPT_ENTRIES: usize = 12;
