@@ -262,11 +262,7 @@ pub(crate) fn draw_trigger_detail(
     related_movements.sort_by_key(|m| m.created_at);
     if !related_movements.is_empty() {
         body_lines.push(Line::default());
-        let section_marker = if movements_focused {
-            "▸ "
-        } else {
-            "  "
-        };
+        let section_marker = if movements_focused { "▸ " } else { "" };
         body_lines.push(Line::from(vec![
             Span::styled(section_marker, Style::default().fg(theme.highlight)),
             Span::styled(
@@ -311,8 +307,10 @@ pub(crate) fn draw_trigger_detail(
             let is_selected = movements_focused && i == movements_selected;
             let prefix = if is_selected {
                 "▸ "
-            } else {
+            } else if movements_focused {
                 "  "
+            } else {
+                ""
             };
             let name_style = if is_selected {
                 Style::default()
@@ -357,11 +355,7 @@ pub(crate) fn draw_trigger_detail(
         .collect();
     if !running_agents.is_empty() {
         body_lines.push(Line::default());
-        let section_marker = if agents_focused {
-            "▸ "
-        } else {
-            "  "
-        };
+        let section_marker = if agents_focused { "▸ " } else { "" };
         body_lines.push(Line::from(vec![
             Span::styled(section_marker, Style::default().fg(theme.highlight)),
             Span::styled(
@@ -375,8 +369,10 @@ pub(crate) fn draw_trigger_detail(
             let is_selected = agents_focused && i == agents_selected;
             let prefix = if is_selected {
                 "▸ "
-            } else {
+            } else if agents_focused {
                 "  "
+            } else {
+                ""
             };
             let name_style = if is_selected {
                 Style::default()
