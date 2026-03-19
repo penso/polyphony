@@ -178,7 +178,11 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
             .title(title)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border))
+            .border_style(Style::default().fg(if app.list_border_focused {
+                theme.highlight
+            } else {
+                theme.border
+            }))
             .padding(Padding::new(1, 1, 0, 0)),
     );
 

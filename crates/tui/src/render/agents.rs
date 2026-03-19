@@ -122,7 +122,11 @@ pub fn draw_agents_tab(
             )
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border)),
+            .border_style(Style::default().fg(if app.list_border_focused {
+                theme.highlight
+            } else {
+                theme.border
+            })),
     );
 
     frame.render_stateful_widget(table, area, &mut app.agents_state);
