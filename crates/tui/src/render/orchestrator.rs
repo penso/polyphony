@@ -342,12 +342,20 @@ fn draw_movements_table(
             },
             OrchestratorTreeRow::Trigger {
                 trigger_index,
+                movement_snapshot_index,
                 is_last_child,
             } => {
                 let trigger = &snapshot.visible_triggers[*trigger_index];
+                let movement = &snapshot.movements[*movement_snapshot_index];
                 let connector = if *is_last_child { "└─ " } else { "├─ " };
                 let (status_icon, status_color) =
                     super::triggers::status_emoji_pub(&trigger.status, theme);
+                // Show "trigger" when the title matches the movement, full title otherwise
+                let display_title = if trigger.title == movement.title {
+                    format!("#{}", trigger.identifier)
+                } else {
+                    trigger.title.clone()
+                };
                 Row::new(vec![
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Line::from(vec![
@@ -359,10 +367,8 @@ fn draw_movements_table(
                             format!("{status_icon} "),
                             Style::default().fg(status_color),
                         ),
-                        Span::styled(
-                            trigger.title.clone(),
-                            Style::default().fg(theme.highlight),
-                        ),
+                        Span::styled("trigger ", Style::default().fg(theme.muted)),
+                        Span::styled(display_title, Style::default().fg(theme.highlight)),
                     ])),
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Span::styled("", Style::default())),
@@ -389,6 +395,7 @@ fn draw_movements_table(
                             format!("{status_icon} "),
                             Style::default().fg(status_color),
                         ),
+                        Span::styled("task ", Style::default().fg(theme.muted)),
                         Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
                     ])),
                     Cell::from(Span::styled("", Style::default())),
@@ -411,11 +418,10 @@ fn draw_movements_table(
                     polyphony_core::DeliverableKind::GitlabMergeRequest => "MR",
                     polyphony_core::DeliverableKind::Patch => "patch",
                 };
-                let label = if let Some(url) = &deliverable.url {
-                    format!("{kind_label}: {url}")
-                } else {
-                    kind_label.to_string()
-                };
+                let url_label = deliverable
+                    .url
+                    .as_deref()
+                    .unwrap_or(kind_label);
                 Row::new(vec![
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Line::from(vec![
@@ -424,7 +430,11 @@ fn draw_movements_table(
                             format!("{decision_icon} "),
                             Style::default().fg(decision_color),
                         ),
-                        Span::styled(label, Style::default().fg(theme.info)),
+                        Span::styled(
+                            format!("{kind_label} "),
+                            Style::default().fg(theme.muted),
+                        ),
+                        Span::styled(url_label.to_string(), Style::default().fg(theme.info)),
                     ])),
                     Cell::from(Span::styled("", Style::default())),
                     Cell::from(Span::styled("", Style::default())),

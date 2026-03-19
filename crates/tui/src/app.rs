@@ -168,7 +168,7 @@ impl ActiveTab {
 #[derive(Debug, Clone)]
 pub(crate) enum OrchestratorTreeRow {
     Movement { snapshot_index: usize },
-    Trigger { trigger_index: usize, is_last_child: bool },
+    Trigger { trigger_index: usize, movement_snapshot_index: usize, is_last_child: bool },
     Task { snapshot_index: usize, is_last_child: bool },
     Outcome { movement_snapshot_index: usize },
 }
@@ -533,14 +533,13 @@ impl AppState {
                 let has_outcome = movement.deliverable.is_some();
                 let has_children = has_tasks || has_outcome;
 
-                // Trigger row (first child) — skip when its title matches the
-                // movement title to avoid redundant repetition.
+                // Trigger row (first child)
                 if let Some(identifier) = movement.issue_identifier.as_deref()
                     && let Some(&trigger_idx) = trigger_by_identifier.get(identifier)
-                    && snapshot.visible_triggers[trigger_idx].title != movement.title
                 {
                     rows.push(OrchestratorTreeRow::Trigger {
                         trigger_index: trigger_idx,
+                        movement_snapshot_index: mov_idx,
                         is_last_child: !has_children,
                     });
                 }
