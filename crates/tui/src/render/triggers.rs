@@ -185,7 +185,7 @@ pub fn draw_triggers_tab(
                     BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
                 Span::styled(spinner.to_string(), Style::default().fg(theme.info))
             } else if trigger.has_workspace {
-                Span::styled("●", Style::default().fg(theme.success))
+                Span::styled("●", Style::default().fg(theme.highlight))
             } else {
                 Span::styled(" ", Style::default())
             };
@@ -314,7 +314,7 @@ pub fn draw_triggers_tab(
             block
                 .title_bottom(
                     Line::from(vec![
-                        Span::styled(" ●", Style::default().fg(theme.success)),
+                        Span::styled(" ●", Style::default().fg(theme.highlight)),
                         Span::styled(":has workspace  ", Style::default().fg(theme.muted)),
                         Span::styled("●", Style::default().fg(theme.success)),
                         Span::styled(":open  ", Style::default().fg(theme.muted)),
