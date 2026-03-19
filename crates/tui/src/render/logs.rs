@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{
         Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph, RenderDirection,
-        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table,
+        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table, TableState,
     },
 };
 use serde_json::Value;
@@ -50,11 +50,21 @@ pub fn draw_logs_tab(
 fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppState) {
     let theme = app.theme;
 
-    // Only re-parse log entries when the buffer has grown.
+    // Incrementally parse only new log lines since the last frame.
     let current_len = app.log_buffer.len();
     if current_len != app.cached_log_entry_count {
-        let raw_lines = app.log_buffer.all_lines();
-        app.cached_log_entries = raw_lines.iter().map(|l| parse_log_entry(l)).collect();
+        if current_len > app.cached_log_entry_count {
+            // Buffer grew — parse only the new tail.
+            let raw_lines = app.log_buffer.all_lines();
+            let new_entries = raw_lines[app.cached_log_entry_count..]
+                .iter()
+                .map(|l| parse_log_entry(l));
+            app.cached_log_entries.extend(new_entries);
+        } else {
+            // Buffer shrank (e.g. was drained) — full re-parse.
+            let raw_lines = app.log_buffer.all_lines();
+            app.cached_log_entries = raw_lines.iter().map(|l| parse_log_entry(l)).collect();
+        }
         app.cached_log_entry_count = current_len;
     }
 
@@ -86,13 +96,8 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
         app.logs_state.select(Some(count - 1));
     }
 
-    // Compute max target width (capped at 20, min 6 for header)
-    let max_target_len = filtered
-        .iter()
-        .map(|e| e.target.len())
-        .max()
-        .unwrap_or(6)
-        .clamp(6, 20) as u16;
+    // Use a fixed target column width to avoid iterating all entries.
+    let max_target_len: u16 = 16;
 
     // Compute available message column width for wrapping
     // area.width - 2 (borders) - 2 (L+R padding) - 9 - 6 - target - 3 (column gaps)
@@ -111,7 +116,14 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row> = filtered
+    // Only build Row widgets for a window around the selection to avoid
+    // expensive per-entry word-wrapping for thousands of off-screen rows.
+    let visible_height = area.height.saturating_sub(3) as usize; // borders + header
+    let selected = app.logs_state.selected().unwrap_or(0);
+    let window_start = selected.saturating_sub(visible_height);
+    let window_end = (selected + visible_height + 1).min(count);
+
+    let rows: Vec<Row> = filtered[window_start..window_end]
         .iter()
         .map(|entry| {
             let (level_color, msg_style) = level_styles(&entry.level, theme);
@@ -129,7 +141,7 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
                         .add_modifier(Modifier::BOLD),
                 )),
                 Cell::from(Span::styled(
-                    entry.target.clone(),
+                    truncate_target(&entry.target, max_target_len as usize),
                     Style::default().fg(Color::Blue),
                 )),
                 msg_cell,
@@ -137,6 +149,11 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
             .height(row_height)
         })
         .collect();
+
+    // Adjust TableState to account for the window offset so ratatui
+    // highlights the correct row within the sliced row set.
+    let mut windowed_state = TableState::default();
+    windowed_state.select(Some(selected - window_start));
 
     let title = build_logs_title(&app.logs_search_query, app.logs_search_active, theme);
     let selected_style = Style::default()
@@ -163,8 +180,8 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
             .padding(Padding::new(1, 1, 0, 0)),
     );
 
-    frame.render_stateful_widget(table, area, &mut app.logs_state);
-    draw_scrollbar(frame, area, count, app.logs_state.selected().unwrap_or(0));
+    frame.render_stateful_widget(table, area, &mut windowed_state);
+    draw_scrollbar(frame, area, count, selected);
 }
 
 // ─── Log parsing ─────────────────────────────────────────────────────
@@ -715,6 +732,14 @@ fn provider_rank(provider: &str) -> u8 {
         "codex" => 0,
         "claude" => 1,
         _ => 2,
+    }
+}
+
+fn truncate_target(target: &str, max_len: usize) -> String {
+    if target.len() <= max_len {
+        target.to_string()
+    } else {
+        format!("{}…", &target[..max_len.saturating_sub(1)])
     }
 }
 
