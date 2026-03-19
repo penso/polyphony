@@ -459,6 +459,7 @@ impl RuntimeService {
 
         // Pipeline worker handling
         if let Some(movement_id) = running.movement_id.clone() {
+            let stopped = self.state.dispatch_mode == polyphony_core::DispatchMode::Stop;
             let workflow = self.workflow();
             let issue = running.issue.clone();
             let workspace_path = running.workspace_path.clone();
@@ -467,6 +468,13 @@ impl RuntimeService {
                 EventScope::Worker,
                 format!("{} pipeline worker {:?}", issue_identifier, outcome.status),
             );
+
+            if stopped {
+                // In stop mode, do not dispatch follow-up pipeline work or retries.
+                self.release_issue(&issue_id);
+                self.emit_snapshot().await?;
+                return Ok(());
+            }
 
             // Determine if this was a planner or a task worker
             if active_task_id.is_none() {
@@ -583,6 +591,7 @@ impl RuntimeService {
             }
         }
 
+        let stopped = self.state.dispatch_mode == polyphony_core::DispatchMode::Stop;
         let workflow = self.workflow();
         match outcome.status {
             AttemptStatus::Succeeded => {
@@ -607,28 +616,36 @@ impl RuntimeService {
                     }
                 }
                 self.state.completed.insert(issue_id.clone());
-                self.schedule_retry(
-                    issue_id.clone(),
-                    issue_identifier.clone(),
-                    1,
-                    None,
-                    true,
-                    workflow.config.agent.max_retry_backoff_ms,
-                );
+                if stopped {
+                    self.release_issue(&issue_id);
+                } else {
+                    self.schedule_retry(
+                        issue_id.clone(),
+                        issue_identifier.clone(),
+                        1,
+                        None,
+                        true,
+                        workflow.config.agent.max_retry_backoff_ms,
+                    );
+                }
             },
             AttemptStatus::CancelledByReconciliation => {
                 self.release_issue(&issue_id);
                 self.state.pull_request_retry_triggers.remove(&issue_id);
             },
             _ => {
-                self.schedule_retry(
-                    issue_id.clone(),
-                    issue_identifier.clone(),
-                    attempt.unwrap_or(0) + 1,
-                    outcome.error.clone(),
-                    false,
-                    workflow.config.agent.max_retry_backoff_ms,
-                );
+                if stopped {
+                    self.release_issue(&issue_id);
+                } else {
+                    self.schedule_retry(
+                        issue_id.clone(),
+                        issue_identifier.clone(),
+                        attempt.unwrap_or(0) + 1,
+                        outcome.error.clone(),
+                        false,
+                        workflow.config.agent.max_retry_backoff_ms,
+                    );
+                }
             },
         }
         self.push_event(
@@ -668,6 +685,7 @@ impl RuntimeService {
             }
         }
 
+        let stopped = self.state.dispatch_mode == polyphony_core::DispatchMode::Stop;
         match outcome.status {
             AttemptStatus::Succeeded => {
                 if let Err(error) = self
@@ -687,14 +705,18 @@ impl RuntimeService {
                         EventScope::Handoff,
                         format!("{} review comment failed: {}", issue_identifier, error),
                     );
-                    self.schedule_retry(
-                        issue_id.clone(),
-                        issue_identifier.clone(),
-                        attempt.unwrap_or(0) + 1,
-                        Some(error.to_string()),
-                        false,
-                        self.workflow().config.agent.max_retry_backoff_ms,
-                    );
+                    if stopped {
+                        self.release_issue(&issue_id);
+                    } else {
+                        self.schedule_retry(
+                            issue_id.clone(),
+                            issue_identifier.clone(),
+                            attempt.unwrap_or(0) + 1,
+                            Some(error.to_string()),
+                            false,
+                            self.workflow().config.agent.max_retry_backoff_ms,
+                        );
+                    }
                 } else {
                     let reviewed = ReviewedPullRequestHead {
                         key: review_target_key(&review_target),
@@ -717,14 +739,18 @@ impl RuntimeService {
                 self.release_issue(&issue_id);
             },
             _ => {
-                self.schedule_retry(
-                    issue_id.clone(),
-                    issue_identifier.clone(),
-                    attempt.unwrap_or(0) + 1,
-                    outcome.error.clone(),
-                    false,
-                    self.workflow().config.agent.max_retry_backoff_ms,
-                );
+                if stopped {
+                    self.release_issue(&issue_id);
+                } else {
+                    self.schedule_retry(
+                        issue_id.clone(),
+                        issue_identifier.clone(),
+                        attempt.unwrap_or(0) + 1,
+                        outcome.error.clone(),
+                        false,
+                        self.workflow().config.agent.max_retry_backoff_ms,
+                    );
+                }
             },
         }
         self.push_event(

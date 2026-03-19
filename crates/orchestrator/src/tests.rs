@@ -2749,3 +2749,309 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
         DeliverableDecision::Accepted
     );
 }
+
+// ---------------------------------------------------------------------------
+// Stop mode tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn stop_mode_skips_dispatch_on_tick() {
+    let workspace_root = unique_workspace_root("stop-tick");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
+
+    service.tick().await;
+
+    assert!(
+        !service.state.running.contains_key("issue-1"),
+        "stop mode should prevent dispatch"
+    );
+}
+
+#[tokio::test]
+async fn stop_mode_blocks_manual_dispatch() {
+    let workspace_root = unique_workspace_root("stop-manual");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
+    service
+        .pending_manual_dispatches
+        .push(("issue-1".into(), None));
+
+    service.process_manual_dispatches().await;
+
+    assert!(
+        !service.state.running.contains_key("issue-1"),
+        "stop mode should block manual dispatch"
+    );
+}
+
+#[tokio::test]
+async fn stop_mode_blocks_retries() {
+    let workspace_root = unique_workspace_root("stop-retry");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
+    // Manually insert a due retry.
+    service
+        .state
+        .retrying
+        .insert("issue-1".into(), RetryEntry {
+            row: RetryRow {
+                issue_id: "issue-1".into(),
+                issue_identifier: "FAC-1".into(),
+                attempt: 1,
+                due_at: Utc::now() - chrono::Duration::seconds(10),
+                error: Some("test error".into()),
+            },
+            due_at: Instant::now() - Duration::from_secs(10),
+        });
+
+    service.process_due_retries().await;
+
+    assert!(
+        service.state.retrying.contains_key("issue-1"),
+        "retry should remain queued and not be processed in stop mode"
+    );
+    assert!(
+        !service.state.running.contains_key("issue-1"),
+        "no task should be dispatched from retry in stop mode"
+    );
+}
+
+#[tokio::test]
+async fn abort_all_drains_retry_queue() {
+    let workspace_root = unique_workspace_root("stop-abort-retries");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.claim_issue("issue-1".to_string(), IssueClaimState::RetryQueued);
+    service
+        .state
+        .retrying
+        .insert("issue-1".into(), RetryEntry {
+            row: RetryRow {
+                issue_id: "issue-1".into(),
+                issue_identifier: "FAC-1".into(),
+                attempt: 2,
+                due_at: Utc::now() + chrono::Duration::minutes(5),
+                error: Some("transient".into()),
+            },
+            due_at: Instant::now() + Duration::from_secs(300),
+        });
+
+    service.abort_all().await;
+
+    assert!(
+        service.state.retrying.is_empty(),
+        "abort_all should drain the retry queue"
+    );
+    assert!(
+        !service.is_claimed("issue-1"),
+        "abort_all should release claims for drained retries"
+    );
+}
+
+#[tokio::test]
+async fn finish_running_in_stop_mode_does_not_schedule_retry_on_success() {
+    let workspace_root = unique_workspace_root("stop-finish-success");
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let issue = sample_issue("issue-5", "FAC-5", "Todo", "Work");
+    let workspace_path = workspace_root.join("FAC-5");
+    service.state.running.insert(
+        issue.id.clone(),
+        make_running_task(issue.clone(), workspace_path),
+    );
+    service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
+
+    service
+        .finish_running(
+            issue.id.clone(),
+            issue.identifier.clone(),
+            None,
+            Utc::now(),
+            AgentRunResult {
+                status: AttemptStatus::Succeeded,
+                turns_completed: 1,
+                error: None,
+                final_issue_state: Some("Human Review".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        service.state.completed.contains(&issue.id),
+        "issue should still be marked as completed"
+    );
+    assert!(
+        !service.state.retrying.contains_key(&issue.id),
+        "no retry should be scheduled in stop mode"
+    );
+    assert!(
+        !service.is_claimed(&issue.id),
+        "issue claim should be released in stop mode"
+    );
+}
+
+#[tokio::test]
+async fn finish_running_in_stop_mode_does_not_schedule_retry_on_failure() {
+    let workspace_root = unique_workspace_root("stop-finish-fail");
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let issue = sample_issue("issue-6", "FAC-6", "Todo", "Work");
+    let workspace_path = workspace_root.join("FAC-6");
+    service.state.running.insert(
+        issue.id.clone(),
+        make_running_task(issue.clone(), workspace_path),
+    );
+    service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
+
+    service
+        .finish_running(
+            issue.id.clone(),
+            issue.identifier.clone(),
+            Some(1),
+            Utc::now(),
+            AgentRunResult {
+                status: AttemptStatus::Failed,
+                turns_completed: 0,
+                error: Some("test failure".into()),
+                final_issue_state: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !service.state.retrying.contains_key(&issue.id),
+        "no retry should be scheduled in stop mode after failure"
+    );
+    assert!(
+        !service.is_claimed(&issue.id),
+        "issue claim should be released in stop mode after failure"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Movement deduplication tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn dispatch_reuses_active_movement_for_same_issue() {
+    let workspace_root = unique_workspace_root("movement-reuse");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
+
+    // First dispatch creates a movement.
+    service.tick().await;
+    assert!(service.state.running.contains_key("issue-1"));
+    let movement_count_after_first = service.state.movements.len();
+    assert_eq!(movement_count_after_first, 1, "first dispatch should create one movement");
+
+    // Simulate the task finishing with success so it gets a continuation retry.
+    let issue = sample_issue("issue-1", "FAC-1", "Todo", "First");
+    handle_next_worker_message(&mut service).await;
+
+    // The issue should now be in the retry queue with a movement still present.
+    assert!(
+        service.state.retrying.contains_key("issue-1"),
+        "successful finish should schedule a continuation retry"
+    );
+
+    // Process the retry (it fires after 1 second but we can trigger manually).
+    service.state.retrying.get_mut("issue-1").unwrap().due_at =
+        Instant::now() - Duration::from_secs(1);
+    service.process_due_retries().await;
+
+    // After the retry dispatch, there should still be only one movement.
+    let movement_count_after_retry = service
+        .state
+        .movements
+        .values()
+        .filter(|m| m.issue_id.as_deref() == Some("issue-1"))
+        .count();
+    assert_eq!(
+        movement_count_after_retry, 1,
+        "retry dispatch should reuse the existing movement, not create a duplicate"
+    );
+}
+
+#[test]
+fn find_existing_movement_prefers_active_over_terminal() {
+    let workspace_root = unique_workspace_root("movement-find-existing");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+
+    let now = Utc::now();
+
+    // Insert a delivered (terminal) movement for the issue.
+    service.state.movements.insert(
+        "mov-delivered".into(),
+        Movement {
+            id: "mov-delivered".into(),
+            kind: MovementKind::IssueDelivery,
+            issue_id: Some("issue-1".into()),
+            issue_identifier: Some("FAC-1".into()),
+            title: "Delivered work".into(),
+            status: MovementStatus::Delivered,
+            workspace_key: None,
+            workspace_path: None,
+            review_target: None,
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        },
+    );
+
+    // Even a terminal movement should be found — prevents duplicate movements
+    // when an issue is re-dispatched via continuation retry.
+    assert_eq!(
+        service.find_existing_movement_for_issue("issue-1"),
+        Some("mov-delivered".into()),
+        "delivered movement should be found when no active one exists"
+    );
+
+    // Insert an in-progress (active) movement — should be preferred.
+    service.state.movements.insert(
+        "mov-active".into(),
+        Movement {
+            id: "mov-active".into(),
+            kind: MovementKind::IssueDelivery,
+            issue_id: Some("issue-1".into()),
+            issue_identifier: Some("FAC-1".into()),
+            title: "Active work".into(),
+            status: MovementStatus::InProgress,
+            workspace_key: None,
+            workspace_path: None,
+            review_target: None,
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        },
+    );
+
+    assert_eq!(
+        service.find_existing_movement_for_issue("issue-1"),
+        Some("mov-active".into()),
+        "active movement should be preferred over terminal one"
+    );
+
+    // No movement for a different issue.
+    assert!(
+        service
+            .find_existing_movement_for_issue("issue-999")
+            .is_none(),
+        "should return None for an issue with no movements"
+    );
+}

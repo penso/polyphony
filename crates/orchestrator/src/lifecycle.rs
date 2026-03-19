@@ -218,5 +218,11 @@ impl RuntimeService {
         for issue_id in running_ids {
             self.stop_running(&issue_id, false).await;
         }
+        // Drain pending retries so nothing restarts when the mode changes back.
+        let retrying_ids = self.state.retrying.keys().cloned().collect::<Vec<_>>();
+        for issue_id in retrying_ids {
+            self.state.retrying.remove(&issue_id);
+            self.release_issue(&issue_id);
+        }
     }
 }
