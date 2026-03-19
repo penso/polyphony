@@ -1,3 +1,5 @@
+use futures_util::StreamExt;
+
 use crate::{
     bootstrap::{drain_pending_input, mouse_in_rect},
     prelude::*,
@@ -25,10 +27,16 @@ pub async fn run(
     // Always trigger a fresh fetch on startup so issues appear immediately.
     let _ = command_tx.send(RuntimeCommand::Refresh);
 
+    let mut event_stream = crossterm::event::EventStream::new();
+    let mut needs_draw = true;
+
     let result = loop {
-        terminal.draw(|frame| {
-            render::render(frame, &snapshot, &mut app);
-        })?;
+        if needs_draw {
+            terminal.draw(|frame| {
+                render::render(frame, &snapshot, &mut app);
+            })?;
+            needs_draw = false;
+        }
 
         if let Some(since) = app.leaving_since
             && since.elapsed() > Duration::from_secs(3)
@@ -36,9 +44,32 @@ pub async fn run(
             break Ok(());
         }
 
+        // Wait for terminal input OR snapshot update — fully async, no blocking.
+        let terminal_event = tokio::select! {
+            biased;
+            event = event_stream.next() => {
+                match event {
+                    Some(Ok(ev)) => Some(ev),
+                    Some(Err(_)) => None,
+                    None => break Ok(()),
+                }
+            }
+            changed = snapshot_rx.changed() => {
+                if changed.is_err() {
+                    break Ok(());
+                }
+                snapshot = snapshot_rx.borrow().clone();
+                app.on_snapshot(&snapshot);
+                refresh_agent_detail_artifact(&mut app, &snapshot).await;
+                needs_draw = true;
+                continue;
+            }
+        };
+
+        let Some(ev) = terminal_event else { continue };
+
         let mut key_handled = false;
-        if event::poll(Duration::from_millis(16))? {
-            match event::read()? {
+        match ev {
                 Event::Mouse(mouse) => {
                     if !app.leaving {
                         if app.has_detail() {
@@ -302,36 +333,15 @@ pub async fn run(
                 },
                 _ => {},
             }
-        }
 
-        // After processing one event, discard any excess queued key repeats
-        // so held keys don't build a backlog, while still drawing every frame
-        // for smooth row-by-row scrolling.
         if key_handled {
-            while event::poll(Duration::from_millis(0))? {
-                let _ = event::read()?;
+            needs_draw = true;
+            refresh_agent_detail_artifact(&mut app, &snapshot).await;
+            // Pick up any snapshot that arrived while handling input.
+            if snapshot_rx.has_changed().unwrap_or(false) {
+                snapshot = snapshot_rx.borrow().clone();
+                app.on_snapshot(&snapshot);
             }
-        }
-
-        refresh_agent_detail_artifact(&mut app, &snapshot).await;
-
-        // After a keypress, loop back to draw immediately so the UI feels instant.
-        // Otherwise, wait for a snapshot update or a short idle timeout.
-        if !key_handled {
-            tokio::select! {
-                changed = snapshot_rx.changed() => {
-                    if changed.is_err() {
-                        break Ok(());
-                    }
-                    snapshot = snapshot_rx.borrow().clone();
-                    app.on_snapshot(&snapshot);
-                    refresh_agent_detail_artifact(&mut app, &snapshot).await;
-                }
-                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
-            }
-        } else if snapshot_rx.has_changed().unwrap_or(false) {
-            snapshot = snapshot_rx.borrow().clone();
-            app.on_snapshot(&snapshot);
         }
     };
 
