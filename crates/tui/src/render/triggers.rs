@@ -314,6 +314,18 @@ pub fn draw_triggers_tab(
             block
                 .title_bottom(
                     Line::from(vec![
+                        Span::styled(" ●", Style::default().fg(theme.highlight)),
+                        Span::styled("wksp ", Style::default().fg(theme.muted)),
+                        Span::styled("✓", Style::default().fg(theme.success)),
+                        Span::styled("ok ", Style::default().fg(theme.muted)),
+                        Span::styled("◷", Style::default().fg(theme.warning)),
+                        Span::styled("wait ", Style::default().fg(theme.muted)),
+                        Span::styled("○", Style::default().fg(theme.success)),
+                        Span::styled("done ", Style::default().fg(theme.muted)),
+                    ]),
+                )
+                .title_bottom(
+                    Line::from(vec![
                         Span::styled("─s:", Style::default().fg(theme.muted)),
                         Span::styled(sort_label, Style::default().fg(theme.highlight)),
                         Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
