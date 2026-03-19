@@ -55,11 +55,14 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
                 .split(areas[1]);
             // The content_area for click detection maps to the list pane
             app.content_area = split[0];
-            render_tab_table(frame, split[0], snapshot, app, app.split_focus == SplitFocus::List);
+            let detail_focused = app.split_focus == SplitFocus::Detail;
+            render_tab_table(frame, split[0], snapshot, app, !detail_focused);
+            app.detail_border_focused = detail_focused;
             render_detail_view(frame, split[1], &detail, snapshot, app);
         } else {
             // Full-page detail (deep stack or narrow terminal)
             app.content_area = areas[1];
+            app.detail_border_focused = true;
             render_detail_view(frame, areas[1], &detail, snapshot, app);
         }
     } else {

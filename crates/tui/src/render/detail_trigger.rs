@@ -53,7 +53,11 @@ pub(crate) fn draw_trigger_detail(
         .title_bottom(Line::from(hint_spans).right_aligned())
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.highlight))
+        .border_style(Style::default().fg(if app.detail_border_focused {
+            theme.highlight
+        } else {
+            theme.border
+        }))
         .style(Style::default().bg(theme.panel_alt));
 
     frame.render_widget(&block, area);
@@ -236,12 +240,13 @@ pub(crate) fn draw_trigger_detail(
     let movements_focused = focus == DetailSection::Section(0);
     let agents_focused = focus == DetailSection::Section(1);
 
-    // Related movements
-    let related_movements: Vec<_> = snapshot
+    // Related movements — sorted by creation time (oldest first, newest at bottom)
+    let mut related_movements: Vec<_> = snapshot
         .movements
         .iter()
         .filter(|m| m.issue_identifier.as_deref() == Some(&*issue.identifier))
         .collect();
+    related_movements.sort_by_key(|m| m.created_at);
     if !related_movements.is_empty() {
         body_lines.push(Line::default());
         let section_marker = if movements_focused { "▸ " } else { "  " };
@@ -299,6 +304,7 @@ pub(crate) fn draw_trigger_detail(
             let kind_label = super::orchestrator::movement_kind_label(m.kind);
             let target = super::orchestrator::movement_target_label(m);
             let status_str = m.status.to_string();
+            let age = super::detail_common::format_relative_time(m.created_at, Utc::now());
             body_lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(theme.highlight)),
                 Span::styled(format!("{status_emoji} "), Style::default().fg(emoji_color)),
@@ -316,11 +322,12 @@ pub(crate) fn draw_trigger_detail(
                 ),
                 Span::styled(
                     format!(
-                        "{:>max_completed_len$}/{:<max_total_len$}",
+                        "{:>max_completed_len$}/{:<max_total_len$}  ",
                         m.tasks_completed, m.task_count
                     ),
                     Style::default().fg(theme.muted),
                 ),
+                Span::styled(age, Style::default().fg(theme.muted)),
             ]));
         }
     }

@@ -48,7 +48,11 @@ pub(crate) fn draw_task_detail(
         )
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.highlight))
+        .border_style(Style::default().fg(if app.detail_border_focused {
+            theme.highlight
+        } else {
+            theme.border
+        }))
         .style(Style::default().bg(theme.panel_alt));
     frame.render_widget(&block, area);
 
