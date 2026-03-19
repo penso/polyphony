@@ -1724,6 +1724,8 @@ mod tests {
                     status: DeliverableStatus::Open,
                     url: Some("https://github.com/penso/polyphony/pull/8".into()),
                     decision: DeliverableDecision::Waiting,
+                    title: None,
+                    description: None,
                 }),
                 has_deliverable: true,
                 review_target: None,

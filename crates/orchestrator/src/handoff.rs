@@ -223,6 +223,8 @@ impl RuntimeService {
                 ("commit_sha", commit_result.head_sha.clone()),
             ],
         )?;
+        let pr_title_copy = pr_title.clone();
+        let pr_body_copy = pr_body.clone();
         let pull_request = pull_request_manager
             .ensure_pull_request(&PullRequestRequest {
                 repository,
@@ -248,6 +250,8 @@ impl RuntimeService {
                 status: polyphony_core::DeliverableStatus::Open,
                 url: pull_request.url.clone(),
                 decision: polyphony_core::DeliverableDecision::Waiting,
+                title: Some(pr_title_copy),
+                description: Some(pr_body_copy),
             });
             movement.updated_at = Utc::now();
             if let Some(store) = &self.store {

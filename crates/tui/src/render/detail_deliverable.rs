@@ -145,29 +145,28 @@ pub(crate) fn draw_deliverable_detail(
         ));
     }
 
-    // Related tasks summary
-    let related_tasks: Vec<_> = snapshot
-        .tasks
-        .iter()
-        .filter(|t| t.movement_id == movement.id)
-        .collect();
-    if !related_tasks.is_empty() {
+    // Deliverable title & description (e.g. PR title and body)
+    if let Some(title) = &deliverable.title {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
-            "Tasks",
+            title.clone(),
             Style::default()
-                .fg(theme.highlight)
+                .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         )));
-        for task in &related_tasks {
-            let status_color = super::tasks::task_status_color(&task.status, theme);
-            let status_icon = super::tasks::task_status_icon(&task.status);
-            lines.push(Line::from(vec![
-                Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
-                Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
-            ]));
+    }
+    if let Some(description) = &deliverable.description
+        && !description.trim().is_empty()
+    {
+        lines.push(Line::default());
+        for line in description.lines() {
+            lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(theme.foreground),
+            )));
         }
     }
+
 
     // Scrollable rendering
     let body_area = rows[3];

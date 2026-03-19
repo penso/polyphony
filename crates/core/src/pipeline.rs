@@ -193,6 +193,10 @@ pub struct Deliverable {
     pub url: Option<String>,
     #[serde(default)]
     pub decision: DeliverableDecision,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

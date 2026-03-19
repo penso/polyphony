@@ -570,6 +570,8 @@ fn render_outputs_shows_flow_output_and_decision() {
             status: DeliverableStatus::Open,
             url: Some("https://github.com/penso/polyphony/pull/8".into()),
             decision: DeliverableDecision::Waiting,
+            title: None,
+            description: None,
         }),
         has_deliverable: true,
         review_target: None,

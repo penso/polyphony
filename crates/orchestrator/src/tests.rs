@@ -2715,6 +2715,8 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
             status: DeliverableStatus::Open,
             url: Some("https://github.com/penso/polyphony/pull/8".into()),
             decision: DeliverableDecision::Waiting,
+            title: None,
+            description: None,
         }),
         created_at: now,
         updated_at: now,
