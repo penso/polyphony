@@ -164,10 +164,11 @@ impl ActiveTab {
     }
 }
 
-/// A row in the Orchestration tab's tree view: movement, task, or outcome summary.
+/// A row in the Orchestration tab's tree view: movement, trigger, task, or outcome.
 #[derive(Debug, Clone)]
 pub(crate) enum OrchestratorTreeRow {
     Movement { snapshot_index: usize },
+    Trigger { trigger_index: usize, is_last_child: bool },
     Task { snapshot_index: usize, is_last_child: bool },
     Outcome { movement_snapshot_index: usize },
 }
@@ -512,6 +513,14 @@ impl AppState {
             tasks.sort_by_key(|&i| snapshot.tasks[i].ordinal);
         }
 
+        // Build trigger lookup by identifier
+        let trigger_by_identifier: StdMap<&str, usize> = snapshot
+            .visible_triggers
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.identifier.as_str(), i))
+            .collect();
+
         let mut rows = Vec::new();
         for &mov_idx in &self.sorted_movement_indices {
             let movement = &snapshot.movements[mov_idx];
@@ -519,8 +528,22 @@ impl AppState {
                 snapshot_index: mov_idx,
             });
             if !self.collapsed_movements.contains(&movement.id) {
-                if let Some(task_indices) = tasks_by_movement.get(movement.id.as_str()) {
-                    let has_outcome = movement.deliverable.is_some();
+                let task_indices = tasks_by_movement.get(movement.id.as_str());
+                let has_tasks = task_indices.is_some_and(|t| !t.is_empty());
+                let has_outcome = movement.deliverable.is_some();
+                let has_children = has_tasks || has_outcome;
+
+                // Trigger row (first child)
+                if let Some(identifier) = movement.issue_identifier.as_deref()
+                    && let Some(&trigger_idx) = trigger_by_identifier.get(identifier)
+                {
+                    rows.push(OrchestratorTreeRow::Trigger {
+                        trigger_index: trigger_idx,
+                        is_last_child: !has_children,
+                    });
+                }
+
+                if let Some(task_indices) = task_indices {
                     let count = task_indices.len();
                     for (ci, &task_idx) in task_indices.iter().enumerate() {
                         rows.push(OrchestratorTreeRow::Task {
@@ -528,12 +551,8 @@ impl AppState {
                             is_last_child: ci == count - 1 && !has_outcome,
                         });
                     }
-                    if has_outcome {
-                        rows.push(OrchestratorTreeRow::Outcome {
-                            movement_snapshot_index: mov_idx,
-                        });
-                    }
-                } else if movement.deliverable.is_some() {
+                }
+                if has_outcome {
                     rows.push(OrchestratorTreeRow::Outcome {
                         movement_snapshot_index: mov_idx,
                     });
@@ -714,7 +733,9 @@ impl AppState {
                 OrchestratorTreeRow::Movement { snapshot_index } => {
                     snapshot.movements.get(*snapshot_index)
                 },
-                OrchestratorTreeRow::Task { .. } | OrchestratorTreeRow::Outcome { .. } => None,
+                OrchestratorTreeRow::Trigger { .. }
+                | OrchestratorTreeRow::Task { .. }
+                | OrchestratorTreeRow::Outcome { .. } => None,
             })
     }
 

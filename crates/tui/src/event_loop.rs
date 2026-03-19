@@ -635,6 +635,16 @@ fn handle_key(
                         app.toggle_movement_collapse(&movement.id.clone());
                         app.rebuild_orchestrator_tree(snapshot);
                     },
+                    Some(app::OrchestratorTreeRow::Trigger { trigger_index, .. }) => {
+                        let trigger = &snapshot.visible_triggers[trigger_index];
+                        app.push_detail(crate::app::DetailView::Trigger {
+                            trigger_id: trigger.trigger_id.clone(),
+                            scroll: 0,
+                            focus: Default::default(),
+                            movements_selected: 0,
+                            agents_selected: 0,
+                        });
+                    },
                     Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) => {
                         let task = &snapshot.tasks[snapshot_index];
                         app.push_detail(crate::app::DetailView::Task {
@@ -1295,6 +1305,18 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                         tasks_selected: 0,
                     }
                 })
+            },
+            Some(app::OrchestratorTreeRow::Trigger { trigger_index, .. }) => {
+                snapshot
+                    .visible_triggers
+                    .get(trigger_index)
+                    .map(|t| crate::app::DetailView::Trigger {
+                        trigger_id: t.trigger_id.clone(),
+                        scroll: 0,
+                        focus: Default::default(),
+                        movements_selected: 0,
+                        agents_selected: 0,
+                    })
             },
             Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) => {
                 snapshot.tasks.get(snapshot_index).map(|t| {

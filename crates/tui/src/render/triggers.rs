@@ -396,6 +396,13 @@ fn kind_color(kind: VisibleTriggerKind, theme: crate::theme::Theme) -> ratatui::
     }
 }
 
+pub(crate) fn status_emoji_pub(
+    state: &str,
+    theme: crate::theme::Theme,
+) -> (&'static str, ratatui::style::Color) {
+    status_emoji(state, theme)
+}
+
 fn status_emoji(state: &str, theme: crate::theme::Theme) -> (&'static str, ratatui::style::Color) {
     match state.to_ascii_lowercase().as_str() {
         "open" | "in progress" | "started" | "in_progress" | "ready" => ("●", theme.success),

@@ -264,6 +264,10 @@ fn draw_movements_table(
                 OrchestratorTreeRow::Movement { snapshot_index } => {
                     matching_movements.contains(snapshot_index)
                 },
+                OrchestratorTreeRow::Trigger { .. } => {
+                    // Trigger rows follow their movement; include if parent matches
+                    true // filtered by parent movement
+                },
                 OrchestratorTreeRow::Task { snapshot_index, .. } => {
                     let task = &snapshot.tasks[*snapshot_index];
                     app.sorted_movement_indices.iter().any(|&mi| {
@@ -334,6 +338,35 @@ fn draw_movements_table(
                         ))
                         .alignment(Alignment::Right),
                     ),
+                ])
+            },
+            OrchestratorTreeRow::Trigger {
+                trigger_index,
+                is_last_child,
+            } => {
+                let trigger = &snapshot.visible_triggers[*trigger_index];
+                let connector = if *is_last_child { "└─ " } else { "├─ " };
+                let (status_icon, status_color) =
+                    super::triggers::status_emoji_pub(&trigger.status, theme);
+                Row::new(vec![
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Line::from(vec![
+                        Span::styled(
+                            format!("  {connector}"),
+                            Style::default().fg(theme.border),
+                        ),
+                        Span::styled(
+                            format!("{status_icon} "),
+                            Style::default().fg(status_color),
+                        ),
+                        Span::styled(
+                            trigger.title.clone(),
+                            Style::default().fg(theme.highlight),
+                        ),
+                    ])),
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Span::styled("", Style::default())),
+                    Cell::from(Span::styled("", Style::default())),
                 ])
             },
             OrchestratorTreeRow::Task {
