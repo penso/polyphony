@@ -324,10 +324,10 @@ pub(crate) fn draw_trigger_detail(
             let kind_label = super::orchestrator::movement_kind_label(m.kind);
             let target = super::orchestrator::movement_target_label(m);
             let status_str = m.status.to_string();
-            let age = super::detail_common::format_relative_time(m.created_at, Utc::now());
+            let ts = m.created_at.format("%Y-%m-%d %H:%M").to_string();
             body_lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(theme.highlight)),
-                Span::styled(format!("{age:>4} "), Style::default().fg(theme.muted)),
+                Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
                 Span::styled(format!("{status_emoji} "), Style::default().fg(emoji_color)),
                 Span::styled(
                     format!("{kind_label:<max_kind_len$}  "),
