@@ -37,7 +37,9 @@ pub async fn run(
         }
 
         let mut key_handled = false;
-        if event::poll(Duration::from_millis(16))? {
+        // Drain all queued input events before drawing so held keys don't
+        // build up a backlog that takes seconds to replay.
+        while event::poll(Duration::from_millis(if key_handled { 0 } else { 16 }))? {
             match event::read()? {
                 Event::Mouse(mouse) => {
                     if !app.leaving {
