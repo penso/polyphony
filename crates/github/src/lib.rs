@@ -6,24 +6,22 @@ use std::{
     },
 };
 
-use {
-    async_trait::async_trait,
-    chrono::{DateTime, Utc},
-    graphql_client::GraphQLQuery,
-    octocrab::{
-        Octocrab,
-        models::issues::{Comment as GithubComment, Issue as GithubIssue},
-    },
-    polyphony_core::{
-        AddIssueCommentRequest, BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue,
-        IssueComment, IssueStateUpdate, IssueTracker, TrackerConnectionStatus, TrackerQuery,
-        UpdateIssueRequest,
-    },
-    reqwest::{StatusCode, header::HeaderMap},
-    serde::{Deserialize, de::DeserializeOwned},
-    thiserror::Error,
-    tracing::{debug, info},
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use graphql_client::GraphQLQuery;
+use octocrab::{
+    Octocrab,
+    models::issues::{Comment as GithubComment, Issue as GithubIssue},
 };
+use polyphony_core::{
+    AddIssueCommentRequest, BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue,
+    IssueComment, IssueStateUpdate, IssueTracker, TrackerConnectionStatus, TrackerQuery,
+    UpdateIssueRequest,
+};
+use reqwest::{StatusCode, header::HeaderMap};
+use serde::{Deserialize, de::DeserializeOwned};
+use thiserror::Error;
+use tracing::{debug, info};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -40,7 +38,6 @@ mod review_triggers;
 mod tests;
 
 use crate::convert::*;
-
 pub use crate::{
     pull_requests::{GithubPullRequestCommenter, GithubPullRequestManager},
     review_triggers::GithubPullRequestReviewTriggerSource,

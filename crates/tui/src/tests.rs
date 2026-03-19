@@ -1,16 +1,15 @@
-use {
-    crate::{
-        bootstrap::{BootstrapChoice, BootstrapState},
-        *,
-    },
-    chrono::Utc,
-    polyphony_core::{
-        BudgetSnapshot, CodexTotals, Deliverable, DeliverableDecision, DeliverableKind,
-        DeliverableStatus, DispatchMode, IssueApprovalState, RuntimeCadence, RuntimeSnapshot,
-        SnapshotCounts, TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerKind,
-        VisibleTriggerRow,
-    },
-    ratatui::{Terminal, backend::TestBackend, buffer::Buffer},
+use chrono::Utc;
+use polyphony_core::{
+    BudgetSnapshot, CodexTotals, Deliverable, DeliverableDecision, DeliverableKind,
+    DeliverableStatus, DispatchMode, IssueApprovalState, RuntimeCadence, RuntimeSnapshot,
+    SnapshotCounts, TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerKind,
+    VisibleTriggerRow,
+};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+
+use crate::{
+    bootstrap::{BootstrapChoice, BootstrapState},
+    *,
 };
 
 fn test_snapshot(visible: usize) -> RuntimeSnapshot {
@@ -320,7 +319,10 @@ fn render_triggers_uses_compact_child_identifiers() {
     // ID column removed; verify parent/child titles render and tree connector is shown
     assert!(screen.contains("Parent"), "{screen}");
     assert!(screen.contains("Child"), "{screen}");
-    assert!(screen.contains("└"), "child should have tree connector: {screen}");
+    assert!(
+        screen.contains("└"),
+        "child should have tree connector: {screen}"
+    );
 }
 
 #[test]
@@ -378,7 +380,10 @@ fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
 
     let screen = buffer_text(terminal.backend().buffer());
     // ID column removed; approval icon should appear before the title
-    assert!(screen.contains("✓"), "approval icon should be visible: {screen}");
+    assert!(
+        screen.contains("✓"),
+        "approval icon should be visible: {screen}"
+    );
     assert!(screen.contains("Trigger title"), "{screen}");
     assert!(!screen.contains("Source"), "{screen}");
 }

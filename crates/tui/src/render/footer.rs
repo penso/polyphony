@@ -1,11 +1,9 @@
-use {
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::Rect,
-        style::Style,
-        text::{Line, Span},
-        widgets::Paragraph,
-    },
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::Rect,
+    style::Style,
+    text::{Line, Span},
+    widgets::Paragraph,
 };
 
 use crate::app::AppState;

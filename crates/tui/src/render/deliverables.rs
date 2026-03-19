@@ -1,15 +1,13 @@
-use {
-    polyphony_core::{
-        Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus, RuntimeSnapshot,
-    },
-    ratatui::{
-        layout::{Alignment, Constraint, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
-            ScrollbarState, Table,
-        },
+use polyphony_core::{
+    Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus, RuntimeSnapshot,
+};
+use ratatui::{
+    layout::{Alignment, Constraint, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table,
     },
 };
 
@@ -53,8 +51,7 @@ pub fn draw_deliverables_tab(
         .map(|movement| {
             let deliverable = movement.deliverable.as_ref().expect("filtered");
             let (status_icon, status_color) = status_indicator(deliverable.status, theme);
-            let (decision_icon, decision_color) =
-                decision_indicator(deliverable.decision, theme);
+            let (decision_icon, decision_color) = decision_indicator(deliverable.decision, theme);
             Row::new(vec![
                 Cell::from(Span::styled(
                     super::format_listing_time(movement.created_at),
@@ -113,7 +110,6 @@ pub fn draw_deliverables_tab(
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-
     .block(
         Block::default()
             .title(Line::from(Span::styled(

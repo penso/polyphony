@@ -1,12 +1,10 @@
-use {
-    async_trait::async_trait,
-    polyphony_agent_local::LocalCliRuntime,
-    polyphony_core::{
-        AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
-        BudgetSnapshot, Error as CoreError,
-    },
-    tokio::sync::mpsc,
+use async_trait::async_trait;
+use polyphony_agent_local::LocalCliRuntime;
+use polyphony_core::{
+    AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
+    BudgetSnapshot, Error as CoreError,
 };
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct CopilotRuntime {
@@ -56,10 +54,9 @@ impl AgentProviderRuntime for CopilotRuntime {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::CopilotRuntime,
-        polyphony_core::{AgentDefinition, AgentProviderRuntime},
-    };
+    use polyphony_core::{AgentDefinition, AgentProviderRuntime};
+
+    use super::CopilotRuntime;
 
     #[test]
     fn supports_copilot_kind() {

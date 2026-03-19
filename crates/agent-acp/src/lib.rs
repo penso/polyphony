@@ -8,29 +8,27 @@ use std::{
     thread::JoinHandle,
 };
 
-use {
-    agent_client_protocol::{self as acp, Agent as _},
-    async_trait::async_trait,
-    polyphony_agent_common::{
-        discover_models_from_command, emit_with_metadata, extract_text_rate_limit_signal,
-        fetch_budget_for_agent, prepare_context_file, prepare_prompt_file, selected_model_hint,
-        shell_command,
-    },
-    polyphony_core::{
-        AgentDefinition, AgentEvent, AgentEventKind, AgentModelCatalog, AgentProviderRuntime,
-        AgentRunResult, AgentRunSpec, AgentSession, AgentTransport, AttemptStatus, BudgetSnapshot,
-        Error as CoreError,
-    },
-    portable_pty::{ChildKiller, CommandBuilder, native_pty_system},
-    serde_json::{Value, json},
-    tokio::{
-        io::{AsyncBufReadExt, BufReader},
-        process::ChildStderr,
-        sync::{mpsc, oneshot},
-    },
-    tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt},
-    tracing::{info, warn},
+use agent_client_protocol::{self as acp, Agent as _};
+use async_trait::async_trait;
+use polyphony_agent_common::{
+    discover_models_from_command, emit_with_metadata, extract_text_rate_limit_signal,
+    fetch_budget_for_agent, prepare_context_file, prepare_prompt_file, selected_model_hint,
+    shell_command,
 };
+use polyphony_core::{
+    AgentDefinition, AgentEvent, AgentEventKind, AgentModelCatalog, AgentProviderRuntime,
+    AgentRunResult, AgentRunSpec, AgentSession, AgentTransport, AttemptStatus, BudgetSnapshot,
+    Error as CoreError,
+};
+use portable_pty::{ChildKiller, CommandBuilder, native_pty_system};
+use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::ChildStderr,
+    sync::{mpsc, oneshot},
+};
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tracing::{info, warn};
 
 #[derive(Debug, Default, Clone)]
 pub struct AcpRuntime;
@@ -1158,15 +1156,14 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use {
-        super::AcpRuntime,
-        polyphony_core::{
-            AgentDefinition, AgentProviderRuntime, AgentRunSpec, AgentTransport,
-            Error as CoreError, Issue,
-        },
-        tempfile::tempdir,
-        tokio::sync::mpsc,
+    use polyphony_core::{
+        AgentDefinition, AgentProviderRuntime, AgentRunSpec, AgentTransport, Error as CoreError,
+        Issue,
     };
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    use super::AcpRuntime;
 
     fn test_issue() -> Issue {
         Issue {

@@ -3,13 +3,11 @@ use std::{
     time::Instant,
 };
 
-use {
-    polyphony_core::{
-        AgentContextSnapshot, AgentHistoryRow, MovementRow, RunningRow, RuntimeSnapshot, TaskRow,
-        VisibleTriggerRow,
-    },
-    ratatui::{layout::Rect, widgets::TableState},
+use polyphony_core::{
+    AgentContextSnapshot, AgentHistoryRow, MovementRow, RunningRow, RuntimeSnapshot, TaskRow,
+    VisibleTriggerRow,
 };
+use ratatui::{layout::Rect, widgets::TableState};
 
 const RPS_HISTORY_CAP: usize = 120;
 pub(crate) const TAB_DIVIDER: &str = "  ";
@@ -390,12 +388,10 @@ impl AppState {
         // Auto-pop detail if the viewed entity disappeared from the snapshot
         if let Some(detail) = self.detail_stack.last() {
             let missing = match detail {
-                DetailView::Trigger { trigger_id, .. } => {
-                    !snapshot
-                        .visible_triggers
-                        .iter()
-                        .any(|t| t.trigger_id == *trigger_id)
-                },
+                DetailView::Trigger { trigger_id, .. } => !snapshot
+                    .visible_triggers
+                    .iter()
+                    .any(|t| t.trigger_id == *trigger_id),
                 DetailView::Movement { movement_id, .. }
                 | DetailView::Deliverable { movement_id, .. } => {
                     !snapshot.movements.iter().any(|m| m.id == *movement_id)

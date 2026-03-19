@@ -3,17 +3,16 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use {
-    crate::{
-        AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig, WorkflowDefinition,
-        files::*, load_workflow_with_user_config, render::*, render_issue_template,
-        render_turn_template, repo_config_path,
-    },
-    polyphony_core::{
-        AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, DispatchMode, Issue,
-        TrackerKind,
-    },
-    serde_yaml::Value as YamlValue,
+use polyphony_core::{
+    AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, DispatchMode, Issue,
+    TrackerKind,
+};
+use serde_yaml::Value as YamlValue;
+
+use crate::{
+    AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig, WorkflowDefinition,
+    files::*, load_workflow_with_user_config, render::*, render_issue_template,
+    render_turn_template, repo_config_path,
 };
 
 fn sample_issue() -> Issue {

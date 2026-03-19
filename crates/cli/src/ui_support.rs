@@ -1,10 +1,9 @@
-use std::{future::Future, pin::Pin};
-
 #[cfg(not(feature = "tui"))]
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
+use std::{future::Future, pin::Pin};
 
 #[cfg(feature = "tui")]
 pub(crate) use polyphony_tui::{Error as TuiError, LogBuffer, prompt_workflow_initialization, run};

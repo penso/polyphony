@@ -7,11 +7,9 @@ mod operator_surface_tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use {
-        polyphony_orchestrator::{RuntimeCommand, RuntimeService},
-        polyphony_workflow::load_workflow,
-        tokio::sync::{mpsc, watch},
-    };
+    use polyphony_orchestrator::{RuntimeCommand, RuntimeService};
+    use polyphony_workflow::load_workflow;
+    use tokio::sync::{mpsc, watch};
 
     use crate::{
         Error, LogBuffer,
@@ -321,12 +319,11 @@ mod command_parse_tests {
 mod bootstrap_tests {
     use std::{fs, io};
 
-    use {
-        crate::{
-            WorkflowBootstrap,
-            bootstrap_support::{ensure_bootstrapped_workflow, maybe_seed_repo_config_file},
-        },
-        polyphony_workflow::repo_config_path,
+    use polyphony_workflow::repo_config_path;
+
+    use crate::{
+        WorkflowBootstrap,
+        bootstrap_support::{ensure_bootstrapped_workflow, maybe_seed_repo_config_file},
     };
 
     fn unique_temp_path(name: &str, extension: &str) -> std::path::PathBuf {

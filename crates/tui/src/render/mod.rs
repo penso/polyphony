@@ -15,9 +15,8 @@ mod tasks;
 mod time;
 mod triggers;
 
-pub(crate) use time::*;
-
 use polyphony_core::RuntimeSnapshot;
+pub(crate) use time::*;
 
 use crate::app::{ActiveTab, AppState, SplitFocus};
 

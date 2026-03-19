@@ -1,12 +1,10 @@
-use {
-    chrono::{DateTime, Utc},
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::Rect,
-        style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::Paragraph,
-    },
+use chrono::{DateTime, Utc};
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
 };
 
 use crate::{
@@ -66,7 +64,12 @@ pub(crate) fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> Str
     }
 }
 
-pub(crate) fn render_separator(frame: &mut ratatui::Frame<'_>, area: Rect, width: u16, theme: Theme) {
+pub(crate) fn render_separator(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    width: u16,
+    theme: Theme,
+) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             "─".repeat(width as usize),
@@ -102,7 +105,9 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .unwrap_or_else(|| trigger_id.clone());
                 spans.push(Span::styled(
                     title,
-                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
                 ));
             },
             DetailView::Movement { movement_id, .. } => {
@@ -114,7 +119,9 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .unwrap_or_else(|| movement_id.clone());
                 spans.push(Span::styled(
                     title,
-                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
                 ));
             },
             DetailView::Task { task_id, .. } => {
@@ -126,22 +133,27 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .unwrap_or_else(|| task_id.clone());
                 spans.push(Span::styled(
                     title,
-                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
                 ));
             },
             DetailView::Agent { agent_index, .. } => {
                 let label = if let Some(running) = snapshot.running.get(*agent_index) {
                     format!("{} ({})", running.agent_name, running.issue_identifier)
-                } else if let Some(history) = snapshot.agent_history.get(
-                    agent_index.saturating_sub(snapshot.running.len()),
-                ) {
+                } else if let Some(history) = snapshot
+                    .agent_history
+                    .get(agent_index.saturating_sub(snapshot.running.len()))
+                {
                     format!("{} ({})", history.agent_name, history.issue_identifier)
                 } else {
                     format!("Agent #{agent_index}")
                 };
                 spans.push(Span::styled(
                     label,
-                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
                 ));
             },
             DetailView::Deliverable { movement_id, .. } => {
@@ -153,13 +165,17 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                     .unwrap_or_else(|| movement_id.clone());
                 spans.push(Span::styled(
                     title,
-                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
                 ));
             },
             DetailView::Events { .. } => {
                 spans.push(Span::styled(
                     "Events",
-                    Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
                 ));
             },
         }
@@ -208,4 +224,3 @@ pub(crate) fn render_scroll_indicator(
         indicator_area,
     );
 }
-

@@ -1,9 +1,7 @@
-use crate::{prelude::*, *};
+use serde::Serialize;
+use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
-use {
-    serde::Serialize,
-    tokio::{fs::OpenOptions, io::AsyncWriteExt},
-};
+use crate::{prelude::*, *};
 
 pub(crate) const MAX_RECENT_EVENTS: usize = 256;
 pub(crate) const MAX_RECENT_EVENT_MESSAGE_CHARS: usize = 120;

@@ -5,19 +5,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use {
-    chrono::{Local, TimeZone, Utc},
-    polyphony_core::{
-        AgentDefinition, AgentEvent, AgentEventKind, AgentModel, AgentModelCatalog, AgentRunResult,
-        AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal, TokenUsage,
-    },
-    serde_json::{Value, json},
-    tokio::{
-        fs,
-        io::{AsyncBufReadExt, BufReader},
-        process::Command,
-        sync::mpsc,
-    },
+use chrono::{Local, TimeZone, Utc};
+use polyphony_core::{
+    AgentDefinition, AgentEvent, AgentEventKind, AgentModel, AgentModelCatalog, AgentRunResult,
+    AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal, TokenUsage,
+};
+use serde_json::{Value, json};
+use tokio::{
+    fs,
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
+    sync::mpsc,
 };
 
 pub use crate::budget::fetch_budget_for_agent;
@@ -573,12 +571,11 @@ pub fn selected_model_hint(agent: &AgentDefinition) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::{
-            BudgetField, apply_budget_probe, base_agent_env, extract_text_rate_limit_signal,
-            parse_model_list,
-        },
-        polyphony_core::{AgentContextSnapshot, AgentDefinition, AgentRunSpec, Issue, TokenUsage},
+    use polyphony_core::{AgentContextSnapshot, AgentDefinition, AgentRunSpec, Issue, TokenUsage};
+
+    use super::{
+        BudgetField, apply_budget_probe, base_agent_env, extract_text_rate_limit_signal,
+        parse_model_list,
     };
 
     #[test]

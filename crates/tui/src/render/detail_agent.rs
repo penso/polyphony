@@ -1,12 +1,10 @@
-use {
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::{Margin, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
-        },
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::{Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
 
@@ -64,17 +62,15 @@ pub(crate) fn draw_agent_detail(
     };
 
     // Get artifact cache from the detail stack
-    let artifact_context = if let Some(crate::app::DetailView::Agent {
-        artifact_cache, ..
-    }) = app.current_detail()
-    {
-        artifact_cache
-            .as_ref()
-            .as_ref()
-            .and_then(|a| a.saved_context.as_ref())
-    } else {
-        None
-    };
+    let artifact_context =
+        if let Some(crate::app::DetailView::Agent { artifact_cache, .. }) = app.current_detail() {
+            artifact_cache
+                .as_ref()
+                .as_ref()
+                .and_then(|a| a.saved_context.as_ref())
+        } else {
+            None
+        };
 
     let lines = agent
         .map(|a| super::agents::build_agent_detail_lines(snapshot, a, artifact_context, theme))

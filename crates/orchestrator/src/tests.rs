@@ -1,29 +1,26 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use {
-    crate::{helpers::*, prelude::*, *},
-    std::{
-        collections::VecDeque,
-        fs,
-        path::Path,
-        sync::{Arc, Mutex},
-    },
+use std::{
+    collections::VecDeque,
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
 };
 
-use {
-    async_trait::async_trait,
-    polyphony_core::{
-        AgentSession, Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus,
-        DispatchMode, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, StoreBootstrap,
-        Workspace, WorkspaceCommitResult, WorkspaceRequest,
-    },
-    polyphony_workflow::load_workflow,
-    serde_json::json,
-    tokio::{
-        sync::{Notify, watch},
-        time::timeout,
-    },
+use async_trait::async_trait;
+use polyphony_core::{
+    AgentSession, Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus,
+    DispatchMode, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, StoreBootstrap,
+    Workspace, WorkspaceCommitResult, WorkspaceRequest,
 };
+use polyphony_workflow::load_workflow;
+use serde_json::json;
+use tokio::{
+    sync::{Notify, watch},
+    time::timeout,
+};
+
+use crate::{helpers::*, prelude::*, *};
 
 #[derive(Clone)]
 struct TestTracker {
@@ -2797,19 +2794,16 @@ async fn stop_mode_blocks_retries() {
     let mut service = test_service(tracker, provisioner, &workspace_root);
     service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
     // Manually insert a due retry.
-    service
-        .state
-        .retrying
-        .insert("issue-1".into(), RetryEntry {
-            row: RetryRow {
-                issue_id: "issue-1".into(),
-                issue_identifier: "FAC-1".into(),
-                attempt: 1,
-                due_at: Utc::now() - chrono::Duration::seconds(10),
-                error: Some("test error".into()),
-            },
-            due_at: Instant::now() - Duration::from_secs(10),
-        });
+    service.state.retrying.insert("issue-1".into(), RetryEntry {
+        row: RetryRow {
+            issue_id: "issue-1".into(),
+            issue_identifier: "FAC-1".into(),
+            attempt: 1,
+            due_at: Utc::now() - chrono::Duration::seconds(10),
+            error: Some("test error".into()),
+        },
+        due_at: Instant::now() - Duration::from_secs(10),
+    });
 
     service.process_due_retries().await;
 
@@ -2830,19 +2824,16 @@ async fn abort_all_drains_retry_queue() {
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     service.claim_issue("issue-1".to_string(), IssueClaimState::RetryQueued);
-    service
-        .state
-        .retrying
-        .insert("issue-1".into(), RetryEntry {
-            row: RetryRow {
-                issue_id: "issue-1".into(),
-                issue_identifier: "FAC-1".into(),
-                attempt: 2,
-                due_at: Utc::now() + chrono::Duration::minutes(5),
-                error: Some("transient".into()),
-            },
-            due_at: Instant::now() + Duration::from_secs(300),
-        });
+    service.state.retrying.insert("issue-1".into(), RetryEntry {
+        row: RetryRow {
+            issue_id: "issue-1".into(),
+            issue_identifier: "FAC-1".into(),
+            attempt: 2,
+            due_at: Utc::now() + chrono::Duration::minutes(5),
+            error: Some("transient".into()),
+        },
+        due_at: Instant::now() + Duration::from_secs(300),
+    });
 
     service.abort_all().await;
 
@@ -2956,7 +2947,10 @@ async fn dispatch_reuses_active_movement_for_same_issue() {
     service.tick().await;
     assert!(service.state.running.contains_key("issue-1"));
     let movement_count_after_first = service.state.movements.len();
-    assert_eq!(movement_count_after_first, 1, "first dispatch should create one movement");
+    assert_eq!(
+        movement_count_after_first, 1,
+        "first dispatch should create one movement"
+    );
 
     // Simulate the task finishing with success so it gets a continuation retry.
     let issue = sample_issue("issue-1", "FAC-1", "Todo", "First");
@@ -2996,9 +2990,10 @@ fn find_existing_movement_prefers_active_over_terminal() {
     let now = Utc::now();
 
     // Insert a delivered (terminal) movement for the issue.
-    service.state.movements.insert(
-        "mov-delivered".into(),
-        Movement {
+    service
+        .state
+        .movements
+        .insert("mov-delivered".into(), Movement {
             id: "mov-delivered".into(),
             kind: MovementKind::IssueDelivery,
             issue_id: Some("issue-1".into()),
@@ -3011,8 +3006,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             deliverable: None,
             created_at: now,
             updated_at: now,
-        },
-    );
+        });
 
     // Even a terminal movement should be found — prevents duplicate movements
     // when an issue is re-dispatched via continuation retry.
@@ -3023,9 +3017,10 @@ fn find_existing_movement_prefers_active_over_terminal() {
     );
 
     // Insert an in-progress (active) movement — should be preferred.
-    service.state.movements.insert(
-        "mov-active".into(),
-        Movement {
+    service
+        .state
+        .movements
+        .insert("mov-active".into(), Movement {
             id: "mov-active".into(),
             kind: MovementKind::IssueDelivery,
             issue_id: Some("issue-1".into()),
@@ -3038,8 +3033,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             deliverable: None,
             created_at: now,
             updated_at: now,
-        },
-    );
+        });
 
     assert_eq!(
         service.find_existing_movement_for_issue("issue-1"),

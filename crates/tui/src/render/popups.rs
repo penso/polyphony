@@ -1,11 +1,9 @@
-use {
-    polyphony_core::{DispatchMode, RuntimeSnapshot},
-    ratatui::{
-        layout::{Constraint, Direction, Layout, Margin, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{Block, BorderType, Clear, Paragraph, Wrap},
-    },
+use polyphony_core::{DispatchMode, RuntimeSnapshot};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Clear, Paragraph, Wrap},
 };
 
 use crate::{app::AppState, theme::Theme};
@@ -120,7 +118,11 @@ pub fn draw_mode_modal(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapsho
         let is_selected = i == app.mode_modal_selected;
         let is_active = *mode == snapshot.dispatch_mode;
 
-        let marker = if is_active { "● " } else { "  " };
+        let marker = if is_active {
+            "● "
+        } else {
+            "  "
+        };
         let marker_color = if is_active {
             theme.success
         } else {
@@ -224,7 +226,11 @@ pub fn draw_agent_picker_modal(
             height: 1,
         };
 
-        let marker = if is_selected { "▸ " } else { "  " };
+        let marker = if is_selected {
+            "▸ "
+        } else {
+            "  "
+        };
         let label_style = if is_selected {
             Style::default()
                 .fg(theme.highlight)

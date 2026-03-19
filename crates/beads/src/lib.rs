@@ -1,16 +1,14 @@
 use std::path::PathBuf;
 
-use {
-    async_trait::async_trait,
-    chrono::{DateTime, Utc},
-    polyphony_core::{
-        BlockerRef, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueStateUpdate,
-        IssueTracker, TrackerQuery, UpdateIssueRequest,
-    },
-    serde::Deserialize,
-    tokio::process::Command,
-    tracing::debug,
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use polyphony_core::{
+    BlockerRef, CreateIssueRequest, Error as CoreError, Issue, IssueAuthor, IssueStateUpdate,
+    IssueTracker, TrackerQuery, UpdateIssueRequest,
 };
+use serde::Deserialize;
+use tokio::process::Command;
+use tracing::debug;
 
 /// A beads JSON record from `bd list --json`.
 #[derive(Debug, Deserialize)]

@@ -1,10 +1,8 @@
 use std::path::PathBuf;
 
-use {
-    async_trait::async_trait,
-    serde::{Deserialize, Serialize},
-    serde_json::Value,
-};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{Error, Issue};
 

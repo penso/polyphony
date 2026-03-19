@@ -1,11 +1,9 @@
-use {
-    async_trait::async_trait,
-    polyphony_core::{
-        BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, ReviewedPullRequestHead,
-        RuntimeSnapshot, StateStore, StoreBootstrap, Task,
-    },
-    thiserror::Error,
+use async_trait::async_trait;
+use polyphony_core::{
+    BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, ReviewedPullRequestHead,
+    RuntimeSnapshot, StateStore, StoreBootstrap, Task,
 };
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -332,16 +330,15 @@ impl SqliteStateStore {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use {
-        super::SqliteStateStore,
-        chrono::Utc,
-        polyphony_core::{
-            AttemptStatus, CodexTotals, DispatchMode, LoadingState, Movement, MovementKind,
-            MovementStatus, PersistedRunRecord, ReviewProviderKind, ReviewTarget,
-            ReviewedPullRequestHead, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, StateStore,
-            TokenUsage, TrackerKind,
-        },
+    use chrono::Utc;
+    use polyphony_core::{
+        AttemptStatus, CodexTotals, DispatchMode, LoadingState, Movement, MovementKind,
+        MovementStatus, PersistedRunRecord, ReviewProviderKind, ReviewTarget,
+        ReviewedPullRequestHead, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, StateStore,
+        TokenUsage, TrackerKind,
     };
+
+    use super::SqliteStateStore;
 
     #[tokio::test]
     async fn persists_reviewed_pull_request_heads() {

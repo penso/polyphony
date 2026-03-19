@@ -4,15 +4,13 @@ use std::{
     time::Duration,
 };
 
-use {
-    async_trait::async_trait,
-    polyphony_core::{
-        CheckoutKind, Error as CoreError, Workspace, WorkspaceCommitRequest, WorkspaceCommitResult,
-        WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
-    },
-    thiserror::Error,
-    tracing::{debug, info, warn},
+use async_trait::async_trait;
+use polyphony_core::{
+    CheckoutKind, Error as CoreError, Workspace, WorkspaceCommitRequest, WorkspaceCommitResult,
+    WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
 };
+use thiserror::Error;
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -724,13 +722,11 @@ where
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use {
-        polyphony_core::{
-            CheckoutKind, WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner,
-            WorkspaceRequest,
-        },
-        tempfile::tempdir,
+    use polyphony_core::{
+        CheckoutKind, WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner,
+        WorkspaceRequest,
     };
+    use tempfile::tempdir;
 
     use super::{
         GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch, detect_github_remote,

@@ -1,12 +1,10 @@
-use {
-    polyphony_core::{RuntimeSnapshot, TaskCategory, TaskStatus},
-    ratatui::{
-        layout::{Constraint, Direction, Layout, Margin, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
-        },
+use polyphony_core::{RuntimeSnapshot, TaskCategory, TaskStatus};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
 
@@ -86,7 +84,10 @@ pub(crate) fn draw_task_detail(
     // Meta line
     let status_color = task_status_color(task.status, theme);
     let meta = Line::from(vec![
-        Span::styled(task_status_icon(task.status), Style::default().fg(status_color)),
+        Span::styled(
+            task_status_icon(task.status),
+            Style::default().fg(status_color),
+        ),
         Span::styled(" ", Style::default()),
         Span::styled(task.status.to_string(), Style::default().fg(status_color)),
         Span::styled("  ", Style::default()),
@@ -126,7 +127,9 @@ pub(crate) fn draw_task_detail(
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Description",
-            Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
         )));
         for line in description.lines() {
             lines.push(Line::from(Span::styled(
@@ -141,7 +144,9 @@ pub(crate) fn draw_task_detail(
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Error",
-            Style::default().fg(theme.danger).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.danger)
+                .add_modifier(Modifier::BOLD),
         )));
         for line in error.lines() {
             lines.push(Line::from(Span::styled(
@@ -178,7 +183,14 @@ pub(crate) fn draw_task_detail(
         );
     }
 
-    render_scroll_indicator(frame, body_area, scroll_pos, total_lines, visible_height, theme);
+    render_scroll_indicator(
+        frame,
+        body_area,
+        scroll_pos,
+        total_lines,
+        visible_height,
+        theme,
+    );
 }
 
 fn task_status_icon(status: TaskStatus) -> &'static str {

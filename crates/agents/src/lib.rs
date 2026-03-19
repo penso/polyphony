@@ -1,13 +1,11 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use {
-    async_trait::async_trait,
-    polyphony_core::{
-        AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
-        AgentRuntime, AgentSession, BudgetSnapshot, Error as CoreError, ToolExecutor,
-    },
-    tokio::sync::mpsc,
+use async_trait::async_trait;
+use polyphony_core::{
+    AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
+    AgentRuntime, AgentSession, BudgetSnapshot, Error as CoreError, ToolExecutor,
 };
+use tokio::sync::mpsc;
 
 #[derive(Default)]
 pub struct AgentRegistryRuntime {
@@ -148,19 +146,19 @@ impl AgentRuntime for AgentRegistryRuntime {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::AgentRegistryRuntime,
-        async_trait::async_trait,
-        polyphony_core::{
-            AgentDefinition, AgentProviderRuntime, AgentRuntime, AgentTransport, BudgetSnapshot,
-            Error as CoreError,
-        },
-        serde_json::json,
-        std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
     };
+
+    use async_trait::async_trait;
+    use polyphony_core::{
+        AgentDefinition, AgentProviderRuntime, AgentRuntime, AgentTransport, BudgetSnapshot,
+        Error as CoreError,
+    };
+    use serde_json::json;
+
+    use super::AgentRegistryRuntime;
 
     #[tokio::test]
     async fn registry_discovers_models_from_provider() {

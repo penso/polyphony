@@ -6,21 +6,19 @@ use std::{
     time::Duration,
 };
 
-use {
-    async_trait::async_trait,
-    polyphony_agent_common::{
-        base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
-        fetch_budget_for_agent, prepare_context_file, prepare_prompt_file,
-        sanitize_session_fragment, selected_model_hint, shell_escape, status_to_result,
-    },
-    polyphony_core::{
-        AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
-        AgentRunResult, AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal,
-    },
-    portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system},
-    tokio::{fs, process::Command, sync::mpsc, time::Instant},
-    tracing::{debug, info, warn},
+use async_trait::async_trait;
+use polyphony_agent_common::{
+    base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
+    fetch_budget_for_agent, prepare_context_file, prepare_prompt_file, sanitize_session_fragment,
+    selected_model_hint, shell_escape, status_to_result,
 };
+use polyphony_core::{
+    AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime, AgentRunResult,
+    AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal,
+};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use tokio::{fs, process::Command, sync::mpsc, time::Instant};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PromptDelivery {
@@ -1023,19 +1021,19 @@ fn diff_tail(previous: &str, current: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::{LocalCliRuntime, codex_command_uses_exec_mode},
-        polyphony_core::{
-            AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime,
-            AgentRunSpec, AgentTransport, Error as CoreError, Issue,
-        },
-        std::{
-            os::unix::{fs::PermissionsExt, process::ExitStatusExt},
-            process::{ExitStatus, Output},
-        },
-        tempfile::tempdir,
-        tokio::sync::mpsc,
+    use std::{
+        os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+        process::{ExitStatus, Output},
     };
+
+    use polyphony_core::{
+        AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime, AgentRunSpec,
+        AgentTransport, Error as CoreError, Issue,
+    };
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    use super::{LocalCliRuntime, codex_command_uses_exec_mode};
 
     fn test_issue() -> Issue {
         Issue {

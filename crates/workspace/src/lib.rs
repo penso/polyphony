@@ -4,16 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use {
-    polyphony_core::{
-        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
-        sanitize_workspace_key,
-    },
-    polyphony_workflow::HooksConfig,
-    thiserror::Error,
-    tokio::{io::AsyncReadExt, process::Command},
-    tracing::{info, warn},
+use polyphony_core::{
+    CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
+    sanitize_workspace_key,
 };
+use polyphony_workflow::HooksConfig;
+use thiserror::Error;
+use tokio::{io::AsyncReadExt, process::Command};
+use tracing::{info, warn};
 
 const HOOK_OUTPUT_LOG_LIMIT: usize = 2_000;
 
@@ -470,14 +468,12 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use {
-        async_trait::async_trait,
-        polyphony_core::{
-            CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
-        },
-        polyphony_workflow::HooksConfig,
-        tempfile::tempdir,
+    use async_trait::async_trait;
+    use polyphony_core::{
+        CheckoutKind, Error as CoreError, Workspace, WorkspaceProvisioner, WorkspaceRequest,
     };
+    use polyphony_workflow::HooksConfig;
+    use tempfile::tempdir;
 
     use super::WorkspaceManager;
 

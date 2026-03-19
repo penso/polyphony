@@ -2,8 +2,8 @@
 condense_wildcard_suffixes     = true
 format_macro_bodies            = false
 format_macro_matchers          = false
-group_imports                  = "Preserve"
-imports_granularity            = "One"
+group_imports                  = "StdExternalCrate"
+imports_granularity            = "Crate"
 match_block_trailing_comma     = true
 normalize_comments             = true
 normalize_doc_attributes       = true

@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use {
-    async_trait::async_trait,
-    polyphony_core::{
-        FeedbackCapabilities, FeedbackChannelDescriptor, FeedbackChannelKind, FeedbackInboundMode,
-        FeedbackNotification, FeedbackSink,
-    },
-    polyphony_workflow::FeedbackConfig,
-    serde::Serialize,
+use async_trait::async_trait;
+use polyphony_core::{
+    FeedbackCapabilities, FeedbackChannelDescriptor, FeedbackChannelKind, FeedbackInboundMode,
+    FeedbackNotification, FeedbackSink,
 };
+use polyphony_workflow::FeedbackConfig;
+use serde::Serialize;
 
 pub struct FeedbackRegistry {
     sinks: Vec<Arc<dyn FeedbackSink>>,

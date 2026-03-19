@@ -72,9 +72,8 @@ pub fn load_workspace_run_history_record(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use crate::{AttemptStatus, TokenUsage};
-
     use super::*;
+    use crate::{AttemptStatus, TokenUsage};
 
     #[test]
     fn workspace_paths_live_under_polyphony_runtime() {

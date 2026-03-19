@@ -1,10 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use {
-    async_trait::async_trait,
-    serde::{Deserialize, Serialize},
-    tokio::sync::Mutex,
-};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use crate::{
     BudgetSnapshot, Error, Movement, PersistedRunRecord, ReviewedPullRequestHead, RuntimeSnapshot,
@@ -316,13 +314,12 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use super::JsonStateStore;
     use crate::{
         AgentContextSnapshot, AgentHistoryRow, AgentModelCatalog, AttemptStatus, BudgetSnapshot,
         CodexTotals, DispatchMode, LoadingState, RuntimeCadence, RuntimeEvent, RuntimeSnapshot,
         SnapshotCounts, StateStore, TokenUsage, TrackerKind,
     };
-
-    use super::JsonStateStore;
 
     #[tokio::test]
     async fn json_state_store_bootstraps_snapshot_and_runs() {

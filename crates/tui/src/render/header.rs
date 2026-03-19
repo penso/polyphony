@@ -1,11 +1,9 @@
-use {
-    polyphony_core::{DispatchMode, RuntimeSnapshot, TrackerConnectionState},
-    ratatui::{
-        layout::{Alignment, Constraint, Direction, Layout, Rect},
-        style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::{Block, BorderType, Paragraph, Tabs},
-    },
+use polyphony_core::{DispatchMode, RuntimeSnapshot, TrackerConnectionState};
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Paragraph, Tabs},
 };
 
 use crate::app::{ActiveTab, AppState, TAB_DIVIDER, TAB_PADDING_LEFT, TAB_PADDING_RIGHT};

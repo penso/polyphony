@@ -1,24 +1,22 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use {
-    async_trait::async_trait,
-    chrono::Utc,
-    futures_util::StreamExt,
-    polyphony_agent_common::{
-        fetch_budget_for_agent, merge_models, model_from_json, run_shell_capture, selected_model,
-    },
-    polyphony_core::{
-        AgentDefinition, AgentEventKind, AgentModel, AgentModelCatalog, AgentProviderRuntime,
-        AgentRunResult, AgentRunSpec, AgentTransport, BudgetSnapshot, Error as CoreError,
-        RateLimitSignal, TokenUsage, ToolCallRequest, ToolExecutor,
-    },
-    reqwest::header::CONTENT_TYPE,
-    serde_json::{Value, json},
-    thiserror::Error,
-    tokio::sync::mpsc,
-    tracing::{debug, info, warn},
-    uuid::Uuid,
+use async_trait::async_trait;
+use chrono::Utc;
+use futures_util::StreamExt;
+use polyphony_agent_common::{
+    fetch_budget_for_agent, merge_models, model_from_json, run_shell_capture, selected_model,
 };
+use polyphony_core::{
+    AgentDefinition, AgentEventKind, AgentModel, AgentModelCatalog, AgentProviderRuntime,
+    AgentRunResult, AgentRunSpec, AgentTransport, BudgetSnapshot, Error as CoreError,
+    RateLimitSignal, TokenUsage, ToolCallRequest, ToolExecutor,
+};
+use reqwest::header::CONTENT_TYPE;
+use serde_json::{Value, json};
+use thiserror::Error;
+use tokio::sync::mpsc;
+use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -694,20 +692,20 @@ fn parse_openai_usage(payload: &Value) -> Option<TokenUsage> {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::{OpenAiRuntime, parse_openai_usage},
-        async_trait::async_trait,
-        polyphony_core::{
-            AgentDefinition, AgentEventKind, AgentProviderRuntime, AgentRunSpec, AgentTransport,
-            Error as CoreError, Issue, ToolCallRequest, ToolCallResult, ToolExecutor, ToolSpec,
-        },
-        std::sync::Arc,
-        tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-            sync::mpsc,
-        },
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use polyphony_core::{
+        AgentDefinition, AgentEventKind, AgentProviderRuntime, AgentRunSpec, AgentTransport,
+        Error as CoreError, Issue, ToolCallRequest, ToolCallResult, ToolExecutor, ToolSpec,
     };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::mpsc,
+    };
+
+    use super::{OpenAiRuntime, parse_openai_usage};
 
     struct MockToolExecutor;
 

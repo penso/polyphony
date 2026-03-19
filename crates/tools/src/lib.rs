@@ -7,17 +7,14 @@ use std::{
     sync::Arc,
 };
 
-use {
-    async_trait::async_trait,
-    polyphony_core::{
-        AddIssueCommentRequest, Error as CoreError, IssueTracker, PullRequestCommenter,
-        PullRequestRef, ToolCallRequest, ToolCallResult, ToolExecutor, ToolSpec, TrackerKind,
-        UpdateIssueRequest,
-    },
-    polyphony_linear::LinearTracker,
-    polyphony_workflow::{LoadedWorkflow, ToolPolicyConfig},
-    serde_json::{Value, json},
+use async_trait::async_trait;
+use polyphony_core::{
+    AddIssueCommentRequest, Error as CoreError, IssueTracker, PullRequestCommenter, PullRequestRef,
+    ToolCallRequest, ToolCallResult, ToolExecutor, ToolSpec, TrackerKind, UpdateIssueRequest,
 };
+use polyphony_linear::LinearTracker;
+use polyphony_workflow::{LoadedWorkflow, ToolPolicyConfig};
+use serde_json::{Value, json};
 
 const DEFAULT_LIST_MAX_DEPTH: usize = 4;
 const DEFAULT_LIST_MAX_ENTRIES: usize = 200;
@@ -1220,17 +1217,16 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use {
-        super::{RegistryToolExecutor, ToolPolicy, pattern_matches},
-        async_trait::async_trait,
-        polyphony_core::{
-            AddIssueCommentRequest, Error as CoreError, Issue, IssueComment, IssueTracker,
-            PullRequestCommenter, PullRequestRef, ToolCallRequest, UpdateIssueRequest,
-        },
-        polyphony_workflow::{LoadedWorkflow, ServiceConfig, WorkflowDefinition, parse_workflow},
-        serde_json::{Value, json},
-        tempfile::TempDir,
+    use async_trait::async_trait;
+    use polyphony_core::{
+        AddIssueCommentRequest, Error as CoreError, Issue, IssueComment, IssueTracker,
+        PullRequestCommenter, PullRequestRef, ToolCallRequest, UpdateIssueRequest,
     };
+    use polyphony_workflow::{LoadedWorkflow, ServiceConfig, WorkflowDefinition, parse_workflow};
+    use serde_json::{Value, json};
+    use tempfile::TempDir;
+
+    use super::{RegistryToolExecutor, ToolPolicy, pattern_matches};
 
     #[derive(Default)]
     struct MockTracker {

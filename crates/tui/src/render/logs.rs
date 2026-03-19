@@ -1,18 +1,15 @@
-use {
-    chrono::Utc,
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::{Alignment, Constraint, Direction, Layout, Rect},
-        style::{Color, Modifier, Style},
-        text::{Line, Span, Text},
-        widgets::{
-            Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph,
-            RenderDirection, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline,
-            Table,
-        },
+use chrono::Utc;
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{
+        Block, BorderType, Borders, Cell, HighlightSpacing, Padding, Paragraph, RenderDirection,
+        Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Table,
     },
-    serde_json::Value,
 };
+use serde_json::Value;
 
 use crate::{app::AppState, theme::Theme};
 

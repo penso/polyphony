@@ -3,12 +3,10 @@ use std::{
     path::PathBuf,
 };
 
-use {
-    polyphony_core::{CheckoutKind, TrackerKind},
-    serde::{Deserialize, Serialize},
-    serde_yaml::Value as YamlValue,
-    thiserror::Error,
-};
+use polyphony_core::{CheckoutKind, TrackerKind};
+use serde::{Deserialize, Serialize};
+use serde_yaml::Value as YamlValue;
+use thiserror::Error;
 
 const DEFAULT_USER_CONFIG_TEMPLATE: &str = include_str!("../../../templates/config.toml");
 const DEFAULT_WORKFLOW_TEMPLATE: &str = include_str!("../../../templates/WORKFLOW.md");

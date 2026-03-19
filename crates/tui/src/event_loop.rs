@@ -66,273 +66,261 @@ pub async fn run(
             }
         };
 
-        let Some(ev) = terminal_event else { continue };
+        let Some(ev) = terminal_event else {
+            continue;
+        };
 
         let mut key_handled = false;
         match ev {
-                Event::Mouse(mouse) => {
-                    if !app.leaving {
-                        if app.has_detail() {
-                            // Click outside modal closes it
-                            if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
-                                app.pop_detail();
-                            }
-                        } else {
-                            match mouse.kind {
-                                MouseEventKind::Down(event::MouseButton::Left) => {
-                                    if let Some(tab) = app.tab_at_position(mouse.column, mouse.row)
-                                    {
-                                        app.active_tab = tab;
-                                    } else if app.active_tab == app::ActiveTab::Triggers {
-                                        // Single click selects trigger row
-                                        if let Some(idx) = app.issue_row_at_position(mouse.row) {
-                                            app.issues_state.select(Some(idx));
-                                        }
-                                        // Double-click opens detail modal
-                                        let now = Instant::now();
-                                        let is_double = app.last_click_at.is_some_and(|prev| {
-                                            now.duration_since(prev) < Duration::from_millis(400)
-                                                && app.last_click_pos.1 == mouse.row
-                                        });
-                                        if is_double
-                                            && let Some(trigger) = app.selected_trigger(&snapshot)
-                                        {
-                                            app.push_detail(
-                                                crate::app::DetailView::Trigger {
-                                                    trigger_id: trigger.trigger_id.clone(),
-                                                    scroll: 0,
-                                                    focus: Default::default(),
-                                                    movements_selected: 0,
-                                                    agents_selected: 0,
-                                                },
-                                            );
-                                            app.last_click_at = None;
-                                        } else {
-                                            app.last_click_at = Some(now);
-                                            app.last_click_pos = (mouse.column, mouse.row);
-                                        }
-                                    } else if app.active_tab == app::ActiveTab::Tasks {
-                                        if let Some(idx) = app.table_row_at_position(mouse.row) {
-                                            app.tasks_state.select(Some(idx));
-                                        }
-                                        let now = Instant::now();
-                                        let is_double = app.last_click_at.is_some_and(|prev| {
-                                            now.duration_since(prev) < Duration::from_millis(400)
-                                                && app.last_click_pos.1 == mouse.row
-                                        });
-                                        if is_double
-                                            && let Some(task) = app.selected_task(&snapshot)
-                                        {
-                                            app.push_detail(crate::app::DetailView::Task {
-                                                task_id: task.id.clone(),
-                                                scroll: 0,
-                                            });
-                                            app.last_click_at = None;
-                                        } else {
-                                            app.last_click_at = Some(now);
-                                            app.last_click_pos = (mouse.column, mouse.row);
-                                        }
+            Event::Mouse(mouse) => {
+                if !app.leaving {
+                    if app.has_detail() {
+                        // Click outside modal closes it
+                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                            app.pop_detail();
+                        }
+                    } else {
+                        match mouse.kind {
+                            MouseEventKind::Down(event::MouseButton::Left) => {
+                                if let Some(tab) = app.tab_at_position(mouse.column, mouse.row) {
+                                    app.active_tab = tab;
+                                } else if app.active_tab == app::ActiveTab::Triggers {
+                                    // Single click selects trigger row
+                                    if let Some(idx) = app.issue_row_at_position(mouse.row) {
+                                        app.issues_state.select(Some(idx));
                                     }
-                                },
-                                MouseEventKind::ScrollDown => {
-                                    handle_mouse_scroll(&mut app, &mouse, &snapshot);
-                                },
-                                MouseEventKind::ScrollUp => {
-                                    handle_mouse_scroll(&mut app, &mouse, &snapshot);
-                                },
-                                _ => {},
-                            }
+                                    // Double-click opens detail modal
+                                    let now = Instant::now();
+                                    let is_double = app.last_click_at.is_some_and(|prev| {
+                                        now.duration_since(prev) < Duration::from_millis(400)
+                                            && app.last_click_pos.1 == mouse.row
+                                    });
+                                    if is_double
+                                        && let Some(trigger) = app.selected_trigger(&snapshot)
+                                    {
+                                        app.push_detail(crate::app::DetailView::Trigger {
+                                            trigger_id: trigger.trigger_id.clone(),
+                                            scroll: 0,
+                                            focus: Default::default(),
+                                            movements_selected: 0,
+                                            agents_selected: 0,
+                                        });
+                                        app.last_click_at = None;
+                                    } else {
+                                        app.last_click_at = Some(now);
+                                        app.last_click_pos = (mouse.column, mouse.row);
+                                    }
+                                } else if app.active_tab == app::ActiveTab::Tasks {
+                                    if let Some(idx) = app.table_row_at_position(mouse.row) {
+                                        app.tasks_state.select(Some(idx));
+                                    }
+                                    let now = Instant::now();
+                                    let is_double = app.last_click_at.is_some_and(|prev| {
+                                        now.duration_since(prev) < Duration::from_millis(400)
+                                            && app.last_click_pos.1 == mouse.row
+                                    });
+                                    if is_double && let Some(task) = app.selected_task(&snapshot) {
+                                        app.push_detail(crate::app::DetailView::Task {
+                                            task_id: task.id.clone(),
+                                            scroll: 0,
+                                        });
+                                        app.last_click_at = None;
+                                    } else {
+                                        app.last_click_at = Some(now);
+                                        app.last_click_pos = (mouse.column, mouse.row);
+                                    }
+                                }
+                            },
+                            MouseEventKind::ScrollDown => {
+                                handle_mouse_scroll(&mut app, &mouse, &snapshot);
+                            },
+                            MouseEventKind::ScrollUp => {
+                                handle_mouse_scroll(&mut app, &mouse, &snapshot);
+                            },
+                            _ => {},
                         }
                     }
-                    key_handled = true;
-                },
-                Event::Key(key) => {
-                    if app.leaving {
-                        // Ignore keys while leaving
-                    } else if app.show_agent_picker {
-                        match key.code {
-                            KeyCode::Esc => {
+                }
+                key_handled = true;
+            },
+            Event::Key(key) => {
+                if app.leaving {
+                    // Ignore keys while leaving
+                } else if app.show_agent_picker {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.show_agent_picker = false;
+                            app.agent_picker_issue_id = None;
+                        },
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            let count = snapshot.agent_profile_names.len();
+                            if count > 0 {
+                                app.agent_picker_selected = (app.agent_picker_selected + 1) % count;
+                            }
+                        },
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            let count = snapshot.agent_profile_names.len();
+                            if count > 0 {
+                                app.agent_picker_selected =
+                                    (app.agent_picker_selected + count - 1) % count;
+                            }
+                        },
+                        KeyCode::Enter => {
+                            if let Some(issue_id) = app.agent_picker_issue_id.take() {
+                                let agent_name = snapshot
+                                    .agent_profile_names
+                                    .get(app.agent_picker_selected)
+                                    .cloned();
                                 app.show_agent_picker = false;
-                                app.agent_picker_issue_id = None;
-                            },
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                let count = snapshot.agent_profile_names.len();
-                                if count > 0 {
-                                    app.agent_picker_selected =
-                                        (app.agent_picker_selected + 1) % count;
-                                }
-                            },
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                let count = snapshot.agent_profile_names.len();
-                                if count > 0 {
-                                    app.agent_picker_selected =
-                                        (app.agent_picker_selected + count - 1) % count;
-                                }
-                            },
-                            KeyCode::Enter => {
-                                if let Some(issue_id) = app.agent_picker_issue_id.take() {
-                                    let agent_name = snapshot
-                                        .agent_profile_names
-                                        .get(app.agent_picker_selected)
-                                        .cloned();
-                                    app.show_agent_picker = false;
-                                    let _ = command_tx.send(RuntimeCommand::DispatchIssue {
-                                        issue_id,
-                                        agent_name,
-                                    });
-                                }
-                            },
-                            _ => {},
-                        }
-                    } else if app.confirm_quit {
-                        match key.code {
-                            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                                app.confirm_quit = false;
-                                let _ = command_tx.send(RuntimeCommand::Shutdown);
-                                app.leaving = true;
-                                app.leaving_since = Some(Instant::now());
-                            },
-                            _ => {
-                                app.confirm_quit = false;
-                            },
-                        }
-                    } else if app.show_mode_modal {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.show_mode_modal = false;
-                            },
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                app.mode_modal_selected = (app.mode_modal_selected + 1) % 5;
-                            },
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                app.mode_modal_selected = (app.mode_modal_selected + 4) % 5;
-                            },
-                            KeyCode::Enter => {
-                                let modes = [
-                                    DispatchMode::Manual,
-                                    DispatchMode::Automatic,
-                                    DispatchMode::Nightshift,
-                                    DispatchMode::Idle,
-                                    DispatchMode::Stop,
-                                ];
-                                let selected = modes[app.mode_modal_selected];
-                                app.show_mode_modal = false;
-                                let _ = command_tx.send(RuntimeCommand::SetMode(selected));
-                            },
-                            _ => {},
-                        }
-                    } else if app.has_detail()
-                        && app.split_focus == crate::app::SplitFocus::Detail
-                    {
-                        if let Some(cmd) =
-                            handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
-                        {
-                            let _ = command_tx.send(cmd);
-                        }
-                    } else if app.has_detail()
-                        && app.split_focus == crate::app::SplitFocus::List
-                    {
-                        // Split mode, list focused: route to list handler
-                        // but Tab toggles focus, Esc closes the detail
-                        match key.code {
-                            KeyCode::Tab => {
-                                app.split_focus = crate::app::SplitFocus::Detail;
-                            },
-                            KeyCode::Esc => {
-                                app.pop_detail();
-                                app.split_focus = crate::app::SplitFocus::default();
-                            },
-                            KeyCode::Enter => {
-                                // In split mode the detail pane already shows the
-                                // selected item — Enter is a no-op to avoid pushing
-                                // duplicate details onto the stack.
-                            },
-                            KeyCode::Char('e') | KeyCode::Char('E') => {
-                                // Forward to detail handler so the events view
-                                // opens regardless of which pane has focus.
-                                if let Some(cmd) =
-                                    handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
-                                {
-                                    let _ = command_tx.send(cmd);
-                                }
-                            },
-                            _ => {
-                                if let Some(command) =
-                                    handle_key(&mut app, key.code, &snapshot)
-                                {
-                                    let shutdown =
-                                        matches!(command, RuntimeCommand::Shutdown);
-                                    if matches!(command, RuntimeCommand::Refresh) {
-                                        app.refresh_requested = true;
-                                    }
-                                    tracing::info!(?command, "TUI sending command");
-                                    let _ = command_tx.send(command);
-                                    if shutdown {
-                                        app.leaving = true;
-                                        app.leaving_since = Some(Instant::now());
-                                    }
-                                }
-                                // After list navigation, update the detail entry
-                                update_split_detail_from_selection(&mut app, &snapshot);
-                            },
-                        }
-                    } else if app.search_active {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.search_active = false;
-                                app.search_query.clear();
-                                app.rebuild_sorted_indices(&snapshot);
-                                sync_selection_after_search(&mut app, &snapshot);
-                            },
-                            KeyCode::Enter => {
-                                app.search_active = false;
-                                // Keep filter active, just exit input mode
-                            },
-                            KeyCode::Backspace => {
-                                app.search_query.pop();
-                                app.rebuild_sorted_indices(&snapshot);
-                                sync_selection_after_search(&mut app, &snapshot);
-                            },
-                            KeyCode::Char(c) => {
-                                app.search_query.push(c);
-                                app.rebuild_sorted_indices(&snapshot);
-                                sync_selection_after_search(&mut app, &snapshot);
-                            },
-                            _ => {},
-                        }
-                    } else if app.logs_search_active {
-                        match key.code {
-                            KeyCode::Esc => {
-                                app.logs_search_active = false;
-                                app.logs_search_query.clear();
-                            },
-                            KeyCode::Enter => {
-                                app.logs_search_active = false;
-                            },
-                            KeyCode::Backspace => {
-                                app.logs_search_query.pop();
-                            },
-                            KeyCode::Char(c) => {
-                                app.logs_search_query.push(c);
-                            },
-                            _ => {},
-                        }
-                    } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
-                        let shutdown = matches!(command, RuntimeCommand::Shutdown);
-                        if matches!(command, RuntimeCommand::Refresh) {
-                            app.refresh_requested = true;
-                        }
-                        tracing::info!(?command, "TUI sending command");
-                        let _ = command_tx.send(command);
-                        if shutdown {
+                                let _ = command_tx.send(RuntimeCommand::DispatchIssue {
+                                    issue_id,
+                                    agent_name,
+                                });
+                            }
+                        },
+                        _ => {},
+                    }
+                } else if app.confirm_quit {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app.confirm_quit = false;
+                            let _ = command_tx.send(RuntimeCommand::Shutdown);
                             app.leaving = true;
                             app.leaving_since = Some(Instant::now());
-                        }
+                        },
+                        _ => {
+                            app.confirm_quit = false;
+                        },
                     }
-                    key_handled = true;
-                },
-                _ => {},
-            }
+                } else if app.show_mode_modal {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.show_mode_modal = false;
+                        },
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.mode_modal_selected = (app.mode_modal_selected + 1) % 5;
+                        },
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.mode_modal_selected = (app.mode_modal_selected + 4) % 5;
+                        },
+                        KeyCode::Enter => {
+                            let modes = [
+                                DispatchMode::Manual,
+                                DispatchMode::Automatic,
+                                DispatchMode::Nightshift,
+                                DispatchMode::Idle,
+                                DispatchMode::Stop,
+                            ];
+                            let selected = modes[app.mode_modal_selected];
+                            app.show_mode_modal = false;
+                            let _ = command_tx.send(RuntimeCommand::SetMode(selected));
+                        },
+                        _ => {},
+                    }
+                } else if app.has_detail() && app.split_focus == crate::app::SplitFocus::Detail {
+                    if let Some(cmd) = handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
+                    {
+                        let _ = command_tx.send(cmd);
+                    }
+                } else if app.has_detail() && app.split_focus == crate::app::SplitFocus::List {
+                    // Split mode, list focused: route to list handler
+                    // but Tab toggles focus, Esc closes the detail
+                    match key.code {
+                        KeyCode::Tab => {
+                            app.split_focus = crate::app::SplitFocus::Detail;
+                        },
+                        KeyCode::Esc => {
+                            app.pop_detail();
+                            app.split_focus = crate::app::SplitFocus::default();
+                        },
+                        KeyCode::Enter => {
+                            // In split mode the detail pane already shows the
+                            // selected item — Enter is a no-op to avoid pushing
+                            // duplicate details onto the stack.
+                        },
+                        KeyCode::Char('e') | KeyCode::Char('E') => {
+                            // Forward to detail handler so the events view
+                            // opens regardless of which pane has focus.
+                            if let Some(cmd) =
+                                handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
+                            {
+                                let _ = command_tx.send(cmd);
+                            }
+                        },
+                        _ => {
+                            if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
+                                let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                                if matches!(command, RuntimeCommand::Refresh) {
+                                    app.refresh_requested = true;
+                                }
+                                tracing::info!(?command, "TUI sending command");
+                                let _ = command_tx.send(command);
+                                if shutdown {
+                                    app.leaving = true;
+                                    app.leaving_since = Some(Instant::now());
+                                }
+                            }
+                            // After list navigation, update the detail entry
+                            update_split_detail_from_selection(&mut app, &snapshot);
+                        },
+                    }
+                } else if app.search_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.search_active = false;
+                            app.search_query.clear();
+                            app.rebuild_sorted_indices(&snapshot);
+                            sync_selection_after_search(&mut app, &snapshot);
+                        },
+                        KeyCode::Enter => {
+                            app.search_active = false;
+                            // Keep filter active, just exit input mode
+                        },
+                        KeyCode::Backspace => {
+                            app.search_query.pop();
+                            app.rebuild_sorted_indices(&snapshot);
+                            sync_selection_after_search(&mut app, &snapshot);
+                        },
+                        KeyCode::Char(c) => {
+                            app.search_query.push(c);
+                            app.rebuild_sorted_indices(&snapshot);
+                            sync_selection_after_search(&mut app, &snapshot);
+                        },
+                        _ => {},
+                    }
+                } else if app.logs_search_active {
+                    match key.code {
+                        KeyCode::Esc => {
+                            app.logs_search_active = false;
+                            app.logs_search_query.clear();
+                        },
+                        KeyCode::Enter => {
+                            app.logs_search_active = false;
+                        },
+                        KeyCode::Backspace => {
+                            app.logs_search_query.pop();
+                        },
+                        KeyCode::Char(c) => {
+                            app.logs_search_query.push(c);
+                        },
+                        _ => {},
+                    }
+                } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
+                    let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                    if matches!(command, RuntimeCommand::Refresh) {
+                        app.refresh_requested = true;
+                    }
+                    tracing::info!(?command, "TUI sending command");
+                    let _ = command_tx.send(command);
+                    if shutdown {
+                        app.leaving = true;
+                        app.leaving_since = Some(Instant::now());
+                    }
+                }
+                key_handled = true;
+            },
+            _ => {},
+        }
 
         if key_handled {
             needs_draw = true;
@@ -375,26 +363,19 @@ enum AgentArtifactRequest {
 async fn refresh_agent_detail_artifact(app: &mut AppState, snapshot: &RuntimeSnapshot) {
     let Some(request) = selected_agent_artifact_request(app, snapshot) else {
         // Clear artifact cache on the current agent detail if present
-        if let Some(crate::app::DetailView::Agent {
-            artifact_cache, ..
-        }) = app.current_detail_mut()
+        if let Some(crate::app::DetailView::Agent { artifact_cache, .. }) = app.current_detail_mut()
         {
             **artifact_cache = None;
         }
         return;
     };
     // Check if we already have a matching cache
-    let existing_key = if let Some(crate::app::DetailView::Agent {
-        artifact_cache, ..
-    }) = app.current_detail()
-    {
-        artifact_cache
-            .as_ref()
-            .as_ref()
-            .map(|a| a.key.clone())
-    } else {
-        None
-    };
+    let existing_key =
+        if let Some(crate::app::DetailView::Agent { artifact_cache, .. }) = app.current_detail() {
+            artifact_cache.as_ref().as_ref().map(|a| a.key.clone())
+        } else {
+            None
+        };
     let request_key = agent_artifact_request_key(&request);
     if existing_key.as_deref() == Some(&request_key) {
         return;
@@ -404,10 +385,7 @@ async fn refresh_agent_detail_artifact(app: &mut AppState, snapshot: &RuntimeSna
         .ok()
         .and_then(Result::ok)
         .flatten();
-    if let Some(crate::app::DetailView::Agent {
-        artifact_cache, ..
-    }) = app.current_detail_mut()
-    {
+    if let Some(crate::app::DetailView::Agent { artifact_cache, .. }) = app.current_detail_mut() {
         **artifact_cache = Some(crate::app::AgentDetailArtifactCache {
             key: request_key,
             saved_context: loaded,
@@ -797,8 +775,7 @@ fn handle_detail_key(
     _command_tx: &mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Option<RuntimeCommand> {
     // In split mode, Esc switches focus to list; a second Esc closes the detail
-    let in_split = app.is_split_eligible()
-        && app.split_focus == crate::app::SplitFocus::Detail;
+    let in_split = app.is_split_eligible() && app.split_focus == crate::app::SplitFocus::Detail;
     match key {
         KeyCode::Esc | KeyCode::Char('q') => {
             if in_split {
@@ -820,240 +797,236 @@ fn handle_detail_key(
             focus,
             ..
         } => match key {
-                KeyCode::Tab => {
-                    // Cycle: Body -> Section(0) movements -> Section(1) agents -> Body
-                    if let Some(crate::app::DetailView::Trigger { focus, .. }) =
-                        app.current_detail_mut()
-                    {
-                        *focus = match *focus {
-                            crate::app::DetailSection::Body => {
-                                crate::app::DetailSection::Section(0)
-                            },
-                            crate::app::DetailSection::Section(0) => {
-                                crate::app::DetailSection::Section(1)
-                            },
-                            _ => crate::app::DetailSection::Body,
-                        };
-                    }
-                },
-                KeyCode::Enter => {
-                    // Drill down into selected section item
-                    match focus {
+            KeyCode::Tab => {
+                // Cycle: Body -> Section(0) movements -> Section(1) agents -> Body
+                if let Some(crate::app::DetailView::Trigger { focus, .. }) =
+                    app.current_detail_mut()
+                {
+                    *focus = match *focus {
+                        crate::app::DetailSection::Body => crate::app::DetailSection::Section(0),
                         crate::app::DetailSection::Section(0) => {
-                            // Movements section — push Movement detail
-                            if let Some(crate::app::DetailView::Trigger {
-                                movements_selected,
-                                trigger_id,
-                                ..
-                            }) = app.current_detail().cloned()
-                            {
-                                let trigger = find_trigger_by_id(snapshot, &trigger_id);
-                                let related: Vec<_> = snapshot
-                                    .movements
-                                    .iter()
-                                    .filter(|m| {
-                                        trigger.is_some_and(|t| {
-                                            m.issue_identifier.as_deref() == Some(&*t.identifier)
-                                        })
-                                    })
-                                    .collect();
-                                if let Some(movement) = related.get(movements_selected) {
-                                    app.push_detail(crate::app::DetailView::Movement {
-                                        movement_id: movement.id.clone(),
-                                        scroll: 0,
-                                        focus: Default::default(),
-                                        tasks_selected: 0,
-                                    });
-                                }
-                            }
+                            crate::app::DetailSection::Section(1)
                         },
-                        crate::app::DetailSection::Section(1) => {
-                            // Agents section — push Agent detail
-                            if let Some(crate::app::DetailView::Trigger {
-                                agents_selected,
-                                trigger_id,
-                                ..
-                            }) = app.current_detail().cloned()
-                            {
-                                let running_agents: Vec<_> = snapshot
-                                    .running
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, r)| r.issue_id == trigger_id)
-                                    .collect();
-                                if let Some(&(idx, _)) = running_agents.get(agents_selected) {
-                                    app.push_detail(crate::app::DetailView::Agent {
-                                        agent_index: idx,
-                                        scroll: 0,
-                                        artifact_cache: Box::new(None),
-                                    });
-                                }
-                            }
-                        },
-                        _ => {},
-                    }
-                },
-                KeyCode::Char('j') | KeyCode::Down => {
-                    navigate_section_or_scroll(app, snapshot, focus, 1, true);
-                },
-                KeyCode::Char('k') | KeyCode::Up => {
-                    navigate_section_or_scroll(app, snapshot, focus, 1, false);
-                },
-                KeyCode::PageDown => {
-                    scroll_detail(app, 8);
-                },
-                KeyCode::PageUp => {
-                    scroll_detail_back(app, 8);
-                },
-                KeyCode::Char('o') => {
-                    if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                        && let Some(url) = &trigger.url
-                    {
-                        open_url(url);
-                    }
-                },
-                KeyCode::Char('a') => {
-                    if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                        && trigger.kind == VisibleTriggerKind::Issue
-                        && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
-                    {
-                        return Some(RuntimeCommand::ApproveIssueTrigger {
-                            issue_id: trigger.trigger_id.clone(),
-                            source: trigger.source.clone(),
-                        });
-                    }
-                },
-                KeyCode::Char('d') => {
-                    if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
-                        return Some(match trigger.kind {
-                            VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
-                                issue_id: trigger.trigger_id.clone(),
-                                agent_name: None,
-                            },
-                            VisibleTriggerKind::PullRequestReview
-                            | VisibleTriggerKind::PullRequestComment
-                            | VisibleTriggerKind::PullRequestConflict => {
-                                RuntimeCommand::DispatchPullRequestTrigger {
-                                    trigger_id: trigger.trigger_id.clone(),
-                                }
-                            },
-                        });
-                    }
-                },
-                KeyCode::Char('e') | KeyCode::Char('E') => {
-                    if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
-                        app.push_detail(crate::app::DetailView::Events {
-                            filter: trigger.identifier.clone(),
-                            scroll: u16::MAX,
-                        });
-                    }
-                },
-                _ => {},
+                        _ => crate::app::DetailSection::Body,
+                    };
+                }
             },
+            KeyCode::Enter => {
+                // Drill down into selected section item
+                match focus {
+                    crate::app::DetailSection::Section(0) => {
+                        // Movements section — push Movement detail
+                        if let Some(crate::app::DetailView::Trigger {
+                            movements_selected,
+                            trigger_id,
+                            ..
+                        }) = app.current_detail().cloned()
+                        {
+                            let trigger = find_trigger_by_id(snapshot, &trigger_id);
+                            let related: Vec<_> = snapshot
+                                .movements
+                                .iter()
+                                .filter(|m| {
+                                    trigger.is_some_and(|t| {
+                                        m.issue_identifier.as_deref() == Some(&*t.identifier)
+                                    })
+                                })
+                                .collect();
+                            if let Some(movement) = related.get(movements_selected) {
+                                app.push_detail(crate::app::DetailView::Movement {
+                                    movement_id: movement.id.clone(),
+                                    scroll: 0,
+                                    focus: Default::default(),
+                                    tasks_selected: 0,
+                                });
+                            }
+                        }
+                    },
+                    crate::app::DetailSection::Section(1) => {
+                        // Agents section — push Agent detail
+                        if let Some(crate::app::DetailView::Trigger {
+                            agents_selected,
+                            trigger_id,
+                            ..
+                        }) = app.current_detail().cloned()
+                        {
+                            let running_agents: Vec<_> = snapshot
+                                .running
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, r)| r.issue_id == trigger_id)
+                                .collect();
+                            if let Some(&(idx, _)) = running_agents.get(agents_selected) {
+                                app.push_detail(crate::app::DetailView::Agent {
+                                    agent_index: idx,
+                                    scroll: 0,
+                                    artifact_cache: Box::new(None),
+                                });
+                            }
+                        }
+                    },
+                    _ => {},
+                }
+            },
+            KeyCode::Char('j') | KeyCode::Down => {
+                navigate_section_or_scroll(app, snapshot, focus, 1, true);
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                navigate_section_or_scroll(app, snapshot, focus, 1, false);
+            },
+            KeyCode::PageDown => {
+                scroll_detail(app, 8);
+            },
+            KeyCode::PageUp => {
+                scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('o') => {
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
+                    && let Some(url) = &trigger.url
+                {
+                    open_url(url);
+                }
+            },
+            KeyCode::Char('a') => {
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
+                    && trigger.kind == VisibleTriggerKind::Issue
+                    && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
+                {
+                    return Some(RuntimeCommand::ApproveIssueTrigger {
+                        issue_id: trigger.trigger_id.clone(),
+                        source: trigger.source.clone(),
+                    });
+                }
+            },
+            KeyCode::Char('d') => {
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
+                    return Some(match trigger.kind {
+                        VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
+                            issue_id: trigger.trigger_id.clone(),
+                            agent_name: None,
+                        },
+                        VisibleTriggerKind::PullRequestReview
+                        | VisibleTriggerKind::PullRequestComment
+                        | VisibleTriggerKind::PullRequestConflict => {
+                            RuntimeCommand::DispatchPullRequestTrigger {
+                                trigger_id: trigger.trigger_id.clone(),
+                            }
+                        },
+                    });
+                }
+            },
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
+                    app.push_detail(crate::app::DetailView::Events {
+                        filter: trigger.identifier.clone(),
+                        scroll: u16::MAX,
+                    });
+                }
+            },
+            _ => {},
+        },
         crate::app::DetailView::Movement {
             ref movement_id,
             focus,
             ..
         } => match key {
-                KeyCode::Tab => {
-                    // Cycle: Body -> Section(0) tasks -> Body
-                    if let Some(crate::app::DetailView::Movement { focus, .. }) =
-                        app.current_detail_mut()
-                    {
-                        *focus = match *focus {
-                            crate::app::DetailSection::Body => {
-                                crate::app::DetailSection::Section(0)
-                            },
-                            _ => crate::app::DetailSection::Body,
-                        };
-                    }
-                },
-                KeyCode::Enter => {
-                    if let crate::app::DetailSection::Section(0) = focus {
-                        // Tasks section — push Task detail
-                        if let Some(crate::app::DetailView::Movement {
-                            tasks_selected,
-                            movement_id,
-                            ..
-                        }) = app.current_detail().cloned()
-                        {
-                            let related: Vec<_> = snapshot
-                                .tasks
-                                .iter()
-                                .filter(|t| t.movement_id == movement_id)
-                                .collect();
-                            if let Some(task) = related.get(tasks_selected) {
-                                app.push_detail(crate::app::DetailView::Task {
-                                    task_id: task.id.clone(),
-                                    scroll: 0,
-                                });
-                            }
-                        }
-                    }
-                },
-                KeyCode::Char('j') | KeyCode::Down => {
-                    navigate_movement_section_or_scroll(app, snapshot, focus, true);
-                },
-                KeyCode::Char('k') | KeyCode::Up => {
-                    navigate_movement_section_or_scroll(app, snapshot, focus, false);
-                },
-                KeyCode::PageDown => {
-                    scroll_detail(app, 8);
-                },
-                KeyCode::PageUp => {
-                    scroll_detail_back(app, 8);
-                },
-                KeyCode::Char('O') => {
-                    if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
-                        let url = movement
-                            .deliverable
-                            .as_ref()
-                            .and_then(|d| d.url.as_deref())
-                            .or_else(|| {
-                                movement
-                                    .review_target
-                                    .as_ref()
-                                    .and_then(|t| t.url.as_deref())
-                            });
-                        if let Some(url) = url {
-                            open_url(url);
-                        }
-                    }
-                },
-                KeyCode::Char('a') => {
-                    if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                        && movement.deliverable.is_some()
-                    {
-                        return Some(RuntimeCommand::ResolveMovementDeliverable {
-                            movement_id: movement.id.clone(),
-                            decision: polyphony_core::DeliverableDecision::Accepted,
-                        });
-                    }
-                },
-                KeyCode::Char('x') => {
-                    if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                        && movement.deliverable.is_some()
-                    {
-                        return Some(RuntimeCommand::ResolveMovementDeliverable {
-                            movement_id: movement.id.clone(),
-                            decision: polyphony_core::DeliverableDecision::Rejected,
-                        });
-                    }
-                },
-                KeyCode::Char('e') | KeyCode::Char('E') => {
-                    if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
-                        let filter = movement
-                            .issue_identifier
-                            .clone()
-                            .unwrap_or_else(|| movement.id.clone());
-                        app.push_detail(crate::app::DetailView::Events {
-                            filter,
-                            scroll: u16::MAX,
-                        });
-                    }
-                },
-                _ => {},
+            KeyCode::Tab => {
+                // Cycle: Body -> Section(0) tasks -> Body
+                if let Some(crate::app::DetailView::Movement { focus, .. }) =
+                    app.current_detail_mut()
+                {
+                    *focus = match *focus {
+                        crate::app::DetailSection::Body => crate::app::DetailSection::Section(0),
+                        _ => crate::app::DetailSection::Body,
+                    };
+                }
             },
+            KeyCode::Enter => {
+                if let crate::app::DetailSection::Section(0) = focus {
+                    // Tasks section — push Task detail
+                    if let Some(crate::app::DetailView::Movement {
+                        tasks_selected,
+                        movement_id,
+                        ..
+                    }) = app.current_detail().cloned()
+                    {
+                        let related: Vec<_> = snapshot
+                            .tasks
+                            .iter()
+                            .filter(|t| t.movement_id == movement_id)
+                            .collect();
+                        if let Some(task) = related.get(tasks_selected) {
+                            app.push_detail(crate::app::DetailView::Task {
+                                task_id: task.id.clone(),
+                                scroll: 0,
+                            });
+                        }
+                    }
+                }
+            },
+            KeyCode::Char('j') | KeyCode::Down => {
+                navigate_movement_section_or_scroll(app, snapshot, focus, true);
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                navigate_movement_section_or_scroll(app, snapshot, focus, false);
+            },
+            KeyCode::PageDown => {
+                scroll_detail(app, 8);
+            },
+            KeyCode::PageUp => {
+                scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('O') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                    let url = movement
+                        .deliverable
+                        .as_ref()
+                        .and_then(|d| d.url.as_deref())
+                        .or_else(|| {
+                            movement
+                                .review_target
+                                .as_ref()
+                                .and_then(|t| t.url.as_deref())
+                        });
+                    if let Some(url) = url {
+                        open_url(url);
+                    }
+                }
+            },
+            KeyCode::Char('a') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && movement.deliverable.is_some()
+                {
+                    return Some(RuntimeCommand::ResolveMovementDeliverable {
+                        movement_id: movement.id.clone(),
+                        decision: polyphony_core::DeliverableDecision::Accepted,
+                    });
+                }
+            },
+            KeyCode::Char('x') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && movement.deliverable.is_some()
+                {
+                    return Some(RuntimeCommand::ResolveMovementDeliverable {
+                        movement_id: movement.id.clone(),
+                        decision: polyphony_core::DeliverableDecision::Rejected,
+                    });
+                }
+            },
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                    let filter = movement
+                        .issue_identifier
+                        .clone()
+                        .unwrap_or_else(|| movement.id.clone());
+                    app.push_detail(crate::app::DetailView::Events {
+                        filter,
+                        scroll: u16::MAX,
+                    });
+                }
+            },
+            _ => {},
+        },
         crate::app::DetailView::Task { .. } => match key {
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
@@ -1206,9 +1179,8 @@ fn navigate_section_or_scroll(
                     .movements
                     .iter()
                     .filter(|m| {
-                        trigger.is_some_and(|t| {
-                            m.issue_identifier.as_deref() == Some(&*t.identifier)
-                        })
+                        trigger
+                            .is_some_and(|t| m.issue_identifier.as_deref() == Some(&*t.identifier))
                     })
                     .count();
                 if count > 0 {
@@ -1293,9 +1265,8 @@ fn navigate_movement_section_or_scroll(
                     } else {
                         tasks_selected.saturating_sub(1)
                     };
-                    if let Some(crate::app::DetailView::Movement {
-                        tasks_selected, ..
-                    }) = app.current_detail_mut()
+                    if let Some(crate::app::DetailView::Movement { tasks_selected, .. }) =
+                        app.current_detail_mut()
                     {
                         *tasks_selected = new_sel;
                     }
@@ -1343,42 +1314,48 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
         return;
     }
     let new_detail = match app.active_tab {
-        app::ActiveTab::Triggers => app.selected_trigger(snapshot).map(|t| {
-            crate::app::DetailView::Trigger {
-                trigger_id: t.trigger_id.clone(),
-                scroll: 0,
-                focus: Default::default(),
-                movements_selected: 0,
-                agents_selected: 0,
-            }
-        }),
-        app::ActiveTab::Orchestrator => app.selected_movement(snapshot).map(|m| {
-            crate::app::DetailView::Movement {
-                movement_id: m.id.clone(),
-                scroll: 0,
-                focus: Default::default(),
-                tasks_selected: 0,
-            }
-        }),
-        app::ActiveTab::Tasks => app.selected_task(snapshot).map(|t| {
-            crate::app::DetailView::Task {
-                task_id: t.id.clone(),
-                scroll: 0,
-            }
-        }),
-        app::ActiveTab::Deliverables => app.selected_deliverable(snapshot).map(|m| {
-            crate::app::DetailView::Deliverable {
-                movement_id: m.id.clone(),
-                scroll: 0,
-            }
-        }),
-        app::ActiveTab::Agents => app.agents_state.selected().map(|idx| {
-            crate::app::DetailView::Agent {
-                agent_index: idx,
-                scroll: 0,
-                artifact_cache: Box::new(None),
-            }
-        }),
+        app::ActiveTab::Triggers => {
+            app.selected_trigger(snapshot)
+                .map(|t| crate::app::DetailView::Trigger {
+                    trigger_id: t.trigger_id.clone(),
+                    scroll: 0,
+                    focus: Default::default(),
+                    movements_selected: 0,
+                    agents_selected: 0,
+                })
+        },
+        app::ActiveTab::Orchestrator => {
+            app.selected_movement(snapshot)
+                .map(|m| crate::app::DetailView::Movement {
+                    movement_id: m.id.clone(),
+                    scroll: 0,
+                    focus: Default::default(),
+                    tasks_selected: 0,
+                })
+        },
+        app::ActiveTab::Tasks => {
+            app.selected_task(snapshot)
+                .map(|t| crate::app::DetailView::Task {
+                    task_id: t.id.clone(),
+                    scroll: 0,
+                })
+        },
+        app::ActiveTab::Deliverables => {
+            app.selected_deliverable(snapshot)
+                .map(|m| crate::app::DetailView::Deliverable {
+                    movement_id: m.id.clone(),
+                    scroll: 0,
+                })
+        },
+        app::ActiveTab::Agents => {
+            app.agents_state
+                .selected()
+                .map(|idx| crate::app::DetailView::Agent {
+                    agent_index: idx,
+                    scroll: 0,
+                    artifact_cache: Box::new(None),
+                })
+        },
         _ => None,
     };
     if let Some(detail) = new_detail
@@ -1460,18 +1437,17 @@ fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
 
 #[cfg(test)]
 mod tests {
-    use {
-        crate::{LogBuffer, event_loop::AgentArtifactRequest},
-        chrono::Utc,
-        crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
-        polyphony_core::{
-            AgentContextEntry, AgentContextSnapshot, AgentEventKind, AttemptStatus, Deliverable,
-            DeliverableDecision, DeliverableKind, DeliverableStatus, IssueApprovalState,
-            PersistedRunRecord, RuntimeSnapshot, SnapshotCounts, TokenUsage, VisibleTriggerKind,
-            VisibleTriggerRow, workspace_run_history_artifact_path,
-            workspace_saved_context_artifact_path,
-        },
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+    use polyphony_core::{
+        AgentContextEntry, AgentContextSnapshot, AgentEventKind, AttemptStatus, Deliverable,
+        DeliverableDecision, DeliverableKind, DeliverableStatus, IssueApprovalState,
+        PersistedRunRecord, RuntimeSnapshot, SnapshotCounts, TokenUsage, VisibleTriggerKind,
+        VisibleTriggerRow, workspace_run_history_artifact_path,
+        workspace_saved_context_artifact_path,
     };
+
+    use crate::{LogBuffer, event_loop::AgentArtifactRequest};
 
     #[test]
     fn outputs_tab_accepts_selected_deliverable() {

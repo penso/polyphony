@@ -1,14 +1,12 @@
-use {
-    chrono::Utc,
-    polyphony_core::{AgentHistoryRow, RuntimeSnapshot, RunningRow},
-    ratatui::{
-        layout::{Constraint, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
-            ScrollbarState, Table,
-        },
+use chrono::Utc;
+use polyphony_core::{AgentHistoryRow, RunningRow, RuntimeSnapshot};
+use ratatui::{
+    layout::{Constraint, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table,
     },
 };
 
@@ -506,7 +504,6 @@ fn extend_plain_lines(lines: &mut Vec<Line<'static>>, content: &str, color: rata
         )));
     }
 }
-
 
 pub(crate) fn format_duration(duration: chrono::Duration) -> String {
     let total_secs = duration.num_seconds().max(0);

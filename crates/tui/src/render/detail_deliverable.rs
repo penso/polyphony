@@ -1,12 +1,10 @@
-use {
-    polyphony_core::{DeliverableDecision, RuntimeSnapshot},
-    ratatui::{
-        layout::{Constraint, Direction, Layout, Margin, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
-        },
+use polyphony_core::{DeliverableDecision, RuntimeSnapshot};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
 
@@ -36,7 +34,10 @@ pub(crate) fn draw_deliverable_detail(
         .title(Line::from(vec![
             Span::styled(" Outcome ", Style::default().fg(theme.info)),
             Span::styled(
-                format!("{} ", super::deliverables::deliverable_label_pub(deliverable)),
+                format!(
+                    "{} ",
+                    super::deliverables::deliverable_label_pub(deliverable)
+                ),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -131,7 +132,11 @@ pub(crate) fn draw_deliverable_detail(
         lines.push(kv_line("URL", url, theme));
     }
     if let Some(workspace_path) = &movement.workspace_path {
-        lines.push(kv_line("Path", &workspace_path.display().to_string(), theme));
+        lines.push(kv_line(
+            "Path",
+            &workspace_path.display().to_string(),
+            theme,
+        ));
     }
 
     // Scrollable rendering
@@ -161,7 +166,14 @@ pub(crate) fn draw_deliverable_detail(
         );
     }
 
-    render_scroll_indicator(frame, body_area, scroll_pos, total_lines, visible_height, theme);
+    render_scroll_indicator(
+        frame,
+        body_area,
+        scroll_pos,
+        total_lines,
+        visible_height,
+        theme,
+    );
 }
 
 fn draw_not_found(

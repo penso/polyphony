@@ -1,14 +1,12 @@
-use {
-    chrono::Utc,
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::{Alignment, Constraint, Direction, Layout, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar,
-            ScrollbarOrientation, ScrollbarState, Table, Wrap,
-        },
+use chrono::Utc;
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table, Wrap,
     },
 };
 
@@ -561,7 +559,9 @@ fn _draw_events_panel(
 
 #[cfg(test)]
 mod tests {
-    use polyphony_core::{MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget};
+    use polyphony_core::{
+        MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget,
+    };
 
     use crate::render::orchestrator::{movement_target_label, render_event_line};
 
@@ -594,7 +594,6 @@ mod tests {
 
         assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
     }
-
 
     #[test]
     fn render_event_line_inserts_separator_between_scope_and_message() {
@@ -697,50 +696,42 @@ pub(crate) fn draw_filtered_events(
             *s = max_scroll;
         }
     }
-    let scroll_pos = app
-        .current_detail()
-        .map(|d| d.scroll())
-        .unwrap_or(0);
+    let scroll_pos = app.current_detail().map(|d| d.scroll()).unwrap_or(0);
 
     let count_label = format!(" {total_lines} events ");
 
     frame.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll_pos, 0))
-            .block(
-                Block::default()
-                    .title(Line::from(vec![
-                        Span::styled(
-                            " Events ",
-                            Style::default()
-                                .fg(theme.foreground)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("({filter}) "),
-                            Style::default().fg(theme.muted),
-                        ),
-                    ]))
-                    .title(
-                        Line::from(Span::styled(count_label, Style::default().fg(theme.muted)))
-                            .right_aligned(),
-                    )
-                    .title_bottom(
-                        Line::from(vec![
-                            Span::styled("j/k", Style::default().fg(theme.highlight)),
-                            Span::styled(":scroll  ", Style::default().fg(theme.muted)),
-                            Span::styled("g/G", Style::default().fg(theme.highlight)),
-                            Span::styled(":top/bottom  ", Style::default().fg(theme.muted)),
-                            Span::styled("Esc", Style::default().fg(theme.highlight)),
-                            Span::styled(":back ", Style::default().fg(theme.muted)),
-                        ])
+        Paragraph::new(lines).scroll((scroll_pos, 0)).block(
+            Block::default()
+                .title(Line::from(vec![
+                    Span::styled(
+                        " Events ",
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("({filter}) "), Style::default().fg(theme.muted)),
+                ]))
+                .title(
+                    Line::from(Span::styled(count_label, Style::default().fg(theme.muted)))
                         .right_aligned(),
-                    )
-                    .borders(ratatui::widgets::Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border))
-                    .style(Style::default().bg(theme.panel_alt)),
-            ),
+                )
+                .title_bottom(
+                    Line::from(vec![
+                        Span::styled("j/k", Style::default().fg(theme.highlight)),
+                        Span::styled(":scroll  ", Style::default().fg(theme.muted)),
+                        Span::styled("g/G", Style::default().fg(theme.highlight)),
+                        Span::styled(":top/bottom  ", Style::default().fg(theme.muted)),
+                        Span::styled("Esc", Style::default().fg(theme.highlight)),
+                        Span::styled(":back ", Style::default().fg(theme.muted)),
+                    ])
+                    .right_aligned(),
+                )
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.border))
+                .style(Style::default().bg(theme.panel_alt)),
+        ),
         area,
     );
 

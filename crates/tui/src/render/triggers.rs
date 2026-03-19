@@ -1,15 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use {
-    polyphony_core::{IssueApprovalState, RuntimeSnapshot, VisibleTriggerKind},
-    ratatui::{
-        layout::{Alignment, Constraint, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Padding, Row, Scrollbar,
-            ScrollbarOrientation, ScrollbarState, Table,
-        },
+use polyphony_core::{IssueApprovalState, RuntimeSnapshot, VisibleTriggerKind};
+use ratatui::{
+    layout::{Alignment, Constraint, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Cell, HighlightSpacing, Padding, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table,
     },
 };
 
@@ -77,7 +75,11 @@ pub fn draw_triggers_tab(
             + 1
     };
     let status_col_width: u16 = 3; // emoji + space
-    let time_col_width: u16 = if compact { 5 } else { 16 }; // "3d" vs "YYYY-MM-DD HH:MM"
+    let time_col_width: u16 = if compact {
+        5
+    } else {
+        16
+    }; // "3d" vs "YYYY-MM-DD HH:MM"
 
     let mut header_cells = vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
@@ -104,7 +106,11 @@ pub fn draw_triggers_tab(
         .style(Style::default().add_modifier(Modifier::BOLD));
 
     let workspace_col_width: u16 = 2; // "● " or empty
-    let tasks_col_width: u16 = if compact { 0 } else { 6 }; // "Tasks" + space
+    let tasks_col_width: u16 = if compact {
+        0
+    } else {
+        6
+    }; // "Tasks" + space
     let title_max_width = (area.width as usize).saturating_sub(
         2 + 1
             + 2
@@ -134,7 +140,11 @@ pub fn draw_triggers_tab(
 
             // Approval marker takes 1 char when present
             let approval = approval_marker(trigger, theme);
-            let approval_width = if approval.is_some() { 1 } else { 0 };
+            let approval_width = if approval.is_some() {
+                1
+            } else {
+                0
+            };
             let effective_title_width = title_max_width
                 .saturating_sub(tree_prefix_width)
                 .saturating_sub(approval_width);
@@ -169,10 +179,7 @@ pub fn draw_triggers_tab(
             let workspace_indicator = if is_running {
                 let spinner =
                     BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
-                Span::styled(
-                    spinner.to_string(),
-                    Style::default().fg(theme.highlight),
-                )
+                Span::styled(spinner.to_string(), Style::default().fg(theme.highlight))
             } else if trigger.has_workspace {
                 Span::styled("●", Style::default().fg(theme.highlight))
             } else {
@@ -189,17 +196,11 @@ pub fn draw_triggers_tab(
 
             let mut cells = vec![
                 Cell::from(workspace_indicator),
-                Cell::from(Span::styled(
-                    time_label,
-                    Style::default().fg(theme.muted),
-                )),
+                Cell::from(Span::styled(time_label, Style::default().fg(theme.muted))),
                 Cell::from(Line::from(title_spans)),
                 Cell::from(
-                    Line::from(Span::styled(
-                        kind_label,
-                        Style::default().fg(kind_color),
-                    ))
-                    .alignment(Alignment::Right),
+                    Line::from(Span::styled(kind_label, Style::default().fg(kind_color)))
+                        .alignment(Alignment::Right),
                 ),
                 Cell::from(
                     Line::from(Span::styled(status_icon, Style::default().fg(status_color)))
@@ -286,36 +287,37 @@ pub fn draw_triggers_tab(
     }
 
     let table = Table::new(rows, col_constraints)
-    .header(header)
-    .row_highlight_style(selected_style)
-    .highlight_spacing(HighlightSpacing::Always)
-    .block({
-        let mut block = Block::default().title(Line::from(title_spans));
-        if app.refresh_requested || snapshot.loading.fetching_issues {
-            let spinner = BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
-            block = block.title(
-                Line::from(vec![
-                    Span::styled(format!(" {spinner} "), Style::default().fg(theme.highlight)),
-                    Span::styled("refreshing ", Style::default().fg(theme.muted)),
-                ])
-                .right_aligned(),
-            );
-        }
-        block
-            .title_bottom(
-                Line::from(vec![
-                    Span::styled("─s:", Style::default().fg(theme.muted)),
-                    Span::styled(sort_label, Style::default().fg(theme.highlight)),
-                    Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
-                ])
-                .right_aligned(),
-            )
-            .borders(ratatui::widgets::Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border))
-            .padding(Padding::right(1))
-            .style(Style::default().bg(theme.panel))
-    });
+        .header(header)
+        .row_highlight_style(selected_style)
+        .highlight_spacing(HighlightSpacing::Always)
+        .block({
+            let mut block = Block::default().title(Line::from(title_spans));
+            if app.refresh_requested || snapshot.loading.fetching_issues {
+                let spinner =
+                    BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
+                block = block.title(
+                    Line::from(vec![
+                        Span::styled(format!(" {spinner} "), Style::default().fg(theme.highlight)),
+                        Span::styled("refreshing ", Style::default().fg(theme.muted)),
+                    ])
+                    .right_aligned(),
+                );
+            }
+            block
+                .title_bottom(
+                    Line::from(vec![
+                        Span::styled("─s:", Style::default().fg(theme.muted)),
+                        Span::styled(sort_label, Style::default().fg(theme.highlight)),
+                        Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
+                    ])
+                    .right_aligned(),
+                )
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme.border))
+                .padding(Padding::right(1))
+                .style(Style::default().bg(theme.panel))
+        });
 
     frame.render_stateful_widget(table, area, &mut app.issues_state);
     draw_scrollbar(frame, area, count, app.issues_state.selected().unwrap_or(0));
@@ -417,4 +419,3 @@ fn draw_scrollbar(frame: &mut ratatui::Frame<'_>, area: Rect, count: usize, posi
         );
     }
 }
-

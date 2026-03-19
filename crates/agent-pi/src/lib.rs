@@ -1,27 +1,25 @@
 use std::{path::PathBuf, process::Stdio};
 
-use {
-    async_trait::async_trait,
-    chrono::Utc,
-    polyphony_agent_common::{
-        emit, extract_text_rate_limit_signal, fetch_budget_for_agent, sanitize_session_fragment,
-        shell_escape,
-    },
-    polyphony_core::{
-        AgentDefinition, AgentEvent, AgentEventKind, AgentModel, AgentModelCatalog,
-        AgentProviderRuntime, AgentRunResult, AgentRunSpec, AgentSession, AgentTransport,
-        AttemptStatus, BudgetSnapshot, Error as CoreError, TokenUsage,
-    },
-    serde_json::{Value, json},
-    tokio::{
-        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-        process::{Child, ChildStdin, ChildStdout, Command},
-        sync::mpsc,
-        task::JoinHandle,
-        time::{Duration, Instant},
-    },
-    tracing::{debug, info},
+use async_trait::async_trait;
+use chrono::Utc;
+use polyphony_agent_common::{
+    emit, extract_text_rate_limit_signal, fetch_budget_for_agent, sanitize_session_fragment,
+    shell_escape,
 };
+use polyphony_core::{
+    AgentDefinition, AgentEvent, AgentEventKind, AgentModel, AgentModelCatalog,
+    AgentProviderRuntime, AgentRunResult, AgentRunSpec, AgentSession, AgentTransport,
+    AttemptStatus, BudgetSnapshot, Error as CoreError, TokenUsage,
+};
+use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdin, ChildStdout, Command},
+    sync::mpsc,
+    task::JoinHandle,
+    time::{Duration, Instant},
+};
+use tracing::{debug, info};
 
 #[derive(Debug, Default, Clone)]
 pub struct PiRuntime;
@@ -797,15 +795,14 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use {
-        super::PiRuntime,
-        polyphony_core::{
-            AgentDefinition, AgentProviderRuntime, AgentRunSpec, AgentTransport,
-            Error as CoreError, Issue,
-        },
-        tempfile::tempdir,
-        tokio::sync::mpsc,
+    use polyphony_core::{
+        AgentDefinition, AgentProviderRuntime, AgentRunSpec, AgentTransport, Error as CoreError,
+        Issue,
     };
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    use super::PiRuntime;
 
     fn test_issue() -> Issue {
         Issue {

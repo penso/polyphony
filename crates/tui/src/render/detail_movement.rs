@@ -1,13 +1,10 @@
-use {
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::{Constraint, Direction, Layout, Margin, Rect},
-        style::{Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-            Wrap,
-        },
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
 
@@ -32,7 +29,10 @@ pub(crate) fn draw_movement_detail(
         .title(Line::from(vec![
             Span::styled(" Movement ", Style::default().fg(theme.info)),
             Span::styled(
-                format!("{} ", super::orchestrator::movement_kind_label(movement.kind)),
+                format!(
+                    "{} ",
+                    super::orchestrator::movement_kind_label(movement.kind)
+                ),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -99,7 +99,10 @@ pub(crate) fn draw_movement_detail(
     let status_color = super::orchestrator::movement_status_color_pub(&movement.status, theme);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(movement.status.to_string(), Style::default().fg(status_color)),
+            Span::styled(
+                movement.status.to_string(),
+                Style::default().fg(status_color),
+            ),
             Span::styled("  ", Style::default()),
             Span::styled(
                 super::orchestrator::movement_target_label(movement),
@@ -119,7 +122,10 @@ pub(crate) fn draw_movement_detail(
     frame.render_widget(
         Gauge::default()
             .gauge_style(Style::default().fg(status_color).bg(theme.border))
-            .label(Span::styled(gauge_label, Style::default().fg(theme.foreground)))
+            .label(Span::styled(
+                gauge_label,
+                Style::default().fg(theme.foreground),
+            ))
             .ratio(ratio),
         rows[2],
     );
@@ -131,13 +137,25 @@ pub(crate) fn draw_movement_detail(
 
     let mut lines = vec![
         kv_line("ID", &movement.id, theme),
-        kv_line("Kind", super::orchestrator::movement_kind_label(movement.kind), theme),
-        kv_line("Target", &super::orchestrator::movement_target_label(movement), theme),
+        kv_line(
+            "Kind",
+            super::orchestrator::movement_kind_label(movement.kind),
+            theme,
+        ),
+        kv_line(
+            "Target",
+            &super::orchestrator::movement_target_label(movement),
+            theme,
+        ),
         kv_line("Created", &format_time(movement.created_at), theme),
     ];
 
     if let Some(deliverable) = &movement.deliverable {
-        lines.push(kv_line("Decision", &deliverable.decision.to_string(), theme));
+        lines.push(kv_line(
+            "Decision",
+            &deliverable.decision.to_string(),
+            theme,
+        ));
         if let Some(url) = &deliverable.url {
             lines.push(kv_line("URL", url, theme));
         }
@@ -146,14 +164,20 @@ pub(crate) fn draw_movement_detail(
         lines.push(kv_line("Wkspace", workspace_key, theme));
     }
     if let Some(workspace_path) = &movement.workspace_path {
-        lines.push(kv_line("Path", &workspace_path.display().to_string(), theme));
+        lines.push(kv_line(
+            "Path",
+            &workspace_path.display().to_string(),
+            theme,
+        ));
     }
 
     if let Some(target) = &movement.review_target {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Review Target",
-            Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(kv_line("Repo", &target.repository, theme));
         lines.push(kv_line("PR", &format!("#{}", target.number), theme));
@@ -187,12 +211,18 @@ pub(crate) fn draw_movement_detail(
         .collect();
     if !related_tasks.is_empty() {
         lines.push(Line::default());
-        let section_marker = if tasks_focused { "▸ " } else { "  " };
+        let section_marker = if tasks_focused {
+            "▸ "
+        } else {
+            "  "
+        };
         lines.push(Line::from(vec![
             Span::styled(section_marker, Style::default().fg(theme.highlight)),
             Span::styled(
                 "Tasks",
-                Style::default().fg(theme.highlight).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.highlight)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
         for (i, task) in related_tasks.iter().enumerate() {
@@ -204,7 +234,11 @@ pub(crate) fn draw_movement_detail(
                 polyphony_core::TaskStatus::Cancelled => theme.muted,
             };
             let is_selected = tasks_focused && i == tasks_selected;
-            let prefix = if is_selected { "▸ " } else { "  " };
+            let prefix = if is_selected {
+                "▸ "
+            } else {
+                "  "
+            };
             let title_style = if is_selected {
                 Style::default()
                     .fg(theme.foreground)
@@ -223,10 +257,7 @@ pub(crate) fn draw_movement_detail(
                     Style::default().fg(task_status_color),
                 ),
                 Span::styled("  ", Style::default()),
-                Span::styled(
-                    task.title.clone(),
-                    title_style,
-                ),
+                Span::styled(task.title.clone(), title_style),
             ]));
         }
     }
@@ -266,7 +297,14 @@ pub(crate) fn draw_movement_detail(
         );
     }
 
-    render_scroll_indicator(frame, body_area, scroll_pos, total_lines, visible_height, theme);
+    render_scroll_indicator(
+        frame,
+        body_area,
+        scroll_pos,
+        total_lines,
+        visible_height,
+        theme,
+    );
 }
 
 fn draw_not_found(

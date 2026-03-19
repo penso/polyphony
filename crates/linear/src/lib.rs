@@ -1,17 +1,15 @@
-use {
-    async_trait::async_trait,
-    chrono::Utc,
-    graphql_client::GraphQLQuery,
-    polyphony_core::{
-        AddIssueCommentRequest, BlockerRef, BudgetSnapshot, CreateIssueRequest, Error as CoreError,
-        Issue, IssueAuthor, IssueComment, IssueStateUpdate, IssueTracker, RateLimitSignal,
-        TrackerQuery, UpdateIssueRequest,
-    },
-    std::time::Duration,
-    tracing::debug,
-};
+use std::time::Duration;
 
+use async_trait::async_trait;
+use chrono::Utc;
+use graphql_client::GraphQLQuery;
+use polyphony_core::{
+    AddIssueCommentRequest, BlockerRef, BudgetSnapshot, CreateIssueRequest, Error as CoreError,
+    Issue, IssueAuthor, IssueComment, IssueStateUpdate, IssueTracker, RateLimitSignal,
+    TrackerQuery, UpdateIssueRequest,
+};
 use serde_json::{Value, json};
+use tracing::debug;
 
 const LINEAR_HTTP_TIMEOUT: Duration = Duration::from_millis(30_000);
 

@@ -7,12 +7,9 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use app::AppState;
+use theme::{Theme, default_theme, detect_terminal_theme};
 use thiserror::Error;
-
-use {
-    app::AppState,
-    theme::{Theme, default_theme, detect_terminal_theme},
-};
 
 #[derive(Debug, Error)]
 pub enum Error {

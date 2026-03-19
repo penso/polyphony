@@ -1,14 +1,12 @@
-use {
-    chrono::{DateTime, Utc},
-    polyphony_core::RuntimeSnapshot,
-    ratatui::{
-        layout::{Constraint, Rect},
-        style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::{
-            Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
-            ScrollbarState, Table,
-        },
+use chrono::{DateTime, Utc};
+use polyphony_core::RuntimeSnapshot;
+use ratatui::{
+    layout::{Constraint, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{
+        Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table,
     },
 };
 
@@ -25,8 +23,12 @@ pub fn draw_tasks_tab(
     // Sort tasks by most recent first (started_at descending, fall back to created_at)
     let mut sorted_indices: Vec<usize> = (0..snapshot.tasks.len()).collect();
     sorted_indices.sort_by(|&a, &b| {
-        let ta = snapshot.tasks[a].started_at.unwrap_or(snapshot.tasks[a].created_at);
-        let tb = snapshot.tasks[b].started_at.unwrap_or(snapshot.tasks[b].created_at);
+        let ta = snapshot.tasks[a]
+            .started_at
+            .unwrap_or(snapshot.tasks[a].created_at);
+        let tb = snapshot.tasks[b]
+            .started_at
+            .unwrap_or(snapshot.tasks[b].created_at);
         tb.cmp(&ta)
     });
     app.sorted_task_indices = sorted_indices;
@@ -51,10 +53,7 @@ pub fn draw_tasks_tab(
             let time_label = format_task_time(task.started_at, task.created_at);
 
             Row::new(vec![
-                Cell::from(Span::styled(
-                    time_label,
-                    Style::default().fg(theme.muted),
-                )),
+                Cell::from(Span::styled(time_label, Style::default().fg(theme.muted))),
                 Cell::from(Span::styled(
                     task.title.clone(),
                     Style::default().fg(theme.foreground),
