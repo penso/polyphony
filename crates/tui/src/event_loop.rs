@@ -576,25 +576,25 @@ fn handle_key(
             app.move_up(len, 8);
         },
 
-        // Jump to bottom (Logs: re-enable auto-scroll)
+        // Jump to bottom
         KeyCode::Char('G') | KeyCode::End => {
             if app.active_tab == app::ActiveTab::Logs {
                 app.logs_auto_scroll = true;
-                let len = app.active_table_len(snapshot);
-                if len > 0 {
-                    app.logs_state.select(Some(len - 1));
-                }
+            }
+            let len = app.active_table_len(snapshot);
+            if len > 0 {
+                app.move_down(len, len);
             }
         },
 
-        // Jump to top (Logs: disable auto-scroll)
+        // Jump to top
         KeyCode::Char('g') | KeyCode::Home => {
             if app.active_tab == app::ActiveTab::Logs {
                 app.logs_auto_scroll = false;
-                let len = app.active_table_len(snapshot);
-                if len > 0 {
-                    app.logs_state.select(Some(0));
-                }
+            }
+            let len = app.active_table_len(snapshot);
+            if len > 0 {
+                app.move_up(len, len);
             }
         },
 
