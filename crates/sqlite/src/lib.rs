@@ -399,6 +399,7 @@ mod tests {
             from_cache: false,
             cached_at: None,
             agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
         };
         let run = PersistedRunRecord {
             issue_id: "issue-1".into(),
@@ -430,6 +431,7 @@ mod tests {
             issue_identifier: Some("GH-1".into()),
             title: "Deliver it".into(),
             status: MovementStatus::Delivered,
+            pipeline_stage: None,
             workspace_key: None,
             workspace_path: None,
             review_target: None,

@@ -9,10 +9,11 @@ pub(crate) use std::{
 pub(crate) use chrono::{DateTime, Utc};
 pub(crate) use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 pub(crate) use polyphony_core::{
-    AgentContextEntry, AgentContextSnapshot, AgentEventKind, AgentRunResult, AgentRunSpec,
+    AgentContextEntry, AgentContextSnapshot, AgentEventKind, AgentProfileSummary, AgentRunResult,
+    AgentRunSpec,
     AgentRuntime, AttemptStatus, BudgetSnapshot, CachedSnapshot, Error as CoreError, EventScope,
     FeedbackAction, FeedbackLink, FeedbackNotification, Issue, IssueApprovalState, IssueTracker,
-    Movement, MovementKind, MovementRow, MovementStatus, NetworkCache, PipelinePlan,
+    Movement, MovementKind, MovementRow, MovementStatus, NetworkCache, PipelinePlan, PipelineStage,
     PullRequestCommentTrigger, PullRequestCommenter, PullRequestManager, PullRequestRef,
     PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger, PullRequestTrigger,
     PullRequestTriggerSource, RateLimitSignal, RetryRow, ReviewTarget, ReviewedPullRequestHead,

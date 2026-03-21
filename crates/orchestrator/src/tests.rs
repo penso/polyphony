@@ -766,14 +766,14 @@ impl PullRequestManager for RecordingPullRequestManager {
 fn test_workflow(workspace_root: &Path) -> LoadedWorkflow {
     test_workflow_with_front_matter(
         workspace_root,
-        "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nTest prompt\n",
+        "---\ntracker:\n  kind: mock\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\norchestration:\n  dispatch_mode: manual\nagents:\n  default: mock\n  profiles:\n    mock:\n      kind: mock\n      transport: mock\n      command: mock\n---\nTest prompt\n",
     )
 }
 
 fn pipeline_workflow_with_automation(workspace_root: &Path) -> LoadedWorkflow {
     test_workflow_with_front_matter(
         workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: test-token\n  active_states: [Todo, In Progress]\n  terminal_states: [Done]\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\n  checkout_kind: linked_worktree\n  source_repo_path: __ROOT__/source-repo\nagent:\n  max_turns: 3\norchestration:\n  router_agent: router\nagents:\n  default: implementer\n  profiles:\n    router:\n      kind: mock\n      transport: mock\n      command: mock\n    implementer:\n      kind: mock\n      transport: mock\n      command: mock\nautomation:\n  enabled: true\n  git:\n    remote_name: origin\n---\nFix {{ issue.identifier }}\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: test-token\n  active_states: [Todo, In Progress]\n  terminal_states: [Done]\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\n  checkout_kind: linked_worktree\n  source_repo_path: __ROOT__/source-repo\nagent:\n  max_turns: 3\norchestration:\n  dispatch_mode: manual\n  router_agent: router\nagents:\n  default: implementer\n  profiles:\n    router:\n      kind: mock\n      transport: mock\n      command: mock\n    implementer:\n      kind: mock\n      transport: mock\n      command: mock\nautomation:\n  enabled: true\n  git:\n    remote_name: origin\n---\nFix {{ issue.identifier }}\n",
     )
 }
 
@@ -1176,6 +1176,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
             issue_identifier: Some(issue.identifier.clone()),
             title: trigger.title.clone(),
             status: MovementStatus::InProgress,
+            pipeline_stage: None,
             workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
             workspace_path: Some(workspace_path.clone()),
             review_target: Some(trigger.review_target()),
@@ -2579,6 +2580,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
             from_cache: false,
             cached_at: None,
             agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
         }),
         retrying: std::collections::HashMap::new(),
         throttles: std::collections::HashMap::new(),
@@ -2707,6 +2709,7 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
         issue_identifier: Some("#7".into()),
         title: "Need a PR".into(),
         status: MovementStatus::Delivered,
+        pipeline_stage: None,
         workspace_key: Some("_7".into()),
         workspace_path: Some(workspace_root.join("_7")),
         review_target: None,
@@ -2770,7 +2773,7 @@ async fn stop_mode_skips_dispatch_on_tick() {
 }
 
 #[tokio::test]
-async fn stop_mode_blocks_manual_dispatch() {
+async fn manual_dispatch_works_in_stop_mode() {
     let workspace_root = unique_workspace_root("stop-manual");
     let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
     let provisioner = RecordingProvisioner::default();
@@ -2783,8 +2786,72 @@ async fn stop_mode_blocks_manual_dispatch() {
     service.process_manual_dispatches().await;
 
     assert!(
+        service.state.running.contains_key("issue-1"),
+        "manual dispatch should work even in stop mode"
+    );
+}
+
+#[tokio::test]
+async fn stop_mode_blocks_automatic_dispatch() {
+    let workspace_root = unique_workspace_root("stop-auto");
+    let tracker =
+        TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "Auto issue")]);
+    let mut service =
+        test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
+
+    service.tick().await;
+
+    assert!(
         !service.state.running.contains_key("issue-1"),
-        "stop mode should block manual dispatch"
+        "stop mode should block automatic dispatch"
+    );
+}
+
+#[tokio::test]
+async fn manual_dispatch_is_processed_on_next_tick() {
+    let workspace_root = unique_workspace_root("manual-tick");
+    let issue = sample_issue("issue-tick-1", "FAC-TICK-1", "Todo", "Tick test");
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let mut service =
+        test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+
+    // Queue a manual dispatch
+    service
+        .pending_manual_dispatches
+        .push((issue.id.clone(), None));
+
+    // A single tick should process it
+    service.tick().await;
+
+    assert!(
+        service.state.running.contains_key(&issue.id),
+        "manual dispatch should be processed on the immediate next tick"
+    );
+}
+
+#[tokio::test]
+async fn manual_dispatch_with_agent_name() {
+    let workspace_root = unique_workspace_root("manual-agent");
+    let issue = sample_issue("issue-agent-1", "FAC-AGENT-1", "Todo", "Agent test");
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let mut service =
+        test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+
+    service
+        .pending_manual_dispatches
+        .push((issue.id.clone(), Some("mock".into())));
+
+    service.process_manual_dispatches().await;
+
+    assert!(
+        service.state.running.contains_key(&issue.id),
+        "manual dispatch with explicit agent name should work"
+    );
+    let running = service.state.running.get(&issue.id).unwrap();
+    assert_eq!(
+        running.agent_name, "mock",
+        "should use the explicitly requested agent"
     );
 }
 
@@ -3002,6 +3069,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             issue_identifier: Some("FAC-1".into()),
             title: "Delivered work".into(),
             status: MovementStatus::Delivered,
+            pipeline_stage: None,
             workspace_key: None,
             workspace_path: None,
             review_target: None,
@@ -3029,6 +3097,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             issue_identifier: Some("FAC-1".into()),
             title: "Active work".into(),
             status: MovementStatus::InProgress,
+            pipeline_stage: None,
             workspace_key: None,
             workspace_path: None,
             review_target: None,
@@ -3063,7 +3132,7 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
 
-    // Default before bootstrap is Manual (from config).
+    // Default before bootstrap is Manual (from test config).
     assert_eq!(service.state.dispatch_mode, DispatchMode::Manual);
     assert!(!service.state.bootstrap_restored);
 
@@ -3095,6 +3164,7 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
             from_cache: false,
             cached_at: None,
             agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
         }),
         retrying: std::collections::HashMap::new(),
         throttles: std::collections::HashMap::new(),

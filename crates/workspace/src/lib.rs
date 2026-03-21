@@ -61,6 +61,14 @@ impl WorkspaceManager {
         clone_url: Option<String>,
         default_branch: Option<String>,
     ) -> Self {
+        // Ensure absolute path so agents always get a valid cwd.
+        let root = if root.is_relative() {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&root))
+                .unwrap_or(root)
+        } else {
+            root
+        };
         Self {
             root,
             provisioner,

@@ -22,7 +22,7 @@ pub(crate) fn draw_agent_detail(
 
     let block = Block::default()
         .title(Line::from(Span::styled(
-            " Agent Detail ",
+            " Agent Session ",
             Style::default()
                 .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
@@ -51,15 +51,8 @@ pub(crate) fn draw_agent_detail(
         horizontal: 2,
     });
 
-    // Resolve agent from index
-    let agent = if let Some(running) = snapshot.running.get(agent_index) {
-        Some(crate::app::SelectedAgentRow::Running(running))
-    } else {
-        snapshot
-            .agent_history
-            .get(agent_index.saturating_sub(snapshot.running.len()))
-            .map(crate::app::SelectedAgentRow::History)
-    };
+    // Resolve agent from sorted display index
+    let agent = app.resolve_agent(snapshot, agent_index);
 
     // Get artifact cache from the detail stack
     let artifact_context =
@@ -73,7 +66,7 @@ pub(crate) fn draw_agent_detail(
         };
 
     let lines = agent
-        .map(|a| super::agents::build_agent_detail_lines(snapshot, a, artifact_context, theme))
+        .map(|a| super::agents::build_agent_detail_lines(snapshot, a, artifact_context, theme, app.frame_count))
         .unwrap_or_else(|| {
             vec![Line::from(Span::styled(
                 "No agent run selected.",

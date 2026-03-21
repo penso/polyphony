@@ -111,6 +111,7 @@ impl RuntimeService {
         running: &RunningTask,
     ) -> Result<(), Error> {
         if !workflow.config.automation.enabled {
+            self.create_local_branch_deliverable(running).await;
             return Ok(());
         }
         info!(
@@ -491,6 +492,482 @@ impl RuntimeService {
                 ),
             );
         }
+    }
+
+    /// Create a local branch deliverable for movements without GitHub automation.
+    async fn create_local_branch_deliverable(&mut self, running: &RunningTask) {
+        let Some(movement_id) = running.movement_id.clone() else {
+            return;
+        };
+
+        // Check if the movement exists and has no deliverable yet
+        let has_deliverable = self
+            .state
+            .movements
+            .get(&movement_id)
+            .is_some_and(|m| m.deliverable.is_some());
+        if has_deliverable {
+            return;
+        }
+        let movement_exists = self.state.movements.contains_key(&movement_id);
+        if !movement_exists {
+            return;
+        }
+
+        // Detect the workspace branch and diff stats
+        let workspace_path = &running.workspace_path;
+        let (branch_name, diff_stats) = match detect_branch_info(workspace_path) {
+            Ok(info) => info,
+            Err(error) => {
+                warn!(%error, "failed to detect branch info for local deliverable");
+                return;
+            },
+        };
+
+        let mut metadata = std::collections::HashMap::new();
+        if let Some((added, removed, changed)) = diff_stats {
+            metadata.insert("lines_added".into(), serde_json::json!(added));
+            metadata.insert("lines_removed".into(), serde_json::json!(removed));
+            metadata.insert("changed_files".into(), serde_json::json!(changed));
+        }
+        metadata.insert("branch".into(), serde_json::json!(branch_name));
+        metadata.insert(
+            "workspace_path".into(),
+            serde_json::json!(workspace_path.display().to_string()),
+        );
+
+        let deliverable = polyphony_core::Deliverable {
+            kind: polyphony_core::DeliverableKind::LocalBranch,
+            status: polyphony_core::DeliverableStatus::Open,
+            url: None,
+            decision: polyphony_core::DeliverableDecision::Waiting,
+            title: Some(format!("Branch: {branch_name}")),
+            description: None,
+            metadata,
+        };
+
+        if let Some(movement) = self.state.movements.get_mut(&movement_id) {
+            movement.deliverable = Some(deliverable);
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+        self.push_event(
+            EventScope::Handoff,
+            format!("{movement_id} local branch deliverable created: {branch_name}"),
+        );
+    }
+
+    /// Create a local branch deliverable from a workspace path, without needing a RunningTask.
+    /// Used on restart when the pipeline completed but the deliverable wasn't created.
+    pub(crate) async fn create_local_branch_deliverable_from_workspace(
+        &mut self,
+        movement_id: &str,
+        workspace_path: &Path,
+    ) {
+        let has_deliverable = self
+            .state
+            .movements
+            .get(movement_id)
+            .is_some_and(|m| m.deliverable.is_some());
+        if has_deliverable {
+            return;
+        }
+
+        let (branch_name, diff_stats) = match detect_branch_info(workspace_path) {
+            Ok(info) => info,
+            Err(error) => {
+                warn!(%error, "failed to detect branch info for local deliverable on resume");
+                return;
+            },
+        };
+
+        let mut metadata = std::collections::HashMap::new();
+        if let Some((added, removed, changed)) = diff_stats {
+            metadata.insert("lines_added".into(), serde_json::json!(added));
+            metadata.insert("lines_removed".into(), serde_json::json!(removed));
+            metadata.insert("changed_files".into(), serde_json::json!(changed));
+        }
+        metadata.insert("branch".into(), serde_json::json!(branch_name));
+        metadata.insert(
+            "workspace_path".into(),
+            serde_json::json!(workspace_path.display().to_string()),
+        );
+
+        let deliverable = polyphony_core::Deliverable {
+            kind: polyphony_core::DeliverableKind::LocalBranch,
+            status: polyphony_core::DeliverableStatus::Open,
+            url: None,
+            decision: polyphony_core::DeliverableDecision::Waiting,
+            title: Some(format!("Branch: {branch_name}")),
+            description: None,
+            metadata,
+        };
+
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            movement.deliverable = Some(deliverable);
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+        self.push_event(
+            EventScope::Handoff,
+            format!("{movement_id} local branch deliverable created on resume: {branch_name}"),
+        );
+    }
+
+    /// Merge a deliverable — either a GitHub PR or a local branch.
+    pub(crate) async fn merge_deliverable(&mut self, movement_id: &str) {
+        // Extract info needed for the merge before borrowing mutably.
+        let merge_info = {
+            let Some(movement) = self.state.movements.get(movement_id) else {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("merge failed: movement {movement_id} not found"),
+                );
+                return;
+            };
+            let movement_label = Self::movement_target_label(movement);
+            let Some(deliverable) = &movement.deliverable else {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("{movement_label} merge failed: no deliverable"),
+                );
+                return;
+            };
+            if deliverable.status == polyphony_core::DeliverableStatus::Merged {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("{movement_label} already merged"),
+                );
+                return;
+            }
+            (
+                deliverable.kind,
+                deliverable
+                    .metadata
+                    .get("branch")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                deliverable
+                    .metadata
+                    .get("workspace_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                deliverable.url.clone().unwrap_or_default(),
+                movement_label,
+            )
+        };
+        let (kind, branch, workspace, url, movement_label) = merge_info;
+
+        let result = match kind {
+            polyphony_core::DeliverableKind::LocalBranch => {
+                merge_local_branch(&workspace, &branch).await
+            },
+            polyphony_core::DeliverableKind::GithubPullRequest => {
+                if let Some(pr_manager) = &self.pull_request_manager {
+                    merge_github_pr(pr_manager.as_ref(), &url).await
+                } else {
+                    polyphony_core::MergeResult {
+                        success: false,
+                        message: "pull request manager not configured".into(),
+                        merged_sha: None,
+                    }
+                }
+            },
+            other => polyphony_core::MergeResult {
+                success: false,
+                message: format!("merge not supported for {other} deliverables"),
+                merged_sha: None,
+            },
+        };
+
+        // Now mutate the movement with the result
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            if result.success {
+                if let Some(deliverable) = movement.deliverable.as_mut() {
+                    deliverable.status = polyphony_core::DeliverableStatus::Merged;
+                    deliverable.decision = polyphony_core::DeliverableDecision::Accepted;
+                }
+                movement.status = polyphony_core::MovementStatus::Delivered;
+                movement.updated_at = Utc::now();
+            }
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+
+        if result.success {
+            self.push_event(
+                EventScope::Handoff,
+                format!("{movement_label} merged: {}", result.message),
+            );
+        } else {
+            self.push_event(
+                EventScope::Handoff,
+                format!("{movement_label} merge failed: {}", result.message),
+            );
+        }
+    }
+}
+
+/// Detect the current branch name and diff stats against the default branch.
+fn detect_branch_info(
+    workspace_path: &Path,
+) -> Result<(String, Option<(usize, usize, usize)>), CoreError> {
+    use std::process::Command;
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(workspace_path)
+        .output()
+        .map_err(|e| CoreError::Adapter(format!("git rev-parse failed: {e}")))?;
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        return Err(CoreError::Adapter("could not determine branch name".into()));
+    }
+
+    // Try to get diff stats against the merge base with main/master.
+    // Check both committed changes AND uncommitted working tree changes.
+    let default_branch = find_default_branch(workspace_path);
+    let committed_stats = if let Some(base) = &default_branch {
+        let merge_base = Command::new("git")
+            .args(["merge-base", base, "HEAD"])
+            .current_dir(workspace_path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+        if let Some(merge_base_sha) = merge_base {
+            let stat_output = Command::new("git")
+                .args(["diff", "--stat", &merge_base_sha, "HEAD"])
+                .current_dir(workspace_path)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+            stat_output.and_then(|stat| parse_diff_stat_summary(&stat))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // If no committed changes, check for uncommitted working tree changes.
+    // Agents like Codex may modify files without committing.
+    let diff_stats = if committed_stats.is_some() {
+        committed_stats
+    } else {
+        let working_tree = Command::new("git")
+            .args(["diff", "--stat", "HEAD"])
+            .current_dir(workspace_path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+
+        working_tree.and_then(|stat| parse_diff_stat_summary(&stat))
+    };
+
+    Ok((branch, diff_stats))
+}
+
+fn find_default_branch(workspace_path: &Path) -> Option<String> {
+    use std::process::Command;
+    for candidate in &["main", "master"] {
+        let status = Command::new("git")
+            .args(["rev-parse", "--verify", candidate])
+            .current_dir(workspace_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?;
+        if status.success() {
+            return Some((*candidate).to_string());
+        }
+    }
+    None
+}
+
+fn parse_diff_stat_summary(stat: &str) -> Option<(usize, usize, usize)> {
+    // Last line looks like: " 5 files changed, 120 insertions(+), 30 deletions(-)"
+    let last_line = stat.lines().last()?;
+    let mut files = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+    for part in last_line.split(',') {
+        let part = part.trim();
+        if part.contains("file") {
+            files = part.split_whitespace().next()?.parse().ok()?;
+        } else if part.contains("insertion") {
+            insertions = part.split_whitespace().next()?.parse().ok()?;
+        } else if part.contains("deletion") {
+            deletions = part.split_whitespace().next()?.parse().ok()?;
+        }
+    }
+    Some((insertions, deletions, files))
+}
+
+/// Merge a local branch into the default branch (main/master).
+async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_core::MergeResult {
+    use tokio::process::Command;
+
+    let workspace = PathBuf::from(workspace_path);
+    if !workspace.exists() {
+        return polyphony_core::MergeResult {
+            success: false,
+            message: format!("workspace path does not exist: {workspace_path}"),
+            merged_sha: None,
+        };
+    }
+
+    // Find the default branch
+    let Some(default_branch) = find_default_branch(&workspace) else {
+        return polyphony_core::MergeResult {
+            success: false,
+            message: "cannot find main or master branch".into(),
+            merged_sha: None,
+        };
+    };
+
+    // Check for merge conflicts first (dry run)
+    let merge_test = Command::new("git")
+        .args(["merge", "--no-commit", "--no-ff", branch])
+        .current_dir(&workspace)
+        .env("GIT_WORK_TREE", &workspace)
+        .output()
+        .await;
+
+    match merge_test {
+        Ok(output) if !output.status.success() => {
+            // Abort the failed merge
+            let _ = Command::new("git")
+                .args(["merge", "--abort"])
+                .current_dir(&workspace)
+                .output()
+                .await;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return polyphony_core::MergeResult {
+                success: false,
+                message: format!(
+                    "merge conflicts detected between {default_branch} and {branch}: {stderr}"
+                ),
+                merged_sha: None,
+            };
+        },
+        Err(error) => {
+            return polyphony_core::MergeResult {
+                success: false,
+                message: format!("git merge failed to execute: {error}"),
+                merged_sha: None,
+            };
+        },
+        _ => {},
+    }
+
+    // Abort the test merge and do a real one
+    let _ = Command::new("git")
+        .args(["merge", "--abort"])
+        .current_dir(&workspace)
+        .output()
+        .await;
+
+    // Now do the actual merge on the default branch
+    // First, checkout the default branch
+    let checkout = Command::new("git")
+        .args(["checkout", &default_branch])
+        .current_dir(&workspace)
+        .output()
+        .await;
+
+    if let Ok(output) = &checkout
+        && !output.status.success()
+    {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return polyphony_core::MergeResult {
+            success: false,
+            message: format!("failed to checkout {default_branch}: {stderr}"),
+            merged_sha: None,
+        };
+    }
+
+    // Merge the branch
+    let merge = Command::new("git")
+        .args(["merge", "--no-ff", branch, "-m", &format!("Merge branch '{branch}'")])
+        .current_dir(&workspace)
+        .output()
+        .await;
+
+    match merge {
+        Ok(output) if output.status.success() => {
+            // Get the merge commit SHA
+            let sha = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&workspace)
+                .output()
+                .await
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+            polyphony_core::MergeResult {
+                success: true,
+                message: format!("merged {branch} into {default_branch}"),
+                merged_sha: sha,
+            }
+        },
+        Ok(output) => {
+            let _ = Command::new("git")
+                .args(["merge", "--abort"])
+                .current_dir(&workspace)
+                .output()
+                .await;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            polyphony_core::MergeResult {
+                success: false,
+                message: format!("merge failed: {stderr}"),
+                merged_sha: None,
+            }
+        },
+        Err(error) => polyphony_core::MergeResult {
+            success: false,
+            message: format!("git merge failed to execute: {error}"),
+            merged_sha: None,
+        },
+    }
+}
+
+/// Merge a GitHub pull request via the PR manager.
+async fn merge_github_pr(
+    _pr_manager: &dyn polyphony_core::PullRequestManager,
+    url: &str,
+) -> polyphony_core::MergeResult {
+    // Extract PR number from URL (e.g. https://github.com/owner/repo/pull/123)
+    let number = url
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<u64>().ok());
+
+    let Some(_number) = number else {
+        return polyphony_core::MergeResult {
+            success: false,
+            message: format!("cannot extract PR number from URL: {url}"),
+            merged_sha: None,
+        };
+    };
+
+    // TODO: Implement GitHub PR merge via pr_manager when the trait supports it.
+    // For now, return an error directing the user to merge via GitHub.
+    polyphony_core::MergeResult {
+        success: false,
+        message: format!("GitHub PR merge not yet implemented — merge via GitHub: {url}"),
+        merged_sha: None,
     }
 }
 

@@ -167,6 +167,7 @@ impl RuntimeService {
                 issue_identifier: Some(issue.identifier.clone()),
                 title: issue.title.clone(),
                 status: MovementStatus::InProgress,
+                pipeline_stage: None,
                 workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
                 workspace_path: Some(workspace.path.clone()),
                 review_target: None,

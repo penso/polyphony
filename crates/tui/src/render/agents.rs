@@ -21,7 +21,7 @@ pub fn draw_agents_tab(
     let theme = app.theme;
 
     let header = Row::new(vec![
-        Cell::from(Span::styled("Issue", Style::default().fg(theme.muted))),
+        Cell::from(Span::styled("Time", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Agent", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Model", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Status", Style::default().fg(theme.muted))),
@@ -34,40 +34,43 @@ pub fn draw_agents_tab(
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     let now = Utc::now();
-    let mut rows = Vec::with_capacity(snapshot.running.len() + snapshot.agent_history.len());
-    for running in &snapshot.running {
-        rows.push(agent_table_row(
-            running.issue_identifier.clone(),
-            running.agent_name.clone(),
-            running.model.clone(),
-            "running".into(),
-            format!("{}/{}", running.turn_count, running.max_turns),
-            format_duration(now.signed_duration_since(running.started_at)),
-            format_tokens(running.tokens.total_tokens),
-            running
-                .last_event
-                .as_deref()
-                .map(|event| truncate(event, 30))
-                .unwrap_or_default(),
-            theme,
-        ));
-    }
-    for history in &snapshot.agent_history {
-        rows.push(agent_table_row(
-            history.issue_identifier.clone(),
-            history.agent_name.clone(),
-            history.model.clone(),
-            history.status.to_string(),
-            format!("{}/{}", history.turn_count, history.max_turns),
-            format_history_span(history, now),
-            format_tokens(history.tokens.total_tokens),
-            history
-                .last_event
-                .as_deref()
-                .map(|event| truncate(event, 30))
-                .unwrap_or_default(),
-            theme,
-        ));
+    let mut rows = Vec::with_capacity(app.sorted_agent_indices.len());
+    for &(is_running, orig_idx) in &app.sorted_agent_indices {
+        if is_running {
+            if let Some(running) = snapshot.running.get(orig_idx) {
+                rows.push(agent_table_row(
+                    super::format_listing_time(running.started_at),
+                    running.agent_name.clone(),
+                    running.model.clone(),
+                    "running".into(),
+                    format!("{}/{}", running.turn_count, running.max_turns),
+                    format_duration(now.signed_duration_since(running.started_at)),
+                    format_tokens(running.tokens.total_tokens),
+                    running
+                        .last_event
+                        .as_deref()
+                        .map(|event| truncate(event, 30))
+                        .unwrap_or_default(),
+                    theme,
+                ));
+            }
+        } else if let Some(history) = snapshot.agent_history.get(orig_idx) {
+            rows.push(agent_table_row(
+                super::format_listing_time(history.started_at),
+                history.agent_name.clone(),
+                history.model.clone(),
+                history.status.to_string(),
+                format!("{}/{}", history.turn_count, history.max_turns),
+                format_history_span(history, now),
+                format_tokens(history.tokens.total_tokens),
+                history
+                    .last_event
+                    .as_deref()
+                    .map(|event| truncate(event, 30))
+                    .unwrap_or_default(),
+                theme,
+            ));
+        }
     }
 
     let selected_style = Style::default()
@@ -75,9 +78,9 @@ pub fn draw_agents_tab(
         .fg(theme.foreground)
         .add_modifier(Modifier::BOLD);
 
-    let count = snapshot.running.len() + snapshot.agent_history.len();
+    let count = app.sorted_agent_indices.len();
     let footer_info = if count == 0 {
-        "no agents".into()
+        "no sessions".into()
     } else {
         format!(
             "{} of {count}",
@@ -93,7 +96,7 @@ pub fn draw_agents_tab(
     };
 
     let table = Table::new(rows, [
-        Constraint::Length(14),
+        Constraint::Length(18),
         Constraint::Length(16),
         Constraint::Length(18),
         Constraint::Length(12),
@@ -108,7 +111,7 @@ pub fn draw_agents_tab(
     .block(
         Block::default()
             .title(Line::from(Span::styled(
-                " Agents ",
+                " Agent Sessions ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -153,7 +156,7 @@ pub fn draw_agents_tab(
 }
 
 fn agent_table_row(
-    issue_identifier: String,
+    time: String,
     agent_name: String,
     model: Option<String>,
     status: String,
@@ -164,10 +167,7 @@ fn agent_table_row(
     theme: crate::theme::Theme,
 ) -> Row<'static> {
     Row::new(vec![
-        Cell::from(Span::styled(
-            issue_identifier,
-            Style::default().fg(theme.info),
-        )),
+        Cell::from(Span::styled(time, Style::default().fg(theme.muted))),
         Cell::from(Span::styled(
             agent_name,
             Style::default().fg(theme.foreground),
@@ -194,10 +194,11 @@ pub(crate) fn build_agent_detail_lines(
     agent: crate::app::SelectedAgentRow<'_>,
     artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
+    frame_count: u64,
 ) -> Vec<Line<'static>> {
     match agent {
         crate::app::SelectedAgentRow::Running(agent) => {
-            build_running_agent_detail_lines(snapshot, agent, artifact_saved_context, theme)
+            build_running_agent_detail_lines(snapshot, agent, artifact_saved_context, theme, frame_count)
         },
         crate::app::SelectedAgentRow::History(agent) => {
             build_history_agent_detail_lines(snapshot, agent, artifact_saved_context, theme)
@@ -205,11 +206,14 @@ pub(crate) fn build_agent_detail_lines(
     }
 }
 
+const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 fn build_running_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
     agent: &RunningRow,
     artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
+    frame_count: u64,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let now = Utc::now();
@@ -217,12 +221,14 @@ fn build_running_agent_detail_lines(
     let model = agent.model.as_deref().unwrap_or("unknown");
     let turns = format!("turn {}/{}", agent.turn_count, agent.max_turns);
 
+    let spinner = BRAILLE_SPINNER[(frame_count / 4) as usize % BRAILLE_SPINNER.len()];
     let header = format!(
         "{} - {} ({model}) - {turns} - {elapsed}",
         agent.issue_identifier, agent.agent_name,
     );
     if let Some(session_id) = &agent.session_id {
         lines.push(Line::from(vec![
+            Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
             Span::styled(session_id.clone(), Style::default().fg(theme.highlight)),
             Span::styled(" | ", Style::default().fg(theme.border)),
             Span::styled(header, Style::default().fg(theme.foreground)),
@@ -232,11 +238,15 @@ fn build_running_agent_detail_lines(
             Span::styled(session_id.clone(), Style::default().fg(theme.info)),
         ]));
     } else {
-        lines.push(Line::from(Span::styled(
-            header,
-            Style::default().fg(theme.foreground),
-        )));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
+            Span::styled(header, Style::default().fg(theme.foreground)),
+        ]));
     }
+
+    // Status line: what the agent is currently doing
+    let status_line = build_agent_status_line(agent, now, spinner, theme);
+    lines.push(status_line);
 
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
@@ -255,30 +265,10 @@ fn build_running_agent_detail_lines(
         )));
     }
 
-    if let Some(saved_context) = artifact_saved_context
-        && !saved_context.transcript.is_empty()
-    {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            "Transcript",
-            Style::default()
-                .fg(theme.highlight)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for entry in &saved_context.transcript {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{} ", entry.at.format("%H:%M:%S")),
-                    Style::default().fg(theme.muted),
-                ),
-                Span::styled(
-                    format!("{:?} ", entry.kind),
-                    Style::default().fg(theme.info),
-                ),
-                Span::styled(entry.message.clone(), Style::default().fg(theme.foreground)),
-            ]));
-        }
-    }
+    append_transcript(&mut lines, artifact_saved_context, theme);
+
+    // Live terminal output — read from the raw log file
+    append_live_output(&mut lines, &agent.workspace_path, &agent.agent_name, theme);
 
     lines.push(Line::default());
     append_agent_availability_lines(&mut lines, snapshot, agent, theme);
@@ -286,6 +276,108 @@ fn build_running_agent_detail_lines(
     append_recent_events(&mut lines, snapshot, &agent.issue_identifier, theme);
 
     lines
+}
+
+/// Build a status line showing what the agent is currently doing.
+fn build_agent_status_line(
+    agent: &RunningRow,
+    now: chrono::DateTime<Utc>,
+    spinner: char,
+    theme: crate::theme::Theme,
+) -> Line<'static> {
+    let last_event = agent.last_event.as_deref().unwrap_or("starting");
+    let since_last = agent
+        .last_event_at
+        .map(|at| now.signed_duration_since(at))
+        .unwrap_or_else(|| now.signed_duration_since(agent.started_at));
+    let since_str = format_duration(since_last);
+
+    // Infer what's happening from the last event
+    let (status_text, status_color) = match last_event {
+        "session started" | "pty session started" | "tmux session started" => {
+            ("starting up", theme.info)
+        },
+        "turn started" => ("thinking", theme.warning),
+        "usage updated" => ("thinking", theme.warning),
+        "tool call" | "tool call started" => ("running tool", theme.info),
+        "tool done" | "tool call completed" => ("thinking", theme.warning),
+        "tool failed" | "tool call failed" => ("thinking (tool failed)", theme.danger),
+        _ => (last_event, theme.muted),
+    };
+
+    Line::from(vec![
+        Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
+        Span::styled(
+            status_text.to_owned(),
+            Style::default().fg(status_color),
+        ),
+        Span::styled(
+            format!("  ({since_str})"),
+            Style::default().fg(theme.muted),
+        ),
+    ])
+}
+
+/// Read the raw PTY/tmux log and append the last N lines of terminal output.
+fn append_live_output(
+    lines: &mut Vec<Line<'static>>,
+    workspace_path: &std::path::Path,
+    agent_name: &str,
+    theme: crate::theme::Theme,
+) {
+    let run_dir = workspace_path.join(".polyphony");
+    let log_path = ["pty.log", "tmux.log"]
+        .iter()
+        .map(|suffix| run_dir.join(format!("{agent_name}-{suffix}")))
+        .find(|p| p.exists());
+
+    let Some(log_path) = log_path else { return };
+    let Ok(raw) = std::fs::read(&log_path) else {
+        return;
+    };
+    if raw.is_empty() {
+        return;
+    }
+
+    // Parse through vt100 to get clean terminal content
+    let mut parser = vt100::Parser::new(500, 120, 0);
+    parser.process(&raw);
+    let content = parser.screen().contents();
+    // Take the last 30 non-empty lines as a preview
+    let output_lines: Vec<&str> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let preview: Vec<&str> = if output_lines.len() > 30 {
+        output_lines[output_lines.len() - 30..].to_vec()
+    } else {
+        output_lines
+    };
+
+    if preview.is_empty() {
+        return;
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Live Output",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  (c for fullscreen)",
+            Style::default().fg(theme.muted),
+        ),
+    ]));
+
+    for line in preview {
+        lines.push(Line::from(Span::styled(
+            line.to_owned(),
+            Style::default().fg(theme.foreground),
+        )));
+    }
 }
 
 fn build_history_agent_detail_lines(
@@ -368,30 +460,11 @@ fn build_history_agent_detail_lines(
         extend_plain_lines(&mut lines, error, theme.danger);
     }
 
-    if let Some(saved_context) = artifact_saved_context.or(agent.saved_context.as_ref())
-        && !saved_context.transcript.is_empty()
-    {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            "Transcript",
-            Style::default()
-                .fg(theme.highlight)
-                .add_modifier(Modifier::BOLD),
-        )));
-        for entry in &saved_context.transcript {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{} ", entry.at.format("%H:%M:%S")),
-                    Style::default().fg(theme.muted),
-                ),
-                Span::styled(
-                    format!("{:?} ", entry.kind),
-                    Style::default().fg(theme.info),
-                ),
-                Span::styled(entry.message.clone(), Style::default().fg(theme.foreground)),
-            ]));
-        }
-    }
+    append_transcript(
+        &mut lines,
+        artifact_saved_context.or(agent.saved_context.as_ref()),
+        theme,
+    );
 
     lines.push(Line::default());
     append_recent_events(&mut lines, snapshot, &agent.issue_identifier, theme);
@@ -410,6 +483,79 @@ fn append_recent_events(
         issue_identifier,
         theme,
     ));
+}
+
+fn append_transcript(
+    lines: &mut Vec<Line<'static>>,
+    saved_context: Option<&polyphony_core::AgentContextSnapshot>,
+    theme: crate::theme::Theme,
+) {
+    use polyphony_core::AgentEventKind;
+
+    let Some(ctx) = saved_context else { return };
+    if ctx.transcript.is_empty() {
+        return;
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "Transcript",
+        Style::default()
+            .fg(theme.highlight)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    for (i, entry) in ctx.transcript.iter().enumerate() {
+        let (kind_label, kind_color) = match entry.kind {
+            AgentEventKind::SessionStarted => ("session started", theme.info),
+            AgentEventKind::TurnStarted => ("turn started", theme.info),
+            AgentEventKind::TurnCompleted => ("turn completed", theme.success),
+            AgentEventKind::TurnFailed => ("turn failed", theme.danger),
+            AgentEventKind::TurnCancelled => ("cancelled", theme.warning),
+            AgentEventKind::ToolCallStarted => ("tool call", theme.muted),
+            AgentEventKind::ToolCallCompleted => ("tool done", theme.muted),
+            AgentEventKind::ToolCallFailed => ("tool failed", theme.danger),
+            AgentEventKind::Notification => ("notice", theme.foreground),
+            AgentEventKind::UsageUpdated => ("usage", theme.muted),
+            AgentEventKind::RateLimitsUpdated => ("rate limit", theme.warning),
+            AgentEventKind::StartupFailed => ("startup failed", theme.danger),
+            AgentEventKind::OtherMessage => ("message", theme.foreground),
+            AgentEventKind::Outcome => ("outcome", theme.success),
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", entry.at.format("%H:%M:%S")),
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled(
+                format!("{kind_label:>16} "),
+                Style::default().fg(kind_color),
+            ),
+        ]));
+
+        // Message on indented continuation lines
+        if !entry.message.is_empty() {
+            for msg_line in entry.message.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("                    {msg_line}"),
+                    Style::default().fg(theme.foreground),
+                )));
+            }
+        }
+
+        // Separator between entries (except last)
+        if i + 1 < ctx.transcript.len() {
+            let next_kind = ctx.transcript[i + 1].kind;
+            // Add blank line before turn boundaries for visual grouping
+            if matches!(
+                next_kind,
+                AgentEventKind::TurnStarted | AgentEventKind::SessionStarted
+            ) {
+                lines.push(Line::default());
+            }
+        }
+    }
 }
 
 fn append_agent_availability_lines(
@@ -518,6 +664,10 @@ pub(crate) fn format_duration(duration: chrono::Duration) -> String {
     } else {
         format!("{}h{}m", total_secs / 3600, (total_secs % 3600) / 60)
     }
+}
+
+pub(crate) fn format_tokens_pub(tokens: u64) -> String {
+    format_tokens(tokens)
 }
 
 fn format_tokens(tokens: u64) -> String {

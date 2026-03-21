@@ -46,6 +46,9 @@ impl RuntimeService {
                 pending_deliverable_resolutions: Vec::new(),
                 pending_manual_dispatches: Vec::new(),
                 pending_manual_pull_request_trigger_dispatches: Vec::new(),
+                pending_merge_deliverables: Vec::new(),
+                pending_task_resolutions: Vec::new(),
+                pending_task_retries: Vec::new(),
                 reload_support: None,
                 state,
             },
@@ -172,6 +175,31 @@ impl RuntimeService {
                             info!(%trigger_id, "manual pull request trigger dispatch queued (event loop)");
                             self.pending_manual_pull_request_trigger_dispatches
                                 .push(trigger_id);
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::MergeDeliverable { movement_id } => {
+                            info!(%movement_id, "merge deliverable requested (event loop)");
+                            self.merge_deliverable(&movement_id).await;
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::ResolveTask {
+                            movement_id,
+                            task_id,
+                        } => {
+                            info!(%movement_id, %task_id, "manual task resolution requested");
+                            self.pending_task_resolutions
+                                .push((movement_id, task_id));
+                            self.process_pending_task_resolutions().await;
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::RetryTask {
+                            movement_id,
+                            task_id,
+                        } => {
+                            info!(%movement_id, %task_id, "task retry requested");
+                            self.pending_task_retries
+                                .push((movement_id, task_id));
+                            self.process_pending_task_retries().await;
                             let _ = self.emit_snapshot().await;
                         }
                     }
@@ -307,6 +335,26 @@ impl RuntimeService {
                     self.pending_manual_pull_request_trigger_dispatches
                         .push(trigger_id);
                 },
+                Ok(RuntimeCommand::MergeDeliverable { movement_id }) => {
+                    info!(%movement_id, "merge deliverable queued");
+                    self.pending_merge_deliverables.push(movement_id);
+                },
+                Ok(RuntimeCommand::ResolveTask {
+                    movement_id,
+                    task_id,
+                }) => {
+                    info!(%movement_id, %task_id, "manual task resolution queued");
+                    self.pending_task_resolutions
+                        .push((movement_id, task_id));
+                },
+                Ok(RuntimeCommand::RetryTask {
+                    movement_id,
+                    task_id,
+                }) => {
+                    info!(%movement_id, %task_id, "task retry queued");
+                    self.pending_task_retries
+                        .push((movement_id, task_id));
+                },
                 Err(_) => return false,
             }
         }
@@ -368,14 +416,8 @@ impl RuntimeService {
         if dispatches.is_empty() {
             return;
         }
-        if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
-            info!("manual dispatches dropped (stop mode)");
-            self.push_event(
-                EventScope::Dispatch,
-                "manual dispatch blocked: orchestrator is in stop mode".into(),
-            );
-            return;
-        }
+        // Manual dispatch always proceeds — the user explicitly requested it,
+        // even in stop mode.
         info!(count = dispatches.len(), "processing manual dispatches");
         let workflow = self.workflow();
         for (issue_id, agent_name) in dispatches {
@@ -454,6 +496,190 @@ impl RuntimeService {
                 format!("{movement_label} deliverable marked {decision}")
             };
             self.push_event(EventScope::Handoff, message);
+        }
+    }
+
+    pub(crate) async fn process_pending_task_resolutions(&mut self) {
+        let resolutions = std::mem::take(&mut self.pending_task_resolutions);
+        if resolutions.is_empty() {
+            return;
+        }
+
+        for (movement_id, task_id) in resolutions {
+            // Mark the task as completed
+            let task_found = if let Some(tasks) = self.state.tasks.get_mut(&movement_id) {
+                if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.status = polyphony_core::TaskStatus::Completed;
+                    task.finished_at = Some(Utc::now());
+                    task.updated_at = Utc::now();
+                    if let Some(store) = &self.store {
+                        let _ = store.save_task(task).await;
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !task_found {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("task resolution ignored: task {task_id} not found in {movement_id}"),
+                );
+                continue;
+            }
+
+            // Reset the movement from Failed back to Executing so the pipeline continues
+            if let Some(movement) = self.state.movements.get_mut(&movement_id) {
+                movement.status = MovementStatus::InProgress;
+                movement.pipeline_stage = Some(PipelineStage::Executing);
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    let _ = store.save_movement(movement).await;
+                }
+            }
+
+            info!(
+                movement_id,
+                task_id,
+                "task manually resolved — resuming pipeline"
+            );
+            self.push_event(
+                EventScope::Dispatch,
+                format!("task {task_id} manually resolved, pipeline resuming"),
+            );
+
+            // Build a minimal Issue from the movement and dispatch next task
+            let movement_info = self.state.movements.get(&movement_id).map(|m| {
+                (
+                    m.issue_id.clone().unwrap_or_default(),
+                    m.issue_identifier.clone().unwrap_or_default(),
+                    m.title.clone(),
+                    m.workspace_path.clone(),
+                )
+            });
+            if let Some((issue_id, identifier, title, Some(ws))) = movement_info {
+                let issue = polyphony_core::Issue {
+                    id: issue_id,
+                    identifier,
+                    title,
+                    description: None,
+                    priority: None,
+                    state: "In Progress".into(),
+                    branch_name: None,
+                    url: None,
+                    author: None,
+                    labels: Vec::new(),
+                    comments: Vec::new(),
+                    blocked_by: Vec::new(),
+                    approval_state: polyphony_core::IssueApprovalState::Approved,
+                    parent_id: None,
+                    created_at: None,
+                    updated_at: None,
+                };
+                if let Err(error) = self
+                    .dispatch_next_task(self.workflow(), issue, None, false, &movement_id, &ws)
+                    .await
+                {
+                    warn!(%error, movement_id, "failed to dispatch next task after manual resolution");
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn process_pending_task_retries(&mut self) {
+        let retries = std::mem::take(&mut self.pending_task_retries);
+        if retries.is_empty() {
+            return;
+        }
+
+        for (movement_id, task_id) in retries {
+            // Reset the task to Pending
+            let task_found = if let Some(tasks) = self.state.tasks.get_mut(&movement_id) {
+                if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.status = polyphony_core::TaskStatus::Pending;
+                    task.error = None;
+                    task.finished_at = None;
+                    task.started_at = None;
+                    task.turns_completed = 0;
+                    task.tokens = TokenUsage::default();
+                    task.updated_at = Utc::now();
+                    if let Some(store) = &self.store {
+                        let _ = store.save_task(task).await;
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !task_found {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("task retry ignored: task {task_id} not found in {movement_id}"),
+                );
+                continue;
+            }
+
+            // Reset the movement back to Executing
+            if let Some(movement) = self.state.movements.get_mut(&movement_id) {
+                movement.status = MovementStatus::InProgress;
+                movement.pipeline_stage = Some(PipelineStage::Executing);
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    let _ = store.save_movement(movement).await;
+                }
+            }
+
+            info!(
+                movement_id,
+                task_id,
+                "task reset to pending — dispatching retry"
+            );
+            self.push_event(
+                EventScope::Dispatch,
+                format!("task {task_id} retrying"),
+            );
+
+            // Build a minimal Issue and dispatch
+            let movement_info = self.state.movements.get(&movement_id).map(|m| {
+                (
+                    m.issue_id.clone().unwrap_or_default(),
+                    m.issue_identifier.clone().unwrap_or_default(),
+                    m.title.clone(),
+                    m.workspace_path.clone(),
+                )
+            });
+            if let Some((issue_id, identifier, title, Some(ws))) = movement_info {
+                let issue = polyphony_core::Issue {
+                    id: issue_id,
+                    identifier,
+                    title,
+                    description: None,
+                    priority: None,
+                    state: "In Progress".into(),
+                    branch_name: None,
+                    url: None,
+                    author: None,
+                    labels: Vec::new(),
+                    comments: Vec::new(),
+                    blocked_by: Vec::new(),
+                    approval_state: polyphony_core::IssueApprovalState::Approved,
+                    parent_id: None,
+                    created_at: None,
+                    updated_at: None,
+                };
+                if let Err(error) = self
+                    .dispatch_next_task(self.workflow(), issue, None, false, &movement_id, &ws)
+                    .await
+                {
+                    warn!(%error, movement_id, "failed to dispatch task retry");
+                }
+            }
         }
     }
 
@@ -564,7 +790,7 @@ impl RuntimeService {
         }
     }
 
-    fn movement_target_label(movement: &Movement) -> String {
+    pub(crate) fn movement_target_label(movement: &Movement) -> String {
         movement
             .review_target
             .as_ref()
@@ -890,9 +1116,18 @@ impl RuntimeService {
 
         self.process_pending_issue_approvals().await;
         self.process_pending_deliverable_resolutions().await;
+        // Process merge requests
+        let merge_ids = std::mem::take(&mut self.pending_merge_deliverables);
+        for movement_id in merge_ids {
+            self.merge_deliverable(&movement_id).await;
+        }
 
+        self.process_pending_task_resolutions().await;
+        self.process_pending_task_retries().await;
         self.process_manual_dispatches().await;
         self.process_manual_pull_request_trigger_dispatches().await;
+        // Emit snapshot immediately after dispatches so movements appear in the TUI
+        let _ = self.emit_snapshot().await;
 
         debug!("tick: reconciling running sessions");
         self.state.loading.reconciling = true;

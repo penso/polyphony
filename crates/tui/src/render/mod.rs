@@ -3,6 +3,7 @@ mod deliverables;
 pub(crate) mod detail_agent;
 pub(crate) mod detail_common;
 pub(crate) mod detail_deliverable;
+pub(crate) mod detail_live_log;
 pub(crate) mod detail_movement;
 pub(crate) mod detail_task;
 pub(crate) mod detail_trigger;
@@ -44,12 +45,12 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     if let Some(detail) = app.current_detail().cloned() {
         if use_split {
-            // Master-detail: list on left (35%), detail on right (65%)
+            // Master-detail: list on left (45%), detail on right (55%)
             let split = ratatui::layout::Layout::default()
                 .direction(ratatui::layout::Direction::Horizontal)
                 .constraints([
-                    ratatui::layout::Constraint::Percentage(35),
-                    ratatui::layout::Constraint::Percentage(65),
+                    ratatui::layout::Constraint::Percentage(45),
+                    ratatui::layout::Constraint::Percentage(55),
                 ])
                 .split(areas[1]);
             // The content_area for click detection maps to the list pane
@@ -86,6 +87,48 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     if app.leaving {
         popups::draw_leaving_modal(frame, app.theme);
+    }
+
+    // Toast notification
+    app.expire_toast();
+    if let Some(toast) = &app.toast {
+        let theme = app.theme;
+        let (border_color, title_color) = match toast.level {
+            crate::app::ToastLevel::Info => (theme.info, theme.info),
+            crate::app::ToastLevel::Warning => (theme.warning, theme.warning),
+            crate::app::ToastLevel::Error => (theme.danger, theme.danger),
+        };
+        let content_width = toast.title.len()
+            + toast.description.as_ref().map_or(0, |d| d.len() + 3);
+        let width = (content_width as u16 + 6).min(frame.area().width.saturating_sub(4));
+        let height: u16 = if toast.description.is_some() { 4 } else { 3 };
+        let area = frame.area();
+        let toast_area = ratatui::layout::Rect {
+            x: area.x + area.width.saturating_sub(width) / 2,
+            y: area.y + area.height.saturating_sub(height + 1),
+            width,
+            height,
+        };
+        frame.render_widget(ratatui::widgets::Clear, toast_area);
+        let mut lines = vec![ratatui::text::Line::from(ratatui::text::Span::styled(
+            toast.title.clone(),
+            ratatui::style::Style::default().fg(title_color).add_modifier(ratatui::style::Modifier::BOLD),
+        ))];
+        if let Some(desc) = &toast.description {
+            lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
+                desc.clone(),
+                ratatui::style::Style::default().fg(theme.foreground),
+            )));
+        }
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(ratatui::style::Style::default().fg(border_color))
+            .style(ratatui::style::Style::default().bg(theme.panel_alt));
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(lines).block(block),
+            toast_area,
+        );
     }
 }
 
@@ -131,6 +174,9 @@ fn render_detail_view(
         },
         crate::app::DetailView::Events { filter, .. } => {
             orchestrator::draw_filtered_events(frame, area, filter, snapshot, app);
+        },
+        crate::app::DetailView::LiveLog { .. } => {
+            detail_live_log::draw_live_log_detail(frame, area, snapshot, app);
         },
     }
 }

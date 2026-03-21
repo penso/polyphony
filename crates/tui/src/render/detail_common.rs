@@ -178,6 +178,18 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                         .add_modifier(Modifier::BOLD),
                 ));
             },
+            DetailView::LiveLog {
+                agent_name,
+                issue_identifier,
+                ..
+            } => {
+                spans.push(Span::styled(
+                    format!("Live: {agent_name} on {issue_identifier}"),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            },
         }
     }
 

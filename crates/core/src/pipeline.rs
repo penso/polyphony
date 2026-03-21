@@ -60,6 +60,32 @@ impl fmt::Display for MovementStatus {
     }
 }
 
+/// Tracks where a pipeline movement is in its lifecycle.
+///
+/// Persisted on the `Movement` so the orchestrator can resume correctly after
+/// a restart without re-running stages that already completed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PipelineStage {
+    /// The router/planner agent has not yet run.
+    Planning,
+    /// The planner finished and created tasks; implementers are running.
+    Executing,
+    /// All tasks completed; handoff / deliverable creation is in progress.
+    Completing,
+}
+
+impl fmt::Display for PipelineStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Planning => "planning",
+            Self::Executing => "executing",
+            Self::Completing => "completing",
+        };
+        f.write_str(s)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MovementKind {
@@ -131,6 +157,7 @@ impl fmt::Display for TaskStatus {
 pub enum DeliverableKind {
     GithubPullRequest,
     GitlabMergeRequest,
+    LocalBranch,
     Patch,
 }
 
@@ -139,6 +166,7 @@ impl fmt::Display for DeliverableKind {
         let s = match self {
             Self::GithubPullRequest => "github_pull_request",
             Self::GitlabMergeRequest => "gitlab_merge_request",
+            Self::LocalBranch => "local_branch",
             Self::Patch => "patch",
         };
         f.write_str(s)
@@ -200,6 +228,13 @@ pub struct Deliverable {
     /// Freeform metadata (e.g. lines_added, lines_removed, files_changed).
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    pub success: bool,
+    pub message: String,
+    pub merged_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -452,6 +487,9 @@ pub struct Movement {
     pub issue_identifier: Option<String>,
     pub title: String,
     pub status: MovementStatus,
+    /// Tracks the current pipeline lifecycle stage for resume-after-restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline_stage: Option<PipelineStage>,
     pub workspace_key: Option<String>,
     pub workspace_path: Option<PathBuf>,
     #[serde(default)]
@@ -473,6 +511,13 @@ pub struct Task {
     pub ordinal: u32,
     pub parent_id: Option<TaskId>,
     pub agent_name: Option<String>,
+    /// Session ID from the agent runtime (e.g., tmux session name, Claude session).
+    /// Stored so the orchestrator can resume the session after a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Thread/conversation ID from the agent provider (e.g., Codex thread UUID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     pub turns_completed: u32,
     pub tokens: TokenUsage,
     pub started_at: Option<DateTime<Utc>>,
@@ -518,6 +563,8 @@ impl PlannedTask {
             ordinal,
             parent_id: None,
             agent_name: self.agent.clone(),
+            session_id: None,
+            thread_id: None,
             turns_completed: 0,
             tokens: TokenUsage::default(),
             started_at: None,

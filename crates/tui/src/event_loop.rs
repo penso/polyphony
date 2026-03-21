@@ -65,7 +65,12 @@ pub async fn run(
                 needs_draw = true;
                 continue;
             }
-            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+            _ = tokio::time::sleep(if snapshot.running.is_empty() {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_millis(80)
+            }) => {
+                refresh_live_log_content(&mut app);
                 needs_draw = true;
                 continue;
             }
@@ -158,13 +163,13 @@ pub async fn run(
                             app.agent_picker_issue_id = None;
                         },
                         KeyCode::Char('j') | KeyCode::Down => {
-                            let count = snapshot.agent_profile_names.len();
+                            let count = snapshot.agent_profiles.len();
                             if count > 0 {
                                 app.agent_picker_selected = (app.agent_picker_selected + 1) % count;
                             }
                         },
                         KeyCode::Char('k') | KeyCode::Up => {
-                            let count = snapshot.agent_profile_names.len();
+                            let count = snapshot.agent_profiles.len();
                             if count > 0 {
                                 app.agent_picker_selected =
                                     (app.agent_picker_selected + count - 1) % count;
@@ -173,9 +178,9 @@ pub async fn run(
                         KeyCode::Enter => {
                             if let Some(issue_id) = app.agent_picker_issue_id.take() {
                                 let agent_name = snapshot
-                                    .agent_profile_names
+                                    .agent_profiles
                                     .get(app.agent_picker_selected)
-                                    .cloned();
+                                    .map(|p| p.name.clone());
                                 app.show_agent_picker = false;
                                 let _ = command_tx.send(RuntimeCommand::DispatchIssue {
                                     issue_id,
@@ -243,9 +248,9 @@ pub async fn run(
                             // selected item — Enter is a no-op to avoid pushing
                             // duplicate details onto the stack.
                         },
-                        KeyCode::Char('e') | KeyCode::Char('E') => {
-                            // Forward to detail handler so the events view
-                            // opens regardless of which pane has focus.
+                        KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('c') | KeyCode::Char('w') => {
+                            // Forward to detail handler so the events/cast/workspace
+                            // actions work regardless of which pane has focus.
                             if let Some(cmd) =
                                 handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
                             {
@@ -345,6 +350,11 @@ pub async fn run(
         }
 
         if key_handled {
+            // Check if a cast playback was requested before redrawing
+            if let Some(playback) = app.pending_cast_playback.take() {
+                run_cast_playback(&playback);
+            }
+            refresh_live_log_content(&mut app);
             needs_draw = true;
             refresh_agent_detail_artifact(&mut app, &snapshot).await;
             // Pick up any snapshot that arrived while handling input.
@@ -648,8 +658,6 @@ fn handle_key(
                         app.push_detail(crate::app::DetailView::Movement {
                             movement_id: movement.id.clone(),
                             scroll: 0,
-                            focus: Default::default(),
-                            tasks_selected: 0,
                         });
                     },
                     Some(app::OrchestratorTreeRow::Trigger { trigger_index, .. }) => {
@@ -668,6 +676,40 @@ fn handle_key(
                             task_id: task.id.clone(),
                             scroll: 0,
                         });
+                    },
+                    Some(app::OrchestratorTreeRow::AgentSession {
+                        history_index,
+                        ..
+                    }) => {
+                        // Map history_index to a sorted agent display index
+                        let display_index = app
+                            .sorted_agent_indices
+                            .iter()
+                            .position(|&(is_running, idx)| !is_running && idx == history_index);
+                        if let Some(display_idx) = display_index {
+                            app.push_detail(crate::app::DetailView::Agent {
+                                agent_index: display_idx,
+                                scroll: 0,
+                                artifact_cache: Box::new(None),
+                            });
+                        }
+                    },
+                    Some(app::OrchestratorTreeRow::RunningAgent {
+                        running_index,
+                        ..
+                    }) => {
+                        // Map running_index to a sorted agent display index
+                        let display_index = app
+                            .sorted_agent_indices
+                            .iter()
+                            .position(|&(is_running, idx)| is_running && idx == running_index);
+                        if let Some(display_idx) = display_index {
+                            app.push_detail(crate::app::DetailView::Agent {
+                                agent_index: display_idx,
+                                scroll: 0,
+                                artifact_cache: Box::new(None),
+                            });
+                        }
                     },
                     Some(app::OrchestratorTreeRow::Outcome {
                         movement_snapshot_index,
@@ -787,12 +829,33 @@ fn handle_key(
             }
         },
 
+        // Merge deliverable (local branch or PR)
+        KeyCode::Char('M') => {
+            if let Some(movement) = selected_deliverable_movement(app, snapshot) {
+                if movement.deliverable.is_some() {
+                    return Some(RuntimeCommand::MergeDeliverable {
+                        movement_id: movement.id.clone(),
+                    });
+                }
+            }
+            // Also check orchestrator tab detail view
+            if let Some(app::DetailView::Movement { movement_id, .. }) = app.current_detail() {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                    if movement.deliverable.is_some() {
+                        return Some(RuntimeCommand::MergeDeliverable {
+                            movement_id: movement.id.clone(),
+                        });
+                    }
+                }
+            }
+        },
+
         // Dispatch issue (pick agent)
         KeyCode::Char('D') => {
             if app.active_tab == app::ActiveTab::Triggers
                 && let Some(issue) = app.selected_trigger(snapshot)
                 && issue.kind == VisibleTriggerKind::Issue
-                && !snapshot.agent_profile_names.is_empty()
+                && !snapshot.agent_profiles.is_empty()
             {
                 app.show_agent_picker = true;
                 app.agent_picker_selected = 0;
@@ -818,6 +881,81 @@ fn handle_key(
                     movement_id: movement.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Rejected,
                 });
+            }
+        },
+
+        // Open terminal at workspace
+        KeyCode::Char('w') => {
+            let workspace = match app.active_tab {
+                app::ActiveTab::Orchestrator => app
+                    .selected_movement(snapshot)
+                    .and_then(|m| m.workspace_path.clone()),
+                app::ActiveTab::Agents => match app.selected_agent(snapshot) {
+                    Some(app::SelectedAgentRow::Running(r)) => Some(r.workspace_path.clone()),
+                    Some(app::SelectedAgentRow::History(h)) => h.workspace_path.clone(),
+                    None => None,
+                },
+                _ => None,
+            };
+            if let Some(ws) = workspace {
+                let ws = if ws.is_relative() {
+                    std::env::current_dir()
+                        .map(|cwd| cwd.join(&ws))
+                        .unwrap_or(ws)
+                } else {
+                    ws
+                };
+                open_terminal_at(&ws);
+            }
+        },
+
+        // Play asciicast recording for selected agent
+        KeyCode::Char('c') => {
+            if app.active_tab == app::ActiveTab::Agents
+                || app.active_tab == app::ActiveTab::Orchestrator
+            {
+                request_cast_playback(app, snapshot);
+            }
+        },
+
+        // Retry failed task (reset to Pending and re-dispatch)
+        KeyCode::Char('t') => {
+            if app.active_tab == app::ActiveTab::Orchestrator {
+                if let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
+                    app.selected_orchestrator_row().cloned()
+                {
+                    let task = &snapshot.tasks[snapshot_index];
+                    if matches!(
+                        task.status,
+                        polyphony_core::TaskStatus::Failed
+                            | polyphony_core::TaskStatus::Completed
+                    ) {
+                        return Some(RuntimeCommand::RetryTask {
+                            movement_id: task.movement_id.clone(),
+                            task_id: task.id.clone(),
+                        });
+                    }
+                }
+            }
+        },
+
+        // Resolve task (mark as completed, resume pipeline)
+        KeyCode::Char('R') => {
+            if app.active_tab == app::ActiveTab::Orchestrator {
+                if let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
+                    app.selected_orchestrator_row().cloned()
+                {
+                    let task = &snapshot.tasks[snapshot_index];
+                    if matches!(
+                        task.status,
+                        polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::InProgress
+                    ) {
+                        return Some(RuntimeCommand::ResolveTask {
+                            movement_id: task.movement_id.clone(),
+                            task_id: task.id.clone(),
+                        });
+                    }
+                }
             }
         },
 
@@ -888,8 +1026,6 @@ fn handle_detail_key(
                         app.push_detail(crate::app::DetailView::Movement {
                             movement_id: movement.id.clone(),
                             scroll: 0,
-                            focus: Default::default(),
-                            tasks_selected: 0,
                         });
                     }
                 }
@@ -1019,6 +1155,20 @@ fn handle_detail_key(
                     });
                 }
             },
+            KeyCode::Char('w') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && let Some(ws) = &movement.workspace_path
+                {
+                    let ws = if ws.is_relative() {
+                        std::env::current_dir()
+                            .map(|cwd| cwd.join(ws))
+                            .unwrap_or_else(|_| ws.clone())
+                    } else {
+                        ws.clone()
+                    };
+                    open_terminal_at(&ws);
+                }
+            },
             _ => {},
         },
         crate::app::DetailView::Task { .. } => match key {
@@ -1056,6 +1206,32 @@ fn handle_detail_key(
             },
             KeyCode::PageUp => {
                 scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('c') => {
+                request_cast_playback_from_detail(app, snapshot);
+            },
+            KeyCode::Char('w') => {
+                let agent_index = match app.current_detail() {
+                    Some(crate::app::DetailView::Agent { agent_index, .. }) => Some(*agent_index),
+                    _ => None,
+                };
+                if let Some(idx) = agent_index {
+                    let ws = match app.resolve_agent(snapshot, idx) {
+                        Some(app::SelectedAgentRow::Running(r)) => Some(r.workspace_path.clone()),
+                        Some(app::SelectedAgentRow::History(h)) => h.workspace_path.clone(),
+                        None => None,
+                    };
+                    if let Some(ws) = ws {
+                        let ws = if ws.is_relative() {
+                            std::env::current_dir()
+                                .map(|cwd| cwd.join(&ws))
+                                .unwrap_or(ws)
+                        } else {
+                            ws
+                        };
+                        open_terminal_at(&ws);
+                    }
+                }
             },
             _ => {},
         },
@@ -1119,8 +1295,76 @@ fn handle_detail_key(
             },
             _ => {},
         },
+        crate::app::DetailView::LiveLog { .. } => match key {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if let Some(crate::app::DetailView::LiveLog { auto_scroll, .. }) =
+                    app.current_detail_mut()
+                {
+                    *auto_scroll = false;
+                }
+                scroll_detail(app, 1);
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                if let Some(crate::app::DetailView::LiveLog { auto_scroll, .. }) =
+                    app.current_detail_mut()
+                {
+                    *auto_scroll = false;
+                }
+                scroll_detail_back(app, 1);
+            },
+            KeyCode::PageDown => {
+                if let Some(crate::app::DetailView::LiveLog { auto_scroll, .. }) =
+                    app.current_detail_mut()
+                {
+                    *auto_scroll = false;
+                }
+                scroll_detail(app, 8);
+            },
+            KeyCode::PageUp => {
+                if let Some(crate::app::DetailView::LiveLog { auto_scroll, .. }) =
+                    app.current_detail_mut()
+                {
+                    *auto_scroll = false;
+                }
+                scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('G') | KeyCode::End => {
+                if let Some(crate::app::DetailView::LiveLog {
+                    auto_scroll, scroll, ..
+                }) = app.current_detail_mut()
+                {
+                    *auto_scroll = true;
+                    *scroll = u16::MAX;
+                }
+            },
+            _ => {},
+        },
     }
     None
+}
+
+/// Refresh the cached content of a LiveLog detail view by re-reading the log file.
+fn refresh_live_log_content(app: &mut AppState) {
+    let Some(crate::app::DetailView::LiveLog {
+        log_path,
+        cached_content,
+        auto_scroll,
+        scroll,
+        ..
+    }) = app.current_detail_mut()
+    else {
+        return;
+    };
+    // Read the raw log file. The content includes ANSI escapes but we'll strip those
+    // and show the plain text in the TUI. Use vt100 to get the visible screen content.
+    if let Ok(raw) = std::fs::read(log_path) {
+        let mut parser = vt100::Parser::new(500, 120, 0);
+        parser.process(&raw);
+        *cached_content = parser.screen().contents();
+        if *auto_scroll {
+            *scroll = u16::MAX;
+        }
+    }
 }
 
 fn scroll_detail(app: &mut AppState, amount: u16) {
@@ -1139,132 +1383,6 @@ fn scroll_detail_back(app: &mut AppState, amount: u16) {
 
 /// Navigate within a Trigger detail view: when a section is focused, j/k moves
 /// the mini-list selection; when Body is focused, j/k scrolls the page.
-fn navigate_section_or_scroll(
-    app: &mut AppState,
-    snapshot: &RuntimeSnapshot,
-    focus: crate::app::DetailSection,
-    amount: u16,
-    down: bool,
-) {
-    match focus {
-        crate::app::DetailSection::Body => {
-            if down {
-                scroll_detail(app, amount);
-            } else {
-                scroll_detail_back(app, amount);
-            }
-        },
-        crate::app::DetailSection::Section(0) => {
-            // Movements mini-list
-            if let Some(crate::app::DetailView::Trigger {
-                ref trigger_id,
-                movements_selected,
-                ..
-            }) = app.current_detail().cloned()
-            {
-                let trigger = find_trigger_by_id(snapshot, trigger_id);
-                let count = snapshot
-                    .movements
-                    .iter()
-                    .filter(|m| {
-                        trigger
-                            .is_some_and(|t| m.issue_identifier.as_deref() == Some(&*t.identifier))
-                    })
-                    .count();
-                if count > 0 {
-                    let new_sel = if down {
-                        (movements_selected + 1).min(count - 1)
-                    } else {
-                        movements_selected.saturating_sub(1)
-                    };
-                    if let Some(crate::app::DetailView::Trigger {
-                        movements_selected, ..
-                    }) = app.current_detail_mut()
-                    {
-                        *movements_selected = new_sel;
-                    }
-                }
-            }
-        },
-        crate::app::DetailSection::Section(1) => {
-            // Agents mini-list
-            if let Some(crate::app::DetailView::Trigger {
-                ref trigger_id,
-                agents_selected,
-                ..
-            }) = app.current_detail().cloned()
-            {
-                let count = snapshot
-                    .running
-                    .iter()
-                    .filter(|r| r.issue_id == *trigger_id)
-                    .count();
-                if count > 0 {
-                    let new_sel = if down {
-                        (agents_selected + 1).min(count - 1)
-                    } else {
-                        agents_selected.saturating_sub(1)
-                    };
-                    if let Some(crate::app::DetailView::Trigger {
-                        agents_selected, ..
-                    }) = app.current_detail_mut()
-                    {
-                        *agents_selected = new_sel;
-                    }
-                }
-            }
-        },
-        _ => {},
-    }
-}
-
-/// Navigate within a Movement detail view: when tasks section is focused, j/k
-/// moves the mini-list selection; when Body is focused, j/k scrolls the page.
-fn navigate_movement_section_or_scroll(
-    app: &mut AppState,
-    snapshot: &RuntimeSnapshot,
-    focus: crate::app::DetailSection,
-    down: bool,
-) {
-    match focus {
-        crate::app::DetailSection::Body => {
-            if down {
-                scroll_detail(app, 1);
-            } else {
-                scroll_detail_back(app, 1);
-            }
-        },
-        crate::app::DetailSection::Section(0) => {
-            // Tasks mini-list
-            if let Some(crate::app::DetailView::Movement {
-                ref movement_id,
-                tasks_selected,
-                ..
-            }) = app.current_detail().cloned()
-            {
-                let count = snapshot
-                    .tasks
-                    .iter()
-                    .filter(|t| t.movement_id == *movement_id)
-                    .count();
-                if count > 0 {
-                    let new_sel = if down {
-                        (tasks_selected + 1).min(count - 1)
-                    } else {
-                        tasks_selected.saturating_sub(1)
-                    };
-                    if let Some(crate::app::DetailView::Movement { tasks_selected, .. }) =
-                        app.current_detail_mut()
-                    {
-                        *tasks_selected = new_sel;
-                    }
-                }
-            }
-        },
-        _ => {},
-    }
-}
-
 fn find_trigger_by_id<'a>(
     snapshot: &'a RuntimeSnapshot,
     trigger_id: &str,
@@ -1318,8 +1436,6 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     crate::app::DetailView::Movement {
                         movement_id: m.id.clone(),
                         scroll: 0,
-                        focus: Default::default(),
-                        tasks_selected: 0,
                     }
                 })
             },
@@ -1341,6 +1457,34 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                         task_id: t.id.clone(),
                         scroll: 0,
                     }
+                })
+            },
+            Some(app::OrchestratorTreeRow::AgentSession {
+                history_index,
+                ..
+            }) => {
+                let display_index = app
+                    .sorted_agent_indices
+                    .iter()
+                    .position(|&(is_running, idx)| !is_running && idx == history_index);
+                display_index.map(|display_idx| crate::app::DetailView::Agent {
+                    agent_index: display_idx,
+                    scroll: 0,
+                    artifact_cache: Box::new(None),
+                })
+            },
+            Some(app::OrchestratorTreeRow::RunningAgent {
+                running_index,
+                ..
+            }) => {
+                let display_index = app
+                    .sorted_agent_indices
+                    .iter()
+                    .position(|&(is_running, idx)| is_running && idx == running_index);
+                display_index.map(|display_idx| crate::app::DetailView::Agent {
+                    agent_index: display_idx,
+                    scroll: 0,
+                    artifact_cache: Box::new(None),
                 })
             },
             Some(app::OrchestratorTreeRow::Outcome {
@@ -1387,6 +1531,226 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
 
 fn open_url(url: &str) {
     let _ = std::process::Command::new("open").arg(url).spawn();
+}
+
+/// Open a new terminal window at the given directory.
+fn open_terminal_at(path: &std::path::Path) {
+    // macOS: open a new Terminal.app window at the path
+    let _ = std::process::Command::new("open")
+        .arg("-a")
+        .arg("Terminal")
+        .arg(path)
+        .spawn();
+}
+
+/// Handle `c` key press: for running agents, open a live log detail view;
+/// for finished agents, open the `.cast` replay in the browser.
+fn request_cast_playback_for_agent(
+    app: &mut AppState,
+    agent: crate::app::SelectedAgentRow<'_>,
+) {
+    let (workspace_path, agent_name, issue_identifier, is_running) = match agent {
+        crate::app::SelectedAgentRow::Running(r) => (
+            Some(r.workspace_path.clone()),
+            r.agent_name.clone(),
+            r.issue_identifier.clone(),
+            true,
+        ),
+        crate::app::SelectedAgentRow::History(h) => (
+            h.workspace_path.clone(),
+            h.agent_name.clone(),
+            h.issue_identifier.clone(),
+            false,
+        ),
+    };
+    let Some(ws) = workspace_path else {
+        tracing::debug!(agent_name, "cast playback: no workspace path");
+        return;
+    };
+    // Ensure absolute path — workspace paths may be stored relative to CWD.
+    let ws = if ws.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&ws))
+            .unwrap_or(ws)
+    } else {
+        ws
+    };
+    let run_dir = ws.join(".polyphony");
+
+    if is_running {
+        // Open a live log viewer inside the TUI
+        for suffix in &["pty.log", "tmux.log"] {
+            let path = run_dir.join(format!("{agent_name}-{suffix}"));
+            tracing::debug!(path = %path.display(), exists = path.exists(), "cast playback: checking live log");
+            if path.exists() {
+                app.push_detail(crate::app::DetailView::LiveLog {
+                    log_path: path,
+                    agent_name,
+                    issue_identifier,
+                    scroll: u16::MAX,
+                    cached_content: String::new(),
+                    auto_scroll: true,
+                });
+                return;
+            }
+        }
+    }
+
+    // Finished agent (or running agent without log): open cast replay in browser
+    for transport in &["pty", "tmux"] {
+        let path = run_dir.join(format!("{agent_name}-{transport}.cast"));
+        tracing::debug!(path = %path.display(), exists = path.exists(), "cast playback: checking cast file");
+        if path.exists() {
+            app.pending_cast_playback = Some(crate::app::CastPlayback::Replay(path));
+            return;
+        }
+    }
+    app.show_toast(
+        crate::app::ToastLevel::Info,
+        format!("No recording for {agent_name}"),
+        Some("This agent uses app-server transport (no terminal). Use Enter for details.".into()),
+    );
+}
+
+/// Set `pending_cast_playback` on the app for the currently selected agent.
+fn request_cast_playback(app: &mut AppState, snapshot: &RuntimeSnapshot) {
+    let agent = match app.active_tab {
+        crate::app::ActiveTab::Agents => app.selected_agent(snapshot),
+        crate::app::ActiveTab::Orchestrator => match app.selected_orchestrator_row().cloned() {
+            Some(crate::app::OrchestratorTreeRow::AgentSession { history_index, .. }) => {
+                snapshot
+                    .agent_history
+                    .get(history_index)
+                    .map(crate::app::SelectedAgentRow::History)
+            },
+            Some(crate::app::OrchestratorTreeRow::RunningAgent { running_index, .. }) => {
+                snapshot
+                    .running
+                    .get(running_index)
+                    .map(crate::app::SelectedAgentRow::Running)
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(agent) = agent {
+        request_cast_playback_for_agent(app, agent);
+    }
+}
+
+/// Set `pending_cast_playback` for the agent shown in the current detail view.
+fn request_cast_playback_from_detail(app: &mut AppState, snapshot: &RuntimeSnapshot) {
+    let agent_index = match app.current_detail() {
+        Some(crate::app::DetailView::Agent { agent_index, .. }) => *agent_index,
+        _ => return,
+    };
+    if let Some(agent) = app.resolve_agent(snapshot, agent_index) {
+        request_cast_playback_for_agent(app, agent);
+    }
+}
+
+/// Open the cast replay in the browser (non-blocking).
+fn run_cast_playback(playback: &crate::app::CastPlayback) {
+    match playback {
+        crate::app::CastPlayback::Replay(cast_path) => {
+            open_cast_in_browser(cast_path);
+        },
+    }
+}
+
+/// Generate a self-contained HTML page with the asciinema-player and open it in the browser.
+fn open_cast_in_browser(cast_path: &std::path::Path) {
+    // Ensure absolute path for file:// URL
+    let cast_path = if cast_path.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(cast_path))
+            .unwrap_or_else(|_| cast_path.to_path_buf())
+    } else {
+        cast_path.to_path_buf()
+    };
+    let cast_path = cast_path.as_path();
+    let cast_data = match std::fs::read_to_string(cast_path) {
+        Ok(data) => data,
+        Err(error) => {
+            tracing::warn!(%error, path = %cast_path.display(), "failed to read cast file");
+            return;
+        },
+    };
+
+    let title = cast_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+
+    // Escape the cast JSONL for embedding in a JS template literal:
+    // backticks and backslashes need escaping, and ${} interpolation must be neutralised.
+    let cast_escaped = cast_data
+        .replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace("${", "\\${");
+
+    let html = format!(
+        r##"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title} — polyphony cast</title>
+<link rel="stylesheet" href="https://unpkg.com/asciinema-player@3.9.0/dist/bundle/asciinema-player.css">
+<style>
+  body {{
+    margin: 0;
+    background: #1a1b26;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+  }}
+  h1 {{
+    color: #7aa2f7;
+    font-size: 1.1em;
+    font-weight: 400;
+    margin: 1.5em 0 0.8em;
+  }}
+  #player {{
+    max-width: 95vw;
+  }}
+  .hint {{
+    color: #565f89;
+    font-size: 0.8em;
+    margin-top: 1em;
+  }}
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+<div id="player"></div>
+<p class="hint">space = pause &middot; . = step &middot; &larr;&rarr; = seek</p>
+<script src="https://unpkg.com/asciinema-player@3.9.0/dist/bundle/asciinema-player.min.js"></script>
+<script>
+const castData = `{cast_escaped}`;
+const blob = new Blob([castData], {{ type: "text/plain" }});
+const url = URL.createObjectURL(blob);
+AsciinemaPlayer.create(url, document.getElementById("player"), {{
+  fit: "width",
+  autoPlay: true,
+  terminalFontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+  theme: "dracula",
+  idleTimeLimit: 2
+}});
+</script>
+</body>
+</html>"##
+    );
+
+    let html_path = cast_path.with_extension("html");
+    if let Err(error) = std::fs::write(&html_path, &html) {
+        tracing::warn!(%error, "failed to write cast HTML player");
+        return;
+    }
+
+    open_url(&format!("file://{}", html_path.display()));
 }
 
 fn handle_mouse_scroll(
@@ -1742,6 +2106,7 @@ mod tests {
             from_cache: false,
             cached_at: None,
             agent_profile_names: vec![],
+            agent_profiles: vec![],
         }
     }
 }

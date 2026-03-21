@@ -16,6 +16,28 @@ pub(crate) const TAB_PADDING_RIGHT: &str = "";
 
 use crate::{LogBuffer, theme::Theme};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToastLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Toast {
+    pub title: String,
+    pub description: Option<String>,
+    pub level: ToastLevel,
+    pub created_at: Instant,
+}
+
+/// What to launch when the user presses `c` on an agent.
+#[derive(Debug)]
+pub(crate) enum CastPlayback {
+    /// Replay a finished recording in the browser.
+    Replay(std::path::PathBuf),
+}
+
 pub(crate) enum SelectedAgentRow<'a> {
     Running(&'a RunningRow),
     History(&'a AgentHistoryRow),
@@ -61,8 +83,6 @@ pub(crate) enum DetailView {
     Movement {
         movement_id: String,
         scroll: u16,
-        focus: DetailSection,
-        tasks_selected: usize,
     },
     Task {
         task_id: String,
@@ -83,6 +103,17 @@ pub(crate) enum DetailView {
         filter: String,
         scroll: u16,
     },
+    /// Live terminal output viewer for a running agent.
+    LiveLog {
+        log_path: std::path::PathBuf,
+        agent_name: String,
+        issue_identifier: String,
+        scroll: u16,
+        /// Cached rendered content — refreshed each tick.
+        cached_content: String,
+        /// Whether to auto-scroll to the bottom.
+        auto_scroll: bool,
+    },
 }
 
 impl DetailView {
@@ -93,7 +124,8 @@ impl DetailView {
             | Self::Task { scroll, .. }
             | Self::Agent { scroll, .. }
             | Self::Deliverable { scroll, .. }
-            | Self::Events { scroll, .. } => *scroll,
+            | Self::Events { scroll, .. }
+            | Self::LiveLog { scroll, .. } => *scroll,
         }
     }
 
@@ -104,7 +136,8 @@ impl DetailView {
             | Self::Task { scroll, .. }
             | Self::Agent { scroll, .. }
             | Self::Deliverable { scroll, .. }
-            | Self::Events { scroll, .. } => scroll,
+            | Self::Events { scroll, .. }
+            | Self::LiveLog { scroll, .. } => scroll,
         }
     }
 }
@@ -169,6 +202,10 @@ impl ActiveTab {
 pub(crate) enum OrchestratorTreeRow {
     Movement { snapshot_index: usize },
     Trigger { trigger_index: usize, movement_snapshot_index: usize, is_last_child: bool },
+    /// An agent session (from history) shown under a movement.
+    AgentSession { history_index: usize, is_last_child: bool },
+    /// A currently running agent shown under a movement.
+    RunningAgent { running_index: usize, is_last_child: bool },
     Task { snapshot_index: usize, is_last_child: bool },
     Outcome { movement_snapshot_index: usize },
 }
@@ -294,6 +331,13 @@ pub struct AppState {
     pub orchestrator_tree_rows: Vec<OrchestratorTreeRow>,
     pub collapsed_movements: HashSet<String>,
     collapsed_movements_initialized: bool,
+    /// Sorted agent indices: each entry is (is_running, original_index).
+    /// Sorted by started_at ascending (oldest first, newest at bottom).
+    pub sorted_agent_indices: Vec<(bool, usize)>,
+    /// When set, the main loop will suspend the TUI and play this agent recording.
+    pub pending_cast_playback: Option<CastPlayback>,
+    /// Toast notification shown briefly at the bottom of the screen.
+    pub toast: Option<Toast>,
 }
 
 impl AppState {
@@ -353,6 +397,33 @@ impl AppState {
             orchestrator_tree_rows: Vec::new(),
             collapsed_movements: HashSet::new(),
             collapsed_movements_initialized: false,
+            sorted_agent_indices: Vec::new(),
+            pending_cast_playback: None,
+            toast: None,
+        }
+    }
+
+    /// Show a toast notification that auto-expires after a few seconds.
+    pub fn show_toast(&mut self, level: ToastLevel, title: impl Into<String>, description: Option<String>) {
+        self.toast = Some(Toast {
+            title: title.into(),
+            description,
+            level,
+            created_at: Instant::now(),
+        });
+    }
+
+    /// Clear expired toasts.
+    pub fn expire_toast(&mut self) {
+        if let Some(toast) = &self.toast {
+            let ttl = match toast.level {
+                ToastLevel::Error => std::time::Duration::from_secs(5),
+                ToastLevel::Warning => std::time::Duration::from_secs(4),
+                ToastLevel::Info => std::time::Duration::from_secs(3),
+            };
+            if toast.created_at.elapsed() > ttl {
+                self.toast = None;
+            }
         }
     }
 
@@ -363,10 +434,30 @@ impl AppState {
         }
         self.rebuild_sorted_indices(snapshot);
         sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());
+        // Rebuild sorted agent indices (oldest first, newest at bottom)
+        {
+            let mut indices: Vec<(bool, usize)> = Vec::with_capacity(
+                snapshot.running.len() + snapshot.agent_history.len(),
+            );
+            for i in 0..snapshot.running.len() {
+                indices.push((true, i));
+            }
+            for i in 0..snapshot.agent_history.len() {
+                indices.push((false, i));
+            }
+            indices.sort_by_key(|&(is_running, idx)| {
+                if is_running {
+                    snapshot.running[idx].started_at
+                } else {
+                    snapshot.agent_history[idx].started_at
+                }
+            });
+            self.sorted_agent_indices = indices;
+        }
         let previous_agent_selection = self.agents_state.selected();
         sync_selection(
             &mut self.agents_state,
-            snapshot.running.len() + snapshot.agent_history.len(),
+            self.sorted_agent_indices.len(),
         );
         if self.agents_state.selected() != previous_agent_selection
             && let Some(DetailView::Agent {
@@ -473,10 +564,9 @@ impl AppState {
                     !snapshot.tasks.iter().any(|t| t.id == *task_id)
                 },
                 DetailView::Agent { agent_index, .. } => {
-                    let total = snapshot.running.len() + snapshot.agent_history.len();
-                    *agent_index >= total
+                    *agent_index >= self.sorted_agent_indices.len()
                 },
-                DetailView::Events { .. } => false,
+                DetailView::Events { .. } | DetailView::LiveLog { .. } => false,
             };
             if missing {
                 self.detail_stack.pop();
@@ -521,6 +611,26 @@ impl AppState {
             .map(|(i, t)| (t.identifier.as_str(), i))
             .collect();
 
+        // Build agent session lookup by issue_id (from history), sorted by started_at
+        let mut sessions_by_issue: StdMap<&str, Vec<usize>> = StdMap::new();
+        for (i, session) in snapshot.agent_history.iter().enumerate() {
+            sessions_by_issue
+                .entry(&session.issue_id)
+                .or_default()
+                .push(i);
+        }
+        for sessions in sessions_by_issue.values_mut() {
+            sessions.sort_by_key(|&i| snapshot.agent_history[i].started_at);
+        }
+        // Also index running sessions
+        let mut running_by_issue: StdMap<&str, Vec<usize>> = StdMap::new();
+        for (i, running) in snapshot.running.iter().enumerate() {
+            running_by_issue
+                .entry(&running.issue_id)
+                .or_default()
+                .push(i);
+        }
+
         let mut rows = Vec::new();
         for &mov_idx in &self.sorted_movement_indices {
             let movement = &snapshot.movements[mov_idx];
@@ -530,8 +640,30 @@ impl AppState {
             if !self.collapsed_movements.contains(&movement.id) {
                 let task_indices = tasks_by_movement.get(movement.id.as_str());
                 let has_tasks = task_indices.is_some_and(|t| !t.is_empty());
-                let has_outcome = movement.deliverable.is_some();
-                let has_children = has_tasks || has_outcome;
+                let has_outcome = movement.deliverable.is_some()
+                    || matches!(
+                        movement.status,
+                        polyphony_core::MovementStatus::Delivered
+                            | polyphony_core::MovementStatus::Failed
+                    );
+                // Collect agent sessions for this movement's issue
+                let issue_id = movement
+                    .issue_identifier
+                    .as_deref()
+                    .and_then(|ident| {
+                        snapshot
+                            .visible_triggers
+                            .iter()
+                            .find(|t| t.identifier == ident)
+                            .map(|t| t.trigger_id.as_str())
+                    });
+                let session_indices = issue_id
+                    .and_then(|id| sessions_by_issue.get(id));
+                let running_indices = issue_id
+                    .and_then(|id| running_by_issue.get(id));
+                let has_sessions = session_indices.is_some_and(|s| !s.is_empty());
+                let has_running = running_indices.is_some_and(|r| !r.is_empty());
+                let has_children = has_tasks || has_outcome || has_sessions || has_running;
 
                 // Trigger row (first child)
                 if let Some(identifier) = movement.issue_identifier.as_deref()
@@ -544,12 +676,115 @@ impl AppState {
                     });
                 }
 
-                if let Some(task_indices) = task_indices {
-                    let count = task_indices.len();
-                    for (ci, &task_idx) in task_indices.iter().enumerate() {
-                        rows.push(OrchestratorTreeRow::Task {
-                            snapshot_index: task_idx,
-                            is_last_child: ci == count - 1 && !has_outcome,
+                // Build a chronological timeline of sessions and tasks.
+                // Collect task agent_names to separate planning vs execution sessions.
+                let task_agent_names: std::collections::HashSet<&str> = task_indices
+                    .map(|idxs| {
+                        idxs.iter()
+                            .filter_map(|&i| snapshot.tasks[i].agent_name.as_deref())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                // Split sessions into planning (non-task) and execution (task-matching).
+                let mut planning_sessions: Vec<usize> = Vec::new();
+                let mut execution_sessions: Vec<usize> = Vec::new();
+                if let Some(indices) = session_indices {
+                    for &idx in indices {
+                        let session = &snapshot.agent_history[idx];
+                        if task_agent_names.contains(session.agent_name.as_str()) {
+                            execution_sessions.push(idx);
+                        } else {
+                            planning_sessions.push(idx);
+                        }
+                    }
+                }
+                planning_sessions.sort_by_key(|&i| snapshot.agent_history[i].started_at);
+                execution_sessions.sort_by_key(|&i| snapshot.agent_history[i].started_at);
+
+                // Assign execution sessions to tasks by time windows.
+                // Each task claims sessions between its started_at and the next task's started_at.
+                let sorted_tasks: Vec<usize> = task_indices
+                    .map(|idxs| {
+                        let mut v = idxs.clone();
+                        v.sort_by_key(|&i| snapshot.tasks[i].started_at);
+                        v
+                    })
+                    .unwrap_or_default();
+                let mut sessions_per_task: Vec<Vec<usize>> =
+                    vec![Vec::new(); sorted_tasks.len()];
+                for &sess_idx in &execution_sessions {
+                    let sess_start = snapshot.agent_history[sess_idx].started_at;
+                    // Find the last task whose started_at <= session started_at
+                    let mut best_task = None;
+                    for (ti, &task_idx) in sorted_tasks.iter().enumerate() {
+                        if let Some(task_start) = snapshot.tasks[task_idx].started_at {
+                            if task_start <= sess_start {
+                                best_task = Some(ti);
+                            }
+                        }
+                    }
+                    if let Some(ti) = best_task {
+                        sessions_per_task[ti].push(sess_idx);
+                    } else {
+                        // Session predates all tasks — treat as planning
+                        planning_sessions.push(sess_idx);
+                    }
+                }
+                // Re-sort planning sessions since we may have appended
+                planning_sessions.sort_by_key(|&i| snapshot.agent_history[i].started_at);
+
+                // Count remaining children after planning sessions
+                let total_remaining = sorted_tasks.len()
+                    + sessions_per_task.iter().map(|s| s.len()).sum::<usize>()
+                    + running_indices.map_or(0, |r| r.len())
+                    + usize::from(has_outcome);
+
+                // Emit planning sessions
+                let plan_count = planning_sessions.len();
+                for (ci, &hist_idx) in planning_sessions.iter().enumerate() {
+                    let is_last = ci == plan_count - 1 && total_remaining == 0;
+                    rows.push(OrchestratorTreeRow::AgentSession {
+                        history_index: hist_idx,
+                        is_last_child: is_last,
+                    });
+                }
+
+                // Emit tasks interleaved with their execution sessions
+                let remaining_after_tasks = running_indices.map_or(0, |r| r.len())
+                    + usize::from(has_outcome);
+                for (ti, &task_idx) in sorted_tasks.iter().enumerate() {
+                    let task_sessions = &sessions_per_task[ti];
+                    let tasks_after = sorted_tasks.len() - ti - 1;
+                    let sessions_after: usize =
+                        sessions_per_task[ti + 1..].iter().map(|s| s.len()).sum();
+                    let items_after =
+                        tasks_after + sessions_after + remaining_after_tasks;
+
+                    let is_last_task = items_after == 0 && task_sessions.is_empty();
+                    rows.push(OrchestratorTreeRow::Task {
+                        snapshot_index: task_idx,
+                        is_last_child: is_last_task,
+                    });
+                    let sess_count = task_sessions.len();
+                    for (si, &sess_idx) in task_sessions.iter().enumerate() {
+                        let is_last =
+                            si == sess_count - 1 && items_after == 0;
+                        rows.push(OrchestratorTreeRow::AgentSession {
+                            history_index: sess_idx,
+                            is_last_child: is_last,
+                        });
+                    }
+                }
+
+                // Running agent rows (after tasks, before outcome)
+                if let Some(running_indices) = running_indices {
+                    let count = running_indices.len();
+                    for (ci, &run_idx) in running_indices.iter().enumerate() {
+                        let is_last = ci == count - 1 && !has_outcome;
+                        rows.push(OrchestratorTreeRow::RunningAgent {
+                            running_index: run_idx,
+                            is_last_child: is_last,
                         });
                     }
                 }
@@ -716,14 +951,33 @@ impl AppState {
         &self,
         snapshot: &'a RuntimeSnapshot,
     ) -> Option<SelectedAgentRow<'a>> {
-        let index = self.agents_state.selected()?;
-        if let Some(running) = snapshot.running.get(index) {
-            return Some(SelectedAgentRow::Running(running));
+        let display_idx = self.agents_state.selected()?;
+        let &(is_running, orig_idx) = self.sorted_agent_indices.get(display_idx)?;
+        if is_running {
+            snapshot.running.get(orig_idx).map(SelectedAgentRow::Running)
+        } else {
+            snapshot
+                .agent_history
+                .get(orig_idx)
+                .map(SelectedAgentRow::History)
         }
-        snapshot
-            .agent_history
-            .get(index.saturating_sub(snapshot.running.len()))
-            .map(SelectedAgentRow::History)
+    }
+
+    /// Resolve an agent from a sorted display index.
+    pub fn resolve_agent<'a>(
+        &self,
+        snapshot: &'a RuntimeSnapshot,
+        display_index: usize,
+    ) -> Option<SelectedAgentRow<'a>> {
+        let &(is_running, orig_idx) = self.sorted_agent_indices.get(display_index)?;
+        if is_running {
+            snapshot.running.get(orig_idx).map(SelectedAgentRow::Running)
+        } else {
+            snapshot
+                .agent_history
+                .get(orig_idx)
+                .map(SelectedAgentRow::History)
+        }
     }
 
     pub fn selected_movement<'a>(&self, snapshot: &'a RuntimeSnapshot) -> Option<&'a MovementRow> {
@@ -735,6 +989,8 @@ impl AppState {
                     snapshot.movements.get(*snapshot_index)
                 },
                 OrchestratorTreeRow::Trigger { .. }
+                | OrchestratorTreeRow::AgentSession { .. }
+                | OrchestratorTreeRow::RunningAgent { .. }
                 | OrchestratorTreeRow::Task { .. }
                 | OrchestratorTreeRow::Outcome { .. } => None,
             })
@@ -768,7 +1024,7 @@ impl AppState {
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {
         match self.active_tab {
             ActiveTab::Triggers => self.sorted_issue_indices.len(),
-            ActiveTab::Agents => snapshot.running.len() + snapshot.agent_history.len(),
+            ActiveTab::Agents => self.sorted_agent_indices.len(),
             ActiveTab::Orchestrator => self.orchestrator_tree_rows.len(),
             ActiveTab::Tasks => snapshot.tasks.len(),
             ActiveTab::Deliverables => snapshot

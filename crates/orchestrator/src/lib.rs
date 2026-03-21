@@ -91,19 +91,32 @@ pub enum RuntimeCommand {
     Shutdown,
     SetMode(polyphony_core::DispatchMode),
     ApproveIssueTrigger {
-        issue_id: String,
+        issue_id: polyphony_core::IssueId,
         source: String,
     },
     ResolveMovementDeliverable {
-        movement_id: String,
+        movement_id: polyphony_core::MovementId,
         decision: polyphony_core::DeliverableDecision,
     },
     DispatchIssue {
-        issue_id: String,
+        issue_id: polyphony_core::IssueId,
         agent_name: Option<String>,
     },
     DispatchPullRequestTrigger {
         trigger_id: String,
+    },
+    MergeDeliverable {
+        movement_id: polyphony_core::MovementId,
+    },
+    /// Mark a pipeline task as completed (manual override) and resume the pipeline.
+    ResolveTask {
+        movement_id: polyphony_core::MovementId,
+        task_id: polyphony_core::TaskId,
+    },
+    /// Re-run a failed pipeline task (reset to Pending and dispatch again).
+    RetryTask {
+        movement_id: polyphony_core::MovementId,
+        task_id: polyphony_core::TaskId,
     },
 }
 
@@ -143,10 +156,14 @@ pub struct RuntimeService {
     command_rx: mpsc::UnboundedReceiver<OrchestratorMessage>,
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     pending_refresh: bool,
-    pending_issue_approvals: Vec<(String, String)>,
-    pending_deliverable_resolutions: Vec<(String, polyphony_core::DeliverableDecision)>,
-    pending_manual_dispatches: Vec<(String, Option<String>)>,
+    pending_issue_approvals: Vec<(polyphony_core::IssueId, String)>,
+    pending_deliverable_resolutions:
+        Vec<(polyphony_core::MovementId, polyphony_core::DeliverableDecision)>,
+    pending_manual_dispatches: Vec<(polyphony_core::IssueId, Option<String>)>,
     pending_manual_pull_request_trigger_dispatches: Vec<String>,
+    pending_merge_deliverables: Vec<polyphony_core::MovementId>,
+    pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
+    pending_task_retries: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     state: RuntimeState,
     reload_support: Option<WorkflowReloadSupport>,
 }
@@ -156,7 +173,7 @@ enum OrchestratorMessage {
     AgentEvent(AgentEvent),
     RateLimited(RateLimitSignal),
     WorkerFinished {
-        issue_id: String,
+        issue_id: polyphony_core::IssueId,
         issue_identifier: String,
         attempt: Option<u32>,
         started_at: DateTime<Utc>,

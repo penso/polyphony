@@ -62,11 +62,33 @@ impl RuntimeService {
         };
         // Reuse an existing active movement for this issue if one exists,
         // otherwise create a new one.
-        let movement_id =
+        let (movement_id, existing_stage) =
             if let Some(existing_id) = self.find_existing_movement_for_issue(&issue.id) {
+                let stage = self
+                    .state
+                    .movements
+                    .get(&existing_id)
+                    .and_then(|m| m.pipeline_stage);
+                // Determine what status this movement should have on reuse.
+                let reuse_status = match stage {
+                    Some(PipelineStage::Completing) => MovementStatus::Delivered,
+                    Some(PipelineStage::Executing) => MovementStatus::InProgress,
+                    _ => initial_status,
+                };
+                let past_planning = matches!(
+                    stage,
+                    Some(PipelineStage::Executing) | Some(PipelineStage::Completing)
+                );
                 if let Some(movement) = self.state.movements.get_mut(&existing_id) {
-                    movement.status = initial_status;
+                    movement.status = reuse_status;
                     movement.updated_at = Utc::now();
+                    if !past_planning {
+                        movement.pipeline_stage = if has_planner {
+                            Some(PipelineStage::Planning)
+                        } else {
+                            Some(PipelineStage::Executing)
+                        };
+                    }
                     if let Some(store) = &self.store {
                         store.save_movement(movement).await?;
                     }
@@ -76,13 +98,19 @@ impl RuntimeService {
                     movement_id = %existing_id,
                     workspace_path = %workspace.path.display(),
                     has_planner,
-                    initial_status = ?initial_status,
+                    existing_stage = ?stage,
+                    reuse_status = ?reuse_status,
                     "pipeline movement reused"
                 );
-                existing_id
+                (existing_id, stage)
             } else {
                 let movement_id = new_movement_id();
                 let now = Utc::now();
+                let pipeline_stage = if has_planner {
+                    Some(PipelineStage::Planning)
+                } else {
+                    Some(PipelineStage::Executing)
+                };
                 let movement = Movement {
                     id: movement_id.clone(),
                     kind: MovementKind::IssueDelivery,
@@ -90,6 +118,7 @@ impl RuntimeService {
                     issue_identifier: Some(issue.identifier.clone()),
                     title: issue.title.clone(),
                     status: initial_status,
+                    pipeline_stage,
                     workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
                     workspace_path: Some(workspace.path.clone()),
                     review_target: None,
@@ -109,8 +138,85 @@ impl RuntimeService {
                     initial_status = ?initial_status,
                     "pipeline movement created"
                 );
-                movement_id
+                (movement_id, None)
             };
+
+        // Pipeline already completed — check for deliverable, mark failed if no output.
+        if matches!(existing_stage, Some(PipelineStage::Completing)) {
+            let has_deliverable = self
+                .state
+                .movements
+                .get(&movement_id)
+                .is_some_and(|m| m.deliverable.is_some());
+            if !has_deliverable {
+                // Try to detect any changes in the workspace
+                self.create_local_branch_deliverable_from_workspace(
+                    &movement_id,
+                    &workspace.path,
+                )
+                .await;
+            }
+            // Check if the deliverable has actual changes
+            let deliverable = self
+                .state
+                .movements
+                .get(&movement_id)
+                .and_then(|m| m.deliverable.as_ref());
+            let confirmed_no_changes = deliverable.is_some_and(|d| {
+                d.metadata
+                    .get("lines_added")
+                    .and_then(|v| v.as_u64())
+                    .is_some_and(|added| added == 0)
+            });
+            let no_output = confirmed_no_changes || deliverable.is_none();
+            if no_output {
+                warn!(
+                    issue_identifier = %issue.identifier,
+                    movement_id,
+                    "pipeline completed with no code changes — marking as failed"
+                );
+                if let Some(movement) = self.state.movements.get_mut(&movement_id) {
+                    movement.status = MovementStatus::Failed;
+                    movement.updated_at = Utc::now();
+                    if let Some(store) = &self.store {
+                        store.save_movement(movement).await?;
+                    }
+                }
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "{} pipeline failed: completed without producing any code changes",
+                        issue.identifier
+                    ),
+                );
+            } else {
+                info!(
+                    issue_identifier = %issue.identifier,
+                    movement_id,
+                    "pipeline already completed, skipping re-dispatch"
+                );
+            }
+            return Ok(());
+        }
+
+        // Tasks exist from a prior planner run — skip the router and resume.
+        if matches!(existing_stage, Some(PipelineStage::Executing)) {
+            info!(
+                issue_identifier = %issue.identifier,
+                movement_id,
+                "skipping planner — resuming from next pending task"
+            );
+            return self
+                .dispatch_next_task(
+                    workflow,
+                    issue,
+                    attempt,
+                    prefer_alternate_agent,
+                    &movement_id,
+                    &workspace.path,
+                )
+                .await;
+        }
 
         if has_planner {
             self.dispatch_planner_task(
@@ -177,6 +283,8 @@ impl RuntimeService {
                     ordinal: (index + 1) as u32,
                     parent_id: None,
                     agent_name: stage.agent.clone(),
+                    session_id: None,
+                    thread_id: None,
                     turns_completed: 0,
                     tokens: TokenUsage::default(),
                     started_at: None,
@@ -250,6 +358,7 @@ impl RuntimeService {
             selected_agent,
             None,
             Some(movement_id.to_string()),
+            None,
         )
         .await
     }
@@ -343,6 +452,27 @@ impl RuntimeService {
             }
         }
 
+        // Build prior context from the task's stored session info for resume.
+        let prior_context = if task.session_id.is_some() || task.thread_id.is_some() {
+            Some(AgentContextSnapshot {
+                issue_id: issue.id.clone(),
+                issue_identifier: issue.identifier.clone(),
+                updated_at: Utc::now(),
+                agent_name: selected_agent.name.clone(),
+                model: selected_agent.model.clone(),
+                session_id: task.session_id.clone(),
+                thread_id: task.thread_id.clone(),
+                turn_id: None,
+                codex_app_server_pid: None,
+                status: None,
+                error: None,
+                usage: TokenUsage::default(),
+                transcript: Vec::new(),
+            })
+        } else {
+            None
+        };
+
         self.spawn_pipeline_worker(
             workflow,
             issue,
@@ -352,6 +482,7 @@ impl RuntimeService {
             selected_agent,
             Some(task.id.clone()),
             Some(movement_id.to_string()),
+            prior_context,
         )
         .await
     }
@@ -439,6 +570,7 @@ impl RuntimeService {
         selected_agent: polyphony_core::AgentDefinition,
         active_task_id: Option<TaskId>,
         movement_id: Option<MovementId>,
+        prior_context: Option<AgentContextSnapshot>,
     ) -> Result<(), Error> {
         let issue_id = issue.id.clone();
         let issue_identifier = issue.identifier.clone();
@@ -493,7 +625,7 @@ impl RuntimeService {
                     max_turns,
                     workflow.config.agent.continuation_prompt.clone(),
                     selected_agent_for_task,
-                    None,
+                    prior_context,
                     command_tx.clone(),
                 )
                 .await;
@@ -663,6 +795,7 @@ impl RuntimeService {
 
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
             movement.status = MovementStatus::InProgress;
+            movement.pipeline_stage = Some(PipelineStage::Executing);
             movement.updated_at = Utc::now();
             if let Some(store) = &self.store {
                 store.save_movement(movement).await?;
@@ -749,12 +882,14 @@ impl RuntimeService {
             )
             .await
         } else {
+            let max_replan_attempts = 2;
             if workflow.config.pipeline.replan_on_failure
                 && workflow.config.router_agent_name().is_some()
+                && attempt.unwrap_or(0) < max_replan_attempts
             {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("{} task failed, re-running planner", issue.identifier),
+                    format!("{} task failed, re-running planner (attempt {})", issue.identifier, attempt.unwrap_or(0) + 1),
                 );
                 // Reset tasks and re-plan
                 if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
@@ -815,6 +950,7 @@ impl RuntimeService {
         );
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
             movement.status = status;
+            movement.pipeline_stage = Some(PipelineStage::Completing);
             movement.updated_at = Utc::now();
             if let Some(store) = &self.store {
                 store.save_movement(movement).await?;

@@ -25,6 +25,17 @@ pub fn workspace_agent_events_artifact_path(workspace_path: &Path) -> PathBuf {
     workspace_runtime_artifact_dir(workspace_path).join(WORKSPACE_AGENT_EVENTS_FILE)
 }
 
+/// Path to the asciicast recording for a given agent run.
+pub fn workspace_cast_artifact_path(
+    workspace_path: &Path,
+    agent_name: &str,
+    transport: &str,
+) -> PathBuf {
+    workspace_path
+        .join(".polyphony")
+        .join(format!("{agent_name}-{transport}.cast"))
+}
+
 pub fn load_workspace_saved_context_artifact(
     workspace_path: &Path,
 ) -> Result<Option<AgentContextSnapshot>, Error> {

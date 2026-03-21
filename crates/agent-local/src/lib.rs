@@ -1,3 +1,5 @@
+mod asciicast;
+
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -55,6 +57,8 @@ struct TmuxSession {
     session_name: String,
     exit_path: PathBuf,
     output_path: PathBuf,
+    cast_path: PathBuf,
+    cast_title: String,
 }
 
 struct PtySession {
@@ -350,7 +354,9 @@ async fn spawn_tmux_session(
         .map_err(|error| CoreError::Adapter(error.to_string()))?;
     let exit_path = run_dir.join(format!("{}-exit.txt", spec.agent.name));
     let output_path = run_dir.join(format!("{}-tmux.log", spec.agent.name));
+    let cast_path = run_dir.join(format!("{}-tmux.cast", spec.agent.name));
     clear_tmux_artifacts(&exit_path, &output_path).await?;
+    remove_file_if_exists(&cast_path).await?;
     let prompt_delivery = tmux_prompt_delivery(&spec.agent);
     let launch_command = tmux_launch_command(command, prompt_file, prompt_delivery);
     let session_name = format!(
@@ -409,11 +415,19 @@ async fn spawn_tmux_session(
         )));
     }
 
+    let cast_title = format!(
+        "{} on {} (attempt {})",
+        spec.agent.name,
+        spec.issue.identifier,
+        spec.attempt.unwrap_or(0)
+    );
     Ok(SpawnedSession {
         session: Box::new(TmuxSession {
             session_name,
             exit_path,
             output_path,
+            cast_path,
+            cast_title,
         }),
         prompt_delivery,
         startup_message: "tmux session started",
@@ -432,7 +446,9 @@ async fn spawn_pty_session(
         .await
         .map_err(|error| CoreError::Adapter(error.to_string()))?;
     let output_path = run_dir.join(format!("{}-pty.log", spec.agent.name));
+    let cast_path = run_dir.join(format!("{}-pty.cast", spec.agent.name));
     remove_file_if_exists(&output_path).await?;
+    remove_file_if_exists(&cast_path).await?;
 
     let model = selected_model_hint(&spec.agent);
     let prompt_delivery = pty_prompt_delivery(&spec.agent);
@@ -486,7 +502,20 @@ async fn spawn_pty_session(
             .map_err(|_| CoreError::Adapter("pty child lock poisoned".into()))?;
         Arc::new(Mutex::new(guard.clone_killer()))
     };
-    spawn_pty_reader(reader, capture_state.clone(), output_path)?;
+    let cast_title = format!(
+        "{} on {} (attempt {})",
+        spec.agent.name,
+        spec.issue.identifier,
+        spec.attempt.unwrap_or(0)
+    );
+    let cast_writer = match asciicast::AsciicastWriter::create(&cast_path, 80, 24, &cast_title) {
+        Ok(w) => Some(w),
+        Err(error) => {
+            warn!(error = %error, "failed to create asciicast recording, continuing without it");
+            None
+        }
+    };
+    spawn_pty_reader(reader, capture_state.clone(), output_path, cast_writer)?;
 
     info!(
         issue_identifier = %spec.issue.identifier,
@@ -559,6 +588,15 @@ impl TerminalSession for TmuxSession {
 
     async fn terminate(&mut self) -> Result<(), CoreError> {
         kill_tmux_session(&self.session_name).await;
+        if let Err(error) = asciicast::convert_log_to_cast(
+            &self.output_path,
+            &self.cast_path,
+            80,
+            24,
+            &self.cast_title,
+        ) {
+            warn!(error = %error, "failed to convert tmux log to asciicast");
+        }
         Ok(())
     }
 }
@@ -829,6 +867,7 @@ fn spawn_pty_reader(
     mut reader: Box<dyn Read + Send>,
     capture_state: Arc<Mutex<PtyCaptureState>>,
     output_path: PathBuf,
+    cast_writer: Option<asciicast::AsciicastWriter>,
 ) -> Result<(), CoreError> {
     let file = std::fs::File::create(output_path)
         .map_err(|error| CoreError::Adapter(error.to_string()))?;
@@ -836,6 +875,7 @@ fn spawn_pty_reader(
         .name("polyphony-pty-reader".into())
         .spawn(move || {
             let mut file = file;
+            let mut cast = cast_writer;
             let mut buffer = [0_u8; 4096];
             loop {
                 match reader.read(&mut buffer) {
@@ -843,6 +883,9 @@ fn spawn_pty_reader(
                     Ok(read) => {
                         let chunk = &buffer[..read];
                         let _ = file.write_all(chunk);
+                        if let Some(ref mut w) = cast {
+                            let _ = w.write_output(chunk);
+                        }
                         let text = String::from_utf8_lossy(chunk);
                         if let Ok(mut guard) = capture_state.lock() {
                             guard.parser.process(chunk);
@@ -854,6 +897,9 @@ fn spawn_pty_reader(
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
+            }
+            if let Some(w) = cast {
+                let _ = w.finish();
             }
         })
         .map(|_| ())

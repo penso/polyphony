@@ -43,6 +43,7 @@ impl RuntimeService {
             issue_identifier: Some(issue_identifier.clone()),
             title: trigger.title.clone(),
             status: MovementStatus::InProgress,
+            pipeline_stage: None,
             workspace_key: Some(workspace.workspace_key.clone()),
             workspace_path: Some(workspace.path.clone()),
             review_target: Some(review_target.clone()),
@@ -244,6 +245,7 @@ impl RuntimeService {
                 trigger.path, trigger.pull_request_title
             ),
             status: MovementStatus::InProgress,
+            pipeline_stage: None,
             workspace_key: Some(workspace.workspace_key.clone()),
             workspace_path: Some(workspace.path.clone()),
             review_target: Some(review_target.clone()),
@@ -540,15 +542,66 @@ impl RuntimeService {
                         );
                     }
                 }
-                self.state.completed.insert(issue_id.clone());
-                self.schedule_retry(
-                    issue_id.clone(),
-                    issue_identifier.clone(),
-                    1,
-                    None,
-                    true,
-                    workflow.config.agent.max_retry_backoff_ms,
-                );
+                // For non-automated pipelines, verify the agent produced actual changes.
+                // Automated pipelines go to Review for human inspection even without changes.
+                let movement_kind = self
+                    .state
+                    .movements
+                    .get(&movement_id)
+                    .map(|m| m.kind);
+                let deliverable = self
+                    .state
+                    .movements
+                    .get(&movement_id)
+                    .and_then(|m| m.deliverable.as_ref());
+                let confirmed_no_changes = deliverable.is_some_and(|d| {
+                    d.metadata
+                        .get("lines_added")
+                        .and_then(|v| v.as_u64())
+                        .is_some_and(|added| added == 0)
+                });
+                let no_output = (confirmed_no_changes || deliverable.is_none())
+                    && matches!(movement_kind, Some(polyphony_core::MovementKind::IssueDelivery))
+                    && !workflow.config.automation.enabled;
+                if no_output {
+                    warn!(
+                        issue_identifier = %issue.identifier,
+                        movement_id,
+                        "pipeline completed with no code changes — marking as failed"
+                    );
+                    if let Some(movement) = self.state.movements.get_mut(&movement_id) {
+                        movement.status = MovementStatus::Failed;
+                        movement.updated_at = Utc::now();
+                        if let Some(store) = &self.store {
+                            let _ = store.save_movement(movement).await;
+                        }
+                    }
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!(
+                            "{} pipeline failed: completed without producing any code changes",
+                            issue.identifier
+                        ),
+                    );
+                    self.schedule_retry(
+                        issue_id.clone(),
+                        issue_identifier.clone(),
+                        attempt.unwrap_or(0) + 1,
+                        Some("pipeline completed without code changes".into()),
+                        false,
+                        workflow.config.agent.max_retry_backoff_ms,
+                    );
+                } else {
+                    self.state.completed.insert(issue_id.clone());
+                    self.schedule_retry(
+                        issue_id.clone(),
+                        issue_identifier.clone(),
+                        1,
+                        None,
+                        true,
+                        workflow.config.agent.max_retry_backoff_ms,
+                    );
+                }
             } else if self
                 .state
                 .movements

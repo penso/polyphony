@@ -171,6 +171,22 @@ impl RuntimeService {
                         self.state.rate_limits = Some(rate_limits);
                     }
                     running_model = running.model.clone();
+
+                    // Propagate session info to the pipeline Task for resume-after-restart.
+                    if let Some(task_id) = &running.active_task_id {
+                        if let Some(movement_id) = &running.movement_id {
+                            if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+                                if let Some(task) = tasks.iter_mut().find(|t| t.id == *task_id) {
+                                    if running.session_id.is_some() {
+                                        task.session_id.clone_from(&running.session_id);
+                                    }
+                                    if running.thread_id.is_some() {
+                                        task.thread_id.clone_from(&running.thread_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 self.update_saved_context_from_event(&event, running_model);
                 if let Some(workspace_path) = self

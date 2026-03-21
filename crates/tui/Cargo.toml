@@ -14,5 +14,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tui-markdown.workspace = true
+vt100.workspace = true
 polyphony-core = { path = "../core" }
 polyphony-orchestrator = { path = "../orchestrator" }
