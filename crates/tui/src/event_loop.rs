@@ -795,6 +795,11 @@ fn handle_key(
             if app.active_tab == app::ActiveTab::Triggers
                 && let Some(trigger) = app.selected_trigger(snapshot)
             {
+                app.show_toast(
+                    crate::app::ToastLevel::Info,
+                    format!("Dispatching {}", trigger.identifier),
+                    None,
+                );
                 return Some(match trigger.kind {
                     VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
                         issue_id: trigger.trigger_id.clone(),
@@ -930,6 +935,11 @@ fn handle_key(
                         polyphony_core::TaskStatus::Failed
                             | polyphony_core::TaskStatus::Completed
                     ) {
+                        app.show_toast(
+                            crate::app::ToastLevel::Info,
+                            format!("Retrying: {}", task.title),
+                            None,
+                        );
                         return Some(RuntimeCommand::RetryTask {
                             movement_id: task.movement_id.clone(),
                             task_id: task.id.clone(),
@@ -950,6 +960,11 @@ fn handle_key(
                         task.status,
                         polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::InProgress
                     ) {
+                        app.show_toast(
+                            crate::app::ToastLevel::Info,
+                            format!("Resolved: {}", task.title),
+                            None,
+                        );
                         return Some(RuntimeCommand::ResolveTask {
                             movement_id: task.movement_id.clone(),
                             task_id: task.id.clone(),
