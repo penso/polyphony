@@ -629,7 +629,9 @@ impl RuntimeService {
             AttemptStatus::Failed | AttemptStatus::TimedOut | AttemptStatus::Stalled => {
                 MovementStatus::Failed
             },
-            AttemptStatus::CancelledByReconciliation => MovementStatus::Cancelled,
+            AttemptStatus::CancelledByReconciliation | AttemptStatus::CancelledByUser => {
+                MovementStatus::Cancelled
+            },
         };
         if let Some(movement) = self
             .state
@@ -726,7 +728,9 @@ impl RuntimeService {
             AttemptStatus::Failed | AttemptStatus::TimedOut | AttemptStatus::Stalled => {
                 MovementStatus::Failed
             },
-            AttemptStatus::CancelledByReconciliation => MovementStatus::Cancelled,
+            AttemptStatus::CancelledByReconciliation | AttemptStatus::CancelledByUser => {
+                MovementStatus::Cancelled
+            },
         };
         if let Some(movement_id) = movement_id.as_ref()
             && let Some(movement) = self.state.movements.get_mut(movement_id)

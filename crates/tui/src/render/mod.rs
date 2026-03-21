@@ -77,6 +77,10 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         popups::draw_confirm_quit(frame, app);
     }
 
+    if app.show_help_modal {
+        popups::draw_help_modal(frame, app);
+    }
+
     if app.show_mode_modal {
         popups::draw_mode_modal(frame, snapshot, app);
     }

@@ -31,6 +31,12 @@ pub(crate) fn draw_agent_detail(
             Line::from(vec![
                 Span::styled("j/k", Style::default().fg(theme.highlight)),
                 Span::styled(":scroll  ", Style::default().fg(theme.muted)),
+                Span::styled("c", Style::default().fg(theme.highlight)),
+                Span::styled(":cast  ", Style::default().fg(theme.muted)),
+                Span::styled("S", Style::default().fg(theme.highlight)),
+                Span::styled(":stop  ", Style::default().fg(theme.muted)),
+                Span::styled("w", Style::default().fg(theme.highlight)),
+                Span::styled(":workspace  ", Style::default().fg(theme.muted)),
                 Span::styled("Esc", Style::default().fg(theme.highlight)),
                 Span::styled(":back ", Style::default().fg(theme.muted)),
             ])
@@ -53,6 +59,9 @@ pub(crate) fn draw_agent_detail(
 
     // Resolve agent from sorted display index
     let agent = app.resolve_agent(snapshot, agent_index);
+    let is_running = agent
+        .as_ref()
+        .is_some_and(|a| matches!(a, crate::app::SelectedAgentRow::Running(_)));
 
     // Get artifact cache from the detail stack
     let artifact_context =
@@ -77,8 +86,18 @@ pub(crate) fn draw_agent_detail(
     let visible_height = inner.height as usize;
     let total_lines = lines.len();
     let max_scroll = total_lines.saturating_sub(visible_height);
+
+    // Auto-scroll for running agents. Content grows between frames so we allow
+    // a tolerance: if the user was within 10 lines of the previous bottom, they
+    // were "following" and we keep them at the new bottom. Scrolling further up
+    // (e.g. pressing k multiple times) disengages auto-scroll.
     let current_scroll = app.current_detail_scroll();
-    if current_scroll as usize > max_scroll {
+    if is_running
+        && (current_scroll == u16::MAX
+            || max_scroll.saturating_sub(current_scroll as usize) <= 10)
+    {
+        app.set_current_detail_scroll(max_scroll as u16);
+    } else if current_scroll as usize > max_scroll {
         app.set_current_detail_scroll(max_scroll as u16);
     }
     let scroll_pos = app.current_detail_scroll();

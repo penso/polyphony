@@ -309,6 +309,7 @@ pub struct AppState {
     /// Whether the detail pane border should use the focused style.
     pub detail_border_focused: bool,
     pub confirm_quit: bool,
+    pub show_help_modal: bool,
     pub show_mode_modal: bool,
     pub mode_modal_selected: usize,
     pub show_agent_picker: bool,
@@ -385,6 +386,7 @@ impl AppState {
             list_border_focused: true,
             detail_border_focused: false,
             confirm_quit: false,
+            show_help_modal: false,
             show_mode_modal: false,
             mode_modal_selected: 0,
             show_agent_picker: false,

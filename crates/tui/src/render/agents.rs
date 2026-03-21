@@ -211,7 +211,7 @@ const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 fn build_running_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
     agent: &RunningRow,
-    artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
+    _artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
     frame_count: u64,
 ) -> Vec<Line<'static>> {
@@ -248,26 +248,7 @@ fn build_running_agent_detail_lines(
     let status_line = build_agent_status_line(agent, now, spinner, theme);
     lines.push(status_line);
 
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "Last Message",
-        Style::default()
-            .fg(theme.highlight)
-            .add_modifier(Modifier::BOLD),
-    )));
-
-    if let Some(last_message) = agent.last_message.as_deref() {
-        extend_plain_lines(&mut lines, last_message, theme.foreground);
-    } else {
-        lines.push(Line::from(Span::styled(
-            "No agent output yet.",
-            Style::default().fg(theme.muted),
-        )));
-    }
-
-    append_transcript(&mut lines, artifact_saved_context, theme);
-
-    // Live terminal output — read from the raw log file
+    // Live terminal output — primary content, shown first
     append_live_output(&mut lines, &agent.workspace_path, &agent.agent_name, theme);
 
     lines.push(Line::default());
@@ -318,46 +299,13 @@ fn build_agent_status_line(
     ])
 }
 
-/// Read the raw PTY/tmux log and append the last N lines of terminal output.
+/// Read the raw PTY/tmux log and append terminal output as the primary live view.
 fn append_live_output(
     lines: &mut Vec<Line<'static>>,
     workspace_path: &std::path::Path,
     agent_name: &str,
     theme: crate::theme::Theme,
 ) {
-    let run_dir = workspace_path.join(".polyphony");
-    let log_path = ["pty.log", "tmux.log"]
-        .iter()
-        .map(|suffix| run_dir.join(format!("{agent_name}-{suffix}")))
-        .find(|p| p.exists());
-
-    let Some(log_path) = log_path else { return };
-    let Ok(raw) = std::fs::read(&log_path) else {
-        return;
-    };
-    if raw.is_empty() {
-        return;
-    }
-
-    // Parse through vt100 to get clean terminal content
-    let mut parser = vt100::Parser::new(500, 120, 0);
-    parser.process(&raw);
-    let content = parser.screen().contents();
-    // Take the last 30 non-empty lines as a preview
-    let output_lines: Vec<&str> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    let preview: Vec<&str> = if output_lines.len() > 30 {
-        output_lines[output_lines.len() - 30..].to_vec()
-    } else {
-        output_lines
-    };
-
-    if preview.is_empty() {
-        return;
-    }
-
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled(
@@ -367,12 +315,66 @@ fn append_live_output(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "  (c for fullscreen)",
+            "  c:fullscreen",
             Style::default().fg(theme.muted),
         ),
     ]));
 
-    for line in preview {
+    let run_dir = workspace_path.join(".polyphony");
+    let log_path = ["pty.log", "tmux.log", "appserver.log"]
+        .iter()
+        .map(|suffix| run_dir.join(format!("{agent_name}-{suffix}")))
+        .find(|p| p.exists());
+
+    let Some(log_path) = log_path else {
+        lines.push(Line::from(Span::styled(
+            "Waiting for agent output…",
+            Style::default().fg(theme.muted),
+        )));
+        return;
+    };
+    let Ok(raw) = std::fs::read(&log_path) else {
+        lines.push(Line::from(Span::styled(
+            "Waiting for agent output…",
+            Style::default().fg(theme.muted),
+        )));
+        return;
+    };
+    if raw.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Waiting for agent output…",
+            Style::default().fg(theme.muted),
+        )));
+        return;
+    }
+
+    // For PTY/tmux logs, parse through vt100 to strip ANSI escapes.
+    // For appserver logs (plain text), use content directly.
+    let is_plain_text = log_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .is_some_and(|f| f.contains("appserver"));
+    let content = if is_plain_text {
+        String::from_utf8_lossy(&raw).into_owned()
+    } else {
+        let mut parser = vt100::Parser::new(500, 120, 0);
+        parser.process(&raw);
+        parser.screen().contents()
+    };
+    let output_lines: Vec<&str> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    // Show all available lines — the panel scrolls
+    if output_lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Waiting for agent output…",
+            Style::default().fg(theme.muted),
+        )));
+        return;
+    }
+
+    for line in output_lines {
         lines.push(Line::from(Span::styled(
             line.to_owned(),
             Style::default().fg(theme.foreground),

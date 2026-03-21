@@ -21,30 +21,21 @@ pub fn draw_footer(
         &[
             ("Esc", "back"),
             ("j/k", "scroll"),
-            ("PgUp/Dn", "page"),
-            ("o/O", "open"),
-            ("w", "workspace"),
             ("c", "cast"),
-            ("d", "dispatch"),
-            ("a/x", "approve/reject"),
+            ("S", "stop"),
+            ("w", "workspace"),
+            ("?", "help"),
             ("q", "quit"),
         ]
     } else {
         &[
             ("1-6", "tabs"),
             ("j/k", "navigate"),
-            ("s", "sort"),
-            ("/", "search"),
             ("Enter", "details"),
-            ("w", "workspace"),
-            ("c", "cast"),
             ("d", "dispatch"),
-            ("o/O", "open"),
-            ("t", "retry task"),
-            ("R", "resolve task"),
-            ("a/x", "approve/accept/reject"),
+            ("S", "stop"),
             ("m", "mode"),
-            ("r", "refresh"),
+            ("?", "help"),
             ("q", "quit"),
         ]
     };

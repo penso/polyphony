@@ -1,4 +1,4 @@
-mod asciicast;
+use polyphony_agent_common::asciicast;
 
 use std::{
     io::{Read, Write},

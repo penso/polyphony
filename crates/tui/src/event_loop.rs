@@ -202,6 +202,13 @@ pub async fn run(
                             app.confirm_quit = false;
                         },
                     }
+                } else if app.show_help_modal {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                            app.show_help_modal = false;
+                        },
+                        _ => {},
+                    }
                 } else if app.show_mode_modal {
                     match key.code {
                         KeyCode::Esc => {
@@ -518,7 +525,10 @@ fn handle_key(
             app.confirm_quit = true;
             return None;
         },
-        KeyCode::Char('r') => return Some(RuntimeCommand::Refresh),
+        KeyCode::Char('r') => {
+            app.show_toast(crate::app::ToastLevel::Info, "Refreshing".to_string(), None);
+            return Some(RuntimeCommand::Refresh);
+        },
 
         // Tab switching
         KeyCode::Tab | KeyCode::Right => {
@@ -689,7 +699,7 @@ fn handle_key(
                         if let Some(display_idx) = display_index {
                             app.push_detail(crate::app::DetailView::Agent {
                                 agent_index: display_idx,
-                                scroll: 0,
+                                scroll: u16::MAX,
                                 artifact_cache: Box::new(None),
                             });
                         }
@@ -706,7 +716,7 @@ fn handle_key(
                         if let Some(display_idx) = display_index {
                             app.push_detail(crate::app::DetailView::Agent {
                                 agent_index: display_idx,
-                                scroll: 0,
+                                scroll: u16::MAX,
                                 artifact_cache: Box::new(None),
                             });
                         }
@@ -734,7 +744,7 @@ fn handle_key(
             {
                 app.push_detail(crate::app::DetailView::Agent {
                     agent_index: index,
-                    scroll: 0,
+                    scroll: u16::MAX,
                     artifact_cache: Box::new(None),
                 });
             }
@@ -823,12 +833,26 @@ fn handle_key(
                 && trigger.kind == VisibleTriggerKind::Issue
                 && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
             {
+                app.show_toast(
+                    crate::app::ToastLevel::Info,
+                    format!("Approving {}", trigger.identifier),
+                    None,
+                );
                 return Some(RuntimeCommand::ApproveIssueTrigger {
                     issue_id: trigger.trigger_id.clone(),
                     source: trigger.source.clone(),
                 });
             }
             if let Some(movement) = selected_deliverable_movement(app, snapshot) {
+                let label = movement
+                    .issue_identifier
+                    .as_deref()
+                    .unwrap_or(&movement.id);
+                app.show_toast(
+                    crate::app::ToastLevel::Info,
+                    format!("Accepting & merging {label}"),
+                    None,
+                );
                 return Some(RuntimeCommand::ResolveMovementDeliverable {
                     movement_id: movement.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Accepted,
@@ -840,15 +864,18 @@ fn handle_key(
         KeyCode::Char('M') => {
             if let Some(movement) = selected_deliverable_movement(app, snapshot) {
                 if movement.deliverable.is_some() {
+                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    app.show_toast(crate::app::ToastLevel::Info, format!("Merging {label}"), None);
                     return Some(RuntimeCommand::MergeDeliverable {
                         movement_id: movement.id.clone(),
                     });
                 }
             }
-            // Also check orchestrator tab detail view
             if let Some(app::DetailView::Movement { movement_id, .. }) = app.current_detail() {
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
                     if movement.deliverable.is_some() {
+                        let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                        app.show_toast(crate::app::ToastLevel::Info, format!("Merging {label}"), None);
                         return Some(RuntimeCommand::MergeDeliverable {
                             movement_id: movement.id.clone(),
                         });
@@ -884,6 +911,8 @@ fn handle_key(
         },
         KeyCode::Char('x') => {
             if let Some(movement) = selected_deliverable_movement(app, snapshot) {
+                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                app.show_toast(crate::app::ToastLevel::Info, format!("Rejecting {label}"), None);
                 return Some(RuntimeCommand::ResolveMovementDeliverable {
                     movement_id: movement.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Rejected,
@@ -922,6 +951,24 @@ fn handle_key(
                 || app.active_tab == app::ActiveTab::Orchestrator
             {
                 request_cast_playback(app, snapshot);
+            }
+        },
+
+        // Stop a running agent
+        KeyCode::Char('S') => {
+            if let Some(issue_id) = selected_running_agent_issue_id(app, snapshot) {
+                let identifier = snapshot
+                    .running
+                    .iter()
+                    .find(|r| r.issue_id == issue_id)
+                    .map(|r| r.issue_identifier.as_str())
+                    .unwrap_or(&issue_id);
+                app.show_toast(
+                    crate::app::ToastLevel::Info,
+                    format!("Stopping agent on {identifier}"),
+                    None,
+                );
+                return Some(RuntimeCommand::StopAgent { issue_id });
             }
         },
 
@@ -974,6 +1021,11 @@ fn handle_key(
                     }
                 }
             }
+        },
+
+        // Help modal
+        KeyCode::Char('?') => {
+            app.show_help_modal = true;
         },
 
         // Clear search filter
@@ -1071,6 +1123,7 @@ fn handle_detail_key(
                     && trigger.kind == VisibleTriggerKind::Issue
                     && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
                 {
+                    app.show_toast(crate::app::ToastLevel::Info, format!("Approving {}", trigger.identifier), None);
                     return Some(RuntimeCommand::ApproveIssueTrigger {
                         issue_id: trigger.trigger_id.clone(),
                         source: trigger.source.clone(),
@@ -1144,6 +1197,8 @@ fn handle_detail_key(
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id)
                     && movement.deliverable.is_some()
                 {
+                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    app.show_toast(crate::app::ToastLevel::Info, format!("Accepting & merging {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Accepted,
@@ -1154,6 +1209,8 @@ fn handle_detail_key(
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id)
                     && movement.deliverable.is_some()
                 {
+                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    app.show_toast(crate::app::ToastLevel::Info, format!("Rejecting {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
@@ -1227,6 +1284,22 @@ fn handle_detail_key(
             KeyCode::Char('c') => {
                 request_cast_playback_from_detail(app, snapshot);
             },
+            KeyCode::Char('S') => {
+                if let Some(issue_id) = selected_running_agent_issue_id(app, snapshot) {
+                    let identifier = snapshot
+                        .running
+                        .iter()
+                        .find(|r| r.issue_id == issue_id)
+                        .map(|r| r.issue_identifier.as_str())
+                        .unwrap_or(&issue_id);
+                    app.show_toast(
+                        crate::app::ToastLevel::Info,
+                        format!("Stopping agent on {identifier}"),
+                        None,
+                    );
+                    return Some(RuntimeCommand::StopAgent { issue_id });
+                }
+            },
             KeyCode::Char('w') => {
                 let agent_index = match app.current_detail() {
                     Some(crate::app::DetailView::Agent { agent_index, .. }) => Some(*agent_index),
@@ -1281,6 +1354,8 @@ fn handle_detail_key(
             },
             KeyCode::Char('a') => {
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    app.show_toast(crate::app::ToastLevel::Info, format!("Accepting & merging {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Accepted,
@@ -1289,6 +1364,8 @@ fn handle_detail_key(
             },
             KeyCode::Char('x') => {
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    app.show_toast(crate::app::ToastLevel::Info, format!("Rejecting {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
@@ -1372,12 +1449,20 @@ fn refresh_live_log_content(app: &mut AppState) {
     else {
         return;
     };
-    // Read the raw log file. The content includes ANSI escapes but we'll strip those
-    // and show the plain text in the TUI. Use vt100 to get the visible screen content.
+    // Read the raw log file. For PTY/tmux logs that contain ANSI escapes, use vt100
+    // to parse the terminal screen. For appserver logs (plain text), read directly.
+    let is_plain_text = log_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .is_some_and(|f| f.contains("appserver"));
     if let Ok(raw) = std::fs::read(log_path) {
-        let mut parser = vt100::Parser::new(500, 120, 0);
-        parser.process(&raw);
-        *cached_content = parser.screen().contents();
+        if is_plain_text {
+            *cached_content = String::from_utf8_lossy(&raw).into_owned();
+        } else {
+            let mut parser = vt100::Parser::new(500, 120, 0);
+            parser.process(&raw);
+            *cached_content = parser.screen().contents();
+        }
         if *auto_scroll {
             *scroll = u16::MAX;
         }
@@ -1415,6 +1500,33 @@ fn find_movement_by_id<'a>(
     movement_id: &str,
 ) -> Option<&'a polyphony_core::MovementRow> {
     snapshot.movements.iter().find(|m| m.id == movement_id)
+}
+
+/// Return the issue_id of the currently selected running agent, if any.
+/// Works from the Agents tab and the Orchestrator tab (when a RunningAgent row is selected).
+fn selected_running_agent_issue_id(app: &AppState, snapshot: &RuntimeSnapshot) -> Option<String> {
+    match app.active_tab {
+        app::ActiveTab::Agents => {
+            if let Some(app::SelectedAgentRow::Running(row)) = app.selected_agent(snapshot) {
+                Some(row.issue_id.clone())
+            } else {
+                None
+            }
+        },
+        app::ActiveTab::Orchestrator => {
+            if let Some(app::OrchestratorTreeRow::RunningAgent { running_index, .. }) =
+                app.selected_orchestrator_row().cloned()
+            {
+                snapshot
+                    .running
+                    .get(running_index)
+                    .map(|r| r.issue_id.clone())
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
 }
 
 fn selected_deliverable_movement<'a>(
@@ -1486,7 +1598,7 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     .position(|&(is_running, idx)| !is_running && idx == history_index);
                 display_index.map(|display_idx| crate::app::DetailView::Agent {
                     agent_index: display_idx,
-                    scroll: 0,
+                    scroll: u16::MAX,
                     artifact_cache: Box::new(None),
                 })
             },
@@ -1500,7 +1612,7 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     .position(|&(is_running, idx)| is_running && idx == running_index);
                 display_index.map(|display_idx| crate::app::DetailView::Agent {
                     agent_index: display_idx,
-                    scroll: 0,
+                    scroll: u16::MAX,
                     artifact_cache: Box::new(None),
                 })
             },
@@ -1533,7 +1645,7 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                 .selected()
                 .map(|idx| crate::app::DetailView::Agent {
                     agent_index: idx,
-                    scroll: 0,
+                    scroll: u16::MAX,
                     artifact_cache: Box::new(None),
                 })
         },
@@ -1596,7 +1708,7 @@ fn request_cast_playback_for_agent(
 
     if is_running {
         // Open a live log viewer inside the TUI
-        for suffix in &["pty.log", "tmux.log"] {
+        for suffix in &["pty.log", "tmux.log", "appserver.log"] {
             let path = run_dir.join(format!("{agent_name}-{suffix}"));
             tracing::debug!(path = %path.display(), exists = path.exists(), "cast playback: checking live log");
             if path.exists() {
@@ -1614,7 +1726,7 @@ fn request_cast_playback_for_agent(
     }
 
     // Finished agent (or running agent without log): open cast replay in browser
-    for transport in &["pty", "tmux"] {
+    for transport in &["pty", "tmux", "appserver"] {
         let path = run_dir.join(format!("{agent_name}-{transport}.cast"));
         tracing::debug!(path = %path.display(), exists = path.exists(), "cast playback: checking cast file");
         if path.exists() {
@@ -1625,7 +1737,7 @@ fn request_cast_playback_for_agent(
     app.show_toast(
         crate::app::ToastLevel::Info,
         format!("No recording for {agent_name}"),
-        Some("This agent uses app-server transport (no terminal). Use Enter for details.".into()),
+        Some("No log or cast file found. Use Enter for details.".into()),
     );
 }
 
@@ -1675,6 +1787,46 @@ fn run_cast_playback(playback: &crate::app::CastPlayback) {
     }
 }
 
+/// Build a styled HTML transcript from log content for instant at-a-glance review.
+fn build_transcript_html(content: &str) -> String {
+    let mut html = String::from(
+        r#"<div class="transcript"><h2>Session Transcript</h2><div class="transcript-lines">"#,
+    );
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let escaped = html_escape::encode_text(line);
+        // Classify lines by content for styling
+        let class = if escaped.contains("→") {
+            "line-sent"
+        } else if escaped.contains("✓ turn completed") || escaped.contains("✓ Tool:") {
+            "line-success"
+        } else if escaped.contains("✕") || escaped.contains("turn failed") {
+            "line-error"
+        } else if escaped.contains("Agent:") {
+            "line-agent"
+        } else if escaped.contains("Prompt:") || escaped.contains("Plan:") {
+            "line-prompt"
+        } else if escaped.contains("Diff:") {
+            "line-diff"
+        } else if escaped.contains("Output:") || escaped.starts_with("              ") {
+            "line-output"
+        } else if escaped.contains("Tool:") || escaped.contains("Exec:") {
+            "line-tool"
+        } else if escaped.contains("←") {
+            "line-received"
+        } else {
+            "line-default"
+        };
+        html.push_str(&format!(r#"<div class="tline {class}">{escaped}</div>"#));
+    }
+
+    html.push_str("</div></div>");
+    html
+}
+
 /// Generate a self-contained HTML page with the asciinema-player and open it in the browser.
 fn open_cast_in_browser(cast_path: &std::path::Path) {
     // Ensure absolute path for file:// URL
@@ -1699,6 +1851,55 @@ fn open_cast_in_browser(cast_path: &std::path::Path) {
         .and_then(|s| s.to_str())
         .unwrap_or("recording");
 
+    // Derive agent name from cast filename (e.g. "router-pty" → "router")
+    // and read the prompt file if it exists.
+    let agent_name = title
+        .strip_suffix("-pty")
+        .or_else(|| title.strip_suffix("-tmux"))
+        .or_else(|| title.strip_suffix("-appserver"))
+        .unwrap_or(title);
+    let prompt_html = cast_path
+        .parent()
+        .map(|dir| dir.join(format!("{agent_name}-prompt.md")))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|prompt| {
+            let escaped = html_escape::encode_text(&prompt);
+            format!(
+                r#"<details class="prompt"><summary>Prompt sent to agent</summary><pre>{escaped}</pre></details>"#
+            )
+        })
+        .unwrap_or_default();
+
+    // Build a styled transcript from the .log file for instant viewing.
+    let transcript_html = cast_path
+        .parent()
+        .and_then(|dir| {
+            // Try appserver.log, pty.log, tmux.log
+            ["appserver.log", "pty.log", "tmux.log"]
+                .iter()
+                .map(|suffix| dir.join(format!("{agent_name}-{suffix}")))
+                .find(|p| p.exists())
+        })
+        .and_then(|log_path| {
+            let raw = std::fs::read(&log_path).ok()?;
+            let is_plain = log_path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(|f| f.contains("appserver"));
+            let content = if is_plain {
+                String::from_utf8_lossy(&raw).into_owned()
+            } else {
+                let mut parser = vt100::Parser::new(500, 120, 0);
+                parser.process(&raw);
+                parser.screen().contents()
+            };
+            if content.trim().is_empty() {
+                return None;
+            }
+            Some(build_transcript_html(&content))
+        })
+        .unwrap_or_default();
+
     // Escape the cast JSONL for embedding in a JS template literal:
     // backticks and backslashes need escaping, and ${} interpolation must be neutralised.
     let cast_escaped = cast_data
@@ -1716,45 +1917,283 @@ fn open_cast_in_browser(cast_path: &std::path::Path) {
 <style>
   body {{
     margin: 0;
+    padding: 1.5em 2em;
     background: #1a1b26;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
   }}
   h1 {{
     color: #7aa2f7;
     font-size: 1.1em;
     font-weight: 400;
-    margin: 1.5em 0 0.8em;
+    margin: 0 0 0.8em;
   }}
   #player {{
-    max-width: 95vw;
+    width: 100%;
+    border: 1px solid #3b4261;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    background: #282a36;
+  }}
+  /* Allow horizontal scroll if terminal is wider than viewport */
+  #player {{
+    overflow-x: auto;
+  }}
+  /* Ensure distinct terminal background */
+  .ap-player {{
+    background: #282a36 !important;
+  }}
+  /* Timeline scrubber bar below the player */
+  #scrubber-container {{
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #c0caf5;
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+  }}
+  #scrubber {{
+    flex: 1;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #3b4261;
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+  }}
+  #scrubber::-webkit-slider-thumb {{
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #7aa2f7;
+    cursor: pointer;
+  }}
+  #scrubber::-moz-range-thumb {{
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #7aa2f7;
+    border: none;
+    cursor: pointer;
+  }}
+  #scrubber::-webkit-slider-runnable-track {{
+    height: 6px;
+    border-radius: 3px;
+  }}
+  #play-btn {{
+    background: none;
+    border: 1px solid #3b4261;
+    border-radius: 4px;
+    color: #c0caf5;
+    font-size: 1.1em;
+    width: 32px;
+    height: 28px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }}
+  #play-btn:hover {{
+    background: #3b4261;
   }}
   .hint {{
     color: #565f89;
     font-size: 0.8em;
     margin-top: 1em;
   }}
+  .transcript {{
+    margin-top: 2em;
+    width: 100%;
+  }}
+  .transcript h2 {{
+    color: #7aa2f7;
+    font-size: 1em;
+    font-weight: 500;
+    margin: 0 0 0.8em;
+  }}
+  .transcript-lines {{
+    background: #282a36;
+    border: 1px solid #3b4261;
+    border-radius: 6px;
+    padding: 1em;
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    max-height: 70vh;
+    overflow-y: auto;
+  }}
+  .tline {{ white-space: pre-wrap; word-wrap: break-word; }}
+  .line-sent {{ color: #9ece6a; }}
+  .line-received {{ color: #7dcfff; }}
+  .line-agent {{ color: #e0af68; }}
+  .line-success {{ color: #9ece6a; font-weight: 500; }}
+  .line-error {{ color: #f7768e; font-weight: 500; }}
+  .line-prompt {{ color: #bb9af7; }}
+  .line-diff {{ color: #7aa2f7; }}
+  .line-output {{ color: #565f89; }}
+  .line-tool {{ color: #7dcfff; font-weight: 500; }}
+  .line-default {{ color: #a9b1d6; }}
+  .prompt {{
+    margin-top: 1.5em;
+    width: 100%;
+    color: #a9b1d6;
+    font-size: 0.85em;
+  }}
+  .prompt summary {{
+    cursor: pointer;
+    color: #7aa2f7;
+    font-weight: 500;
+    margin-bottom: 0.5em;
+  }}
+  .prompt pre {{
+    background: #282a36;
+    border: 1px solid #3b4261;
+    border-radius: 6px;
+    padding: 1em;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 60vh;
+    overflow-y: auto;
+    line-height: 1.5;
+  }}
 </style>
 </head>
 <body>
 <h1>{title}</h1>
 <div id="player"></div>
-<p class="hint">space = pause &middot; . = step &middot; &larr;&rarr; = seek</p>
+<div id="scrubber-container">
+  <button id="play-btn" title="Play/Pause">▶</button>
+  <span id="time-current">0:00</span>
+  <input type="range" id="scrubber" min="0" max="1000" value="1000">
+  <span id="time-total">0:00</span>
+</div>
+<p class="hint">space = play/pause &middot; &larr;&rarr; = seek 5s &middot; 0-9 = jump to %</p>
+{transcript_html}
+{prompt_html}
 <script src="https://unpkg.com/asciinema-player@3.9.0/dist/bundle/asciinema-player.min.js"></script>
 <script>
 const castData = `{cast_escaped}`;
 const blob = new Blob([castData], {{ type: "text/plain" }});
 const url = URL.createObjectURL(blob);
-AsciinemaPlayer.create(url, document.getElementById("player"), {{
-  fit: "width",
-  autoPlay: true,
+const player = AsciinemaPlayer.create(url, document.getElementById("player"), {{
+  fit: false,
+  autoPlay: false,
+  controls: false,
+  poster: "npt:99:59:59",
+  terminalFontSize: "14px",
   terminalFontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
   theme: "dracula",
   idleTimeLimit: 2
+}});
+
+// Custom scrubber and controls.
+// asciinema-player v3 exposes getDuration() and getCurrentTime() but they
+// may return undefined until the recording is loaded. We derive duration
+// from the cast data as a reliable fallback.
+const scrubber = document.getElementById("scrubber");
+const timeCurrent = document.getElementById("time-current");
+const timeTotal = document.getElementById("time-total");
+const playBtn = document.getElementById("play-btn");
+let isPlaying = false;
+let seeking = false;
+let duration = 0;
+
+// Parse duration from cast data (last event timestamp) so scrubber works before playback.
+(function() {{
+  const lines = castData.trim().split("\n");
+  for (let i = lines.length - 1; i >= 1; i--) {{
+    try {{
+      const ev = JSON.parse(lines[i]);
+      if (Array.isArray(ev) && typeof ev[0] === "number") {{ duration = ev[0]; break; }}
+    }} catch(e) {{}}
+  }}
+  timeTotal.textContent = fmt(duration);
+  timeCurrent.textContent = fmt(duration);
+  scrubber.style.background = "linear-gradient(to right, #7aa2f7 100%, #3b4261 100%)";
+}})();
+
+function fmt(s) {{
+  if (!s || isNaN(s)) return "0:00";
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m + ":" + (sec < 10 ? "0" : "") + sec;
+}}
+
+function updateScrubberUI(ct) {{
+  if (!duration) return;
+  ct = Math.max(0, Math.min(ct, duration));
+  scrubber.value = Math.round((ct / duration) * 1000);
+  timeCurrent.textContent = fmt(ct);
+  const pct = (scrubber.value / 1000) * 100;
+  scrubber.style.background = "linear-gradient(to right, #7aa2f7 " + pct + "%, #3b4261 " + pct + "%)";
+}}
+
+// Use the "playing" event (fires on first frame) to read duration,
+// since getDuration() returns null before the recording is loaded.
+player.addEventListener("playing", function() {{
+  const d = player.getDuration();
+  if (d != null && !isNaN(d)) {{
+    duration = d;
+    timeTotal.textContent = fmt(duration);
+  }}
+}});
+
+player.addEventListener("play", function() {{
+  isPlaying = true;
+  playBtn.textContent = "⏸";
+}});
+player.addEventListener("pause", function() {{
+  isPlaying = false;
+  playBtn.textContent = "▶";
+}});
+player.addEventListener("ended", function() {{
+  isPlaying = false;
+  playBtn.textContent = "▶";
+  updateScrubberUI(duration);
+}});
+
+// Poll getCurrentTime() to update the scrubber during playback.
+setInterval(function() {{
+  if (seeking) return;
+  const ct = player.getCurrentTime();
+  if (ct != null && !isNaN(ct)) updateScrubberUI(ct);
+}}, 250);
+
+// Scrubber drag — seek live while dragging
+scrubber.addEventListener("input", function() {{
+  seeking = true;
+  if (!duration) return;
+  const t = (scrubber.value / 1000) * duration;
+  timeCurrent.textContent = fmt(t);
+  const pct = (scrubber.value / 1000) * 100;
+  scrubber.style.background = "linear-gradient(to right, #7aa2f7 " + pct + "%, #3b4261 " + pct + "%)";
+  player.seek(t);
+}});
+scrubber.addEventListener("change", function() {{
+  seeking = false;
+}});
+
+playBtn.addEventListener("click", function() {{
+  if (isPlaying) {{ player.pause(); }} else {{ player.play(); }}
+}});
+
+document.addEventListener("keydown", function(e) {{
+  if (e.key === " ") {{
+    e.preventDefault();
+    if (isPlaying) {{ player.pause(); }} else {{ player.play(); }}
+  }} else if (e.key === "ArrowRight" && duration) {{
+    player.seek(Math.min(player.getCurrentTime() + 5, duration));
+  }} else if (e.key === "ArrowLeft" && duration) {{
+    player.seek(Math.max(player.getCurrentTime() - 5, 0));
+  }} else if (e.key >= "0" && e.key <= "9" && duration) {{
+    player.seek(parseInt(e.key) / 10 * duration);
+  }}
 }});
 </script>
 </body>

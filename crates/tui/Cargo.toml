@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 chrono.workspace = true
 crossterm.workspace = true
+html-escape.workspace = true
 futures-util.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true

@@ -118,6 +118,10 @@ pub enum RuntimeCommand {
         movement_id: polyphony_core::MovementId,
         task_id: polyphony_core::TaskId,
     },
+    /// Stop a running agent by issue ID (user-initiated).
+    StopAgent {
+        issue_id: polyphony_core::IssueId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +168,7 @@ pub struct RuntimeService {
     pending_merge_deliverables: Vec<polyphony_core::MovementId>,
     pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_task_retries: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
+    pending_agent_stops: Vec<polyphony_core::IssueId>,
     state: RuntimeState,
     reload_support: Option<WorkflowReloadSupport>,
 }

@@ -1,3 +1,4 @@
+pub mod asciicast;
 mod budget;
 
 use std::{

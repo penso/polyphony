@@ -1,3 +1,5 @@
+mod transcript;
+
 use std::{process::Stdio, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -140,6 +142,7 @@ struct CodexAppServerSession {
     codex_app_server_pid: Option<String>,
     next_request_id: u64,
     emitted_session_started: bool,
+    transcript: Option<transcript::TranscriptLogger>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -175,31 +178,31 @@ impl AgentSession for CodexAppServerSession {
             "starting codex app-server turn"
         );
         let request_metadata = self.event_metadata(None);
-        write_json_line(
-            &mut self.stdin,
-            &{
-                let mut params = json!({
-                    "threadId": thread_id,
-                    "input": [{"type": "text", "text": prompt}],
-                    "cwd": workspace_path,
-                    "title": title,
-                    "approvalPolicy": approval_policy,
-                    "sandboxPolicy": sandbox_policy,
-                });
-                if let Some(model) = &self.spec.agent.model {
-                    params["model"] = json!(model);
-                }
-                if let Some(level) = &self.spec.agent.reasoning_level {
-                    params["reasoningEffort"] = json!(level);
-                }
-                json!({
-                    "id": request_id,
-                    "method": "turn/start",
-                    "params": params,
-                })
-            },
-        )
-        .await?;
+        let request = {
+            let mut params = json!({
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": prompt}],
+                "cwd": workspace_path,
+                "title": title,
+                "approvalPolicy": approval_policy,
+                "sandboxPolicy": sandbox_policy,
+            });
+            if let Some(model) = &self.spec.agent.model {
+                params["model"] = json!(model);
+            }
+            if let Some(level) = &self.spec.agent.reasoning_level {
+                params["reasoningEffort"] = json!(level);
+            }
+            json!({
+                "id": request_id,
+                "method": "turn/start",
+                "params": params,
+            })
+        };
+        if let Some(t) = self.transcript.as_mut() {
+            t.log_sent(&request);
+        }
+        write_json_line(&mut self.stdin, &request).await?;
         let turn_response = wait_for_response(
             &self.spec,
             &self.event_tx,
@@ -209,6 +212,7 @@ impl AgentSession for CodexAppServerSession {
             request_id,
             &request_metadata,
             self.tool_executor.as_ref(),
+            &mut self.transcript,
         )
         .await?;
         let turn_id = turn_response["result"]["turn"]["id"]
@@ -249,6 +253,9 @@ impl AgentSession for CodexAppServerSession {
             thread_id = %self.thread_id,
             "stopping codex app-server session"
         );
+        if let Some(transcript) = self.transcript.take() {
+            let _ = transcript.finish();
+        }
         best_effort_stop_child(&mut self.child).await;
         if let Some(stderr_forward) = self.stderr_forward.take() {
             let _ = stderr_forward.await;
@@ -286,6 +293,9 @@ impl CodexAppServerSession {
             let value = match serde_json::from_str::<Value>(&line) {
                 Ok(value) => value,
                 Err(error) => {
+                    if let Some(t) = self.transcript.as_mut() {
+                        t.log_received_raw(&line);
+                    }
                     emit_codex(
                         &self.event_tx,
                         &self.spec,
@@ -299,6 +309,9 @@ impl CodexAppServerSession {
                     continue;
                 },
             };
+            if let Some(t) = self.transcript.as_mut() {
+                t.log_received(&value);
+            }
             if maybe_auto_respond(
                 &mut self.stdin,
                 &value,
@@ -306,6 +319,7 @@ impl CodexAppServerSession {
                 &self.event_tx,
                 &event_metadata,
                 self.tool_executor.as_ref(),
+                &mut self.transcript,
             )
             .await?
             {
@@ -469,21 +483,37 @@ async fn launch_codex_session(
     };
     let dynamic_tools = tool_specs_for(&spec, tool_executor.as_ref());
 
+    // Create transcript logger for live viewing and asciicast replay.
+    let run_dir = spec.workspace_path.join(".polyphony");
+    let log_path = run_dir.join(format!("{}-appserver.log", spec.agent.name));
+    let cast_path = run_dir.join(format!("{}-appserver.cast", spec.agent.name));
+    let cast_title = format!("{}: {} ({})", spec.issue.identifier, spec.issue.title, spec.agent.name);
+    // Remove stale files from a previous run.
+    let _ = std::fs::remove_file(&log_path);
+    let _ = std::fs::remove_file(&cast_path);
+    let mut transcript = match transcript::TranscriptLogger::create(&log_path, &cast_path, &cast_title) {
+        Ok(t) => Some(t),
+        Err(error) => {
+            warn!(%error, "failed to create codex transcript logger");
+            None
+        },
+    };
+
     let handshake = async {
-        write_json_line(
-            &mut stdin,
-            &json!({
-                "id": 1u64,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": {"name": "polyphony", "version": "0.1.0"},
-                    "capabilities": {
-                        "experimentalApi": true
-                    }
+        let init_msg = json!({
+            "id": 1u64,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {"name": "polyphony", "version": "0.1.0"},
+                "capabilities": {
+                    "experimentalApi": true
                 }
-            }),
-        )
-        .await?;
+            }
+        });
+        if let Some(t) = transcript.as_mut() {
+            t.log_sent(&init_msg);
+        }
+        write_json_line(&mut stdin, &init_msg).await?;
         wait_for_response(
             &spec,
             &event_tx,
@@ -493,24 +523,29 @@ async fn launch_codex_session(
             1,
             &startup_metadata,
             tool_executor.as_ref(),
+            &mut transcript,
         )
         .await?;
-        write_json_line(&mut stdin, &json!({"method": "initialized", "params": {}})).await?;
+        let initialized_msg = json!({"method": "initialized", "params": {}});
+        if let Some(t) = transcript.as_mut() {
+            t.log_sent(&initialized_msg);
+        }
+        write_json_line(&mut stdin, &initialized_msg).await?;
 
-        write_json_line(
-            &mut stdin,
-            &json!({
-                "id": 2u64,
-                "method": "thread/start",
-                "params": {
-                    "approvalPolicy": normalize_to_kebab(spec.agent.approval_policy.as_deref()),
-                    "sandbox": normalize_to_kebab(spec.agent.thread_sandbox.as_deref()),
-                    "cwd": spec.workspace_path,
-                    "dynamicTools": dynamic_tools,
-                }
-            }),
-        )
-        .await?;
+        let thread_start_msg = json!({
+            "id": 2u64,
+            "method": "thread/start",
+            "params": {
+                "approvalPolicy": normalize_to_kebab(spec.agent.approval_policy.as_deref()),
+                "sandbox": normalize_to_kebab(spec.agent.thread_sandbox.as_deref()),
+                "cwd": spec.workspace_path,
+                "dynamicTools": dynamic_tools,
+            }
+        });
+        if let Some(t) = transcript.as_mut() {
+            t.log_sent(&thread_start_msg);
+        }
+        write_json_line(&mut stdin, &thread_start_msg).await?;
         let thread_response = wait_for_response(
             &spec,
             &event_tx,
@@ -520,6 +555,7 @@ async fn launch_codex_session(
             2,
             &startup_metadata,
             tool_executor.as_ref(),
+            &mut transcript,
         )
         .await?;
         let thread_id = thread_response["result"]["thread"]["id"]
@@ -542,6 +578,9 @@ async fn launch_codex_session(
             );
             let message = normalized_error_message(&error);
             emit_startup_failed(&event_tx, &spec, &startup_metadata, &message);
+            if let Some(t) = transcript.take() {
+                let _ = t.finish();
+            }
             best_effort_stop_child(&mut child).await;
             let _ = stderr_forward.await;
             return Err(error);
@@ -565,6 +604,7 @@ async fn launch_codex_session(
         codex_app_server_pid,
         next_request_id: 3,
         emitted_session_started: false,
+        transcript,
     })
 }
 
@@ -589,6 +629,7 @@ async fn wait_for_response(
     id: u64,
     event_metadata: &CodexEventMetadata,
     tool_executor: Option<&Arc<dyn ToolExecutor>>,
+    transcript: &mut Option<transcript::TranscriptLogger>,
 ) -> Result<Value, CoreError> {
     loop {
         let next_line = tokio::time::timeout(
@@ -601,12 +642,18 @@ async fn wait_for_response(
             return Err(classify_child_exit(child));
         };
         let value: Value = serde_json::from_str(&line).map_err(|error| {
+            if let Some(t) = transcript.as_mut() {
+                t.log_received_raw(&line);
+            }
             CoreError::Adapter(format!(
                 "invalid JSON from app-server: {error} (line: {})",
                 &line[..line.len().min(200)]
             ))
         })?;
-        if maybe_auto_respond(stdin, &value, spec, event_tx, event_metadata, tool_executor).await? {
+        if let Some(t) = transcript.as_mut() {
+            t.log_received(&value);
+        }
+        if maybe_auto_respond(stdin, &value, spec, event_tx, event_metadata, tool_executor, transcript).await? {
             continue;
         }
         if value["id"].as_u64() == Some(id) {
@@ -745,6 +792,7 @@ async fn maybe_auto_respond(
     event_tx: &mpsc::UnboundedSender<polyphony_core::AgentEvent>,
     event_metadata: &CodexEventMetadata,
     tool_executor: Option<&Arc<dyn ToolExecutor>>,
+    transcript: &mut Option<transcript::TranscriptLogger>,
 ) -> Result<bool, CoreError> {
     let Some(method) = value["method"].as_str() else {
         return Ok(false);
@@ -753,12 +801,20 @@ async fn maybe_auto_respond(
         return Ok(false);
     };
     if method.contains("approval") {
-        write_json_line(stdin, &json!({"id": id, "result": {"approved": true}})).await?;
+        let response = json!({"id": id, "result": {"approved": true}});
+        if let Some(t) = transcript.as_mut() {
+            t.log_sent(&response);
+        }
+        write_json_line(stdin, &response).await?;
         return Ok(true);
     }
     if method.contains("item/tool/call") {
         let result = execute_tool_call(value, spec, tool_executor, event_tx, event_metadata).await;
-        write_json_line(stdin, &json!({"id": id, "result": result})).await?;
+        let response = json!({"id": id, "result": result});
+        if let Some(t) = transcript.as_mut() {
+            t.log_sent(&response);
+        }
+        write_json_line(stdin, &response).await?;
         return Ok(true);
     }
     Ok(false)

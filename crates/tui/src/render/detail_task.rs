@@ -39,6 +39,10 @@ pub(crate) fn draw_task_detail(
             Line::from(vec![
                 Span::styled("j/k", Style::default().fg(theme.highlight)),
                 Span::styled(":scroll  ", Style::default().fg(theme.muted)),
+                Span::styled("t", Style::default().fg(theme.highlight)),
+                Span::styled(":retry  ", Style::default().fg(theme.muted)),
+                Span::styled("R", Style::default().fg(theme.highlight)),
+                Span::styled(":resolve  ", Style::default().fg(theme.muted)),
                 Span::styled("Esc", Style::default().fg(theme.highlight)),
                 Span::styled(":back ", Style::default().fg(theme.muted)),
             ])

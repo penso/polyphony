@@ -45,6 +45,7 @@ dirs = "6.0"
 futures-util = "0.3"
 git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 graphql_client = "0.16"
+html-escape = "0.2"
 liquid = "0.26"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"

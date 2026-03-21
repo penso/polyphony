@@ -49,6 +49,7 @@ impl RuntimeService {
                 pending_merge_deliverables: Vec::new(),
                 pending_task_resolutions: Vec::new(),
                 pending_task_retries: Vec::new(),
+                pending_agent_stops: Vec::new(),
                 reload_support: None,
                 state,
             },
@@ -200,6 +201,11 @@ impl RuntimeService {
                             self.pending_task_retries
                                 .push((movement_id, task_id));
                             self.process_pending_task_retries().await;
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::StopAgent { issue_id } => {
+                            info!(%issue_id, "user-initiated agent stop requested");
+                            self.stop_running_by_user(&issue_id).await;
                             let _ = self.emit_snapshot().await;
                         }
                     }
@@ -355,6 +361,10 @@ impl RuntimeService {
                     self.pending_task_retries
                         .push((movement_id, task_id));
                 },
+                Ok(RuntimeCommand::StopAgent { issue_id }) => {
+                    info!(%issue_id, "user-initiated agent stop queued");
+                    self.pending_agent_stops.push(issue_id);
+                },
                 Err(_) => return false,
             }
         }
@@ -460,6 +470,8 @@ impl RuntimeService {
             return;
         }
 
+        let mut merge_after = Vec::new();
+
         for (movement_id, decision) in resolutions {
             let Some(movement) = self.state.movements.get_mut(&movement_id) else {
                 self.push_event(
@@ -496,6 +508,16 @@ impl RuntimeService {
                 format!("{movement_label} deliverable marked {decision}")
             };
             self.push_event(EventScope::Handoff, message);
+
+            // Auto-merge on accept: queue a merge so the user doesn't have to
+            // press a separate key.
+            if decision == polyphony_core::DeliverableDecision::Accepted {
+                merge_after.push(movement_id);
+            }
+        }
+
+        for movement_id in merge_after {
+            self.merge_deliverable(&movement_id).await;
         }
     }
 
@@ -680,6 +702,13 @@ impl RuntimeService {
                     warn!(%error, movement_id, "failed to dispatch task retry");
                 }
             }
+        }
+    }
+
+    pub(crate) async fn process_pending_agent_stops(&mut self) {
+        let stops = std::mem::take(&mut self.pending_agent_stops);
+        for issue_id in stops {
+            self.stop_running_by_user(&issue_id).await;
         }
     }
 
@@ -1124,6 +1153,7 @@ impl RuntimeService {
 
         self.process_pending_task_resolutions().await;
         self.process_pending_task_retries().await;
+        self.process_pending_agent_stops().await;
         self.process_manual_dispatches().await;
         self.process_manual_pull_request_trigger_dispatches().await;
         // Emit snapshot immediately after dispatches so movements appear in the TUI

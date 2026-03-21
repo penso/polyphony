@@ -326,6 +326,111 @@ pub(crate) fn draw_confirm_quit(frame: &mut ratatui::Frame<'_>, app: &AppState) 
     );
 }
 
+pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
+    let theme = app.theme;
+
+    const KEYBINDINGS: &[(&str, &str, &str)] = &[
+        // (key, short, description)
+        ("Navigation", "", ""),
+        ("1-6", "tabs", "Switch between Triggers, Orchestration, Tasks, Outcomes, Agents, Logs"),
+        ("j / k", "navigate", "Move selection up/down in lists"),
+        ("PgUp / PgDn", "page", "Page up/down in lists and detail views"),
+        ("g / G", "top/bottom", "Jump to top or bottom"),
+        ("Enter", "details", "Open detail view for selected item"),
+        ("Esc", "back", "Close detail view, clear search, or switch focus"),
+        ("Tab", "focus", "Toggle focus between list and detail in split view"),
+        ("/", "search", "Filter items by keyword"),
+        ("", "", ""),
+        ("Agent Actions", "", ""),
+        ("S", "stop agent", "Stop a running agent (Agents/Orchestration tabs)"),
+        ("c", "cast", "View live log (running) or replay recording (finished)"),
+        ("w", "workspace", "Open terminal at agent's workspace directory"),
+        ("d", "dispatch", "Manually dispatch selected trigger to an agent"),
+        ("", "", ""),
+        ("Workflow", "", ""),
+        ("a", "approve", "Approve a waiting trigger or accept a deliverable"),
+        ("x", "reject", "Reject a deliverable"),
+        ("t", "retry task", "Retry a failed pipeline task"),
+        ("R", "resolve task", "Mark a task as completed manually"),
+        ("m", "mode", "Change dispatch mode (Manual/Auto/Nightshift/Idle/Stop)"),
+        ("", "", ""),
+        ("Other", "", ""),
+        ("o / O", "open", "Open issue/PR in browser (o) or full URL (O)"),
+        ("s", "sort", "Toggle sort order in Agents tab"),
+        ("r", "refresh", "Force refresh from trackers"),
+        ("?", "help", "Show this help"),
+        ("q", "quit", "Quit polyphony"),
+    ];
+
+    let content_lines = KEYBINDINGS.len() as u16;
+    let modal_height = (content_lines + 4).min(frame.area().height.saturating_sub(4));
+    let area = centered_rect(frame.area(), 78, modal_height);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " Keybindings ",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(
+            Line::from(vec![
+                Span::styled("Esc", Style::default().fg(theme.highlight)),
+                Span::styled(" or ", Style::default().fg(theme.muted)),
+                Span::styled("?", Style::default().fg(theme.highlight)),
+                Span::styled(":close ", Style::default().fg(theme.muted)),
+            ])
+            .right_aligned(),
+        )
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.highlight))
+        .style(Style::default().bg(theme.background));
+    frame.render_widget(&block, area);
+
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+
+    let lines: Vec<Line<'_>> = KEYBINDINGS
+        .iter()
+        .map(|(key, short, desc)| {
+            if key.is_empty() {
+                // Blank separator line
+                Line::default()
+            } else if short.is_empty() {
+                // Section header
+                Line::from(Span::styled(
+                    format!("── {key} ──"),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                // Key binding row
+                Line::from(vec![
+                    Span::styled(
+                        format!("{key:>12}"),
+                        Style::default().fg(theme.highlight),
+                    ),
+                    Span::styled("  ", Style::default()),
+                    Span::styled(
+                        (*desc).to_string(),
+                        Style::default().fg(theme.foreground),
+                    ),
+                ])
+            }
+        })
+        .collect();
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        inner,
+    );
+}
+
 pub(crate) fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
     let width = area.width.min(max_width).max(1);
     let height = area.height.min(max_height).max(1);

@@ -25,6 +25,7 @@ pub enum AttemptStatus {
     TimedOut,
     Stalled,
     CancelledByReconciliation,
+    CancelledByUser,
 }
 
 impl fmt::Display for AttemptStatus {

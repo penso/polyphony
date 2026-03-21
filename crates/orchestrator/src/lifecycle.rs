@@ -213,6 +213,61 @@ impl RuntimeService {
             .await;
     }
 
+    /// Stop a running agent by user request. Does not clean up workspace so the
+    /// user can inspect the work done so far.
+    pub(crate) async fn stop_running_by_user(&mut self, issue_id: &str) {
+        if let Some(running) = self.state.running.remove(issue_id) {
+            running.handle.abort();
+            self.release_issue(issue_id);
+            // Mark the associated movement as cancelled.
+            if let Some(movement) = self
+                .state
+                .movements
+                .values_mut()
+                .find(|m| m.issue_id.as_deref() == Some(issue_id))
+            {
+                movement.status = MovementStatus::Cancelled;
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    let _ = store.save_movement(movement).await;
+                }
+            }
+            let finished_at = Utc::now();
+            let outcome = AgentRunResult {
+                status: AttemptStatus::CancelledByUser,
+                turns_completed: running.turn_count,
+                error: Some("stopped by user".into()),
+                final_issue_state: None,
+            };
+            self.finalize_saved_context(issue_id, &running.issue.identifier, &running, &outcome);
+            if let Some(context) = self.state.saved_contexts.get(issue_id)
+                && let Err(error) =
+                    persist_workspace_saved_context_artifact(&running.workspace_path, context).await
+            {
+                warn!(
+                    %error,
+                    workspace_path = %running.workspace_path.display(),
+                    issue_identifier = %running.issue.identifier,
+                    "persisting workspace saved context failed"
+                );
+            }
+            let run = build_persisted_run_record(
+                &running,
+                outcome.status,
+                finished_at,
+                outcome.error.clone(),
+                self.state.saved_contexts.get(issue_id).cloned(),
+            );
+            if let Err(error) = self.record_run_history(run).await {
+                warn!(%error, issue_identifier = %running.issue.identifier, "persisting stopped run failed");
+            }
+            self.push_event(
+                EventScope::Dispatch,
+                format!("user stopped {}", running.issue.identifier),
+            );
+        }
+    }
+
     pub(crate) async fn abort_all(&mut self) {
         let running_ids = self.state.running.keys().cloned().collect::<Vec<_>>();
         for issue_id in running_ids {

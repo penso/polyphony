@@ -7,14 +7,14 @@ use std::time::Instant;
 /// Produces JSONL files compatible with `asciinema play` and the
 /// `asciinema-player` web component. Header is written on creation;
 /// each `write_output` call appends a timestamped `"o"` event.
-pub(crate) struct AsciicastWriter {
+pub struct AsciicastWriter {
     writer: BufWriter<std::fs::File>,
     start: Instant,
 }
 
 impl AsciicastWriter {
     /// Create a new `.cast` file at `path` and write the v2 header.
-    pub(crate) fn create(path: &Path, width: u16, height: u16, title: &str) -> io::Result<Self> {
+    pub fn create(path: &Path, width: u16, height: u16, title: &str) -> io::Result<Self> {
         let file = std::fs::File::create(path)?;
         let mut writer = BufWriter::new(file);
 
@@ -42,7 +42,7 @@ impl AsciicastWriter {
     }
 
     /// Append an output (`"o"`) event with the elapsed time since recording started.
-    pub(crate) fn write_output(&mut self, data: &[u8]) -> io::Result<()> {
+    pub fn write_output(&mut self, data: &[u8]) -> io::Result<()> {
         let elapsed = self.start.elapsed().as_secs_f64();
         let text = String::from_utf8_lossy(data);
         let event = serde_json::json!([elapsed, "o", text]);
@@ -52,7 +52,7 @@ impl AsciicastWriter {
     }
 
     /// Flush and close the writer.
-    pub(crate) fn finish(mut self) -> io::Result<()> {
+    pub fn finish(mut self) -> io::Result<()> {
         self.writer.flush()
     }
 }
@@ -60,7 +60,7 @@ impl AsciicastWriter {
 /// Convert a plain log file to an asciicast v2 file with approximate timing.
 ///
 /// Each line is spaced 50ms apart to give a rough playback feel.
-pub(crate) fn convert_log_to_cast(
+pub fn convert_log_to_cast(
     log_path: &Path,
     cast_path: &Path,
     width: u16,
