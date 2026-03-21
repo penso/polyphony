@@ -103,6 +103,18 @@ pub fn draw_tasks_tab(
                     .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(
+                Line::from(vec![
+                    Span::styled(" …", Style::default().fg(theme.info)),
+                    Span::styled(":pending  ", Style::default().fg(theme.muted)),
+                    Span::styled("◐", Style::default().fg(theme.success)),
+                    Span::styled(":running  ", Style::default().fg(theme.muted)),
+                    Span::styled("✓", Style::default().fg(theme.muted)),
+                    Span::styled(":done  ", Style::default().fg(theme.muted)),
+                    Span::styled("✕", Style::default().fg(theme.danger)),
+                    Span::styled(":failed", Style::default().fg(theme.muted)),
+                ]),
+            )
+            .title_bottom(
                 Line::from(Span::styled(
                     format!("─{footer_info}─"),
                     Style::default().fg(theme.muted),
