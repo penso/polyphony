@@ -706,6 +706,42 @@ impl RuntimeService {
                 EventScope::Handoff,
                 format!("{movement_label} merged: {}", result.message),
             );
+            // Close the underlying issue in the tracker so the trigger
+            // disappears from the active list.
+            if let Some(movement) = self.state.movements.get(movement_id) {
+                if let Some(issue_id) = &movement.issue_id {
+                    let terminal_state = self
+                        .workflow()
+                        .config
+                        .tracker
+                        .terminal_states
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "closed".into());
+                    let request = polyphony_core::UpdateIssueRequest {
+                        id: issue_id.clone(),
+                        state: Some(terminal_state.clone()),
+                        ..Default::default()
+                    };
+                    match self.tracker.update_issue(&request).await {
+                        Ok(_) => {
+                            self.push_event(
+                                EventScope::Handoff,
+                                format!("{movement_label} issue marked {terminal_state}"),
+                            );
+                        },
+                        Err(error) => {
+                            warn!(%error, issue_id, "failed to close issue after merge");
+                            self.push_event(
+                                EventScope::Handoff,
+                                format!(
+                                    "{movement_label} merged but failed to close issue: {error}"
+                                ),
+                            );
+                        },
+                    }
+                }
+            }
         } else {
             self.push_event(
                 EventScope::Handoff,
