@@ -178,9 +178,10 @@ pub fn draw_triggers_tab(
                     .unwrap_or_else(|| "—".into())
             };
 
-            // Workspace indicator: spinner if running, dot if workspace, empty otherwise
+            // Workspace indicator: spinner if running or dispatching, dot if workspace, empty otherwise
             let is_running = running_ids.contains(trigger.trigger_id.as_str());
-            let workspace_indicator = if is_running {
+            let is_dispatching = app.dispatching_triggers.contains(&trigger.trigger_id);
+            let workspace_indicator = if is_running || is_dispatching {
                 let spinner =
                     BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
                 Span::styled(spinner.to_string(), Style::default().fg(theme.info))

@@ -338,6 +338,9 @@ pub struct AppState {
     pub pending_cast_playback: Option<CastPlayback>,
     /// Toast notification shown briefly at the bottom of the screen.
     pub toast: Option<Toast>,
+    /// Trigger IDs that have been dispatched but not yet running.
+    /// Cleared when the trigger appears in `snapshot.running`.
+    pub dispatching_triggers: HashSet<String>,
 }
 
 impl AppState {
@@ -400,6 +403,7 @@ impl AppState {
             sorted_agent_indices: Vec::new(),
             pending_cast_playback: None,
             toast: None,
+            dispatching_triggers: HashSet::new(),
         }
     }
 
@@ -431,6 +435,18 @@ impl AppState {
         // Clear refresh indicator once we get a live (non-cached) snapshot
         if self.refresh_requested && !snapshot.from_cache {
             self.refresh_requested = false;
+        }
+        // Clear dispatching indicators for triggers that are now running or have movements
+        if !self.dispatching_triggers.is_empty() {
+            let running_ids: HashSet<&str> =
+                snapshot.running.iter().map(|r| r.issue_id.as_str()).collect();
+            let movement_ids: HashSet<&str> = snapshot
+                .movements
+                .iter()
+                .filter_map(|m| m.issue_identifier.as_deref())
+                .collect();
+            self.dispatching_triggers
+                .retain(|id| !running_ids.contains(id.as_str()) && !movement_ids.contains(id.as_str()));
         }
         self.rebuild_sorted_indices(snapshot);
         sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());

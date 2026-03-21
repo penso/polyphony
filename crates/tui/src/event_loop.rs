@@ -800,6 +800,8 @@ fn handle_key(
                     format!("Dispatching {}", trigger.identifier),
                     None,
                 );
+                app.dispatching_triggers
+                    .insert(trigger.trigger_id.clone());
                 return Some(match trigger.kind {
                     VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
                         issue_id: trigger.trigger_id.clone(),
