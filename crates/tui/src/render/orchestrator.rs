@@ -593,6 +593,10 @@ fn draw_movements_table(
                     let url_label = deliverable
                         .url
                         .as_deref()
+                        .or_else(|| {
+                            deliverable.metadata.get("branch")
+                                .and_then(|v| v.as_str())
+                        })
                         .unwrap_or(kind_label);
                     let mut diff_spans = Vec::new();
                     if let Some(added) =
