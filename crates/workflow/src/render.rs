@@ -354,11 +354,14 @@ pub(crate) fn shorthand_agent_profile(config: CodexConfig) -> (String, AgentProf
     let command = normalize_optional_string(config.command)
         .or_else(|| default_single_agent_command(&kind).map(str::to_string));
     (name.clone(), AgentProfileConfig {
+        description: None,
+        source: Default::default(),
         kind,
         transport: None,
         command,
         fallbacks: Vec::new(),
         model: None,
+        reasoning_level: None,
         models: Vec::new(),
         models_command: None,
         fetch_models: true,
@@ -435,6 +438,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
             .or_else(|| matches!(transport, AgentTransport::Acpx).then(|| "acpx".to_string())),
         fallback_agents: profile.fallbacks.clone(),
         model: profile.model.clone(),
+        reasoning_level: profile.reasoning_level.clone(),
         models: profile.models.clone(),
         models_command: profile.models_command.clone(),
         fetch_models: profile.fetch_models,

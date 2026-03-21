@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use polyphony_core::{
     AgentDefinition, AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime,
-    AttemptStatus, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor, IssueComment,
+    AttemptStatus, BudgetPollResult, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor,
+    IssueComment,
     IssueStateUpdate, IssueTracker, TokenUsage, TrackerQuery,
 };
 use thiserror::Error;
@@ -261,26 +262,29 @@ impl AgentRuntime for MockAgentRuntime {
     async fn fetch_budgets(
         &self,
         agents: &[AgentDefinition],
-    ) -> Result<Vec<BudgetSnapshot>, CoreError> {
+    ) -> Result<BudgetPollResult, CoreError> {
         let names = if agents.is_empty() {
             vec!["mock".to_string()]
         } else {
             agents.iter().map(|agent| agent.name.clone()).collect()
         };
-        Ok(names
-            .into_iter()
-            .map(|name| BudgetSnapshot {
-                component: format!("agent:{name}"),
-                captured_at: Utc::now(),
-                credits_remaining: Some(100.0),
-                credits_total: Some(100.0),
-                spent_usd: Some(0.0),
-                soft_limit_usd: Some(10.0),
-                hard_limit_usd: Some(25.0),
-                reset_at: None,
-                raw: None,
-            })
-            .collect())
+        Ok(BudgetPollResult {
+            snapshots: names
+                .into_iter()
+                .map(|name| BudgetSnapshot {
+                    component: format!("agent:{name}"),
+                    captured_at: Utc::now(),
+                    credits_remaining: Some(100.0),
+                    credits_total: Some(100.0),
+                    spent_usd: Some(0.0),
+                    soft_limit_usd: Some(10.0),
+                    hard_limit_usd: Some(25.0),
+                    reset_at: None,
+                    raw: None,
+                })
+                .collect(),
+            throttles: Vec::new(),
+        })
     }
 }
 

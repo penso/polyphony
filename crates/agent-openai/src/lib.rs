@@ -287,12 +287,18 @@ async fn run_openai_chat(
             .post(&url)
             .bearer_auth(&api_key)
             .header("User-Agent", "polyphony")
-            .json(&json!({
-                "model": model,
-                "messages": messages,
-                "stream": true,
-                "stream_options": {"include_usage": true},
-            }))
+            .json(&{
+                let mut body = json!({
+                    "model": model,
+                    "messages": messages,
+                    "stream": true,
+                    "stream_options": {"include_usage": true},
+                });
+                if let Some(level) = &spec.agent.reasoning_level {
+                    body["reasoning_effort"] = json!(level);
+                }
+                body
+            })
             .send()
             .await
             .map_err(|error| CoreError::Adapter(error.to_string()))?;

@@ -179,6 +179,12 @@ fn output_label(deliverable: &Deliverable) -> String {
             .map(|number| format!("PR #{number}"))
             .unwrap_or_else(|| "PR".into()),
         DeliverableKind::GitlabMergeRequest => "MR".into(),
+        DeliverableKind::LocalBranch => deliverable
+            .metadata
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .map(|b| format!("branch:{b}"))
+            .unwrap_or_else(|| "branch".into()),
         DeliverableKind::Patch => "Patch".into(),
     }
 }

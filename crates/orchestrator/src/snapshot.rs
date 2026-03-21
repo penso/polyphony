@@ -255,7 +255,7 @@ impl RuntimeService {
             },
             cadence: RuntimeCadence {
                 tracker_poll_interval_ms: self.workflow_rx.borrow().config.polling.interval_ms,
-                budget_poll_interval_ms: 60_000,
+                budget_poll_interval_ms: 300_000,
                 model_discovery_interval_ms: 300_000,
                 last_tracker_poll_at: self.state.last_tracker_poll_at,
                 last_budget_poll_at: self.state.last_budget_poll_at,
@@ -392,6 +392,20 @@ impl RuntimeService {
                 .profiles
                 .keys()
                 .cloned()
+                .collect(),
+            agent_profiles: self
+                .workflow_rx
+                .borrow()
+                .config
+                .agents
+                .profiles
+                .iter()
+                .map(|(name, profile)| AgentProfileSummary {
+                    name: name.clone(),
+                    kind: profile.kind.clone(),
+                    description: profile.description.clone(),
+                    source: profile.source,
+                })
                 .collect(),
         }
     }
@@ -615,11 +629,15 @@ impl RuntimeService {
         let due = self
             .state
             .last_budget_poll_at
-            .map(|at| Utc::now().signed_duration_since(at).num_seconds() >= 60)
+            .map(|at| Utc::now().signed_duration_since(at).num_seconds() >= 300)
             .unwrap_or(true);
         if !due {
             return;
         }
+        // Clean up expired budget throttles
+        self.state
+            .throttles
+            .retain(|_, t| t.due_at > Instant::now());
         self.state.last_budget_poll_at = Some(Utc::now());
 
         match self.tracker.fetch_budget().await {
@@ -630,14 +648,25 @@ impl RuntimeService {
         }
 
         let workflow = self.workflow();
-        match self
-            .agent
-            .fetch_budgets(&workflow.config.all_agents())
-            .await
+        let all_agents = workflow.config.all_agents();
+        let agents: Vec<_> = all_agents
+            .into_iter()
+            .filter(|a| {
+                let throttle_key = format!("budget:{}", a.kind);
+                self.state
+                    .throttles
+                    .get(&throttle_key)
+                    .is_none_or(|t| t.due_at <= Instant::now())
+            })
+            .collect();
+        match self.agent.fetch_budgets(&agents).await
         {
-            Ok(snapshots) => {
-                for snapshot in snapshots {
+            Ok(poll_result) => {
+                for snapshot in poll_result.snapshots {
                     self.record_budget(snapshot).await;
+                }
+                for signal in poll_result.throttles {
+                    self.register_throttle(signal);
                 }
             },
             Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),

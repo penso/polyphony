@@ -402,6 +402,7 @@ mod tests {
             from_cache: false,
             cached_at: None,
             agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
         };
         let run = crate::PersistedRunRecord {
             issue_id: "1".into(),
@@ -503,6 +504,7 @@ mod tests {
                 from_cache: false,
                 cached_at: None,
                 agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
             }),
             run_history: (0..300)
                 .map(|index| crate::PersistedRunRecord {

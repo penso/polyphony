@@ -195,6 +195,16 @@ pub struct RuntimeSnapshot {
     pub cached_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub agent_profile_names: Vec<String>,
+    #[serde(default)]
+    pub agent_profiles: Vec<AgentProfileSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentProfileSummary {
+    pub name: String,
+    pub kind: String,
+    pub description: Option<String>,
+    pub source: AgentProfileSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -416,6 +426,12 @@ pub struct ThrottleWindow {
     pub component: String,
     pub until: DateTime<Utc>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BudgetPollResult {
+    pub snapshots: Vec<BudgetSnapshot>,
+    pub throttles: Vec<RateLimitSignal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

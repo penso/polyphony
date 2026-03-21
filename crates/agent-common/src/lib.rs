@@ -132,6 +132,12 @@ pub fn base_agent_env(
     if let Some(model) = model {
         envs.insert("POLYPHONY_AGENT_MODEL".into(), model.to_string());
     }
+    if let Some(level) = &spec.agent.reasoning_level {
+        envs.insert(
+            "POLYPHONY_AGENT_REASONING_LEVEL".into(),
+            level.clone(),
+        );
+    }
     if let Some(context_file) = context_file {
         envs.insert(
             "POLYPHONY_CONTEXT_FILE".into(),

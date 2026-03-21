@@ -11,7 +11,7 @@ use serde_yaml::Value as YamlValue;
 
 use crate::{
     AgentProfileOverride, AgentPromptConfig, LoadedWorkflow, ServiceConfig, WorkflowDefinition,
-    files::*, load_workflow_with_user_config, render::*, render_issue_template,
+    files::*, load_workflow_with_user_config, parse_workflow, render::*, render_issue_template,
     render_turn_template, repo_config_path,
 };
 
@@ -1118,6 +1118,26 @@ fn ensure_repo_agent_prompt_files_writes_defaults_once() {
 }
 
 #[test]
+fn all_agent_prompt_templates_parse_successfully() {
+    for (name, contents) in default_repo_agent_prompt_templates() {
+        let definition = parse_workflow(contents)
+            .unwrap_or_else(|error| panic!("template {name}.md failed to parse workflow: {error}"));
+        let profile = serde_yaml::from_value::<AgentProfileOverride>(definition.config)
+            .unwrap_or_else(|error| {
+                panic!("template {name}.md front matter failed to parse: {error}")
+            });
+        assert!(
+            profile.kind.is_some(),
+            "template {name}.md must have a 'kind' field"
+        );
+        assert!(
+            !definition.prompt_template.trim().is_empty(),
+            "template {name}.md must have a non-empty prompt body"
+        );
+    }
+}
+
+#[test]
 fn generated_defaults_load_with_seeded_agent_prompts() {
     let root = unique_temp_path("generated-defaults-load", "d");
     fs::create_dir_all(&root).unwrap();
@@ -1338,6 +1358,7 @@ agents:
         agent_prompts: [("research".to_string(), AgentPromptConfig {
             profile: AgentProfileOverride::default(),
             prompt_template: "Investigate carefully for {{ issue.title }}".into(),
+            source: Default::default(),
         })]
         .into_iter()
         .collect(),

@@ -79,6 +79,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
         from_cache: false,
         cached_at: None,
         agent_profile_names: vec![],
+        agent_profiles: vec![],
     }
 }
 
@@ -720,8 +721,6 @@ fn detail_stack_push_pop() {
     app.push_detail(app::DetailView::Movement {
         movement_id: "m-1".into(),
         scroll: 0,
-        focus: Default::default(),
-        tasks_selected: 0,
     });
     assert_eq!(app.detail_stack.len(), 2);
     assert!(matches!(
@@ -791,8 +790,6 @@ fn split_layout_eligible_only_for_single_depth() {
     app.push_detail(app::DetailView::Movement {
         movement_id: "m-1".into(),
         scroll: 0,
-        focus: Default::default(),
-        tasks_selected: 0,
     });
     assert!(!app.is_split_eligible());
 }

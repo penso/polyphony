@@ -146,11 +146,15 @@ pub struct CodexConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AgentProfileConfig {
+    pub description: Option<String>,
+    #[serde(skip)]
+    pub source: polyphony_core::AgentProfileSource,
     pub kind: String,
     pub transport: Option<String>,
     pub command: Option<String>,
     pub fallbacks: Vec<String>,
     pub model: Option<String>,
+    pub reasoning_level: Option<String>,
     pub models: Vec<String>,
     pub models_command: Option<String>,
     #[serde(default = "crate::service::default_true")]
@@ -177,11 +181,13 @@ pub struct AgentProfileConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct AgentProfileOverride {
+    pub description: Option<String>,
     pub kind: Option<String>,
     pub transport: Option<String>,
     pub command: Option<String>,
     pub fallbacks: Option<Vec<String>>,
     pub model: Option<String>,
+    pub reasoning_level: Option<String>,
     pub models: Option<Vec<String>>,
     pub models_command: Option<String>,
     pub fetch_models: Option<bool>,
@@ -208,6 +214,8 @@ pub struct AgentProfileOverride {
 pub struct AgentPromptConfig {
     pub profile: AgentProfileOverride,
     pub prompt_template: String,
+    #[serde(skip)]
+    pub source: polyphony_core::AgentProfileSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

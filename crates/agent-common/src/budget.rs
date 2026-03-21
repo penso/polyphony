@@ -342,18 +342,77 @@ async fn fetch_json(
         .await
         .map_err(|error| CoreError::Adapter(format!("budget request failed: {error}")))?;
     let status = response.status();
+    if status.as_u16() == 429 {
+        let retry_after_ms = parse_retry_after(&response);
+        let retry_after_header = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(ToOwned::to_owned);
+        let body = response.text().await.unwrap_or_default();
+        tracing::debug!(
+            %url,
+            ?retry_after_header,
+            body_preview = &body[..body.len().min(200)],
+            "budget endpoint returned 429"
+        );
+        return Err(CoreError::RateLimited(Box::new(
+            polyphony_core::RateLimitSignal {
+                component: format!("budget:{url}"),
+                reason: "budget endpoint returned 429".into(),
+                limited_at: Utc::now(),
+                retry_after_ms,
+                reset_at: None,
+                status_code: Some(429),
+                raw: serde_json::from_str(&body).ok(),
+            },
+        )));
+    }
     let body = response
         .text()
         .await
         .map_err(|error| CoreError::Adapter(format!("budget response read failed: {error}")))?;
     if !status.is_success() {
         return Err(CoreError::Adapter(format!(
-            "budget request returned HTTP {}",
+            "budget request to {} returned HTTP {}",
+            url,
             status.as_u16()
         )));
     }
     serde_json::from_str(&body)
         .map_err(|error| CoreError::Adapter(format!("budget response decode failed: {error}")))
+}
+
+/// Minimum backoff for 429 responses when Retry-After is missing or zero (5 minutes).
+const MIN_RETRY_AFTER_MS: u64 = 300_000;
+
+/// Parse the `Retry-After` header from an HTTP response.
+/// Supports both delay-seconds (e.g. `120`) and HTTP-date formats.
+/// Returns at least `MIN_RETRY_AFTER_MS` to prevent tight retry loops.
+fn parse_retry_after(response: &reqwest::Response) -> Option<u64> {
+    let value = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok());
+    let Some(value) = value else {
+        return Some(MIN_RETRY_AFTER_MS);
+    };
+    // Try as integer seconds first
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some((seconds * 1000).max(MIN_RETRY_AFTER_MS));
+    }
+    // Try as float seconds
+    if let Ok(seconds) = value.parse::<f64>() {
+        return Some(((seconds * 1000.0) as u64).max(MIN_RETRY_AFTER_MS));
+    }
+    // Try as HTTP-date (RFC 2822 / RFC 7231)
+    if let Ok(date) = chrono::DateTime::parse_from_rfc2822(value) {
+        let delay_ms = date.signed_duration_since(Utc::now()).num_milliseconds();
+        if delay_ms > 0 {
+            return Some((delay_ms as u64).max(MIN_RETRY_AFTER_MS));
+        }
+    }
+    Some(MIN_RETRY_AFTER_MS)
 }
 
 fn should_retry_codex_with_refresh(error: &CoreError) -> bool {

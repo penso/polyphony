@@ -521,6 +521,7 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
         from_cache: false,
         cached_at: None,
         agent_profile_names: Vec::new(),
+        agent_profiles: Vec::new(),
     }
 }
 

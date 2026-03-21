@@ -2973,6 +2973,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -3057,6 +3058,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3257,6 +3259,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tui-markdown",
+ "vt100",
 ]
 
 [[package]]

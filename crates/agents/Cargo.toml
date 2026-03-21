@@ -19,6 +19,7 @@ pi = ["dep:polyphony-agent-pi"]
 async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 polyphony-core = { path = "../core" }
 polyphony-agent-acp = { path = "../agent-acp", optional = true }
 polyphony-agent-acpx = { path = "../agent-acpx", optional = true }

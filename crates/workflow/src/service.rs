@@ -168,7 +168,7 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("orchestration", HashMap::<String, i64>::new())
             .map_err(config_error)?
-            .set_default("orchestration.dispatch_mode", "manual")
+            .set_default("orchestration.dispatch_mode", "stop")
             .map_err(config_error)?
             .set_default("agents", HashMap::<String, i64>::new())
             .map_err(config_error)?
@@ -276,6 +276,7 @@ impl ServiceConfig {
         for (name, prompt) in prompts {
             let profile = self.agents.profiles.entry(name.clone()).or_default();
             profile.apply_override(&prompt.profile);
+            profile.source = prompt.source;
         }
         if self.agents.default.is_none() {
             if self.agents.profiles.contains_key("implementer") {
@@ -475,7 +476,7 @@ impl ServiceConfig {
         self.orchestration.dispatch_mode =
             self.orchestration.dispatch_mode.trim().to_ascii_lowercase();
         if self.orchestration.dispatch_mode.is_empty() {
-            self.orchestration.dispatch_mode = "manual".into();
+            self.orchestration.dispatch_mode = "stop".into();
         }
         self.feedback.offered = self
             .feedback
@@ -658,10 +659,10 @@ impl ServiceConfig {
         }
         if !matches!(
             self.orchestration.dispatch_mode.as_str(),
-            "manual" | "automatic" | "nightshift" | "idle"
+            "manual" | "automatic" | "nightshift" | "idle" | "stop"
         ) {
             return Err(Error::InvalidConfig(
-                "orchestration.dispatch_mode must be `manual`, `automatic`, `nightshift`, or `idle`".into(),
+                "orchestration.dispatch_mode must be `manual`, `automatic`, `nightshift`, `idle`, or `stop`".into(),
             ));
         }
         if self.tracker.kind == TrackerKind::Github {
@@ -844,6 +845,7 @@ impl ServiceConfig {
             "automatic" => polyphony_core::DispatchMode::Automatic,
             "nightshift" => polyphony_core::DispatchMode::Nightshift,
             "idle" => polyphony_core::DispatchMode::Idle,
+            "stop" => polyphony_core::DispatchMode::Stop,
             _ => polyphony_core::DispatchMode::Manual,
         }
     }
@@ -953,6 +955,9 @@ impl AgentsConfig {
 
 impl AgentProfileConfig {
     pub(crate) fn apply_override(&mut self, override_config: &AgentProfileOverride) {
+        if let Some(value) = &override_config.description {
+            self.description = Some(value.clone());
+        }
         if let Some(value) = &override_config.kind {
             self.kind = value.clone();
         }
@@ -967,6 +972,9 @@ impl AgentProfileConfig {
         }
         if let Some(value) = &override_config.model {
             self.model = Some(value.clone());
+        }
+        if let Some(value) = &override_config.reasoning_level {
+            self.reasoning_level = Some(value.clone());
         }
         if let Some(value) = &override_config.models {
             self.models = value.clone();
@@ -1033,6 +1041,9 @@ impl AgentProfileConfig {
 
 impl AgentProfileOverride {
     pub(crate) fn merge(&mut self, other: Self) {
+        if other.description.is_some() {
+            self.description = other.description;
+        }
         if other.kind.is_some() {
             self.kind = other.kind;
         }
@@ -1047,6 +1058,9 @@ impl AgentProfileOverride {
         }
         if other.model.is_some() {
             self.model = other.model;
+        }
+        if other.reasoning_level.is_some() {
+            self.reasoning_level = other.reasoning_level;
         }
         if other.models.is_some() {
             self.models = other.models;

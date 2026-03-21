@@ -1,8 +1,11 @@
 ---
+description: Investigation, root-cause analysis, and evidence gathering
 kind: codex
 transport: app_server
 command: codex --dangerously-bypass-approvals-and-sandbox app-server
-approval_policy: auto
+model: gpt-5.4
+reasoning_level: high
+approval_policy: never
 thread_sandbox: workspace-write
 turn_sandbox_policy: workspace-write
 ---

@@ -177,11 +177,17 @@ pub fn draw_agent_picker_modal(
     snapshot: &RuntimeSnapshot,
     app: &AppState,
 ) {
+    use polyphony_core::AgentProfileSource;
+
     let theme = app.theme;
-    let profile_count = snapshot.agent_profile_names.len();
-    let content_height = (profile_count as u16).clamp(1, 10);
+    let profiles = &snapshot.agent_profiles;
+    let profile_count = profiles.len();
+    // Each profile takes 2 rows (name + description) plus 1 separator, except the last.
+    let has_descriptions = profiles.iter().any(|p| p.description.is_some());
+    let row_height: u16 = if has_descriptions { 3 } else { 1 };
+    let content_height = ((profile_count as u16) * row_height).clamp(1, 20);
     let total_height = content_height + 4;
-    let area = centered_rect(frame.area(), 48, total_height);
+    let area = centered_rect(frame.area(), 64, total_height);
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -214,23 +220,14 @@ pub fn draw_agent_picker_modal(
         horizontal: 2,
     });
 
-    for (i, name) in snapshot.agent_profile_names.iter().enumerate() {
-        if i as u16 >= inner.height {
+    let mut y_offset: u16 = 0;
+    for (i, profile) in profiles.iter().enumerate() {
+        if y_offset >= inner.height {
             break;
         }
         let is_selected = i == app.agent_picker_selected;
-        let row_area = Rect {
-            x: inner.x,
-            y: inner.y + i as u16,
-            width: inner.width,
-            height: 1,
-        };
 
-        let marker = if is_selected {
-            "▸ "
-        } else {
-            "  "
-        };
+        let marker = if is_selected { "▸ " } else { "  " };
         let label_style = if is_selected {
             Style::default()
                 .fg(theme.highlight)
@@ -238,21 +235,71 @@ pub fn draw_agent_picker_modal(
         } else {
             Style::default().fg(theme.foreground)
         };
-
         let bg = if is_selected {
             Style::default().bg(theme.panel_alt)
         } else {
             Style::default()
         };
 
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(marker, Style::default().fg(theme.highlight)),
-                Span::styled(name.clone(), label_style),
-            ]))
-            .style(bg),
-            row_area,
-        );
+        let source_label = match profile.source {
+            AgentProfileSource::UserGlobal => " ⌂",
+            AgentProfileSource::Repository => " ⊙",
+            AgentProfileSource::Config => "",
+        };
+
+        // Name row
+        let name_area = Rect {
+            x: inner.x,
+            y: inner.y + y_offset,
+            width: inner.width,
+            height: 1,
+        };
+        let mut spans = vec![
+            Span::styled(marker, Style::default().fg(theme.highlight)),
+            Span::styled(profile.name.clone(), label_style),
+            Span::styled(
+                format!(" ({})", profile.kind),
+                Style::default().fg(theme.muted),
+            ),
+        ];
+        if !source_label.is_empty() {
+            spans.push(Span::styled(
+                source_label,
+                Style::default().fg(theme.info),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(bg), name_area);
+        y_offset += 1;
+
+        // Description row
+        if has_descriptions {
+            if y_offset < inner.height {
+                let desc_area = Rect {
+                    x: inner.x,
+                    y: inner.y + y_offset,
+                    width: inner.width,
+                    height: 1,
+                };
+                let desc_text = profile
+                    .description
+                    .as_deref()
+                    .unwrap_or("");
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!("  {desc_text}"),
+                        Style::default().fg(theme.muted),
+                    )))
+                    .style(bg),
+                    desc_area,
+                );
+                y_offset += 1;
+            }
+
+            // Separator
+            if i + 1 < profile_count && y_offset < inner.height {
+                y_offset += 1;
+            }
+        }
     }
 }
 

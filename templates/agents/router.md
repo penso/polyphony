@@ -1,10 +1,10 @@
 ---
-kind: codex
-transport: app_server
-command: codex --dangerously-bypass-approvals-and-sandbox app-server
-approval_policy: auto
-thread_sandbox: workspace-write
-turn_sandbox_policy: workspace-write
+description: Task decomposition and pipeline planning
+kind: claude
+transport: local_cli
+command: claude -p --verbose --dangerously-skip-permissions
+model: claude-opus-4-6
+interaction_mode: interactive
 ---
 You are the routing agent for this movement.
 

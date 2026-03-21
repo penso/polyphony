@@ -97,6 +97,15 @@ impl AgentRunResult {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentProfileSource {
+    #[default]
+    Config,
+    UserGlobal,
+    Repository,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentTransport {
     #[default]
     Mock,
@@ -133,6 +142,7 @@ pub struct AgentDefinition {
     pub command: Option<String>,
     pub fallback_agents: Vec<String>,
     pub model: Option<String>,
+    pub reasoning_level: Option<String>,
     pub models: Vec<String>,
     pub models_command: Option<String>,
     pub fetch_models: bool,

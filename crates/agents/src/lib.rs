@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use polyphony_core::{
     AgentDefinition, AgentModelCatalog, AgentProviderRuntime, AgentRunResult, AgentRunSpec,
-    AgentRuntime, AgentSession, BudgetSnapshot, Error as CoreError, ToolExecutor,
+    AgentRuntime, AgentSession, BudgetPollResult, BudgetSnapshot, Error as CoreError, ToolExecutor,
 };
 use tokio::sync::mpsc;
 
@@ -94,11 +94,31 @@ impl AgentRuntime for AgentRegistryRuntime {
     async fn fetch_budgets(
         &self,
         agents: &[AgentDefinition],
-    ) -> Result<Vec<BudgetSnapshot>, CoreError> {
-        let mut snapshots = Vec::new();
-        let mut cached: BTreeMap<String, BudgetSnapshot> = BTreeMap::new();
+    ) -> Result<BudgetPollResult, CoreError> {
+        // Cache results per unique credential/endpoint combo so agents sharing
+        // the same provider make only one HTTP call.
+        enum CachedResult {
+            Ok(BudgetSnapshot),
+            None,
+            RateLimited,
+            Failed,
+        }
+
+        let mut result = BudgetPollResult::default();
+        let mut cached: BTreeMap<String, CachedResult> = BTreeMap::new();
         for agent in agents {
-            let provider = self.provider_for(agent)?;
+            let provider = match self.provider_for(agent) {
+                Ok(p) => p,
+                Err(error) => {
+                    tracing::warn!(
+                        agent_name = %agent.name,
+                        agent_kind = %agent.kind,
+                        %error,
+                        "budget poll skipped: no provider"
+                    );
+                    continue;
+                },
+            };
             let cache_key = format!(
                 "{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
                 provider.runtime_key(),
@@ -109,25 +129,64 @@ impl AgentRuntime for AgentRegistryRuntime {
                 agent.spending_command,
                 agent.env,
             );
-            let fetched = if let Some(snapshot) = cached.get(&cache_key) {
-                snapshot.clone()
+            if let Some(entry) = cached.get(&cache_key) {
+                match entry {
+                    CachedResult::Ok(snapshot) => {
+                        let mut snapshot = snapshot.clone();
+                        snapshot.component = format!("agent:{}", agent.name);
+                        if let Some(raw) = snapshot.raw.as_mut()
+                            && raw.get("agent_name").is_none()
+                        {
+                            raw["agent_name"] = agent.name.clone().into();
+                        }
+                        result.snapshots.push(snapshot);
+                    },
+                    CachedResult::None | CachedResult::Failed | CachedResult::RateLimited => {
+                        continue
+                    },
+                }
             } else {
-                let Some(snapshot) = provider.fetch_budget(agent).await? else {
-                    continue;
-                };
-                cached.insert(cache_key, snapshot.clone());
-                snapshot
-            };
-            let mut snapshot = fetched;
-            snapshot.component = format!("agent:{}", agent.name);
-            if let Some(raw) = snapshot.raw.as_mut()
-                && raw.get("agent_name").is_none()
-            {
-                raw["agent_name"] = agent.name.clone().into();
+                match provider.fetch_budget(agent).await {
+                    Ok(Some(snapshot)) => {
+                        cached.insert(cache_key, CachedResult::Ok(snapshot.clone()));
+                        let mut snapshot = snapshot;
+                        snapshot.component = format!("agent:{}", agent.name);
+                        if let Some(raw) = snapshot.raw.as_mut()
+                            && raw.get("agent_name").is_none()
+                        {
+                            raw["agent_name"] = agent.name.clone().into();
+                        }
+                        result.snapshots.push(snapshot);
+                    },
+                    Ok(None) => {
+                        cached.insert(cache_key, CachedResult::None);
+                    },
+                    Err(CoreError::RateLimited(signal)) => {
+                        tracing::warn!(
+                            agent_name = %agent.name,
+                            agent_kind = %agent.kind,
+                            retry_after_ms = signal.retry_after_ms,
+                            "agent budget poll rate-limited"
+                        );
+                        // Rewrite component to identify the agent, not the URL
+                        let mut signal = *signal;
+                        signal.component = format!("budget:{}", agent.kind);
+                        result.throttles.push(signal);
+                        cached.insert(cache_key, CachedResult::RateLimited);
+                    },
+                    Err(error) => {
+                        tracing::warn!(
+                            agent_name = %agent.name,
+                            agent_kind = %agent.kind,
+                            %error,
+                            "agent budget poll failed"
+                        );
+                        cached.insert(cache_key, CachedResult::Failed);
+                    },
+                }
             }
-            snapshots.push(snapshot);
         }
-        Ok(snapshots)
+        Ok(result)
     }
 
     async fn discover_models(
@@ -245,8 +304,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(budgets.len(), 2);
-        assert_eq!(budgets[0].component, "agent:router");
-        assert_eq!(budgets[1].component, "agent:reviewer");
+        assert_eq!(budgets.snapshots.len(), 2);
+        assert_eq!(budgets.snapshots[0].component, "agent:router");
+        assert_eq!(budgets.snapshots[1].component, "agent:reviewer");
     }
 }

@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::detail_common::{kv_line, render_scroll_indicator, render_separator};
-use crate::app::{AppState, DetailSection, DetailView};
+use crate::app::AppState;
 
 pub(crate) fn draw_movement_detail(
     frame: &mut ratatui::Frame<'_>,
@@ -198,6 +198,90 @@ pub(crate) fn draw_movement_detail(
         ));
         if let Some(url) = &target.url {
             lines.push(kv_line("URL", url, theme));
+        }
+    }
+
+    // Tasks with agent session info
+    {
+        let mut task_indices: Vec<usize> = snapshot
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.movement_id == movement.id)
+            .map(|(i, _)| i)
+            .collect();
+        task_indices.sort_by_key(|&i| snapshot.tasks[i].ordinal);
+
+        if !task_indices.is_empty() {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(
+                "Tasks",
+                Style::default()
+                    .fg(theme.highlight)
+                    .add_modifier(Modifier::BOLD),
+            )));
+
+            for &idx in &task_indices {
+                let task = &snapshot.tasks[idx];
+                let icon = super::tasks::task_status_icon(&task.status);
+                let color = super::tasks::task_status_color(&task.status, theme);
+
+                // Status icon + title
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{icon} "), Style::default().fg(color)),
+                    Span::styled(
+                        task.title.clone(),
+                        Style::default()
+                            .fg(theme.foreground)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+
+                // Agent, turns, tokens on one line
+                let agent_label = task
+                    .agent_name
+                    .as_deref()
+                    .unwrap_or("-");
+                let turns_label = format!("{} turns", task.turns_completed);
+                let tokens_label = if task.total_tokens > 0 {
+                    super::agents::format_tokens_pub(task.total_tokens)
+                } else {
+                    "-".into()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("  Agent: ", Style::default().fg(theme.muted)),
+                    Span::styled(agent_label.to_string(), Style::default().fg(theme.info)),
+                    Span::styled("  Turns: ", Style::default().fg(theme.muted)),
+                    Span::styled(turns_label, Style::default().fg(theme.foreground)),
+                    Span::styled("  Tokens: ", Style::default().fg(theme.muted)),
+                    Span::styled(tokens_label, Style::default().fg(theme.foreground)),
+                ]));
+
+                // Duration
+                let duration_label = match (task.started_at, task.finished_at) {
+                    (Some(start), Some(end)) => {
+                        super::agents::format_duration(end.signed_duration_since(start))
+                    },
+                    (Some(start), None) => {
+                        let elapsed =
+                            super::agents::format_duration(chrono::Utc::now().signed_duration_since(start));
+                        format!("{elapsed} (running)")
+                    },
+                    _ => "not started".into(),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("  Duration: ", Style::default().fg(theme.muted)),
+                    Span::styled(duration_label, Style::default().fg(theme.foreground)),
+                ]));
+
+                // Error if present
+                if let Some(error) = &task.error {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Error: ", Style::default().fg(theme.muted)),
+                        Span::styled(error.clone(), Style::default().fg(theme.danger)),
+                    ]));
+                }
+            }
         }
     }
 

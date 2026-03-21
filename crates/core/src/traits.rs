@@ -70,8 +70,8 @@ pub trait AgentRuntime: Send + Sync {
     async fn fetch_budgets(
         &self,
         _agents: &[AgentDefinition],
-    ) -> Result<Vec<BudgetSnapshot>, Error> {
-        Ok(Vec::new())
+    ) -> Result<BudgetPollResult, Error> {
+        Ok(BudgetPollResult::default())
     }
     async fn discover_models(
         &self,

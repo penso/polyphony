@@ -85,14 +85,19 @@ pub fn draw_header(
     frame.render_widget(tabs, sections[0]);
 
     // Status summary
+    let mut status_block = Block::default()
+        .title(status_title)
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border));
+
+    let budget_footer = compact_budget_footer(snapshot, theme, sections[1].width.saturating_sub(2));
+    if !budget_footer.spans.is_empty() {
+        status_block = status_block.title_bottom(budget_footer);
+    }
+
     frame.render_widget(
-        Paragraph::new(vec![status_summary]).block(
-            Block::default()
-                .title(status_title)
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.border)),
-        ),
+        Paragraph::new(vec![status_summary]).block(status_block),
         sections[1],
     );
 }
@@ -196,6 +201,124 @@ fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
 
     status_spans.push(Span::styled(" ", Style::default()));
     Line::from(status_spans)
+}
+
+/// Session and weekly budget percentages for a provider.
+struct BudgetPcts {
+    session: Option<u32>,
+    weekly: Option<u32>,
+}
+
+fn compact_budget_footer(
+    snapshot: &RuntimeSnapshot,
+    theme: crate::theme::Theme,
+    max_width: u16,
+) -> Line<'static> {
+    let has_budgets = !snapshot.budgets.is_empty();
+    let has_budget_throttles = snapshot
+        .throttles
+        .iter()
+        .any(|t| t.component.starts_with("budget:"));
+    if !has_budgets && !has_budget_throttles {
+        return Line::default();
+    }
+
+    // Deduplicate by provider kind so agents sharing the same provider show once.
+    // The raw JSON contains a "provider" field (e.g. "codex", "claude").
+    // Fall back to the agent name if no provider field is present.
+    let mut seen = std::collections::BTreeMap::<String, BudgetPcts>::new();
+    for budget in &snapshot.budgets {
+        let label = budget
+            .raw
+            .as_ref()
+            .and_then(|raw| raw.get("provider").and_then(|v| v.as_str()))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                budget
+                    .component
+                    .strip_prefix("agent:")
+                    .unwrap_or(&budget.component)
+                    .to_string()
+            });
+        if seen.contains_key(&label) {
+            continue;
+        }
+        let session = match (budget.credits_remaining, budget.credits_total) {
+            (Some(remaining), Some(total)) if total > 0.0 => {
+                Some((remaining / total * 100.0).round() as u32)
+            },
+            _ => None,
+        };
+        let weekly = budget
+            .raw
+            .as_ref()
+            .and_then(|raw| raw.get("weekly_remaining"))
+            .and_then(|v| v.as_f64())
+            .map(|pct| pct.round() as u32);
+        seen.insert(label, BudgetPcts { session, weekly });
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (label, pcts) in &seen {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" ", Style::default().fg(theme.border)));
+        }
+        let worst = pcts
+            .session
+            .into_iter()
+            .chain(pcts.weekly)
+            .min()
+            .unwrap_or(100);
+        let color = if worst <= 10 {
+            theme.danger
+        } else if worst <= 30 {
+            theme.warning
+        } else {
+            theme.muted
+        };
+        let text = match (pcts.session, pcts.weekly) {
+            (Some(s), Some(w)) => format!("{label}:{s}%/{w}%"),
+            (Some(s), None) => format!("{label}:{s}%"),
+            (None, Some(w)) => format!("{label}:{w}%"),
+            (None, None) => label.clone(),
+        };
+        spans.push(Span::styled(text, Style::default().fg(color)));
+    }
+
+    // Show throttled budget providers that have no snapshot yet
+    for throttle in &snapshot.throttles {
+        let Some(kind) = throttle.component.strip_prefix("budget:") else {
+            continue;
+        };
+        if seen.contains_key(kind) {
+            continue;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::styled(" ", Style::default().fg(theme.border)));
+        }
+        spans.push(Span::styled(
+            format!("{kind}:429"),
+            Style::default().fg(theme.danger),
+        ));
+    }
+
+    // Trim if too wide
+    let total_width: usize = spans.iter().map(|s| s.content.len()).sum();
+    if total_width > max_width as usize {
+        let mut trimmed = Vec::new();
+        let mut used = 0;
+        for span in spans {
+            let w = span.content.len();
+            if used + w > max_width as usize {
+                break;
+            }
+            used += w;
+            trimmed.push(span);
+        }
+        return Line::from(trimmed);
+    }
+
+    Line::from(spans)
 }
 
 fn header_status_width(area_width: u16, summary: &Line<'_>, title: &Line<'_>) -> u16 {

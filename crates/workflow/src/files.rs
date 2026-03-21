@@ -119,16 +119,45 @@ pub fn ensure_repo_config_file(
     Ok(true)
 }
 
+/// Ensure `.polyphony/.gitignore` exists so logs, caches, and workspaces are
+/// not committed.
+fn ensure_polyphony_gitignore(workflow_path: impl AsRef<Path>) -> Result<(), Error> {
+    let polyphony_dir = workflow_path
+        .as_ref()
+        .parent()
+        .map(|parent| parent.join(".polyphony"))
+        .ok_or_else(|| Error::Config("cannot determine .polyphony directory".into()))?;
+    let gitignore_path = polyphony_dir.join(".gitignore");
+    if gitignore_path.exists() {
+        return Ok(());
+    }
+    let content = "\
+# Polyphony runtime files — do not commit
+logs/
+workspaces/
+state.json
+cache.json
+";
+    fs::write(&gitignore_path, content).map_err(|error| {
+        Error::Config(format!(
+            "writing `{}` failed: {error}",
+            gitignore_path.display()
+        ))
+    })?;
+    Ok(())
+}
+
 pub fn ensure_repo_agent_prompt_files(
     workflow_path: impl AsRef<Path>,
 ) -> Result<Vec<PathBuf>, Error> {
-    let dir = repo_agent_prompt_dir(workflow_path)?;
+    let dir = repo_agent_prompt_dir(&workflow_path)?;
     fs::create_dir_all(&dir).map_err(|error| {
         Error::Config(format!(
             "creating `{}` for repo agent prompts failed: {error}",
             dir.display()
         ))
     })?;
+    ensure_polyphony_gitignore(&workflow_path)?;
     let mut created = Vec::new();
     for (name, contents) in default_repo_agent_prompt_templates() {
         let path = dir.join(format!("{name}.md"));
@@ -195,10 +224,20 @@ fn load_agent_prompt_configs(
 ) -> Result<HashMap<String, AgentPromptConfig>, Error> {
     let mut prompts = HashMap::new();
     if let Some(global_dir) = user_agent_prompt_dir(user_config_path) {
-        load_agent_prompt_dir(&global_dir, &mut prompts, false)?;
+        load_agent_prompt_dir(
+            &global_dir,
+            &mut prompts,
+            false,
+            polyphony_core::AgentProfileSource::UserGlobal,
+        )?;
     }
     let repo_dir = repo_agent_prompt_dir(workflow_path)?;
-    load_agent_prompt_dir(&repo_dir, &mut prompts, true)?;
+    load_agent_prompt_dir(
+        &repo_dir,
+        &mut prompts,
+        true,
+        polyphony_core::AgentProfileSource::Repository,
+    )?;
     Ok(prompts)
 }
 
@@ -206,6 +245,7 @@ fn load_agent_prompt_dir(
     dir: &Path,
     prompts: &mut HashMap<String, AgentPromptConfig>,
     merge_with_existing: bool,
+    source: polyphony_core::AgentProfileSource,
 ) -> Result<(), Error> {
     if !dir.exists() {
         return Ok(());
@@ -237,10 +277,12 @@ fn load_agent_prompt_dir(
                 path.display()
             )));
         };
-        let loaded = load_agent_prompt_file(&path)?;
+        let mut loaded = load_agent_prompt_file(&path)?;
+        loaded.source = source;
         if merge_with_existing {
             if let Some(existing) = prompts.get_mut(&name) {
                 existing.profile.merge(loaded.profile);
+                existing.source = source;
                 if !loaded.prompt_template.trim().is_empty() {
                     existing.prompt_template = loaded.prompt_template;
                 }
@@ -269,6 +311,7 @@ fn load_agent_prompt_file(path: &Path) -> Result<AgentPromptConfig, Error> {
     Ok(AgentPromptConfig {
         profile,
         prompt_template: definition.prompt_template,
+        source: Default::default(),
     })
 }
 

@@ -81,6 +81,7 @@ max_turns = 20
 # "in progress" = 4
 
 [orchestration]
+# dispatch_mode = "stop"         # stop, manual, automatic, nightshift, idle
 # router_agent = "router"
 # mode = "advisory"              # or "enforced"
 
@@ -102,17 +103,19 @@ max_turns = 20
 
 # Generic agent profile reference. Every supported field is shown here.
 # [agents.profiles.example]
+# description = "Short description shown in the TUI agent picker"
 # kind = "openai"
 # transport = "openai_chat"
 # command = "custom-agent"
 # fallbacks = ["backup"]
 # model = "gpt-5.1"
+# reasoning_level = "high"          # low, medium, high, xhigh — sent as reasoning_effort to OpenAI, reasoningEffort to Codex
 # models = ["gpt-5.1", "gpt-5-mini"]
 # models_command = "custom-agent models --json"
 # fetch_models = true
 # base_url = "https://api.openai.com/v1"
 # api_key = "$OPENAI_API_KEY"
-# approval_policy = "auto"
+# approval_policy = "never"
 # thread_sandbox = "workspace-write"
 # turn_sandbox_policy = "workspace-write"
 # turn_timeout_ms = 3600000
@@ -136,7 +139,7 @@ max_turns = 20
 # command = "codex --dangerously-bypass-approvals-and-sandbox app-server"
 # fetch_models = true
 # models_command = "codex models --json"
-# approval_policy = "auto"
+# approval_policy = "never"
 # thread_sandbox = "workspace-write"
 # turn_sandbox_policy = "workspace-write"
 

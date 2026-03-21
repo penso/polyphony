@@ -102,6 +102,32 @@ fn adapter_error(kind: &'static str) -> CoreError {
     CoreError::Adapter(kind.into())
 }
 
+/// Normalize to camelCase for `sandboxPolicy.type` in `run_turn` requests.
+fn normalize_to_camel(value: Option<&str>) -> Option<String> {
+    value.map(|v| match v {
+        "workspace-write" | "workspaceWrite" => "workspaceWrite".into(),
+        "danger-full-access" | "full-access" | "dangerFullAccess" => "dangerFullAccess".into(),
+        "read-only" | "readOnly" => "readOnly".into(),
+        "external-sandbox" | "externalSandbox" => "externalSandbox".into(),
+        "on-failure" | "onFailure" => "onFailure".into(),
+        "on-request" | "onRequest" => "onRequest".into(),
+        other => other.into(),
+    })
+}
+
+/// Normalize to kebab-case for `thread/start` `sandbox` and `approvalPolicy` fields.
+fn normalize_to_kebab(value: Option<&str>) -> Option<String> {
+    value.map(|v| match v {
+        "workspaceWrite" | "workspace-write" => "workspace-write".into(),
+        "dangerFullAccess" | "danger-full-access" | "full-access" => "danger-full-access".into(),
+        "readOnly" | "read-only" => "read-only".into(),
+        "externalSandbox" | "external-sandbox" => "external-sandbox".into(),
+        "onFailure" | "on-failure" => "on-failure".into(),
+        "onRequest" | "on-request" => "on-request".into(),
+        other => other.into(),
+    })
+}
+
 struct CodexAppServerSession {
     spec: AgentRunSpec,
     event_tx: mpsc::UnboundedSender<polyphony_core::AgentEvent>,
@@ -132,13 +158,16 @@ impl AgentSession for CodexAppServerSession {
         let thread_id = self.thread_id.clone();
         let title = format!("{}: {}", self.spec.issue.identifier, self.spec.issue.title);
         let workspace_path = self.spec.workspace_path.clone();
-        let approval_policy = self.spec.agent.approval_policy.clone();
+        let approval_policy = normalize_to_camel(self.spec.agent.approval_policy.as_deref());
         let sandbox_policy = self
             .spec
             .agent
             .turn_sandbox_policy
-            .as_ref()
-            .map(|policy| json!({"type": policy}));
+            .as_deref()
+            .map(|policy| {
+                let normalized = normalize_to_camel(Some(policy)).unwrap_or_default();
+                json!({"type": normalized})
+            });
         info!(
             issue_identifier = %self.spec.issue.identifier,
             thread_id = %self.thread_id,
@@ -148,18 +177,27 @@ impl AgentSession for CodexAppServerSession {
         let request_metadata = self.event_metadata(None);
         write_json_line(
             &mut self.stdin,
-            &json!({
-                "id": request_id,
-                "method": "turn/start",
-                "params": {
+            &{
+                let mut params = json!({
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": prompt}],
                     "cwd": workspace_path,
                     "title": title,
                     "approvalPolicy": approval_policy,
                     "sandboxPolicy": sandbox_policy,
+                });
+                if let Some(model) = &self.spec.agent.model {
+                    params["model"] = json!(model);
                 }
-            }),
+                if let Some(level) = &self.spec.agent.reasoning_level {
+                    params["reasoningEffort"] = json!(level);
+                }
+                json!({
+                    "id": request_id,
+                    "method": "turn/start",
+                    "params": params,
+                })
+            },
         )
         .await?;
         let turn_response = wait_for_response(
@@ -176,7 +214,7 @@ impl AgentSession for CodexAppServerSession {
         let turn_id = turn_response["result"]["turn"]["id"]
             .as_str()
             .or_else(|| turn_response["result"]["id"].as_str())
-            .ok_or_else(|| adapter_error("response_error"))?
+            .ok_or_else(|| CoreError::Adapter("turn/start response missing turn id".into()))?
             .to_string();
         let event_metadata = self.event_metadata(Some(turn_id.as_str()));
         if !self.emitted_session_started {
@@ -404,7 +442,7 @@ async fn launch_codex_session(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .spawn()
-    .map_err(|_| adapter_error("response_error"))?;
+    .map_err(|error| CoreError::Adapter(format!("failed to start codex app-server: {error}")))?;
     let codex_app_server_pid = child.id().map(|pid| pid.to_string());
     let mut stdin = child
         .stdin
@@ -465,8 +503,8 @@ async fn launch_codex_session(
                 "id": 2u64,
                 "method": "thread/start",
                 "params": {
-                    "approvalPolicy": spec.agent.approval_policy,
-                    "sandbox": spec.agent.thread_sandbox,
+                    "approvalPolicy": normalize_to_kebab(spec.agent.approval_policy.as_deref()),
+                    "sandbox": normalize_to_kebab(spec.agent.thread_sandbox.as_deref()),
                     "cwd": spec.workspace_path,
                     "dynamicTools": dynamic_tools,
                 }
@@ -487,7 +525,7 @@ async fn launch_codex_session(
         let thread_id = thread_response["result"]["thread"]["id"]
             .as_str()
             .or_else(|| thread_response["result"]["id"].as_str())
-            .ok_or_else(|| adapter_error("response_error"))?
+            .ok_or_else(|| CoreError::Adapter("thread/start response missing thread id".into()))?
             .to_string();
         Ok::<String, CoreError>(thread_id)
     }
@@ -562,14 +600,30 @@ async fn wait_for_response(
         let Some(line) = next_line.map_err(normalize_io_error)? else {
             return Err(classify_child_exit(child));
         };
-        let value: Value =
-            serde_json::from_str(&line).map_err(|_| adapter_error("response_error"))?;
+        let value: Value = serde_json::from_str(&line).map_err(|error| {
+            CoreError::Adapter(format!(
+                "invalid JSON from app-server: {error} (line: {})",
+                &line[..line.len().min(200)]
+            ))
+        })?;
         if maybe_auto_respond(stdin, &value, spec, event_tx, event_metadata, tool_executor).await? {
             continue;
         }
         if value["id"].as_u64() == Some(id) {
-            if value.get("error").is_some() {
-                return Err(adapter_error("response_error"));
+            if let Some(error) = value.get("error") {
+                let message = error
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .or_else(|| error.as_str())
+                    .unwrap_or("unknown error");
+                let code = error
+                    .get("code")
+                    .and_then(|c| c.as_i64())
+                    .map(|c| format!(" (code {c})"))
+                    .unwrap_or_default();
+                return Err(CoreError::Adapter(format!(
+                    "app-server error{code}: {message}"
+                )));
             }
             return Ok(value);
         }
@@ -639,7 +693,7 @@ fn normalize_io_error(error: std::io::Error) -> CoreError {
         std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => {
             adapter_error("port_exit")
         },
-        _ => adapter_error("response_error"),
+        _ => CoreError::Adapter(format!("io error: {error}")),
     }
 }
 
@@ -899,7 +953,8 @@ async fn write_json_line(
     stdin: &mut tokio::process::ChildStdin,
     value: &Value,
 ) -> Result<(), CoreError> {
-    let bytes = serde_json::to_vec(value).map_err(|_| adapter_error("response_error"))?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| CoreError::Adapter(format!("failed to serialize message: {error}")))?;
     stdin.write_all(&bytes).await.map_err(normalize_io_error)?;
     stdin.write_all(b"\n").await.map_err(normalize_io_error)?;
     stdin.flush().await.map_err(normalize_io_error)?;
@@ -1464,8 +1519,13 @@ done
             .await;
 
         match result {
-            Err(CoreError::Adapter(message)) => assert_eq!(message, "response_error"),
-            other => panic!("expected response_error, got {other:?}"),
+            Err(CoreError::Adapter(message)) => {
+                assert!(
+                    message.contains("invalid JSON") || message.contains("not-json"),
+                    "expected descriptive error about invalid JSON, got: {message}"
+                );
+            },
+            other => panic!("expected adapter error, got {other:?}"),
         }
 
         let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -1473,7 +1533,10 @@ done
             .iter()
             .find(|event| matches!(event.kind, AgentEventKind::StartupFailed))
             .expect("expected startup failed event");
-        assert_eq!(startup_failed.message.as_deref(), Some("response_error"));
+        assert!(
+            startup_failed.message.is_some(),
+            "startup failed event should have a message"
+        );
     }
 
     #[test]

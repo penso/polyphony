@@ -7,6 +7,7 @@
 - [Architecture](./architecture.md)
   - [Architecture Diagrams](./architecture-diagrams.md)
 - [Workflow Configuration](./workflow.md)
+- [Agent Configuration](./agents.md)
 - [Built-In Tools](./tools.md)
 - [Workspace Crates](./crates.md)
   - [polyphony-core](./crates/polyphony-core.md)

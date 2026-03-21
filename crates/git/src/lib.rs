@@ -673,9 +673,44 @@ fn resolve_base_commit<'a>(
             });
         }
     }
-    repo.head()
-        .and_then(|head| head.peel_to_commit())
-        .map_err(|error| CoreError::Adapter(format!("resolve HEAD failed: {error}")))
+    match repo.head() {
+        Ok(head) => head
+            .peel_to_commit()
+            .map_err(|error| CoreError::Adapter(format!("resolve HEAD failed: {error}"))),
+        Err(error)
+            if error.code() == git2::ErrorCode::UnbornBranch
+                || error.code() == git2::ErrorCode::NotFound =>
+        {
+            // Repository has no commits yet — create an initial empty commit
+            // so worktrees and branches can be created from it.
+            info!("repository has no commits, creating initial empty commit");
+            create_initial_commit(repo)
+        },
+        Err(error) => Err(CoreError::Adapter(format!("resolve HEAD failed: {error}"))),
+    }
+}
+
+/// Create an initial empty commit on an unborn branch so that worktrees and
+/// branches can be created. Commits everything currently staged (if any).
+fn create_initial_commit(repo: &git2::Repository) -> Result<git2::Commit<'_>, CoreError> {
+    let sig = repo
+        .signature()
+        .or_else(|_| git2::Signature::now("Polyphony", "polyphony@localhost"))
+        .map_err(|error| CoreError::Adapter(format!("create signature failed: {error}")))?;
+    let mut index = repo
+        .index()
+        .map_err(|error| CoreError::Adapter(format!("open index failed: {error}")))?;
+    let tree_oid = index
+        .write_tree()
+        .map_err(|error| CoreError::Adapter(format!("write tree failed: {error}")))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|error| CoreError::Adapter(format!("find tree failed: {error}")))?;
+    let commit_oid = repo
+        .commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+        .map_err(|error| CoreError::Adapter(format!("create initial commit failed: {error}")))?;
+    repo.find_commit(commit_oid)
+        .map_err(|error| CoreError::Adapter(format!("find initial commit failed: {error}")))
 }
 
 fn cleanup_partial_workspace(path: &Path) {
