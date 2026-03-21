@@ -822,7 +822,7 @@ fn render_event_line(
     event: &polyphony_core::RuntimeEvent,
     theme: crate::theme::Theme,
 ) -> Line<'static> {
-    let ts = event.at.format("%Y-%m-%d %H:%M");
+    let ts = event.at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M");
     let scope_color = match event.scope {
         polyphony_core::EventScope::Dispatch => theme.info,
         polyphony_core::EventScope::Handoff => theme.highlight,

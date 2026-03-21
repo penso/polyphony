@@ -527,7 +527,7 @@ fn append_transcript(
 
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{} ", entry.at.format("%H:%M:%S")),
+                format!("{} ", entry.at.with_timezone(&chrono::Local).format("%H:%M:%S")),
                 Style::default().fg(theme.muted),
             ),
             Span::styled(

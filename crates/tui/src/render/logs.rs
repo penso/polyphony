@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Local, Utc};
 use polyphony_core::RuntimeSnapshot;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -241,9 +241,18 @@ fn parse_json_log_entry(v: &serde_json::Value) -> LogEntry {
     let time = v
         .get("timestamp")
         .and_then(|t| t.as_str())
-        .and_then(|t| t.find('T').and_then(|pos| t.get(pos + 1..pos + 9)))
-        .unwrap_or("")
-        .to_string();
+        .and_then(|t| {
+            chrono::DateTime::parse_from_rfc3339(t)
+                .ok()
+                .map(|dt| dt.with_timezone(&Local).format("%H:%M:%S").to_string())
+                .or_else(|| {
+                    // Fallback: extract raw time after 'T' if parsing fails
+                    t.find('T')
+                        .and_then(|pos| t.get(pos + 1..pos + 9))
+                        .map(str::to_string)
+                })
+        })
+        .unwrap_or_default();
 
     let mut extras_parts: Vec<String> = Vec::new();
     if let Some(fields) = v.get("fields").and_then(|f| f.as_object()) {

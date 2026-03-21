@@ -322,7 +322,7 @@ pub(crate) fn draw_trigger_detail(
             let kind_label = super::orchestrator::movement_kind_label(m.kind);
             let target = super::orchestrator::movement_target_label(m);
             let status_str = m.status.to_string();
-            let ts = m.created_at.format("%Y-%m-%d %H:%M").to_string();
+            let ts = m.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string();
             body_lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(theme.highlight)),
                 Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
