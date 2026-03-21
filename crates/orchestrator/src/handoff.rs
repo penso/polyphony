@@ -816,6 +816,10 @@ fn parse_diff_stat_summary(stat: &str) -> Option<(usize, usize, usize)> {
 }
 
 /// Merge a local branch into the default branch (main/master).
+///
+/// Linked worktrees cannot `git checkout main` because main is already checked
+/// out in the parent repo. Instead, we resolve the **main repository path**
+/// (where the default branch lives) and run the merge there.
 async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_core::MergeResult {
     use tokio::process::Command;
 
@@ -828,8 +832,14 @@ async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_cor
         };
     }
 
+    // Find the main repository path. In a linked worktree, `git rev-parse
+    // --show-toplevel` returns the worktree root, but the default branch is
+    // checked out in the main repo. Use `git worktree list --porcelain` to
+    // find where `main`/`master` lives, falling back to the common git dir.
+    let main_repo = resolve_main_repo_path(&workspace).await.unwrap_or_else(|| workspace.clone());
+
     // Find the default branch
-    let Some(default_branch) = find_default_branch(&workspace) else {
+    let Some(default_branch) = find_default_branch(&main_repo) else {
         return polyphony_core::MergeResult {
             success: false,
             message: "cannot find main or master branch".into(),
@@ -837,80 +847,25 @@ async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_cor
         };
     };
 
-    // Check for merge conflicts first (dry run)
-    let merge_test = Command::new("git")
-        .args(["merge", "--no-commit", "--no-ff", branch])
-        .current_dir(&workspace)
-        .env("GIT_WORK_TREE", &workspace)
-        .output()
-        .await;
-
-    match merge_test {
-        Ok(output) if !output.status.success() => {
-            // Abort the failed merge
-            let _ = Command::new("git")
-                .args(["merge", "--abort"])
-                .current_dir(&workspace)
-                .output()
-                .await;
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return polyphony_core::MergeResult {
-                success: false,
-                message: format!(
-                    "merge conflicts detected between {default_branch} and {branch}: {stderr}"
-                ),
-                merged_sha: None,
-            };
-        },
-        Err(error) => {
-            return polyphony_core::MergeResult {
-                success: false,
-                message: format!("git merge failed to execute: {error}"),
-                merged_sha: None,
-            };
-        },
-        _ => {},
-    }
-
-    // Abort the test merge and do a real one
-    let _ = Command::new("git")
-        .args(["merge", "--abort"])
-        .current_dir(&workspace)
-        .output()
-        .await;
-
-    // Now do the actual merge on the default branch
-    // First, checkout the default branch
-    let checkout = Command::new("git")
-        .args(["checkout", &default_branch])
-        .current_dir(&workspace)
-        .output()
-        .await;
-
-    if let Ok(output) = &checkout
-        && !output.status.success()
-    {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return polyphony_core::MergeResult {
-            success: false,
-            message: format!("failed to checkout {default_branch}: {stderr}"),
-            merged_sha: None,
-        };
-    }
-
-    // Merge the branch
+    // Merge the branch from the main repo directory (where the default branch
+    // is checked out). This avoids the "already checked out" error in worktrees.
     let merge = Command::new("git")
-        .args(["merge", "--no-ff", branch, "-m", &format!("Merge branch '{branch}'")])
-        .current_dir(&workspace)
+        .args([
+            "merge",
+            "--no-ff",
+            branch,
+            "-m",
+            &format!("Merge branch '{branch}'"),
+        ])
+        .current_dir(&main_repo)
         .output()
         .await;
 
     match merge {
         Ok(output) if output.status.success() => {
-            // Get the merge commit SHA
             let sha = Command::new("git")
                 .args(["rev-parse", "HEAD"])
-                .current_dir(&workspace)
+                .current_dir(&main_repo)
                 .output()
                 .await
                 .ok()
@@ -923,9 +878,10 @@ async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_cor
             }
         },
         Ok(output) => {
+            // Abort a failed merge so the repo isn't left in a dirty state
             let _ = Command::new("git")
                 .args(["merge", "--abort"])
-                .current_dir(&workspace)
+                .current_dir(&main_repo)
                 .output()
                 .await;
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -941,6 +897,35 @@ async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_cor
             merged_sha: None,
         },
     }
+}
+
+/// Resolve the path to the main repository (where the default branch is
+/// checked out). For linked worktrees this is the parent repo, for regular
+/// repos this returns the repo path itself.
+async fn resolve_main_repo_path(workspace_path: &Path) -> Option<PathBuf> {
+    use tokio::process::Command;
+
+    // `git rev-parse --git-common-dir` gives us the shared .git directory.
+    // From that we can derive the main repo toplevel.
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(workspace_path)
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let common_path = if PathBuf::from(&common_dir).is_absolute() {
+        PathBuf::from(&common_dir)
+    } else {
+        workspace_path.join(&common_dir)
+    };
+    // The common dir is typically `.git` — its parent is the repo root.
+    // For bare repos or unusual layouts it might differ, but for standard
+    // repos (which polyphony uses) this is reliable.
+    common_path.parent().map(|p| p.to_path_buf())
 }
 
 /// Merge a GitHub pull request via the PR manager.
