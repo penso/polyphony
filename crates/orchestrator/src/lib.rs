@@ -161,8 +161,10 @@ pub struct RuntimeService {
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     pending_refresh: bool,
     pending_issue_approvals: Vec<(polyphony_core::IssueId, String)>,
-    pending_deliverable_resolutions:
-        Vec<(polyphony_core::MovementId, polyphony_core::DeliverableDecision)>,
+    pending_deliverable_resolutions: Vec<(
+        polyphony_core::MovementId,
+        polyphony_core::DeliverableDecision,
+    )>,
     pending_manual_dispatches: Vec<(polyphony_core::IssueId, Option<String>)>,
     pending_manual_pull_request_trigger_dispatches: Vec<String>,
     pending_merge_deliverables: Vec<polyphony_core::MovementId>,

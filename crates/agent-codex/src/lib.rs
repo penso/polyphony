@@ -487,17 +487,21 @@ async fn launch_codex_session(
     let run_dir = spec.workspace_path.join(".polyphony");
     let log_path = run_dir.join(format!("{}-appserver.log", spec.agent.name));
     let cast_path = run_dir.join(format!("{}-appserver.cast", spec.agent.name));
-    let cast_title = format!("{}: {} ({})", spec.issue.identifier, spec.issue.title, spec.agent.name);
+    let cast_title = format!(
+        "{}: {} ({})",
+        spec.issue.identifier, spec.issue.title, spec.agent.name
+    );
     // Remove stale files from a previous run.
     let _ = std::fs::remove_file(&log_path);
     let _ = std::fs::remove_file(&cast_path);
-    let mut transcript = match transcript::TranscriptLogger::create(&log_path, &cast_path, &cast_title) {
-        Ok(t) => Some(t),
-        Err(error) => {
-            warn!(%error, "failed to create codex transcript logger");
-            None
-        },
-    };
+    let mut transcript =
+        match transcript::TranscriptLogger::create(&log_path, &cast_path, &cast_title) {
+            Ok(t) => Some(t),
+            Err(error) => {
+                warn!(%error, "failed to create codex transcript logger");
+                None
+            },
+        };
 
     let handshake = async {
         let init_msg = json!({
@@ -653,7 +657,17 @@ async fn wait_for_response(
         if let Some(t) = transcript.as_mut() {
             t.log_received(&value);
         }
-        if maybe_auto_respond(stdin, &value, spec, event_tx, event_metadata, tool_executor, transcript).await? {
+        if maybe_auto_respond(
+            stdin,
+            &value,
+            spec,
+            event_tx,
+            event_metadata,
+            tool_executor,
+            transcript,
+        )
+        .await?
+        {
             continue;
         }
         if value["id"].as_u64() == Some(id) {

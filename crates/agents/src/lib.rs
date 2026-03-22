@@ -142,7 +142,7 @@ impl AgentRuntime for AgentRegistryRuntime {
                         result.snapshots.push(snapshot);
                     },
                     CachedResult::None | CachedResult::Failed | CachedResult::RateLimited => {
-                        continue
+                        continue;
                     },
                 }
             } else {

@@ -67,10 +67,7 @@ pub trait AgentRuntime: Send + Sync {
         spec: AgentRunSpec,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<AgentRunResult, Error>;
-    async fn fetch_budgets(
-        &self,
-        _agents: &[AgentDefinition],
-    ) -> Result<BudgetPollResult, Error> {
+    async fn fetch_budgets(&self, _agents: &[AgentDefinition]) -> Result<BudgetPollResult, Error> {
         Ok(BudgetPollResult::default())
     }
     async fn discover_models(

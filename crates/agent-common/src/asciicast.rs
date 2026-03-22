@@ -1,6 +1,8 @@
-use std::io::{self, BufWriter, Write};
-use std::path::Path;
-use std::time::Instant;
+use std::{
+    io::{self, BufWriter, Write},
+    path::Path,
+    time::Instant,
+};
 
 /// Writer for asciicast v2 format files (`.cast`).
 ///
@@ -173,6 +175,9 @@ mod tests {
         std::fs::write(&log_path, "").unwrap();
         convert_log_to_cast(&log_path, &cast_path, 80, 24, "empty").unwrap();
 
-        assert!(!cast_path.exists(), "empty log should not produce a cast file");
+        assert!(
+            !cast_path.exists(),
+            "empty log should not produce a cast file"
+        );
     }
 }

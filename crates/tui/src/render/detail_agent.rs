@@ -75,7 +75,15 @@ pub(crate) fn draw_agent_detail(
         };
 
     let lines = agent
-        .map(|a| super::agents::build_agent_detail_lines(snapshot, a, artifact_context, theme, app.frame_count))
+        .map(|a| {
+            super::agents::build_agent_detail_lines(
+                snapshot,
+                a,
+                artifact_context,
+                theme,
+                app.frame_count,
+            )
+        })
         .unwrap_or_else(|| {
             vec![Line::from(Span::styled(
                 "No agent run selected.",
@@ -93,8 +101,7 @@ pub(crate) fn draw_agent_detail(
     // (e.g. pressing k multiple times) disengages auto-scroll.
     let current_scroll = app.current_detail_scroll();
     if is_running
-        && (current_scroll == u16::MAX
-            || max_scroll.saturating_sub(current_scroll as usize) <= 10)
+        && (current_scroll == u16::MAX || max_scroll.saturating_sub(current_scroll as usize) <= 10)
     {
         app.set_current_detail_scroll(max_scroll as u16);
     } else if current_scroll as usize > max_scroll {

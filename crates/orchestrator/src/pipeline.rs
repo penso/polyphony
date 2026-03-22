@@ -150,11 +150,8 @@ impl RuntimeService {
                 .is_some_and(|m| m.deliverable.is_some());
             if !has_deliverable {
                 // Try to detect any changes in the workspace
-                self.create_local_branch_deliverable_from_workspace(
-                    &movement_id,
-                    &workspace.path,
-                )
-                .await;
+                self.create_local_branch_deliverable_from_workspace(&movement_id, &workspace.path)
+                    .await;
             }
             // Check if the deliverable has actual changes
             let deliverable = self
@@ -889,7 +886,11 @@ impl RuntimeService {
             {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("{} task failed, re-running planner (attempt {})", issue.identifier, attempt.unwrap_or(0) + 1),
+                    format!(
+                        "{} task failed, re-running planner (attempt {})",
+                        issue.identifier,
+                        attempt.unwrap_or(0) + 1
+                    ),
                 );
                 // Reset tasks and re-plan
                 if let Some(tasks) = self.state.tasks.get_mut(movement_id) {

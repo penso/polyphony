@@ -149,6 +149,17 @@ fn normalize_status(status: &str) -> String {
     }
 }
 
+fn denormalize_status(status: &str) -> String {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "open" => "open".to_string(),
+        "in progress" | "in_progress" => "in_progress".to_string(),
+        "blocked" => "blocked".to_string(),
+        "closed" => "closed".to_string(),
+        "deferred" => "deferred".to_string(),
+        _ => status.to_string(),
+    }
+}
+
 /// Strip the project prefix from a beads ID: `polyphony-oio.2` → `oio.2`.
 fn shorten_beads_id(id: &str) -> String {
     id.split_once('-')
@@ -373,7 +384,7 @@ impl IssueTracker for BeadsTracker {
         }
         let state_arg;
         if let Some(ref state) = request.state {
-            state_arg = format!("--status={}", state);
+            state_arg = format!("--status={}", denormalize_status(state));
             args.push(&state_arg);
         }
         let priority_str;
@@ -390,5 +401,41 @@ impl IssueTracker for BeadsTracker {
             .first()
             .map(detail_to_issue)
             .ok_or_else(|| CoreError::Adapter("bd show returned empty after update".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{denormalize_status, normalize_status};
+
+    #[test]
+    fn normalize_builtin_statuses_for_display() {
+        assert_eq!(normalize_status("open"), "Open");
+        assert_eq!(normalize_status("in_progress"), "In Progress");
+        assert_eq!(normalize_status("blocked"), "Blocked");
+        assert_eq!(normalize_status("closed"), "Closed");
+        assert_eq!(normalize_status("deferred"), "Deferred");
+    }
+
+    #[test]
+    fn denormalize_builtin_statuses_for_beads_updates() {
+        assert_eq!(denormalize_status("Open"), "open");
+        assert_eq!(denormalize_status("In Progress"), "in_progress");
+        assert_eq!(denormalize_status("Blocked"), "blocked");
+        assert_eq!(denormalize_status("Closed"), "closed");
+        assert_eq!(denormalize_status("Deferred"), "deferred");
+    }
+
+    #[test]
+    fn denormalize_accepts_existing_native_statuses() {
+        assert_eq!(denormalize_status("open"), "open");
+        assert_eq!(denormalize_status("in_progress"), "in_progress");
+        assert_eq!(denormalize_status("closed"), "closed");
+    }
+
+    #[test]
+    fn denormalize_preserves_custom_status_labels() {
+        assert_eq!(denormalize_status("Human Review"), "Human Review");
+        assert_eq!(denormalize_status("waiting_on_ops"), "waiting_on_ops");
     }
 }

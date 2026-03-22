@@ -200,14 +200,31 @@ impl ActiveTab {
 /// A row in the Orchestration tab's tree view: movement, trigger, task, or outcome.
 #[derive(Debug, Clone)]
 pub(crate) enum OrchestratorTreeRow {
-    Movement { snapshot_index: usize },
-    Trigger { trigger_index: usize, movement_snapshot_index: usize, is_last_child: bool },
+    Movement {
+        snapshot_index: usize,
+    },
+    Trigger {
+        trigger_index: usize,
+        movement_snapshot_index: usize,
+        is_last_child: bool,
+    },
     /// An agent session (from history) shown under a movement.
-    AgentSession { history_index: usize, is_last_child: bool },
+    AgentSession {
+        history_index: usize,
+        is_last_child: bool,
+    },
     /// A currently running agent shown under a movement.
-    RunningAgent { running_index: usize, is_last_child: bool },
-    Task { snapshot_index: usize, is_last_child: bool },
-    Outcome { movement_snapshot_index: usize },
+    RunningAgent {
+        running_index: usize,
+        is_last_child: bool,
+    },
+    Task {
+        snapshot_index: usize,
+        is_last_child: bool,
+    },
+    Outcome {
+        movement_snapshot_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -410,7 +427,12 @@ impl AppState {
     }
 
     /// Show a toast notification that auto-expires after a few seconds.
-    pub fn show_toast(&mut self, level: ToastLevel, title: impl Into<String>, description: Option<String>) {
+    pub fn show_toast(
+        &mut self,
+        level: ToastLevel,
+        title: impl Into<String>,
+        description: Option<String>,
+    ) {
         self.toast = Some(Toast {
             title: title.into(),
             description,
@@ -440,23 +462,26 @@ impl AppState {
         }
         // Clear dispatching indicators for triggers that are now running or have movements
         if !self.dispatching_triggers.is_empty() {
-            let running_ids: HashSet<&str> =
-                snapshot.running.iter().map(|r| r.issue_id.as_str()).collect();
+            let running_ids: HashSet<&str> = snapshot
+                .running
+                .iter()
+                .map(|r| r.issue_id.as_str())
+                .collect();
             let movement_ids: HashSet<&str> = snapshot
                 .movements
                 .iter()
                 .filter_map(|m| m.issue_identifier.as_deref())
                 .collect();
-            self.dispatching_triggers
-                .retain(|id| !running_ids.contains(id.as_str()) && !movement_ids.contains(id.as_str()));
+            self.dispatching_triggers.retain(|id| {
+                !running_ids.contains(id.as_str()) && !movement_ids.contains(id.as_str())
+            });
         }
         self.rebuild_sorted_indices(snapshot);
         sync_selection(&mut self.issues_state, self.sorted_issue_indices.len());
         // Rebuild sorted agent indices (oldest first, newest at bottom)
         {
-            let mut indices: Vec<(bool, usize)> = Vec::with_capacity(
-                snapshot.running.len() + snapshot.agent_history.len(),
-            );
+            let mut indices: Vec<(bool, usize)> =
+                Vec::with_capacity(snapshot.running.len() + snapshot.agent_history.len());
             for i in 0..snapshot.running.len() {
                 indices.push((true, i));
             }
@@ -473,10 +498,7 @@ impl AppState {
             self.sorted_agent_indices = indices;
         }
         let previous_agent_selection = self.agents_state.selected();
-        sync_selection(
-            &mut self.agents_state,
-            self.sorted_agent_indices.len(),
-        );
+        sync_selection(&mut self.agents_state, self.sorted_agent_indices.len());
         if self.agents_state.selected() != previous_agent_selection
             && let Some(DetailView::Agent {
                 scroll,
@@ -505,8 +527,7 @@ impl AppState {
                     .sort_by_key(|&i| std::cmp::Reverse(snapshot.movements[i].created_at));
             },
             MovementSortKey::Status => {
-                movement_indices
-                    .sort_by_key(|&i| snapshot.movements[i].status.to_string());
+                movement_indices.sort_by_key(|&i| snapshot.movements[i].status.to_string());
             },
         }
         self.sorted_movement_indices = movement_indices;
@@ -593,8 +614,9 @@ impl AppState {
     }
 
     pub fn rebuild_orchestrator_tree(&mut self, snapshot: &RuntimeSnapshot) {
-        use polyphony_core::MovementStatus;
         use std::collections::HashMap as StdMap;
+
+        use polyphony_core::MovementStatus;
 
         // Auto-collapse terminal movements on first load
         if !self.collapsed_movements_initialized && !snapshot.movements.is_empty() {
@@ -665,20 +687,15 @@ impl AppState {
                             | polyphony_core::MovementStatus::Failed
                     );
                 // Collect agent sessions for this movement's issue
-                let issue_id = movement
-                    .issue_identifier
-                    .as_deref()
-                    .and_then(|ident| {
-                        snapshot
-                            .visible_triggers
-                            .iter()
-                            .find(|t| t.identifier == ident)
-                            .map(|t| t.trigger_id.as_str())
-                    });
-                let session_indices = issue_id
-                    .and_then(|id| sessions_by_issue.get(id));
-                let running_indices = issue_id
-                    .and_then(|id| running_by_issue.get(id));
+                let issue_id = movement.issue_identifier.as_deref().and_then(|ident| {
+                    snapshot
+                        .visible_triggers
+                        .iter()
+                        .find(|t| t.identifier == ident)
+                        .map(|t| t.trigger_id.as_str())
+                });
+                let session_indices = issue_id.and_then(|id| sessions_by_issue.get(id));
+                let running_indices = issue_id.and_then(|id| running_by_issue.get(id));
                 let has_sessions = session_indices.is_some_and(|s| !s.is_empty());
                 let has_running = running_indices.is_some_and(|r| !r.is_empty());
                 let has_children = has_tasks || has_outcome || has_sessions || has_running;
@@ -729,8 +746,7 @@ impl AppState {
                         v
                     })
                     .unwrap_or_default();
-                let mut sessions_per_task: Vec<Vec<usize>> =
-                    vec![Vec::new(); sorted_tasks.len()];
+                let mut sessions_per_task: Vec<Vec<usize>> = vec![Vec::new(); sorted_tasks.len()];
                 for &sess_idx in &execution_sessions {
                     let sess_start = snapshot.agent_history[sess_idx].started_at;
                     // Find the last task whose started_at <= session started_at
@@ -769,15 +785,14 @@ impl AppState {
                 }
 
                 // Emit tasks interleaved with their execution sessions
-                let remaining_after_tasks = running_indices.map_or(0, |r| r.len())
-                    + usize::from(has_outcome);
+                let remaining_after_tasks =
+                    running_indices.map_or(0, |r| r.len()) + usize::from(has_outcome);
                 for (ti, &task_idx) in sorted_tasks.iter().enumerate() {
                     let task_sessions = &sessions_per_task[ti];
                     let tasks_after = sorted_tasks.len() - ti - 1;
                     let sessions_after: usize =
                         sessions_per_task[ti + 1..].iter().map(|s| s.len()).sum();
-                    let items_after =
-                        tasks_after + sessions_after + remaining_after_tasks;
+                    let items_after = tasks_after + sessions_after + remaining_after_tasks;
 
                     let is_last_task = items_after == 0 && task_sessions.is_empty();
                     rows.push(OrchestratorTreeRow::Task {
@@ -786,8 +801,7 @@ impl AppState {
                     });
                     let sess_count = task_sessions.len();
                     for (si, &sess_idx) in task_sessions.iter().enumerate() {
-                        let is_last =
-                            si == sess_count - 1 && items_after == 0;
+                        let is_last = si == sess_count - 1 && items_after == 0;
                         rows.push(OrchestratorTreeRow::AgentSession {
                             history_index: sess_idx,
                             is_last_child: is_last,
@@ -972,7 +986,10 @@ impl AppState {
         let display_idx = self.agents_state.selected()?;
         let &(is_running, orig_idx) = self.sorted_agent_indices.get(display_idx)?;
         if is_running {
-            snapshot.running.get(orig_idx).map(SelectedAgentRow::Running)
+            snapshot
+                .running
+                .get(orig_idx)
+                .map(SelectedAgentRow::Running)
         } else {
             snapshot
                 .agent_history
@@ -989,7 +1006,10 @@ impl AppState {
     ) -> Option<SelectedAgentRow<'a>> {
         let &(is_running, orig_idx) = self.sorted_agent_indices.get(display_index)?;
         if is_running {
-            snapshot.running.get(orig_idx).map(SelectedAgentRow::Running)
+            snapshot
+                .running
+                .get(orig_idx)
+                .map(SelectedAgentRow::Running)
         } else {
             snapshot
                 .agent_history

@@ -12,10 +12,7 @@ use ratatui::{
 
 /// Build a child tree row with 2 cells: empty time + full-width title.
 fn child_row(title: Line<'_>) -> Row<'_> {
-    Row::new(vec![
-        Cell::from(Span::raw("")),
-        Cell::from(title),
-    ])
+    Row::new(vec![Cell::from(Span::raw("")), Cell::from(title)])
 }
 
 use crate::app::AppState;
@@ -229,9 +226,10 @@ fn draw_movements_table(
 
     let header = Row::new(vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
-        Cell::from(Line::from(vec![
-            Span::styled("Title", Style::default().fg(theme.muted)),
-        ])),
+        Cell::from(Line::from(vec![Span::styled(
+            "Title",
+            Style::default().fg(theme.muted),
+        )])),
     ])
     .height(1)
     .style(Style::default().add_modifier(Modifier::BOLD));
@@ -328,10 +326,7 @@ fn draw_movements_table(
                         format!("{status_icon} "),
                         Style::default().fg(status_icon_color),
                     ),
-                    Span::styled(
-                        m.title.clone(),
-                        Style::default().fg(theme.foreground),
-                    ),
+                    Span::styled(m.title.clone(), Style::default().fg(theme.foreground)),
                 ];
                 if !output_icon.is_empty() {
                     title_spans.push(Span::styled(
@@ -358,7 +353,11 @@ fn draw_movements_table(
             } => {
                 let trigger = &snapshot.visible_triggers[*trigger_index];
                 let movement = &snapshot.movements[*movement_snapshot_index];
-                let connector = if *is_last_child { "└─ " } else { "├─ " };
+                let connector = if *is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                };
                 let (status_icon, status_color) =
                     super::triggers::status_emoji_pub(&trigger.status, theme);
                 // Show "trigger" when the title matches the movement, full title otherwise
@@ -368,14 +367,8 @@ fn draw_movements_table(
                     trigger.title.clone()
                 };
                 child_row(Line::from(vec![
-                    Span::styled(
-                        format!(" {connector}"),
-                        Style::default().fg(theme.border),
-                    ),
-                    Span::styled(
-                        format!("{status_icon} "),
-                        Style::default().fg(status_color),
-                    ),
+                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
+                    Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                     Span::styled("trigger ", Style::default().fg(theme.muted)),
                     Span::styled(display_title, Style::default().fg(theme.highlight)),
                 ]))
@@ -385,19 +378,17 @@ fn draw_movements_table(
                 is_last_child,
             } => {
                 let task = &snapshot.tasks[*snapshot_index];
-                let connector = if *is_last_child { "└─ " } else { "├─ " };
+                let connector = if *is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                };
                 let status_icon = super::tasks::task_status_icon(&task.status);
                 let status_color = super::tasks::task_status_color(&task.status, theme);
 
                 let mut title_spans = vec![
-                    Span::styled(
-                        format!(" {connector}"),
-                        Style::default().fg(theme.border),
-                    ),
-                    Span::styled(
-                        format!("{status_icon} "),
-                        Style::default().fg(status_color),
-                    ),
+                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
+                    Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                     Span::styled("task ", Style::default().fg(theme.muted)),
                     Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
                 ];
@@ -446,7 +437,11 @@ fn draw_movements_table(
                 is_last_child,
             } => {
                 let session = &snapshot.agent_history[*history_index];
-                let connector = if *is_last_child { "└─ " } else { "├─ " };
+                let connector = if *is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                };
                 let status_icon = match session.status {
                     polyphony_core::AttemptStatus::Succeeded => "✓",
                     polyphony_core::AttemptStatus::Failed => "✕",
@@ -467,19 +462,10 @@ fn draw_movements_table(
                 );
 
                 let mut title_spans = vec![
-                    Span::styled(
-                        format!(" {connector}"),
-                        Style::default().fg(theme.border),
-                    ),
-                    Span::styled(
-                        format!("{status_icon} "),
-                        Style::default().fg(status_color),
-                    ),
+                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
+                    Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                     Span::styled("agent ", Style::default().fg(theme.muted)),
-                    Span::styled(
-                        session.agent_name.clone(),
-                        Style::default().fg(theme.info),
-                    ),
+                    Span::styled(session.agent_name.clone(), Style::default().fg(theme.info)),
                 ];
                 if let Some(model) = &session.model {
                     title_spans.push(Span::styled(
@@ -499,10 +485,7 @@ fn draw_movements_table(
                         } else {
                             format!(" — {error}")
                         };
-                        title_spans.push(Span::styled(
-                            excerpt,
-                            Style::default().fg(theme.danger),
-                        ));
+                        title_spans.push(Span::styled(excerpt, Style::default().fg(theme.danger)));
                     }
                 }
                 // Show last message for successful sessions
@@ -513,10 +496,7 @@ fn draw_movements_table(
                         } else {
                             format!(" — {msg}")
                         };
-                        title_spans.push(Span::styled(
-                            excerpt,
-                            Style::default().fg(theme.muted),
-                        ));
+                        title_spans.push(Span::styled(excerpt, Style::default().fg(theme.muted)));
                     }
                 }
 
@@ -527,7 +507,11 @@ fn draw_movements_table(
                 is_last_child,
             } => {
                 let running = &snapshot.running[*running_index];
-                let connector = if *is_last_child { "└─ " } else { "├─ " };
+                let connector = if *is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                };
                 let spinner_chars: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
                 let spinner = spinner_chars[app.frame_count as usize % spinner_chars.len()];
                 let duration = super::agents::format_duration(
@@ -535,19 +519,10 @@ fn draw_movements_table(
                 );
 
                 let mut title_spans = vec![
-                    Span::styled(
-                        format!(" {connector}"),
-                        Style::default().fg(theme.border),
-                    ),
-                    Span::styled(
-                        format!("{spinner} "),
-                        Style::default().fg(theme.info),
-                    ),
+                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
+                    Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
                     Span::styled("agent ", Style::default().fg(theme.muted)),
-                    Span::styled(
-                        running.agent_name.clone(),
-                        Style::default().fg(theme.info),
-                    ),
+                    Span::styled(running.agent_name.clone(), Style::default().fg(theme.info)),
                 ];
                 if let Some(model) = &running.model {
                     title_spans.push(Span::styled(
@@ -560,16 +535,17 @@ fn draw_movements_table(
                     Style::default().fg(theme.muted),
                 ));
                 // Show last event or message as status hint
-                if let Some(msg) = running.last_message.as_deref().or(running.last_event.as_deref()) {
+                if let Some(msg) = running
+                    .last_message
+                    .as_deref()
+                    .or(running.last_event.as_deref())
+                {
                     let excerpt = if msg.len() > 50 {
                         format!(" — {}…", &msg[..47])
                     } else {
                         format!(" — {msg}")
                     };
-                    title_spans.push(Span::styled(
-                        excerpt,
-                        Style::default().fg(theme.muted),
-                    ));
+                    title_spans.push(Span::styled(excerpt, Style::default().fg(theme.muted)));
                 }
 
                 child_row(Line::from(title_spans))
@@ -593,14 +569,13 @@ fn draw_movements_table(
                     let url_label = deliverable
                         .url
                         .as_deref()
-                        .or_else(|| {
-                            deliverable.metadata.get("branch")
-                                .and_then(|v| v.as_str())
-                        })
+                        .or_else(|| deliverable.metadata.get("branch").and_then(|v| v.as_str()))
                         .unwrap_or(kind_label);
                     let mut diff_spans = Vec::new();
-                    if let Some(added) =
-                        deliverable.metadata.get("lines_added").and_then(|v| v.as_u64())
+                    if let Some(added) = deliverable
+                        .metadata
+                        .get("lines_added")
+                        .and_then(|v| v.as_u64())
                     {
                         diff_spans.push(Span::styled(
                             format!(" +{added}"),
@@ -634,9 +609,7 @@ fn draw_movements_table(
                         polyphony_core::MovementStatus::Delivered => {
                             ("✓", theme.success, "delivered (no changes)")
                         },
-                        polyphony_core::MovementStatus::Failed => {
-                            ("✕", theme.danger, "failed")
-                        },
+                        polyphony_core::MovementStatus::Failed => ("✕", theme.danger, "failed"),
                         _ => ("●", theme.muted, "unknown"),
                     };
                     let mut spans = vec![
@@ -714,10 +687,14 @@ fn draw_movements_table(
         Span::styled(":pending ", Style::default().fg(theme.muted)),
     ]);
 
-    let time_col_width: u16 = if compact { 7 } else { 18 }; // "▶ 6d" vs "▶ 2026-03-16 02:15"
+    let time_col_width: u16 = if compact {
+        7
+    } else {
+        18
+    }; // "▶ 6d" vs "▶ 2026-03-16 02:15"
     let table = Table::new(rows, [
         Constraint::Length(time_col_width), // collapse icon + time
-        Constraint::Fill(1),               // title (full width)
+        Constraint::Fill(1),                // title (full width)
     ])
     .header(header)
     .row_highlight_style(selected_style)
@@ -822,7 +799,10 @@ fn render_event_line(
     event: &polyphony_core::RuntimeEvent,
     theme: crate::theme::Theme,
 ) -> Line<'static> {
-    let ts = event.at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M");
+    let ts = event
+        .at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M");
     let scope_color = match event.scope {
         polyphony_core::EventScope::Dispatch => theme.info,
         polyphony_core::EventScope::Handoff => theme.highlight,

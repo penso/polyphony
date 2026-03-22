@@ -252,8 +252,10 @@ impl RuntimeService {
                 serde_json::Value::Number(commit_result.changed_files.into()),
             );
             if let Some(added) = commit_result.lines_added {
-                metadata
-                    .insert("lines_added".into(), serde_json::Value::Number(added.into()));
+                metadata.insert(
+                    "lines_added".into(),
+                    serde_json::Value::Number(added.into()),
+                );
             }
             if let Some(removed) = commit_result.lines_removed {
                 metadata.insert(
@@ -708,38 +710,36 @@ impl RuntimeService {
             );
             // Close the underlying issue in the tracker so the trigger
             // disappears from the active list.
-            if let Some(movement) = self.state.movements.get(movement_id) {
-                if let Some(issue_id) = &movement.issue_id {
-                    let terminal_state = self
-                        .workflow()
-                        .config
-                        .tracker
-                        .terminal_states
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "closed".into());
-                    let request = polyphony_core::UpdateIssueRequest {
-                        id: issue_id.clone(),
-                        state: Some(terminal_state.clone()),
-                        ..Default::default()
-                    };
-                    match self.tracker.update_issue(&request).await {
-                        Ok(_) => {
-                            self.push_event(
-                                EventScope::Handoff,
-                                format!("{movement_label} issue marked {terminal_state}"),
-                            );
-                        },
-                        Err(error) => {
-                            warn!(%error, issue_id, "failed to close issue after merge");
-                            self.push_event(
-                                EventScope::Handoff,
-                                format!(
-                                    "{movement_label} merged but failed to close issue: {error}"
-                                ),
-                            );
-                        },
-                    }
+            if let Some(movement) = self.state.movements.get(movement_id)
+                && let Some(issue_id) = &movement.issue_id
+            {
+                let terminal_state = self
+                    .workflow()
+                    .config
+                    .tracker
+                    .terminal_states
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "closed".into());
+                let request = polyphony_core::UpdateIssueRequest {
+                    id: issue_id.clone(),
+                    state: Some(terminal_state.clone()),
+                    ..Default::default()
+                };
+                match self.tracker.update_issue(&request).await {
+                    Ok(_) => {
+                        self.push_event(
+                            EventScope::Handoff,
+                            format!("{movement_label} issue marked {terminal_state}"),
+                        );
+                    },
+                    Err(error) => {
+                        warn!(%error, issue_id, "failed to close issue after merge");
+                        self.push_event(
+                            EventScope::Handoff,
+                            format!("{movement_label} merged but failed to close issue: {error}"),
+                        );
+                    },
                 }
             }
         } else {
@@ -872,7 +872,9 @@ async fn merge_local_branch(workspace_path: &str, branch: &str) -> polyphony_cor
     // --show-toplevel` returns the worktree root, but the default branch is
     // checked out in the main repo. Use `git worktree list --porcelain` to
     // find where `main`/`master` lives, falling back to the common git dir.
-    let main_repo = resolve_main_repo_path(&workspace).await.unwrap_or_else(|| workspace.clone());
+    let main_repo = resolve_main_repo_path(&workspace)
+        .await
+        .unwrap_or_else(|| workspace.clone());
 
     // Find the default branch
     let Some(default_branch) = find_default_branch(&main_repo) else {
@@ -970,10 +972,7 @@ async fn merge_github_pr(
     url: &str,
 ) -> polyphony_core::MergeResult {
     // Extract PR number from URL (e.g. https://github.com/owner/repo/pull/123)
-    let number = url
-        .rsplit('/')
-        .next()
-        .and_then(|s| s.parse::<u64>().ok());
+    let number = url.rsplit('/').next().and_then(|s| s.parse::<u64>().ok());
 
     let Some(_number) = number else {
         return polyphony_core::MergeResult {

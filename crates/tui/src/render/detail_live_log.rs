@@ -112,7 +112,12 @@ pub(crate) fn draw_live_log_detail(
     } else {
         cached_content
             .lines()
-            .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(theme.foreground))))
+            .map(|line| {
+                Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default().fg(theme.foreground),
+                ))
+            })
             .collect()
     };
 

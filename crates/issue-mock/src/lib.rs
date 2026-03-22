@@ -5,8 +5,7 @@ use chrono::Utc;
 use polyphony_core::{
     AgentDefinition, AgentEvent, AgentEventKind, AgentRunResult, AgentRunSpec, AgentRuntime,
     AttemptStatus, BudgetPollResult, BudgetSnapshot, Error as CoreError, Issue, IssueAuthor,
-    IssueComment,
-    IssueStateUpdate, IssueTracker, TokenUsage, TrackerQuery,
+    IssueComment, IssueStateUpdate, IssueTracker, TokenUsage, TrackerQuery,
 };
 use thiserror::Error;
 use tokio::sync::{RwLock, mpsc};

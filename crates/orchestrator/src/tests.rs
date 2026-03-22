@@ -2363,7 +2363,9 @@ async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github(
     let committer = RecordingCommitter::new(Some(WorkspaceCommitResult {
         branch_name: "task/dog-101".into(),
         head_sha: "abc123def".into(),
-        changed_files: 1, lines_added: None, lines_removed: None,
+        changed_files: 1,
+        lines_added: None,
+        lines_removed: None,
     }));
     let committer_handle = committer.clone();
     let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
@@ -2469,7 +2471,9 @@ async fn pipeline_issue_trigger_writes_workspace_artifacts_and_runs_after_outcom
     let committer = RecordingCommitter::new(Some(WorkspaceCommitResult {
         branch_name: "task/dog-103".into(),
         head_sha: "abc123def".into(),
-        changed_files: 1, lines_added: None, lines_removed: None,
+        changed_files: 1,
+        lines_added: None,
+        lines_removed: None,
     }));
     let pull_request_manager = RecordingPullRequestManager::new(PullRequestRef {
         repository: "penso/polyphony".into(),
@@ -2719,7 +2723,8 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
             url: Some("https://github.com/penso/polyphony/pull/8".into()),
             decision: DeliverableDecision::Waiting,
             title: None,
-            description: None, metadata: Default::default(),
+            description: None,
+            metadata: Default::default(),
         }),
         created_at: now,
         updated_at: now,
@@ -2794,10 +2799,8 @@ async fn manual_dispatch_works_in_stop_mode() {
 #[tokio::test]
 async fn stop_mode_blocks_automatic_dispatch() {
     let workspace_root = unique_workspace_root("stop-auto");
-    let tracker =
-        TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "Auto issue")]);
-    let mut service =
-        test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "Auto issue")]);
+    let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
     service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
 
     service.tick().await;
@@ -2813,8 +2816,7 @@ async fn manual_dispatch_is_processed_on_next_tick() {
     let workspace_root = unique_workspace_root("manual-tick");
     let issue = sample_issue("issue-tick-1", "FAC-TICK-1", "Todo", "Tick test");
     let tracker = TestTracker::new(vec![issue.clone()]);
-    let mut service =
-        test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+    let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
 
     // Queue a manual dispatch
     service
@@ -2835,8 +2837,7 @@ async fn manual_dispatch_with_agent_name() {
     let workspace_root = unique_workspace_root("manual-agent");
     let issue = sample_issue("issue-agent-1", "FAC-AGENT-1", "Todo", "Agent test");
     let tracker = TestTracker::new(vec![issue.clone()]);
-    let mut service =
-        test_service(tracker, RecordingProvisioner::default(), &workspace_root);
+    let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
 
     service
         .pending_manual_dispatches
@@ -3022,7 +3023,6 @@ async fn dispatch_reuses_active_movement_for_same_issue() {
     );
 
     // Simulate the task finishing with success so it gets a continuation retry.
-    let issue = sample_issue("issue-1", "FAC-1", "Todo", "First");
     handle_next_worker_message(&mut service).await;
 
     // The issue should now be in the retry queue with a movement still present.

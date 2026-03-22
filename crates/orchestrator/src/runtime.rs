@@ -350,16 +350,14 @@ impl RuntimeService {
                     task_id,
                 }) => {
                     info!(%movement_id, %task_id, "manual task resolution queued");
-                    self.pending_task_resolutions
-                        .push((movement_id, task_id));
+                    self.pending_task_resolutions.push((movement_id, task_id));
                 },
                 Ok(RuntimeCommand::RetryTask {
                     movement_id,
                     task_id,
                 }) => {
                     info!(%movement_id, %task_id, "task retry queued");
-                    self.pending_task_retries
-                        .push((movement_id, task_id));
+                    self.pending_task_retries.push((movement_id, task_id));
                 },
                 Ok(RuntimeCommand::StopAgent { issue_id }) => {
                     info!(%issue_id, "user-initiated agent stop queued");
@@ -565,8 +563,7 @@ impl RuntimeService {
 
             info!(
                 movement_id,
-                task_id,
-                "task manually resolved — resuming pipeline"
+                task_id, "task manually resolved — resuming pipeline"
             );
             self.push_event(
                 EventScope::Dispatch,
@@ -659,13 +656,9 @@ impl RuntimeService {
 
             info!(
                 movement_id,
-                task_id,
-                "task reset to pending — dispatching retry"
+                task_id, "task reset to pending — dispatching retry"
             );
-            self.push_event(
-                EventScope::Dispatch,
-                format!("task {task_id} retrying"),
-            );
+            self.push_event(EventScope::Dispatch, format!("task {task_id} retrying"));
 
             // Build a minimal Issue and dispatch
             let movement_info = self.state.movements.get(&movement_id).map(|m| {

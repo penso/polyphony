@@ -544,11 +544,7 @@ impl RuntimeService {
                 }
                 // For non-automated pipelines, verify the agent produced actual changes.
                 // Automated pipelines go to Review for human inspection even without changes.
-                let movement_kind = self
-                    .state
-                    .movements
-                    .get(&movement_id)
-                    .map(|m| m.kind);
+                let movement_kind = self.state.movements.get(&movement_id).map(|m| m.kind);
                 let deliverable = self
                     .state
                     .movements
@@ -561,7 +557,10 @@ impl RuntimeService {
                         .is_some_and(|added| added == 0)
                 });
                 let no_output = (confirmed_no_changes || deliverable.is_none())
-                    && matches!(movement_kind, Some(polyphony_core::MovementKind::IssueDelivery))
+                    && matches!(
+                        movement_kind,
+                        Some(polyphony_core::MovementKind::IssueDelivery)
+                    )
                     && !workflow.config.automation.enabled;
                 if no_output {
                     warn!(

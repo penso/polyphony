@@ -197,9 +197,13 @@ pub(crate) fn build_agent_detail_lines(
     frame_count: u64,
 ) -> Vec<Line<'static>> {
     match agent {
-        crate::app::SelectedAgentRow::Running(agent) => {
-            build_running_agent_detail_lines(snapshot, agent, artifact_saved_context, theme, frame_count)
-        },
+        crate::app::SelectedAgentRow::Running(agent) => build_running_agent_detail_lines(
+            snapshot,
+            agent,
+            artifact_saved_context,
+            theme,
+            frame_count,
+        ),
         crate::app::SelectedAgentRow::History(agent) => {
             build_history_agent_detail_lines(snapshot, agent, artifact_saved_context, theme)
         },
@@ -288,14 +292,8 @@ fn build_agent_status_line(
 
     Line::from(vec![
         Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
-        Span::styled(
-            status_text.to_owned(),
-            Style::default().fg(status_color),
-        ),
-        Span::styled(
-            format!("  ({since_str})"),
-            Style::default().fg(theme.muted),
-        ),
+        Span::styled(status_text.to_owned(), Style::default().fg(status_color)),
+        Span::styled(format!("  ({since_str})"), Style::default().fg(theme.muted)),
     ])
 }
 
@@ -314,10 +312,7 @@ fn append_live_output(
                 .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            "  c:fullscreen",
-            Style::default().fg(theme.muted),
-        ),
+        Span::styled("  c:fullscreen", Style::default().fg(theme.muted)),
     ]));
 
     let run_dir = workspace_path.join(".polyphony");
@@ -361,10 +356,7 @@ fn append_live_output(
         parser.process(&raw);
         parser.screen().contents()
     };
-    let output_lines: Vec<&str> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
+    let output_lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
     // Show all available lines — the panel scrolls
     if output_lines.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -494,7 +486,9 @@ fn append_transcript(
 ) {
     use polyphony_core::AgentEventKind;
 
-    let Some(ctx) = saved_context else { return };
+    let Some(ctx) = saved_context else {
+        return;
+    };
     if ctx.transcript.is_empty() {
         return;
     }
@@ -527,7 +521,10 @@ fn append_transcript(
 
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{} ", entry.at.with_timezone(&chrono::Local).format("%H:%M:%S")),
+                format!(
+                    "{} ",
+                    entry.at.with_timezone(&chrono::Local).format("%H:%M:%S")
+                ),
                 Style::default().fg(theme.muted),
             ),
             Span::styled(

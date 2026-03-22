@@ -1,5 +1,7 @@
-use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::{
+    io::{self, BufWriter, Write},
+    path::Path,
+};
 
 use chrono::Local;
 use polyphony_agent_common::asciicast::AsciicastWriter;
@@ -97,10 +99,7 @@ impl TranscriptLogger {
     pub(crate) fn log_received_raw(&mut self, line: &str) {
         let ts = local_timestamp();
         let plain = format!("[{ts}] ← (raw) {}\n", truncate(line, 200));
-        let colored = format!(
-            "\x1b[36m[{ts}] ← (raw)\x1b[0m {}\n",
-            truncate(line, 200)
-        );
+        let colored = format!("\x1b[36m[{ts}] ← (raw)\x1b[0m {}\n", truncate(line, 200));
         let _ = self.write_plain(&plain);
         let _ = self.write_cast(&colored);
     }
@@ -147,7 +146,10 @@ impl TranscriptLogger {
         let preview_lines: Vec<&str> = trimmed.lines().take(10).collect();
         let preview = preview_lines.join("\n              ");
         let suffix = if trimmed.lines().count() > 10 {
-            format!("\n              … ({} more lines)", trimmed.lines().count() - 10)
+            format!(
+                "\n              … ({} more lines)",
+                trimmed.lines().count() - 10
+            )
         } else {
             String::new()
         };
@@ -204,22 +206,27 @@ fn format_sent(value: &Value) -> Option<(String, String)> {
             Some((plain, colored))
         },
         "thread/start" => {
-            let cwd = value.pointer("/params/cwd").and_then(Value::as_str).unwrap_or("?");
+            let cwd = value
+                .pointer("/params/cwd")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
             let plain = format!("[{ts}] → thread/start cwd={cwd}\n");
             let colored = format!("\x1b[32m[{ts}] →\x1b[0m \x1b[1mthread/start\x1b[0m cwd={cwd}\n");
             Some((plain, colored))
         },
         "turn/start" => {
-            let thread = value.pointer("/params/threadId").and_then(Value::as_str).unwrap_or("?");
+            let thread = value
+                .pointer("/params/threadId")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
             let input = value
                 .pointer("/params/input/0/text")
                 .and_then(Value::as_str)
                 .map(|t| truncate(t, 120))
                 .unwrap_or_default();
             let plain = format!("[{ts}] → turn/start thread={thread}\n");
-            let colored = format!(
-                "\x1b[32m[{ts}] →\x1b[0m \x1b[1mturn/start\x1b[0m thread={thread}\n"
-            );
+            let colored =
+                format!("\x1b[32m[{ts}] →\x1b[0m \x1b[1mturn/start\x1b[0m thread={thread}\n");
             // Show the prompt on the next line if present.
             if input.is_empty() {
                 Some((plain, colored))
@@ -266,7 +273,10 @@ fn format_received(value: &Value) -> Option<(String, String)> {
             Some((plain, colored))
         },
         "turn/diff/updated" => {
-            let diff = value.pointer("/params/diff").and_then(Value::as_str).unwrap_or("");
+            let diff = value
+                .pointer("/params/diff")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let file_count = diff.matches("--- a/").count();
             if file_count > 0 {
                 // Extract file paths from the diff.
@@ -293,7 +303,10 @@ fn format_received(value: &Value) -> Option<(String, String)> {
             }
         },
         "turn/plan/updated" => {
-            let plan = value.pointer("/params/plan").and_then(Value::as_str).unwrap_or("");
+            let plan = value
+                .pointer("/params/plan")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let first_line = plan.lines().next().unwrap_or("").trim();
             if first_line.is_empty() {
                 None
@@ -334,15 +347,12 @@ fn format_received(value: &Value) -> Option<(String, String)> {
                 if let Some(thread_id) = value.pointer("/result/thread/id").and_then(Value::as_str)
                 {
                     let plain = format!("[{ts}] ← thread started: {thread_id}\n");
-                    let colored = format!(
-                        "\x1b[36m[{ts}] ←\x1b[0m thread started: {thread_id}\n"
-                    );
+                    let colored = format!("\x1b[36m[{ts}] ←\x1b[0m thread started: {thread_id}\n");
                     return Some((plain, colored));
                 }
                 if let Some(turn_id) = value.pointer("/result/turn/id").and_then(Value::as_str) {
                     let plain = format!("[{ts}] ← turn started: {turn_id}\n");
-                    let colored =
-                        format!("\x1b[36m[{ts}] ←\x1b[0m turn started: {turn_id}\n");
+                    let colored = format!("\x1b[36m[{ts}] ←\x1b[0m turn started: {turn_id}\n");
                     return Some((plain, colored));
                 }
             }
@@ -399,11 +409,7 @@ fn format_item_completed(value: &Value) -> Option<(String, String)> {
             let cmd = value
                 .pointer("/params/item/command")
                 .and_then(Value::as_str)
-                .or_else(|| {
-                    value
-                        .pointer("/params/item/args/0")
-                        .and_then(Value::as_str)
-                })
+                .or_else(|| value.pointer("/params/item/args/0").and_then(Value::as_str))
                 .map(|c| truncate(c, 100));
             let exit_code = value
                 .pointer("/params/item/exitCode")
@@ -417,9 +423,7 @@ fn format_item_completed(value: &Value) -> Option<(String, String)> {
                 .map(|c| format!(" (exit {c})"))
                 .unwrap_or_default();
             let plain = format!("[{ts}] {symbol} Exec: {cmd_str}{exit_str}\n");
-            let colored = format!(
-                "\x1b[90m[{ts}] {symbol}\x1b[0m Exec: {cmd_str}{exit_str}\n"
-            );
+            let colored = format!("\x1b[90m[{ts}] {symbol}\x1b[0m Exec: {cmd_str}{exit_str}\n");
             Some((plain, colored))
         },
         _ => None,
@@ -536,10 +540,16 @@ mod tests {
 
         let mut logger = TranscriptLogger::create(&log_path, &cast_path, "test").unwrap();
         // Send some deltas.
-        logger.log_received(&json!({"method": "item/agentMessage/delta", "params": {"delta": "Hello "}}));
-        logger.log_received(&json!({"method": "item/agentMessage/delta", "params": {"delta": "world!"}}));
+        logger.log_received(
+            &json!({"method": "item/agentMessage/delta", "params": {"delta": "Hello "}}),
+        );
+        logger.log_received(
+            &json!({"method": "item/agentMessage/delta", "params": {"delta": "world!"}}),
+        );
         // Flush on item/completed.
-        logger.log_received(&json!({"method": "item/completed", "params": {"item": {"type": "message"}}}));
+        logger.log_received(
+            &json!({"method": "item/completed", "params": {"item": {"type": "message"}}}),
+        );
         logger.finish().unwrap();
 
         let log_content = std::fs::read_to_string(&log_path).unwrap();

@@ -659,8 +659,7 @@ impl RuntimeService {
                     .is_none_or(|t| t.due_at <= Instant::now())
             })
             .collect();
-        match self.agent.fetch_budgets(&agents).await
-        {
+        match self.agent.fetch_budgets(&agents).await {
             Ok(poll_result) => {
                 for snapshot in poll_result.snapshots {
                     self.record_budget(snapshot).await;

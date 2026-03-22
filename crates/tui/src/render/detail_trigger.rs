@@ -262,7 +262,11 @@ pub(crate) fn draw_trigger_detail(
     related_movements.sort_by_key(|m| m.created_at);
     if !related_movements.is_empty() {
         body_lines.push(Line::default());
-        let section_marker = if movements_focused { "▸ " } else { "" };
+        let section_marker = if movements_focused {
+            "▸ "
+        } else {
+            ""
+        };
         body_lines.push(Line::from(vec![
             Span::styled(section_marker, Style::default().fg(theme.highlight)),
             Span::styled(
@@ -322,7 +326,11 @@ pub(crate) fn draw_trigger_detail(
             let kind_label = super::orchestrator::movement_kind_label(m.kind);
             let target = super::orchestrator::movement_target_label(m);
             let status_str = m.status.to_string();
-            let ts = m.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string();
+            let ts = m
+                .created_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string();
             body_lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(theme.highlight)),
                 Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
@@ -355,7 +363,11 @@ pub(crate) fn draw_trigger_detail(
         .collect();
     if !running_agents.is_empty() {
         body_lines.push(Line::default());
-        let section_marker = if agents_focused { "▸ " } else { "" };
+        let section_marker = if agents_focused {
+            "▸ "
+        } else {
+            ""
+        };
         body_lines.push(Line::from(vec![
             Span::styled(section_marker, Style::default().fg(theme.highlight)),
             Span::styled(

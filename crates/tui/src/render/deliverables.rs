@@ -118,18 +118,16 @@ pub fn draw_deliverables_tab(
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             )))
-            .title_bottom(
-                Line::from(vec![
-                    Span::styled(" ●", Style::default().fg(theme.success)),
-                    Span::styled(":open  ", Style::default().fg(theme.muted)),
-                    Span::styled("◷", Style::default().fg(theme.warning)),
-                    Span::styled(":waiting  ", Style::default().fg(theme.muted)),
-                    Span::styled("✓", Style::default().fg(theme.highlight)),
-                    Span::styled(":merged  ", Style::default().fg(theme.muted)),
-                    Span::styled("✕", Style::default().fg(theme.danger)),
-                    Span::styled(":rejected", Style::default().fg(theme.muted)),
-                ]),
-            )
+            .title_bottom(Line::from(vec![
+                Span::styled(" ●", Style::default().fg(theme.success)),
+                Span::styled(":open  ", Style::default().fg(theme.muted)),
+                Span::styled("◷", Style::default().fg(theme.warning)),
+                Span::styled(":waiting  ", Style::default().fg(theme.muted)),
+                Span::styled("✓", Style::default().fg(theme.highlight)),
+                Span::styled(":merged  ", Style::default().fg(theme.muted)),
+                Span::styled("✕", Style::default().fg(theme.danger)),
+                Span::styled(":rejected", Style::default().fg(theme.muted)),
+            ]))
             .title_bottom(
                 Line::from(Span::styled(
                     format!("─{footer_info}─"),
@@ -249,7 +247,8 @@ mod tests {
             url: Some("https://github.com/penso/polyphony/pull/8".into()),
             decision: DeliverableDecision::Waiting,
             title: None,
-            description: None, metadata: Default::default(),
+            description: None,
+            metadata: Default::default(),
         };
 
         assert_eq!(

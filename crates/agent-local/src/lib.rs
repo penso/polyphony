@@ -1,5 +1,3 @@
-use polyphony_agent_common::asciicast;
-
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -10,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use polyphony_agent_common::{
-    base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
+    asciicast, base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
     fetch_budget_for_agent, prepare_context_file, prepare_prompt_file, sanitize_session_fragment,
     selected_model_hint, shell_escape, status_to_result,
 };
@@ -513,7 +511,7 @@ async fn spawn_pty_session(
         Err(error) => {
             warn!(error = %error, "failed to create asciicast recording, continuing without it");
             None
-        }
+        },
     };
     spawn_pty_reader(reader, capture_state.clone(), output_path, cast_writer)?;
 

@@ -238,10 +238,7 @@ pub(crate) fn draw_movement_detail(
                 ]));
 
                 // Agent, turns, tokens on one line
-                let agent_label = task
-                    .agent_name
-                    .as_deref()
-                    .unwrap_or("-");
+                let agent_label = task.agent_name.as_deref().unwrap_or("-");
                 let turns_label = format!("{} turns", task.turns_completed);
                 let tokens_label = if task.total_tokens > 0 {
                     super::agents::format_tokens_pub(task.total_tokens)
@@ -263,8 +260,9 @@ pub(crate) fn draw_movement_detail(
                         super::agents::format_duration(end.signed_duration_since(start))
                     },
                     (Some(start), None) => {
-                        let elapsed =
-                            super::agents::format_duration(chrono::Utc::now().signed_duration_since(start));
+                        let elapsed = super::agents::format_duration(
+                            chrono::Utc::now().signed_duration_since(start),
+                        );
                         format!("{elapsed} (running)")
                     },
                     _ => "not started".into(),

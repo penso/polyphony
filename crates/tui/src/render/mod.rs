@@ -102,10 +102,14 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
             crate::app::ToastLevel::Warning => (theme.warning, theme.warning),
             crate::app::ToastLevel::Error => (theme.danger, theme.danger),
         };
-        let content_width = toast.title.len()
-            + toast.description.as_ref().map_or(0, |d| d.len() + 3);
+        let content_width =
+            toast.title.len() + toast.description.as_ref().map_or(0, |d| d.len() + 3);
         let width = (content_width as u16 + 6).min(frame.area().width.saturating_sub(4));
-        let height: u16 = if toast.description.is_some() { 4 } else { 3 };
+        let height: u16 = if toast.description.is_some() {
+            4
+        } else {
+            3
+        };
         let area = frame.area();
         let toast_area = ratatui::layout::Rect {
             x: area.x + area.width.saturating_sub(width) / 2,
@@ -116,7 +120,9 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         frame.render_widget(ratatui::widgets::Clear, toast_area);
         let mut lines = vec![ratatui::text::Line::from(ratatui::text::Span::styled(
             toast.title.clone(),
-            ratatui::style::Style::default().fg(title_color).add_modifier(ratatui::style::Modifier::BOLD),
+            ratatui::style::Style::default()
+                .fg(title_color)
+                .add_modifier(ratatui::style::Modifier::BOLD),
         ))];
         if let Some(desc) = &toast.description {
             lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(

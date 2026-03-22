@@ -184,7 +184,11 @@ pub fn draw_agent_picker_modal(
     let profile_count = profiles.len();
     // Each profile takes 2 rows (name + description) plus 1 separator, except the last.
     let has_descriptions = profiles.iter().any(|p| p.description.is_some());
-    let row_height: u16 = if has_descriptions { 3 } else { 1 };
+    let row_height: u16 = if has_descriptions {
+        3
+    } else {
+        1
+    };
     let content_height = ((profile_count as u16) * row_height).clamp(1, 20);
     let total_height = content_height + 4;
     let area = centered_rect(frame.area(), 64, total_height);
@@ -227,7 +231,11 @@ pub fn draw_agent_picker_modal(
         }
         let is_selected = i == app.agent_picker_selected;
 
-        let marker = if is_selected { "▸ " } else { "  " };
+        let marker = if is_selected {
+            "▸ "
+        } else {
+            "  "
+        };
         let label_style = if is_selected {
             Style::default()
                 .fg(theme.highlight)
@@ -263,10 +271,7 @@ pub fn draw_agent_picker_modal(
             ),
         ];
         if !source_label.is_empty() {
-            spans.push(Span::styled(
-                source_label,
-                Style::default().fg(theme.info),
-            ));
+            spans.push(Span::styled(source_label, Style::default().fg(theme.info)));
         }
         frame.render_widget(Paragraph::new(Line::from(spans)).style(bg), name_area);
         y_offset += 1;
@@ -280,10 +285,7 @@ pub fn draw_agent_picker_modal(
                     width: inner.width,
                     height: 1,
                 };
-                let desc_text = profile
-                    .description
-                    .as_deref()
-                    .unwrap_or("");
+                let desc_text = profile.description.as_deref().unwrap_or("");
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
                         format!("  {desc_text}"),
@@ -332,30 +334,74 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     const KEYBINDINGS: &[(&str, &str, &str)] = &[
         // (key, short, description)
         ("Navigation", "", ""),
-        ("1-6", "tabs", "Switch between Triggers, Orchestration, Tasks, Outcomes, Agents, Logs"),
+        (
+            "1-6",
+            "tabs",
+            "Switch between Triggers, Orchestration, Tasks, Outcomes, Agents, Logs",
+        ),
         ("j / k", "navigate", "Move selection up/down in lists"),
-        ("PgUp / PgDn", "page", "Page up/down in lists and detail views"),
+        (
+            "PgUp / PgDn",
+            "page",
+            "Page up/down in lists and detail views",
+        ),
         ("g / G", "top/bottom", "Jump to top or bottom"),
         ("Enter", "details", "Open detail view for selected item"),
-        ("Esc", "back", "Close detail view, clear search, or switch focus"),
-        ("Tab", "focus", "Toggle focus between list and detail in split view"),
+        (
+            "Esc",
+            "back",
+            "Close detail view, clear search, or switch focus",
+        ),
+        (
+            "Tab",
+            "focus",
+            "Toggle focus between list and detail in split view",
+        ),
         ("/", "search", "Filter items by keyword"),
         ("", "", ""),
         ("Agent Actions", "", ""),
-        ("S", "stop agent", "Stop a running agent (Agents/Orchestration tabs)"),
-        ("c", "cast", "View live log (running) or replay recording (finished)"),
-        ("w", "workspace", "Open terminal at agent's workspace directory"),
-        ("d", "dispatch", "Manually dispatch selected trigger to an agent"),
+        (
+            "S",
+            "stop agent",
+            "Stop a running agent (Agents/Orchestration tabs)",
+        ),
+        (
+            "c",
+            "cast",
+            "View live log (running) or replay recording (finished)",
+        ),
+        (
+            "w",
+            "workspace",
+            "Open terminal at agent's workspace directory",
+        ),
+        (
+            "d",
+            "dispatch",
+            "Manually dispatch selected trigger to an agent",
+        ),
         ("", "", ""),
         ("Workflow", "", ""),
-        ("a", "approve", "Approve a waiting trigger or accept a deliverable"),
+        (
+            "a",
+            "approve",
+            "Approve a waiting trigger or accept a deliverable",
+        ),
         ("x", "reject", "Reject a deliverable"),
         ("t", "retry task", "Retry a failed pipeline task"),
         ("R", "resolve task", "Mark a task as completed manually"),
-        ("m", "mode", "Change dispatch mode (Manual/Auto/Nightshift/Idle/Stop)"),
+        (
+            "m",
+            "mode",
+            "Change dispatch mode (Manual/Auto/Nightshift/Idle/Stop)",
+        ),
         ("", "", ""),
         ("Other", "", ""),
-        ("o / O", "open", "Open issue/PR in browser (o) or full URL (O)"),
+        (
+            "o / O",
+            "open",
+            "Open issue/PR in browser (o) or full URL (O)",
+        ),
         ("s", "sort", "Toggle sort order in Agents tab"),
         ("r", "refresh", "Force refresh from trackers"),
         ("?", "help", "Show this help"),
@@ -411,24 +457,15 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             } else {
                 // Key binding row
                 Line::from(vec![
-                    Span::styled(
-                        format!("{key:>12}"),
-                        Style::default().fg(theme.highlight),
-                    ),
+                    Span::styled(format!("{key:>12}"), Style::default().fg(theme.highlight)),
                     Span::styled("  ", Style::default()),
-                    Span::styled(
-                        (*desc).to_string(),
-                        Style::default().fg(theme.foreground),
-                    ),
+                    Span::styled((*desc).to_string(), Style::default().fg(theme.foreground)),
                 ])
             }
         })
         .collect();
 
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        inner,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 pub(crate) fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect {
