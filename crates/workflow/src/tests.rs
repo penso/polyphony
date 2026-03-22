@@ -1,5 +1,6 @@
 use std::{
     fs,
+    sync::{LazyLock, Mutex, MutexGuard},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -34,6 +35,39 @@ fn unique_temp_path(name: &str, extension: &str) -> std::path::PathBuf {
             .as_nanos(),
         extension
     ))
+}
+
+static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+struct UnsetEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<String>)>,
+}
+
+impl UnsetEnvGuard {
+    fn new(names: &[&str]) -> Self {
+        let lock = ENV_LOCK.lock().unwrap();
+        let saved = names
+            .iter()
+            .map(|name| ((*name).to_string(), std::env::var(name).ok()))
+            .collect::<Vec<_>>();
+        for name in names {
+            // Tests mutate process env, so serialize the handful that need it.
+            unsafe { std::env::remove_var(name) };
+        }
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for UnsetEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    }
 }
 
 #[test]
@@ -806,6 +840,7 @@ review_triggers:
 
 #[test]
 fn openai_chat_fallbacks_without_api_keys_do_not_block_workflow_load() {
+    let _env = UnsetEnvGuard::new(&["KIMI_API_KEY", "MOONSHOT_API_KEY", "OPENAI_API_KEY"]);
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 agents:
@@ -875,6 +910,7 @@ tracker:
 
 #[test]
 fn github_tracker_without_api_key_is_valid() {
+    let _env = UnsetEnvGuard::new(&["GH_TOKEN", "GITHUB_TOKEN"]);
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:

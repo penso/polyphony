@@ -21,6 +21,9 @@ test:
 test-raw:
     cargo +{{nightly_toolchain}} test --workspace
 
+test-integration:
+    cargo +{{nightly_toolchain}} test --workspace -- --ignored --nocapture
+
 install:
     mkdir -p "$HOME/.local/bin"
     cargo +{{nightly_toolchain}} build --release -p polyphony-cli
