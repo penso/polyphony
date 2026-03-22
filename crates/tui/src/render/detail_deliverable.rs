@@ -129,7 +129,7 @@ pub(crate) fn draw_deliverable_detail(
     ));
     lines.push(kv_line(
         "Status",
-        &super::orchestrator::movement_status_label(&movement.status),
+        super::orchestrator::movement_status_label(&movement.status),
         theme,
     ));
     if let Some(identifier) = &movement.issue_identifier {

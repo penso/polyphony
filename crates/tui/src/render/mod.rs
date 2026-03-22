@@ -89,6 +89,10 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         popups::draw_agent_picker_modal(frame, snapshot, app);
     }
 
+    if app.dispatch_modal.is_some() {
+        popups::draw_dispatch_modal(frame, app);
+    }
+
     if app.leaving {
         popups::draw_leaving_modal(frame, app.theme);
     }
@@ -97,11 +101,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
     app.expire_toast();
     if let Some(toast) = &app.toast {
         let theme = app.theme;
-        let (border_color, title_color) = match toast.level {
-            crate::app::ToastLevel::Info => (theme.info, theme.info),
-            crate::app::ToastLevel::Warning => (theme.warning, theme.warning),
-            crate::app::ToastLevel::Error => (theme.danger, theme.danger),
-        };
+        let (border_color, title_color) = (theme.info, theme.info);
         let content_width =
             toast.title.len() + toast.description.as_ref().map_or(0, |d| d.len() + 3);
         let width = (content_width as u16 + 6).min(frame.area().width.saturating_sub(4));

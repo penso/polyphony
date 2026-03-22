@@ -305,6 +305,120 @@ pub fn draw_agent_picker_modal(
     }
 }
 
+pub fn draw_dispatch_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
+    let Some(modal) = app.dispatch_modal.as_ref() else {
+        return;
+    };
+
+    let theme = app.theme;
+    let area = centered_rect(frame.area(), 78, frame.area().height.min(18));
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " Dispatch Directives ",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(
+            Line::from(vec![
+                Span::styled("Enter", Style::default().fg(theme.highlight)),
+                Span::styled(":newline  ", Style::default().fg(theme.muted)),
+                Span::styled("^D", Style::default().fg(theme.highlight)),
+                Span::styled(":dispatch  ", Style::default().fg(theme.muted)),
+                Span::styled("Esc", Style::default().fg(theme.highlight)),
+                Span::styled(":cancel ", Style::default().fg(theme.muted)),
+            ])
+            .right_aligned(),
+        )
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.highlight))
+        .style(Style::default().bg(theme.background));
+    frame.render_widget(block, area);
+
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    });
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Min(6),
+        ])
+        .split(inner);
+
+    let agent_label = modal.agent_name.as_deref().unwrap_or("default");
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("trigger:", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(" {}  ", modal.trigger_identifier),
+                Style::default()
+                    .fg(theme.highlight)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("agent:", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(" {agent_label}"),
+                Style::default().fg(theme.foreground),
+            ),
+        ])),
+        rows[0],
+    );
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                modal.trigger_title.clone(),
+                Style::default().fg(theme.foreground),
+            )),
+            Line::from(Span::styled(
+                "Optional operator instructions. These are prepended to the router or worker prompt and override lower-priority issue text.",
+                Style::default().fg(theme.muted),
+            )),
+        ])
+        .wrap(Wrap { trim: false }),
+        rows[1],
+    );
+
+    let textarea_block = Block::default()
+        .title(Line::from(Span::styled(
+            " Directives ",
+            Style::default().fg(theme.info),
+        )))
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.panel_alt));
+    let textarea_inner = textarea_block.inner(rows[2]);
+    frame.render_widget(textarea_block, rows[2]);
+
+    if modal.directives.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Leave empty to dispatch with the normal prompt.",
+                Style::default().fg(theme.muted),
+            )))
+            .wrap(Wrap { trim: false }),
+            textarea_inner,
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(modal.directives.as_str()).wrap(Wrap { trim: false }),
+            textarea_inner,
+        );
+    }
+
+    let (line, col) = modal.cursor_line_col();
+    let cursor_x = textarea_inner.x + (col as u16).min(textarea_inner.width.saturating_sub(1));
+    let cursor_y = textarea_inner.y + (line as u16).min(textarea_inner.height.saturating_sub(1));
+    frame.set_cursor_position((cursor_x, cursor_y));
+}
+
 pub(crate) fn draw_confirm_quit(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let theme = app.theme;
     let area = centered_rect(frame.area(), 34, 3);
@@ -378,7 +492,7 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         (
             "d",
             "dispatch",
-            "Manually dispatch selected trigger to an agent",
+            "Open dispatch modal for a trigger, with optional operator directives",
         ),
         ("", "", ""),
         ("Workflow", "", ""),
@@ -387,7 +501,11 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             "approve",
             "Approve a waiting trigger or accept a deliverable",
         ),
-        ("x", "reject", "Reject a deliverable"),
+        (
+            "x",
+            "close/reject",
+            "Close an existing trigger issue or reject a deliverable",
+        ),
         ("t", "retry task", "Retry a failed pipeline task"),
         ("R", "resolve task", "Mark a task as completed manually"),
         (

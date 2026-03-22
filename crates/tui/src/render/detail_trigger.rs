@@ -1,4 +1,3 @@
-use chrono::Utc;
 use polyphony_core::{IssueApprovalState, RuntimeSnapshot, VisibleTriggerRow};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -10,7 +9,7 @@ use ratatui::{
 };
 
 use super::detail_common::{
-    format_relative_time, label_color, render_scroll_indicator, render_separator, strip_html_tags,
+    label_color, render_scroll_indicator, render_separator, strip_html_tags,
 };
 use crate::app::{AppState, DetailSection, DetailView};
 
@@ -65,70 +64,22 @@ pub(crate) fn draw_trigger_detail(
         horizontal: 2,
     });
 
-    // Compute title height
-    let title_width = inner.width as usize;
-    let title_lines_count = (if title_width > 0 {
-        issue.title.len().div_ceil(title_width)
-    } else {
-        1
-    })
-    .clamp(1, 3);
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(title_lines_count as u16),
-            Constraint::Length(1), // Meta
-            Constraint::Length(1), // Indicator
-            Constraint::Length(1), // Separator
-            Constraint::Min(1),    // Body
-        ])
-        .split(inner);
-
-    // Row 0: Title with created time
     let created_str = issue
         .created_at
-        .map(|c| format_relative_time(c, Utc::now()))
+        .map(super::format_detail_time)
         .unwrap_or_default();
-
-    if !created_str.is_empty() {
-        let time_label = format!(" {created_str} ago ");
-        let time_len = time_label.len() as u16;
-        let title_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(1), Constraint::Length(time_len)])
-            .split(rows[0]);
-
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                issue.title.clone(),
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .wrap(Wrap { trim: false }),
-            title_cols[0],
-        );
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                time_label,
-                Style::default().fg(theme.muted),
-            )))
-            .alignment(ratatui::layout::Alignment::Right),
-            title_cols[1],
-        );
+    let time_len = if !created_str.is_empty() {
+        format!(" {created_str} ").len() as u16
     } else {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                issue.title.clone(),
-                Style::default()
-                    .fg(theme.foreground)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .wrap(Wrap { trim: false }),
-            rows[0],
-        );
-    }
+        0
+    };
+    let title_width = inner.width.saturating_sub(time_len).max(1) as usize;
+    let title_lines_count = issue
+        .title
+        .chars()
+        .count()
+        .div_ceil(title_width)
+        .clamp(1, 4);
 
     // Row 1: Status | Priority | Labels | Author | Updated
     let state_color = super::triggers::state_color(&issue.status, theme);
@@ -196,16 +147,74 @@ pub(crate) fn draw_trigger_detail(
         ));
     }
     if let Some(updated) = issue.updated_at {
-        let age = format_relative_time(updated, Utc::now());
         meta_spans.push(sep);
         meta_spans.push(Span::styled("updated:", Style::default().fg(theme.muted)));
         meta_spans.push(Span::styled(
-            format!("{age} ago "),
+            format!("{} ", super::format_detail_time(updated)),
             Style::default().fg(theme.muted),
         ));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(meta_spans)), rows[1]);
+    let meta_line = Line::from(meta_spans);
+    let meta_lines_count = meta_line
+        .width()
+        .div_ceil(inner.width.max(1) as usize)
+        .clamp(1, 3);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(title_lines_count as u16),
+            Constraint::Length(meta_lines_count as u16),
+            Constraint::Length(1), // Indicator
+            Constraint::Length(1), // Separator
+            Constraint::Min(1),    // Body
+        ])
+        .split(inner);
+
+    // Row 0: Title with created time
+    if !created_str.is_empty() {
+        let time_label = format!(" {created_str} ");
+        let title_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(time_len)])
+            .split(rows[0]);
+
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                issue.title.clone(),
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .wrap(Wrap { trim: false }),
+            title_cols[0],
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                time_label,
+                Style::default().fg(theme.muted),
+            )))
+            .alignment(ratatui::layout::Alignment::Right),
+            title_cols[1],
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                issue.title.clone(),
+                Style::default()
+                    .fg(theme.foreground)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .wrap(Wrap { trim: false }),
+            rows[0],
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new(meta_line).wrap(Wrap { trim: false }),
+        rows[1],
+    );
 
     // Row 2: Indicator legend
     let is_running = snapshot
@@ -474,6 +483,8 @@ fn detail_hint_spans(issue: &VisibleTriggerRow, theme: crate::theme::Theme) -> V
             ":dispatch  ",
             Style::default().fg(theme.muted),
         ));
+        spans.push(Span::styled("x", Style::default().fg(theme.highlight)));
+        spans.push(Span::styled(":close  ", Style::default().fg(theme.muted)));
         if issue.approval_state == IssueApprovalState::Waiting {
             spans.push(Span::styled("a", Style::default().fg(theme.highlight)));
             spans.push(Span::styled(":approve  ", Style::default().fg(theme.muted)));

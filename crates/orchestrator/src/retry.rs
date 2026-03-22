@@ -122,6 +122,7 @@ impl RuntimeService {
                 retry.row.error.is_some(),
                 None,
                 skip_workspace_sync,
+                None,
             )
             .await
         {

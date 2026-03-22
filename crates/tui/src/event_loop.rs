@@ -84,7 +84,11 @@ pub async fn run(
         match ev {
             Event::Mouse(mouse) => {
                 if !app.leaving {
-                    if app.has_detail() {
+                    if app.dispatch_modal.is_some() {
+                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                            app.dispatch_modal = None;
+                        }
+                    } else if app.has_detail() {
                         // Click outside modal closes it
                         if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
                             app.pop_detail();
@@ -182,14 +186,17 @@ pub async fn run(
                                     .get(app.agent_picker_selected)
                                     .map(|p| p.name.clone());
                                 app.show_agent_picker = false;
-                                let _ = command_tx.send(RuntimeCommand::DispatchIssue {
-                                    issue_id,
-                                    agent_name,
-                                });
+                                if let Some(trigger) = find_trigger_by_id(&snapshot, &issue_id) {
+                                    let _ =
+                                        start_dispatch_for_trigger(&mut app, trigger, agent_name);
+                                }
                             }
                         },
                         _ => {},
                     }
+                } else if let Some(command) = handle_dispatch_modal_key(&mut app, key) {
+                    tracing::info!(?command, "TUI sending command");
+                    let _ = command_tx.send(command);
                 } else if app.confirm_quit {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
@@ -529,7 +536,7 @@ fn handle_key(
             return None;
         },
         KeyCode::Char('r') => {
-            app.show_toast(crate::app::ToastLevel::Info, "Refreshing".to_string(), None);
+            app.show_toast("Refreshing".to_string(), None);
             return Some(RuntimeCommand::Refresh);
         },
 
@@ -623,14 +630,13 @@ fn handle_key(
 
         // Toggle collapse on movement rows (Orchestrator tab)
         KeyCode::Char(' ') => {
-            if app.active_tab == app::ActiveTab::Orchestrator {
-                if let Some(app::OrchestratorTreeRow::Movement { snapshot_index }) =
+            if app.active_tab == app::ActiveTab::Orchestrator
+                && let Some(app::OrchestratorTreeRow::Movement { snapshot_index }) =
                     app.selected_orchestrator_row().cloned()
-                {
-                    let movement = &snapshot.movements[snapshot_index];
-                    app.toggle_movement_collapse(&movement.id.clone());
-                    app.rebuild_orchestrator_tree(snapshot);
-                }
+            {
+                let movement = &snapshot.movements[snapshot_index];
+                app.toggle_movement_collapse(&movement.id.clone());
+                app.rebuild_orchestrator_tree(snapshot);
             }
         },
 
@@ -802,25 +808,7 @@ fn handle_key(
             if app.active_tab == app::ActiveTab::Triggers
                 && let Some(trigger) = app.selected_trigger(snapshot)
             {
-                app.show_toast(
-                    crate::app::ToastLevel::Info,
-                    format!("Dispatching {}", trigger.identifier),
-                    None,
-                );
-                app.dispatching_triggers.insert(trigger.trigger_id.clone());
-                return Some(match trigger.kind {
-                    VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
-                        issue_id: trigger.trigger_id.clone(),
-                        agent_name: None,
-                    },
-                    VisibleTriggerKind::PullRequestReview
-                    | VisibleTriggerKind::PullRequestComment
-                    | VisibleTriggerKind::PullRequestConflict => {
-                        RuntimeCommand::DispatchPullRequestTrigger {
-                            trigger_id: trigger.trigger_id.clone(),
-                        }
-                    },
-                });
+                return start_dispatch_for_trigger(app, trigger, None);
             }
         },
         KeyCode::Char('a') => {
@@ -829,23 +817,15 @@ fn handle_key(
                 && trigger.kind == VisibleTriggerKind::Issue
                 && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
             {
-                app.show_toast(
-                    crate::app::ToastLevel::Info,
-                    format!("Approving {}", trigger.identifier),
-                    None,
-                );
+                app.show_toast(format!("Approving {}", trigger.identifier), None);
                 return Some(RuntimeCommand::ApproveIssueTrigger {
                     issue_id: trigger.trigger_id.clone(),
                     source: trigger.source.clone(),
                 });
             }
-            if let Some(movement) = selected_deliverable_movement(app, snapshot) {
+            if let Some(movement) = selected_resolvable_deliverable_movement(app, snapshot) {
                 let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                app.show_toast(
-                    crate::app::ToastLevel::Info,
-                    format!("Accepting & merging {label}"),
-                    None,
-                );
+                app.show_toast(format!("Accepting & merging {label}"), None);
                 return Some(RuntimeCommand::ResolveMovementDeliverable {
                     movement_id: movement.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Accepted,
@@ -855,33 +835,24 @@ fn handle_key(
 
         // Merge deliverable (local branch or PR)
         KeyCode::Char('M') => {
-            if let Some(movement) = selected_deliverable_movement(app, snapshot) {
-                if movement.deliverable.is_some() {
-                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Merging {label}"),
-                        None,
-                    );
-                    return Some(RuntimeCommand::MergeDeliverable {
-                        movement_id: movement.id.clone(),
-                    });
-                }
+            if let Some(movement) = selected_deliverable_movement(app, snapshot)
+                && movement.deliverable.is_some()
+            {
+                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                app.show_toast(format!("Merging {label}"), None);
+                return Some(RuntimeCommand::MergeDeliverable {
+                    movement_id: movement.id.clone(),
+                });
             }
-            if let Some(app::DetailView::Movement { movement_id, .. }) = app.current_detail() {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
-                    if movement.deliverable.is_some() {
-                        let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                        app.show_toast(
-                            crate::app::ToastLevel::Info,
-                            format!("Merging {label}"),
-                            None,
-                        );
-                        return Some(RuntimeCommand::MergeDeliverable {
-                            movement_id: movement.id.clone(),
-                        });
-                    }
-                }
+            if let Some(app::DetailView::Movement { movement_id, .. }) = app.current_detail()
+                && let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                && movement.deliverable.is_some()
+            {
+                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                app.show_toast(format!("Merging {label}"), None);
+                return Some(RuntimeCommand::MergeDeliverable {
+                    movement_id: movement.id.clone(),
+                });
             }
         },
 
@@ -911,13 +882,18 @@ fn handle_key(
             };
         },
         KeyCode::Char('x') => {
-            if let Some(movement) = selected_deliverable_movement(app, snapshot) {
+            if app.active_tab == app::ActiveTab::Triggers
+                && let Some(trigger) = app.selected_trigger(snapshot)
+                && trigger_can_close_issue(snapshot, trigger)
+            {
+                app.show_toast(format!("Closing {}", trigger.identifier), None);
+                return Some(RuntimeCommand::CloseIssueTrigger {
+                    issue_id: trigger.trigger_id.clone(),
+                });
+            }
+            if let Some(movement) = selected_resolvable_deliverable_movement(app, snapshot) {
                 let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                app.show_toast(
-                    crate::app::ToastLevel::Info,
-                    format!("Rejecting {label}"),
-                    None,
-                );
+                app.show_toast(format!("Rejecting {label}"), None);
                 return Some(RuntimeCommand::ResolveMovementDeliverable {
                     movement_id: movement.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Rejected,
@@ -968,61 +944,47 @@ fn handle_key(
                     .find(|r| r.issue_id == issue_id)
                     .map(|r| r.issue_identifier.as_str())
                     .unwrap_or(&issue_id);
-                app.show_toast(
-                    crate::app::ToastLevel::Info,
-                    format!("Stopping agent on {identifier}"),
-                    None,
-                );
+                app.show_toast(format!("Stopping agent on {identifier}"), None);
                 return Some(RuntimeCommand::StopAgent { issue_id });
             }
         },
 
         // Retry failed task (reset to Pending and re-dispatch)
         KeyCode::Char('t') => {
-            if app.active_tab == app::ActiveTab::Orchestrator {
-                if let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
+            if app.active_tab == app::ActiveTab::Orchestrator
+                && let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
                     app.selected_orchestrator_row().cloned()
-                {
-                    let task = &snapshot.tasks[snapshot_index];
-                    if matches!(
-                        task.status,
-                        polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::Completed
-                    ) {
-                        app.show_toast(
-                            crate::app::ToastLevel::Info,
-                            format!("Retrying: {}", task.title),
-                            None,
-                        );
-                        return Some(RuntimeCommand::RetryTask {
-                            movement_id: task.movement_id.clone(),
-                            task_id: task.id.clone(),
-                        });
-                    }
+            {
+                let task = &snapshot.tasks[snapshot_index];
+                if matches!(
+                    task.status,
+                    polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::Completed
+                ) {
+                    app.show_toast(format!("Retrying: {}", task.title), None);
+                    return Some(RuntimeCommand::RetryTask {
+                        movement_id: task.movement_id.clone(),
+                        task_id: task.id.clone(),
+                    });
                 }
             }
         },
 
         // Resolve task (mark as completed, resume pipeline)
         KeyCode::Char('R') => {
-            if app.active_tab == app::ActiveTab::Orchestrator {
-                if let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
+            if app.active_tab == app::ActiveTab::Orchestrator
+                && let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
                     app.selected_orchestrator_row().cloned()
-                {
-                    let task = &snapshot.tasks[snapshot_index];
-                    if matches!(
-                        task.status,
-                        polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::InProgress
-                    ) {
-                        app.show_toast(
-                            crate::app::ToastLevel::Info,
-                            format!("Resolved: {}", task.title),
-                            None,
-                        );
-                        return Some(RuntimeCommand::ResolveTask {
-                            movement_id: task.movement_id.clone(),
-                            task_id: task.id.clone(),
-                        });
-                    }
+            {
+                let task = &snapshot.tasks[snapshot_index];
+                if matches!(
+                    task.status,
+                    polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::InProgress
+                ) {
+                    app.show_toast(format!("Resolved: {}", task.title), None);
+                    return Some(RuntimeCommand::ResolveTask {
+                        movement_id: task.movement_id.clone(),
+                        task_id: task.id.clone(),
+                    });
                 }
             }
         },
@@ -1088,17 +1050,16 @@ fn handle_detail_key(
             },
             KeyCode::Enter => {
                 // Open the single movement detail if one exists
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
-                    if let Some(movement) = snapshot
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
+                    && let Some(movement) = snapshot
                         .movements
                         .iter()
                         .find(|m| m.issue_identifier.as_deref() == Some(&*trigger.identifier))
-                    {
-                        app.push_detail(crate::app::DetailView::Movement {
-                            movement_id: movement.id.clone(),
-                            scroll: 0,
-                        });
-                    }
+                {
+                    app.push_detail(crate::app::DetailView::Movement {
+                        movement_id: movement.id.clone(),
+                        scroll: 0,
+                    });
                 }
             },
             KeyCode::Char('j') | KeyCode::Down => {
@@ -1125,32 +1086,26 @@ fn handle_detail_key(
                     && trigger.kind == VisibleTriggerKind::Issue
                     && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
                 {
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Approving {}", trigger.identifier),
-                        None,
-                    );
+                    app.show_toast(format!("Approving {}", trigger.identifier), None);
                     return Some(RuntimeCommand::ApproveIssueTrigger {
                         issue_id: trigger.trigger_id.clone(),
                         source: trigger.source.clone(),
                     });
                 }
             },
+            KeyCode::Char('x') => {
+                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
+                    && trigger_can_close_issue(snapshot, trigger)
+                {
+                    app.show_toast(format!("Closing {}", trigger.identifier), None);
+                    return Some(RuntimeCommand::CloseIssueTrigger {
+                        issue_id: trigger.trigger_id.clone(),
+                    });
+                }
+            },
             KeyCode::Char('d') => {
                 if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
-                    return Some(match trigger.kind {
-                        VisibleTriggerKind::Issue => RuntimeCommand::DispatchIssue {
-                            issue_id: trigger.trigger_id.clone(),
-                            agent_name: None,
-                        },
-                        VisibleTriggerKind::PullRequestReview
-                        | VisibleTriggerKind::PullRequestComment
-                        | VisibleTriggerKind::PullRequestConflict => {
-                            RuntimeCommand::DispatchPullRequestTrigger {
-                                trigger_id: trigger.trigger_id.clone(),
-                            }
-                        },
-                    });
+                    return start_dispatch_for_trigger(app, trigger, None);
                 }
             },
             KeyCode::Char('e') | KeyCode::Char('E') => {
@@ -1201,14 +1156,10 @@ fn handle_detail_key(
             },
             KeyCode::Char('a') => {
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement.deliverable.is_some()
+                    && movement_can_resolve_deliverable(movement)
                 {
                     let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Accepting & merging {label}"),
-                        None,
-                    );
+                    app.show_toast(format!("Accepting & merging {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Accepted,
@@ -1217,14 +1168,10 @@ fn handle_detail_key(
             },
             KeyCode::Char('x') => {
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement.deliverable.is_some()
+                    && movement_can_resolve_deliverable(movement)
                 {
                     let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Rejecting {label}"),
-                        None,
-                    );
+                    app.show_toast(format!("Rejecting {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
@@ -1306,11 +1253,7 @@ fn handle_detail_key(
                         .find(|r| r.issue_id == issue_id)
                         .map(|r| r.issue_identifier.as_str())
                         .unwrap_or(&issue_id);
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Stopping agent on {identifier}"),
-                        None,
-                    );
+                    app.show_toast(format!("Stopping agent on {identifier}"), None);
                     return Some(RuntimeCommand::StopAgent { issue_id });
                 }
             },
@@ -1367,13 +1310,11 @@ fn handle_detail_key(
                 }
             },
             KeyCode::Char('a') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && movement_can_resolve_deliverable(movement)
+                {
                     let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Accepting & merging {label}"),
-                        None,
-                    );
+                    app.show_toast(format!("Accepting & merging {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Accepted,
@@ -1381,13 +1322,11 @@ fn handle_detail_key(
                 }
             },
             KeyCode::Char('x') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && movement_can_resolve_deliverable(movement)
+                {
                     let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
-                    app.show_toast(
-                        crate::app::ToastLevel::Info,
-                        format!("Rejecting {label}"),
-                        None,
-                    );
+                    app.show_toast(format!("Rejecting {label}"), None);
                     return Some(RuntimeCommand::ResolveMovementDeliverable {
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
@@ -1583,6 +1522,40 @@ fn selected_deliverable_movement<'a>(
     }
 }
 
+fn selected_resolvable_deliverable_movement<'a>(
+    app: &AppState,
+    snapshot: &'a RuntimeSnapshot,
+) -> Option<&'a polyphony_core::MovementRow> {
+    selected_deliverable_movement(app, snapshot)
+        .filter(|movement| movement_can_resolve_deliverable(movement))
+}
+
+fn movement_can_resolve_deliverable(movement: &polyphony_core::MovementRow) -> bool {
+    movement.deliverable.as_ref().is_some_and(|deliverable| {
+        deliverable.decision == polyphony_core::DeliverableDecision::Waiting
+    })
+}
+
+fn trigger_can_close_issue(
+    snapshot: &RuntimeSnapshot,
+    trigger: &polyphony_core::VisibleTriggerRow,
+) -> bool {
+    if trigger.kind != VisibleTriggerKind::Issue {
+        return false;
+    }
+    if snapshot
+        .running
+        .iter()
+        .any(|row| row.issue_id == trigger.trigger_id)
+    {
+        return false;
+    }
+    !matches!(
+        trigger.status.to_ascii_lowercase().as_str(),
+        "closed" | "done" | "completed" | "cancelled" | "canceled" | "reviewed" | "already_fixed"
+    )
+}
+
 /// In split mode, after navigating the list, replace the single detail stack
 /// entry with the newly selected entity so the right pane updates live.
 fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnapshot) {
@@ -1763,7 +1736,6 @@ fn request_cast_playback_for_agent(app: &mut AppState, agent: crate::app::Select
         }
     }
     app.show_toast(
-        crate::app::ToastLevel::Info,
         format!("No recording for {agent_name}"),
         Some("No log or cast file found. Use Enter for details.".into()),
     );
@@ -2283,6 +2255,85 @@ fn handle_mouse_scroll(
     }
 }
 
+fn start_dispatch_for_trigger(
+    app: &mut AppState,
+    trigger: &polyphony_core::VisibleTriggerRow,
+    agent_name: Option<String>,
+) -> Option<RuntimeCommand> {
+    match trigger.kind {
+        VisibleTriggerKind::Issue => {
+            app.dispatch_modal = Some(crate::app::DispatchModalState::new(
+                trigger.trigger_id.clone(),
+                trigger.identifier.clone(),
+                trigger.title.clone(),
+                agent_name,
+            ));
+            None
+        },
+        VisibleTriggerKind::PullRequestReview
+        | VisibleTriggerKind::PullRequestComment
+        | VisibleTriggerKind::PullRequestConflict => {
+            app.show_toast(format!("Dispatching {}", trigger.identifier), None);
+            app.dispatching_triggers.insert(trigger.trigger_id.clone());
+            Some(RuntimeCommand::DispatchPullRequestTrigger {
+                trigger_id: trigger.trigger_id.clone(),
+            })
+        },
+    }
+}
+
+fn handle_dispatch_modal_key(app: &mut AppState, key: event::KeyEvent) -> Option<RuntimeCommand> {
+    let control_held = key.modifiers.contains(event::KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => {
+            app.dispatch_modal = None;
+            None
+        },
+        KeyCode::Char('d') | KeyCode::Char('D') if control_held => submit_dispatch_modal(app),
+        _ => {
+            let modal = app.dispatch_modal.as_mut()?;
+            match key.code {
+                KeyCode::Enter => modal.insert_newline(),
+                KeyCode::Backspace => modal.backspace(),
+                KeyCode::Left => modal.move_left(),
+                KeyCode::Right => modal.move_right(),
+                KeyCode::Up => modal.move_up(),
+                KeyCode::Down => modal.move_down(),
+                KeyCode::Home => modal.move_home(),
+                KeyCode::End => modal.move_end(),
+                KeyCode::Tab => {
+                    for _ in 0..4 {
+                        modal.insert_char(' ');
+                    }
+                },
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty() || key.modifiers == event::KeyModifiers::SHIFT =>
+                {
+                    modal.insert_char(c);
+                },
+                _ => {},
+            }
+            None
+        },
+    }
+}
+
+fn submit_dispatch_modal(app: &mut AppState) -> Option<RuntimeCommand> {
+    let modal = app.dispatch_modal.take()?;
+    let agent_label = modal.agent_name.as_deref().unwrap_or("default");
+    let directives = modal.normalized_directives();
+    app.show_toast(
+        format!("Dispatching {} to {agent_label}", modal.trigger_identifier),
+        directives.clone(),
+    );
+    app.dispatching_triggers.insert(modal.trigger_id.clone());
+    Some(RuntimeCommand::DispatchIssue {
+        issue_id: modal.trigger_id,
+        agent_name: modal.agent_name,
+        directives,
+    })
+}
+
 fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
     let len = app.sorted_issue_indices.len();
     if len == 0 {
@@ -2302,7 +2353,7 @@ fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use crossterm::event::{KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use polyphony_core::{
         AgentContextEntry, AgentContextSnapshot, AgentEventKind, AttemptStatus, Deliverable,
         DeliverableDecision, DeliverableKind, DeliverableStatus, IssueApprovalState,
@@ -2333,6 +2384,24 @@ mod tests {
     }
 
     #[test]
+    fn outputs_tab_ignores_already_accepted_deliverable() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.movements[0]
+            .deliverable
+            .as_mut()
+            .expect("deliverable exists")
+            .decision = DeliverableDecision::Accepted;
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Deliverables;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('a'), &snapshot);
+
+        assert!(command.is_none());
+    }
+
+    #[test]
     fn orchestrator_tab_rejects_selected_deliverable() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
@@ -2349,6 +2418,27 @@ mod tests {
                 decision: polyphony_core::DeliverableDecision::Rejected,
             }) if movement_id == "mov-1"
         ));
+    }
+
+    #[test]
+    fn deliverable_detail_ignores_already_resolved_deliverable() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.movements[0]
+            .deliverable
+            .as_mut()
+            .expect("deliverable exists")
+            .decision = DeliverableDecision::Accepted;
+        app.on_snapshot(&snapshot);
+        app.push_detail(crate::app::DetailView::Deliverable {
+            movement_id: "mov-1".into(),
+            scroll: 0,
+        });
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('a'), &snapshot);
+
+        assert!(command.is_none());
     }
 
     #[test]
@@ -2386,6 +2476,130 @@ mod tests {
                 source,
             }) if issue_id == "7" && source == "github"
         ));
+    }
+
+    #[test]
+    fn triggers_tab_closes_selected_issue() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.visible_triggers = vec![VisibleTriggerRow {
+            trigger_id: "7".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "github".into(),
+            identifier: "#7".into(),
+            title: "Already done".into(),
+            status: "Todo".into(),
+            approval_state: IssueApprovalState::Approved,
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: Some("penso".into()),
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        }];
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Triggers;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('x'), &snapshot);
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::CloseIssueTrigger { issue_id })
+                if issue_id == "7"
+        ));
+    }
+
+    #[test]
+    fn triggers_tab_opens_dispatch_modal_for_issue() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.visible_triggers = vec![VisibleTriggerRow {
+            trigger_id: "7".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "github".into(),
+            identifier: "#7".into(),
+            title: "Needs operator guidance".into(),
+            status: "Todo".into(),
+            approval_state: IssueApprovalState::Approved,
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: Some("penso".into()),
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        }];
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Triggers;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('d'), &snapshot);
+
+        assert!(command.is_none());
+        let modal = app
+            .dispatch_modal
+            .as_ref()
+            .expect("dispatch modal should open");
+        assert_eq!(modal.trigger_id, "7");
+        assert_eq!(modal.trigger_identifier, "#7");
+        assert_eq!(modal.trigger_title, "Needs operator guidance");
+        assert!(modal.agent_name.is_none());
+    }
+
+    #[test]
+    fn dispatch_modal_submits_issue_with_directives() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.dispatch_modal = Some(crate::app::DispatchModalState::new(
+            "7".into(),
+            "#7".into(),
+            "Needs operator guidance".into(),
+            Some("router".into()),
+        ));
+
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+        let command = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::DispatchIssue {
+                issue_id,
+                agent_name,
+                directives,
+            }) if issue_id == "7"
+                && agent_name.as_deref() == Some("router")
+                && directives.as_deref() == Some("Plan")
+        ));
+        assert!(app.dispatch_modal.is_none());
+        assert!(app.dispatching_triggers.contains("7"));
     }
 
     #[test]

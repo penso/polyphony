@@ -8,7 +8,12 @@ impl RuntimeService {
         attempt: Option<u32>,
         prefer_alternate_agent: bool,
         skip_workspace_sync: bool,
+        directives: Option<&str>,
     ) -> Result<(), Error> {
+        let manual_dispatch_directives = directives
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned);
         let workspace_manager = if skip_workspace_sync {
             info!(
                 issue_identifier = %issue.identifier,
@@ -81,6 +86,7 @@ impl RuntimeService {
                 );
                 if let Some(movement) = self.state.movements.get_mut(&existing_id) {
                     movement.status = reuse_status;
+                    movement.manual_dispatch_directives = manual_dispatch_directives.clone();
                     movement.updated_at = Utc::now();
                     if !past_planning {
                         movement.pipeline_stage = if has_planner {
@@ -119,6 +125,7 @@ impl RuntimeService {
                     title: issue.title.clone(),
                     status: initial_status,
                     pipeline_stage,
+                    manual_dispatch_directives: manual_dispatch_directives.clone(),
                     workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
                     workspace_path: Some(workspace.path.clone()),
                     review_target: None,
@@ -345,6 +352,10 @@ impl RuntimeService {
             1,
             workflow.config.agent.max_turns,
         )?;
+        let prompt = prepend_manual_dispatch_directives(
+            prompt,
+            self.manual_dispatch_directives(movement_id),
+        );
 
         self.spawn_pipeline_worker(
             workflow.clone(),
@@ -532,7 +543,10 @@ impl RuntimeService {
             max_turns,
         )?;
 
-        let mut prompt = base_prompt;
+        let mut prompt = prepend_manual_dispatch_directives(
+            base_prompt,
+            self.manual_dispatch_directives(movement_id),
+        );
         prompt.push_str(&format!(
             "\n\n## Pipeline Task {}/{}\n\
              **Task:** {}\n\
@@ -555,6 +569,13 @@ impl RuntimeService {
         );
 
         Ok(prompt)
+    }
+
+    fn manual_dispatch_directives(&self, movement_id: &str) -> Option<&str> {
+        self.state
+            .movements
+            .get(movement_id)
+            .and_then(|movement| movement.manual_dispatch_directives.as_deref())
     }
 
     pub(crate) async fn spawn_pipeline_worker(

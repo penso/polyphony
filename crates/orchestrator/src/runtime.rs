@@ -43,6 +43,7 @@ impl RuntimeService {
                 external_command_rx,
                 pending_refresh: false,
                 pending_issue_approvals: Vec::new(),
+                pending_issue_closures: Vec::new(),
                 pending_deliverable_resolutions: Vec::new(),
                 pending_manual_dispatches: Vec::new(),
                 pending_manual_pull_request_trigger_dispatches: Vec::new(),
@@ -158,6 +159,12 @@ impl RuntimeService {
                             self.process_pending_issue_approvals().await;
                             let _ = self.emit_snapshot().await;
                         }
+                        RuntimeCommand::CloseIssueTrigger { issue_id } => {
+                            info!(%issue_id, "issue closure queued (event loop)");
+                            self.pending_issue_closures.push(issue_id);
+                            self.process_pending_issue_closures().await;
+                            let _ = self.emit_snapshot().await;
+                        }
                         RuntimeCommand::ResolveMovementDeliverable {
                             movement_id,
                             decision,
@@ -167,9 +174,17 @@ impl RuntimeService {
                             self.process_pending_deliverable_resolutions().await;
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::DispatchIssue { issue_id, agent_name } => {
-                            info!(%issue_id, ?agent_name, "manual dispatch queued (event loop)");
-                            self.pending_manual_dispatches.push((issue_id, agent_name));
+                        RuntimeCommand::DispatchIssue {
+                            issue_id,
+                            agent_name,
+                            directives,
+                        } => {
+                            info!(%issue_id, ?agent_name, has_directives = directives.is_some(), "manual dispatch queued (event loop)");
+                            self.pending_manual_dispatches.push(ManualDispatchRequest {
+                                issue_id,
+                                agent_name,
+                                directives,
+                            });
                             next_tick = Instant::now();
                         }
                         RuntimeCommand::DispatchPullRequestTrigger { trigger_id } => {
@@ -322,6 +337,10 @@ impl RuntimeService {
                     info!(%issue_id, %source, "issue approval queued");
                     self.pending_issue_approvals.push((issue_id, source));
                 },
+                Ok(RuntimeCommand::CloseIssueTrigger { issue_id }) => {
+                    info!(%issue_id, "issue closure queued");
+                    self.pending_issue_closures.push(issue_id);
+                },
                 Ok(RuntimeCommand::ResolveMovementDeliverable {
                     movement_id,
                     decision,
@@ -332,9 +351,14 @@ impl RuntimeService {
                 Ok(RuntimeCommand::DispatchIssue {
                     issue_id,
                     agent_name,
+                    directives,
                 }) => {
-                    info!(%issue_id, ?agent_name, "manual dispatch queued");
-                    self.pending_manual_dispatches.push((issue_id, agent_name));
+                    info!(%issue_id, ?agent_name, has_directives = directives.is_some(), "manual dispatch queued");
+                    self.pending_manual_dispatches.push(ManualDispatchRequest {
+                        issue_id,
+                        agent_name,
+                        directives,
+                    });
                 },
                 Ok(RuntimeCommand::DispatchPullRequestTrigger { trigger_id }) => {
                     info!(%trigger_id, "manual pull request trigger dispatch queued");
@@ -419,6 +443,94 @@ impl RuntimeService {
         self.save_cache().await;
     }
 
+    pub(crate) async fn process_pending_issue_closures(&mut self) {
+        let closures = std::mem::take(&mut self.pending_issue_closures);
+        if closures.is_empty() {
+            return;
+        }
+        let workflow = self.workflow();
+        let tracker_kind = workflow.config.tracker.kind;
+        let terminal_state = workflow
+            .config
+            .tracker
+            .terminal_states
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "closed".into());
+
+        for issue_id in closures {
+            if self.state.running.contains_key(&issue_id) {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("issue {issue_id} cannot be closed while running"),
+                );
+                continue;
+            }
+
+            let request = polyphony_core::UpdateIssueRequest {
+                id: issue_id.clone(),
+                state: Some(terminal_state.clone()),
+                ..Default::default()
+            };
+            let issue = match self.tracker.update_issue(&request).await {
+                Ok(issue) => issue,
+                Err(error) => {
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("issue {issue_id} failed to close: {error}"),
+                    );
+                    continue;
+                },
+            };
+
+            let approval_key = approval_key_for_issue(tracker_kind, &issue);
+            self.state.approved_issue_keys.remove(&approval_key);
+            self.state
+                .visible_issues
+                .retain(|row| row.issue_id != issue_id);
+            self.state
+                .bootstrapped_visible_issues
+                .retain(|row| row.issue_id != issue_id);
+            self.state.discarded_triggers.remove(&issue_id);
+
+            let workspace_key = sanitize_workspace_key(&issue.identifier);
+            if self.state.worktree_keys.contains(&workspace_key) {
+                let manager = self.build_workspace_manager(&workflow);
+                match manager
+                    .cleanup_workspace(
+                        &issue.identifier,
+                        issue.branch_name.clone(),
+                        &workflow.config.hooks,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        self.state.worktree_keys.remove(&workspace_key);
+                        self.push_event(
+                            EventScope::Dispatch,
+                            format!("{} workspace cleaned up", issue.identifier),
+                        );
+                    },
+                    Err(error) => {
+                        self.push_event(
+                            EventScope::Dispatch,
+                            format!(
+                                "{} closed but workspace cleanup failed: {error}",
+                                issue.identifier
+                            ),
+                        );
+                    },
+                }
+            }
+
+            self.push_event(
+                EventScope::Dispatch,
+                format!("{} marked {}", issue.identifier, terminal_state),
+            );
+        }
+        self.save_cache().await;
+    }
+
     pub(crate) async fn process_manual_dispatches(&mut self) {
         let dispatches = std::mem::take(&mut self.pending_manual_dispatches);
         if dispatches.is_empty() {
@@ -428,7 +540,8 @@ impl RuntimeService {
         // even in stop mode.
         info!(count = dispatches.len(), "processing manual dispatches");
         let workflow = self.workflow();
-        for (issue_id, agent_name) in dispatches {
+        for request in dispatches {
+            let issue_id = request.issue_id.clone();
             let issues = match self
                 .tracker
                 .fetch_issues_by_ids(std::slice::from_ref(&issue_id))
@@ -455,7 +568,8 @@ impl RuntimeService {
             self.dispatch_requested_issue(
                 workflow.clone(),
                 issue,
-                agent_name.as_deref(),
+                request.agent_name.as_deref(),
+                request.directives.as_deref(),
                 "manual dispatch",
             )
             .await;
@@ -471,7 +585,7 @@ impl RuntimeService {
         let mut merge_after = Vec::new();
 
         for (movement_id, decision) in resolutions {
-            let Some(movement) = self.state.movements.get_mut(&movement_id) else {
+            let Some(movement) = self.state.movements.get(&movement_id) else {
                 self.push_event(
                     EventScope::Handoff,
                     format!("deliverable decision ignored: movement {movement_id} not found"),
@@ -479,6 +593,31 @@ impl RuntimeService {
                 continue;
             };
             let movement_label = Self::movement_target_label(movement);
+            let Some(deliverable) = movement.deliverable.as_ref() else {
+                let message = format!(
+                    "deliverable decision ignored: movement {movement_label} has no deliverable"
+                );
+                self.push_event(EventScope::Handoff, message);
+                continue;
+            };
+            if deliverable.decision != polyphony_core::DeliverableDecision::Waiting {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!(
+                        "deliverable decision ignored: {movement_label} already {}",
+                        deliverable.decision
+                    ),
+                );
+                continue;
+            }
+
+            let Some(movement) = self.state.movements.get_mut(&movement_id) else {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("deliverable decision ignored: movement {movement_id} not found"),
+                );
+                continue;
+            };
             let Some(deliverable) = movement.deliverable.as_mut() else {
                 let message = format!(
                     "deliverable decision ignored: movement {movement_label} has no deliverable"
@@ -486,7 +625,6 @@ impl RuntimeService {
                 self.push_event(EventScope::Handoff, message);
                 continue;
             };
-
             deliverable.decision = decision;
             movement.updated_at = Utc::now();
             let persist_error = if let Some(store) = &self.store {
@@ -1034,6 +1172,7 @@ impl RuntimeService {
         workflow: LoadedWorkflow,
         issue: Issue,
         agent_name: Option<&str>,
+        directives: Option<&str>,
         source: &'static str,
     ) {
         let skip_workspace_sync = source == "orphan auto-dispatch";
@@ -1072,6 +1211,7 @@ impl RuntimeService {
                 false,
                 agent_name,
                 skip_workspace_sync,
+                directives,
             )
             .await
         {
@@ -1137,6 +1277,7 @@ impl RuntimeService {
         }
 
         self.process_pending_issue_approvals().await;
+        self.process_pending_issue_closures().await;
         self.process_pending_deliverable_resolutions().await;
         // Process merge requests
         let merge_ids = std::mem::take(&mut self.pending_merge_deliverables);
@@ -1326,6 +1467,7 @@ impl RuntimeService {
                         workflow.clone(),
                         issue.clone(),
                         None,
+                        None,
                         "orphan auto-dispatch",
                     )
                     .await;
@@ -1397,7 +1539,7 @@ impl RuntimeService {
                 break;
             }
             if let Err(error) = self
-                .dispatch_issue(workflow.clone(), issue, None, false, None, false)
+                .dispatch_issue(workflow.clone(), issue, None, false, None, false, None)
                 .await
             {
                 self.push_event(EventScope::Dispatch, format!("dispatch failed: {error}"));

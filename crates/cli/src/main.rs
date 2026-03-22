@@ -418,6 +418,7 @@ async fn handle_daemon_command(
                 &send_control_request(workflow_path, DaemonRequest::DispatchIssue {
                     issue_id,
                     agent_name: agent,
+                    directives: None,
                 })
                 .await?,
             )?;

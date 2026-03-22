@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use polyphony_core::{
     BudgetSnapshot, CodexTotals, Deliverable, DeliverableDecision, DeliverableKind,
     DeliverableStatus, DispatchMode, IssueApprovalState, RuntimeCadence, RuntimeSnapshot,
@@ -172,6 +172,56 @@ fn render_mode_modal_with_idle_selection_does_not_panic() {
 }
 
 #[test]
+fn render_help_modal_mentions_close_issue_keybind() {
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let snapshot = test_snapshot(1);
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.show_help_modal = true;
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(
+        screen.contains("x  Close an existing trigger issue"),
+        "{screen}"
+    );
+    assert!(screen.contains("reject a deliverable"), "{screen}");
+}
+
+#[test]
+fn render_dispatch_modal_shows_full_operator_directives_copy() {
+    let backend = TestBackend::new(160, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let snapshot = test_snapshot(1);
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.dispatch_modal = Some(app::DispatchModalState::new(
+        "issue-1".into(),
+        "4x3".into(),
+        "Investigate high Arbor CPU during embedded agent terminal activity".into(),
+        None,
+    ));
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(
+        screen.contains("worker prompt and override lower-priority issue text."),
+        "{screen}"
+    );
+}
+
+#[test]
 fn child_triggers_are_sorted_by_local_number_under_parent() {
     let mut snapshot = test_snapshot(0);
     snapshot.visible_triggers = vec![
@@ -327,7 +377,7 @@ fn render_triggers_uses_compact_child_identifiers() {
 }
 
 #[test]
-fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
+fn render_triggers_shows_source_column_when_sources_are_mixed() {
     let backend = TestBackend::new(120, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut snapshot = test_snapshot(0);
@@ -386,7 +436,9 @@ fn render_triggers_strip_github_repo_prefix_and_hide_source_column() {
         "approval icon should be visible: {screen}"
     );
     assert!(screen.contains("Trigger title"), "{screen}");
-    assert!(!screen.contains("Source"), "{screen}");
+    assert!(!screen.contains("Src"), "{screen}");
+    assert!(screen.contains(""), "{screen}");
+    assert!(screen.contains("bd"), "{screen}");
 }
 
 #[test]
@@ -494,7 +546,7 @@ fn render_triggers_show_clock_icon_for_waiting_issue_approval() {
 
     let screen = buffer_text(terminal.backend().buffer());
     // ID column removed; approval icon now appears before the title
-    assert!(screen.contains("◷Waiting for approval"), "{screen}");
+    assert!(screen.contains("◷ Waiting for approval"), "{screen}");
 }
 
 #[test]
@@ -531,7 +583,223 @@ fn render_triggers_show_approved_icon_for_verified_github_issue() {
 
     let screen = buffer_text(terminal.backend().buffer());
     // ID column removed; approval icon now appears before the title
-    assert!(screen.contains("✓Approved issue"), "{screen}");
+    assert!(screen.contains("✓ Approved issue"), "{screen}");
+}
+
+#[test]
+fn trigger_detail_uses_absolute_times_instead_of_relative_time() {
+    let backend = TestBackend::new(120, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    let created_at = Utc.with_ymd_and_hms(2026, 3, 22, 9, 15, 0).unwrap();
+    let updated_at = Utc.with_ymd_and_hms(2026, 3, 22, 11, 45, 0).unwrap();
+    snapshot.visible_triggers = vec![VisibleTriggerRow {
+        trigger_id: "github-77".into(),
+        kind: VisibleTriggerKind::Issue,
+        source: "github".into(),
+        identifier: "penso/polyphony#77".into(),
+        title: "Absolute time detail".into(),
+        status: "Todo".into(),
+        approval_state: IssueApprovalState::Approved,
+        priority: Some(2),
+        labels: vec![],
+        description: None,
+        url: None,
+        author: Some("penso".into()),
+        parent_id: None,
+        updated_at: Some(updated_at),
+        created_at: Some(created_at),
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "github-77".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(
+        screen.contains(&render::format_detail_time(created_at)),
+        "{screen}"
+    );
+    assert!(
+        screen.contains(&render::format_detail_time(updated_at)),
+        "{screen}"
+    );
+    assert!(screen.contains("x:close"), "{screen}");
+    assert!(!screen.contains("ago"), "{screen}");
+}
+
+#[test]
+fn trigger_detail_wraps_long_titles_without_truncating_them() {
+    let backend = TestBackend::new(160, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    let created_at = Utc.with_ymd_and_hms(2026, 3, 22, 8, 4, 0).unwrap();
+    let long_title = "The terminal window cannot be closed when exiting and throws an error.";
+    snapshot.visible_triggers = vec![VisibleTriggerRow {
+        trigger_id: "github-88".into(),
+        kind: VisibleTriggerKind::Issue,
+        source: "github".into(),
+        identifier: "penso/arbor#88".into(),
+        title: long_title.into(),
+        status: "Todo".into(),
+        approval_state: IssueApprovalState::Waiting,
+        priority: Some(2),
+        labels: vec!["bug".into()],
+        description: Some("Body".into()),
+        url: None,
+        author: Some("terranc".into()),
+        parent_id: None,
+        updated_at: Some(created_at),
+        created_at: Some(created_at),
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "github-88".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("throws an error."), "{screen}");
+    assert!(
+        screen.contains(&render::format_detail_time(created_at)),
+        "{screen}"
+    );
+}
+
+#[test]
+fn trigger_detail_wraps_long_author_without_truncating_it() {
+    let backend = TestBackend::new(160, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    let created_at = Utc.with_ymd_and_hms(2026, 3, 19, 15, 52, 56).unwrap();
+    snapshot.visible_triggers = vec![VisibleTriggerRow {
+        trigger_id: "beads-88".into(),
+        kind: VisibleTriggerKind::Issue,
+        source: "beads".into(),
+        identifier: "arbor-4x3".into(),
+        title: "Investigate high Arbor CPU during embedded agent terminal activity".into(),
+        status: "In Progress".into(),
+        approval_state: IssueApprovalState::Approved,
+        priority: Some(1),
+        labels: vec!["bug".into()],
+        description: Some("Body".into()),
+        url: None,
+        author: Some("gpg@penso.example".into()),
+        parent_id: None,
+        updated_at: Some(created_at),
+        created_at: Some(created_at),
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "beads-88".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("@gpg@penso.example"), "{screen}");
+    assert!(screen.contains("updated:"), "{screen}");
+}
+
+#[test]
+fn trigger_split_list_uses_short_times_when_detail_is_open() {
+    let backend = TestBackend::new(160, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    let first_created_at = Utc.with_ymd_and_hms(2026, 3, 22, 9, 15, 0).unwrap();
+    let second_created_at = Utc.with_ymd_and_hms(2026, 3, 22, 13, 37, 0).unwrap();
+    snapshot.visible_triggers = vec![
+        VisibleTriggerRow {
+            trigger_id: "github-78".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "github".into(),
+            identifier: "penso/polyphony#78".into(),
+            title: "First trigger".into(),
+            status: "Todo".into(),
+            approval_state: IssueApprovalState::Approved,
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: Some("penso".into()),
+            parent_id: None,
+            updated_at: None,
+            created_at: Some(first_created_at),
+            has_workspace: false,
+        },
+        VisibleTriggerRow {
+            trigger_id: "github-79".into(),
+            kind: VisibleTriggerKind::Issue,
+            source: "github".into(),
+            identifier: "penso/polyphony#79".into(),
+            title: "Second trigger".into(),
+            status: "Todo".into(),
+            approval_state: IssueApprovalState::Approved,
+            priority: Some(2),
+            labels: vec![],
+            description: None,
+            url: None,
+            author: Some("penso".into()),
+            parent_id: None,
+            updated_at: None,
+            created_at: Some(second_created_at),
+            has_workspace: false,
+        },
+    ];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Trigger {
+        trigger_id: "github-78".into(),
+        scroll: 0,
+        focus: Default::default(),
+        movements_selected: 0,
+        agents_selected: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(
+        screen.contains(&render::format_short_time(second_created_at)),
+        "{screen}"
+    );
 }
 
 #[test]

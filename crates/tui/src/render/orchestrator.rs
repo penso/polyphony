@@ -478,26 +478,26 @@ fn draw_movements_table(
                     Style::default().fg(theme.muted),
                 ));
                 // Show error excerpt for failed sessions
-                if session.status == polyphony_core::AttemptStatus::Failed {
-                    if let Some(error) = &session.error {
-                        let excerpt = if error.len() > 50 {
-                            format!(" — {}…", &error[..47])
-                        } else {
-                            format!(" — {error}")
-                        };
-                        title_spans.push(Span::styled(excerpt, Style::default().fg(theme.danger)));
-                    }
+                if session.status == polyphony_core::AttemptStatus::Failed
+                    && let Some(error) = &session.error
+                {
+                    let excerpt = if error.len() > 50 {
+                        format!(" — {}…", &error[..47])
+                    } else {
+                        format!(" — {error}")
+                    };
+                    title_spans.push(Span::styled(excerpt, Style::default().fg(theme.danger)));
                 }
                 // Show last message for successful sessions
-                if session.status == polyphony_core::AttemptStatus::Succeeded {
-                    if let Some(msg) = &session.last_message {
-                        let excerpt = if msg.len() > 60 {
-                            format!(" — {}…", &msg[..57])
-                        } else {
-                            format!(" — {msg}")
-                        };
-                        title_spans.push(Span::styled(excerpt, Style::default().fg(theme.muted)));
-                    }
+                if session.status == polyphony_core::AttemptStatus::Succeeded
+                    && let Some(msg) = &session.last_message
+                {
+                    let excerpt = if msg.len() > 60 {
+                        format!(" — {}…", &msg[..57])
+                    } else {
+                        format!(" — {msg}")
+                    };
+                    title_spans.push(Span::styled(excerpt, Style::default().fg(theme.muted)));
                 }
 
                 child_row(Line::from(title_spans))
@@ -957,63 +957,6 @@ fn _draw_events_panel(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use polyphony_core::{
-        MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget,
-    };
-
-    use crate::render::orchestrator::{movement_target_label, render_event_line};
-
-    #[test]
-    fn movement_target_label_prefers_review_target() {
-        let movement = MovementRow {
-            id: "movement-1".to_string(),
-            kind: MovementKind::PullRequestReview,
-            issue_identifier: Some("xm7".to_string()),
-            title: "Review PR".to_string(),
-            status: MovementStatus::InProgress,
-            task_count: 0,
-            tasks_completed: 0,
-            deliverable: None,
-            has_deliverable: false,
-            review_target: Some(ReviewTarget {
-                provider: ReviewProviderKind::Github,
-                repository: "penso/polyphony".to_string(),
-                number: 123,
-                url: None,
-                base_branch: "main".to_string(),
-                head_branch: "feature".to_string(),
-                head_sha: "abc123".to_string(),
-                checkout_ref: Some("refs/pull/123/head".to_string()),
-            }),
-            workspace_key: None,
-            workspace_path: None,
-            created_at: chrono::Utc::now(),
-        };
-
-        assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
-    }
-
-    #[test]
-    fn render_event_line_inserts_separator_between_scope_and_message() {
-        let event = polyphony_core::RuntimeEvent {
-            at: chrono::Utc::now(),
-            scope: polyphony_core::EventScope::Dispatch,
-            message: "manual dispatch: w1b -> default".to_string(),
-        };
-
-        let line = render_event_line(&event, crate::theme::default_theme());
-        let rendered = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-
-        assert!(rendered.contains("dispatch manual dispatch: w1b -> default"));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Compact recent events (for inline detail views — 3 most recent)
 // ---------------------------------------------------------------------------
@@ -1086,10 +1029,10 @@ pub(crate) fn draw_filtered_events(
 
     // Clamp / auto-scroll to bottom.
     let scroll = app.current_detail_mut().map(|d| d.scroll_mut());
-    if let Some(s) = scroll {
-        if *s >= max_scroll || *s == u16::MAX {
-            *s = max_scroll;
-        }
+    if let Some(s) = scroll
+        && (*s >= max_scroll || *s == u16::MAX)
+    {
+        *s = max_scroll;
     }
     let scroll_pos = app.current_detail().map(|d| d.scroll()).unwrap_or(0);
 
@@ -1144,5 +1087,62 @@ pub(crate) fn draw_filtered_events(
             area,
             &mut scrollbar_state,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use polyphony_core::{
+        MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget,
+    };
+
+    use crate::render::orchestrator::{movement_target_label, render_event_line};
+
+    #[test]
+    fn movement_target_label_prefers_review_target() {
+        let movement = MovementRow {
+            id: "movement-1".to_string(),
+            kind: MovementKind::PullRequestReview,
+            issue_identifier: Some("xm7".to_string()),
+            title: "Review PR".to_string(),
+            status: MovementStatus::InProgress,
+            task_count: 0,
+            tasks_completed: 0,
+            deliverable: None,
+            has_deliverable: false,
+            review_target: Some(ReviewTarget {
+                provider: ReviewProviderKind::Github,
+                repository: "penso/polyphony".to_string(),
+                number: 123,
+                url: None,
+                base_branch: "main".to_string(),
+                head_branch: "feature".to_string(),
+                head_sha: "abc123".to_string(),
+                checkout_ref: Some("refs/pull/123/head".to_string()),
+            }),
+            workspace_key: None,
+            workspace_path: None,
+            created_at: chrono::Utc::now(),
+        };
+
+        assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
+    }
+
+    #[test]
+    fn render_event_line_inserts_separator_between_scope_and_message() {
+        let event = polyphony_core::RuntimeEvent {
+            at: chrono::Utc::now(),
+            scope: polyphony_core::EventScope::Dispatch,
+            message: "manual dispatch: w1b -> default".to_string(),
+        };
+
+        let line = render_event_line(&event, crate::theme::default_theme());
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(rendered.contains("dispatch manual dispatch: w1b -> default"));
     }
 }

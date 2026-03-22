@@ -82,7 +82,12 @@ impl RuntimeService {
         prefer_alternate_agent: bool,
         agent_override: Option<&str>,
         skip_workspace_sync: bool,
+        directives: Option<&str>,
     ) -> Result<(), Error> {
+        let manual_dispatch_directives = directives
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned);
         if workflow.config.pipeline_active() {
             info!(
                 issue_identifier = %issue.identifier,
@@ -96,6 +101,7 @@ impl RuntimeService {
                     attempt,
                     prefer_alternate_agent,
                     skip_workspace_sync,
+                    manual_dispatch_directives.as_deref(),
                 )
                 .await;
         }
@@ -152,6 +158,7 @@ impl RuntimeService {
         if let Some(existing_id) = self.find_existing_movement_for_issue(&issue.id) {
             if let Some(movement) = self.state.movements.get_mut(&existing_id) {
                 movement.status = MovementStatus::InProgress;
+                movement.manual_dispatch_directives = manual_dispatch_directives.clone();
                 movement.updated_at = Utc::now();
                 if let Some(store) = &self.store {
                     store.save_movement(movement).await?;
@@ -168,6 +175,7 @@ impl RuntimeService {
                 title: issue.title.clone(),
                 status: MovementStatus::InProgress,
                 pipeline_stage: None,
+                manual_dispatch_directives: manual_dispatch_directives.clone(),
                 workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
                 workspace_path: Some(workspace.path.clone()),
                 review_target: None,
@@ -193,15 +201,18 @@ impl RuntimeService {
         let active_states = workflow.config.tracker.active_states.clone();
         let max_turns = workflow.config.agent.max_turns;
         let prompt = append_saved_context(
-            apply_agent_prompt_template(
-                &workflow,
-                &selected_agent.name,
-                render_turn_prompt(&workflow.definition, &issue, attempt, 1, max_turns)?,
-                &issue,
-                attempt,
-                1,
-                max_turns,
-            )?,
+            prepend_manual_dispatch_directives(
+                apply_agent_prompt_template(
+                    &workflow,
+                    &selected_agent.name,
+                    render_turn_prompt(&workflow.definition, &issue, attempt, 1, max_turns)?,
+                    &issue,
+                    attempt,
+                    1,
+                    max_turns,
+                )?,
+                manual_dispatch_directives.as_deref(),
+            ),
             saved_context.as_ref(),
             attempt.is_some()
                 || saved_context

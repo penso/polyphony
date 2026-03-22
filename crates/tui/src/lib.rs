@@ -89,6 +89,10 @@ impl LogBuffer {
         lock_or_recover(&self.lines).len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        lock_or_recover(&self.lines).is_empty()
+    }
+
     pub fn drain_oldest_first(&self) -> Vec<String> {
         let mut lines = lock_or_recover(&self.lines);
         lines.drain(..).collect()

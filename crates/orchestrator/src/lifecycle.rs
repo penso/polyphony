@@ -55,6 +55,10 @@ impl RuntimeService {
                 "startup terminal issue fetch was slow"
             );
         }
+        let terminal_issue_ids = issues
+            .iter()
+            .map(|issue| issue.id.clone())
+            .collect::<HashSet<_>>();
         let manager = self.build_workspace_manager(&workflow);
         for issue in issues {
             if let Err(error) = manager
@@ -67,6 +71,25 @@ impl RuntimeService {
             {
                 warn!(%error, issue_identifier = %issue.identifier, "terminal cleanup failed");
             }
+        }
+        let stale_accepted_movements = self
+            .state
+            .movements
+            .values()
+            .filter(|movement| {
+                movement.issue_id.as_ref().is_some_and(|issue_id| {
+                    !terminal_issue_ids.contains(issue_id)
+                        && movement.deliverable.as_ref().is_some_and(|deliverable| {
+                            deliverable.status == polyphony_core::DeliverableStatus::Merged
+                                && deliverable.decision
+                                    == polyphony_core::DeliverableDecision::Accepted
+                        })
+                })
+            })
+            .map(|movement| movement.id.clone())
+            .collect::<Vec<_>>();
+        for movement_id in stale_accepted_movements {
+            self.finalize_accepted_movement(&movement_id).await;
         }
 
         // Scan remaining workspaces on disk and cache the keys.

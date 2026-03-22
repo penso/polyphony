@@ -432,6 +432,7 @@ mod tests {
             title: "Deliver it".into(),
             status: MovementStatus::Delivered,
             pipeline_stage: None,
+            manual_dispatch_directives: None,
             workspace_key: None,
             workspace_path: None,
             review_target: None,

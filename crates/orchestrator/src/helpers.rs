@@ -785,6 +785,22 @@ pub(crate) fn append_saved_context(
     result
 }
 
+pub(crate) fn prepend_manual_dispatch_directives(
+    prompt: String,
+    directives: Option<&str>,
+) -> String {
+    let Some(directives) = directives.map(str::trim).filter(|text| !text.is_empty()) else {
+        return prompt;
+    };
+    format!(
+        "## Operator Directives (Highest Priority)\n\
+         Follow these directives before lower-priority issue text, generated plans, or prior assumptions.\n\
+         If they conflict with the issue, call out the conflict and follow these directives.\n\n\
+         {directives}\n\n\
+         {prompt}"
+    )
+}
+
 pub(crate) fn rotate_agent_candidates(
     candidate_agents: &[polyphony_core::AgentDefinition],
     previous_agent_name: Option<&str>,

@@ -63,11 +63,24 @@ pub fn draw_triggers_tab(
         )
         .collect();
     let compact = area.width < 80;
+    let mixed_sources = trigger_data
+        .first()
+        .map(|(first, ..)| {
+            trigger_data
+                .iter()
+                .any(|(trigger, ..)| trigger.source != first.source)
+        })
+        .unwrap_or(false);
     // Hide the Kind column when all triggers are the same kind (e.g. all issues).
     let all_same_kind = trigger_data
         .first()
         .map(|(first, ..)| trigger_data.iter().all(|(t, ..)| t.kind == first.kind))
         .unwrap_or(true);
+    let source_col_width: u16 = if mixed_sources {
+        2
+    } else {
+        0
+    };
     let kind_col_width: u16 = if all_same_kind {
         0
     } else if compact {
@@ -88,11 +101,38 @@ pub fn draw_triggers_tab(
         16
     }; // "3d" vs "YYYY-MM-DD HH:MM"
 
-    let mut header_cells = vec![
-        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
-    ];
+    let any_activity_indicator = trigger_data.iter().any(|(trigger, ..)| {
+        trigger.has_workspace
+            || running_ids.contains(trigger.trigger_id.as_str())
+            || app.dispatching_triggers.contains(&trigger.trigger_id)
+    });
+    let workspace_col_width: u16 = if any_activity_indicator {
+        1
+    } else {
+        0
+    };
+
+    let mut header_cells = Vec::new();
+    if workspace_col_width > 0 {
+        header_cells.push(Cell::from(Span::styled(
+            "",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    header_cells.push(Cell::from(Span::styled(
+        "",
+        Style::default().fg(theme.muted),
+    )));
+    if mixed_sources {
+        header_cells.push(Cell::from(Span::styled(
+            "",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    header_cells.push(Cell::from(Span::styled(
+        "Title",
+        Style::default().fg(theme.muted),
+    )));
     if !all_same_kind {
         header_cells.push(Cell::from(Span::styled(
             "",
@@ -113,7 +153,6 @@ pub fn draw_triggers_tab(
         .height(1)
         .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let workspace_col_width: u16 = 2; // "● " or empty
     let tasks_col_width: u16 = if compact {
         0
     } else {
@@ -124,6 +163,7 @@ pub fn draw_triggers_tab(
             + 1 // highlight symbol
             + workspace_col_width as usize
             + time_col_width as usize
+            + source_col_width as usize
             + kind_col_width as usize
             + status_col_width as usize
             + tasks_col_width as usize
@@ -147,7 +187,7 @@ pub fn draw_triggers_tab(
             // Approval marker takes 1 char when present
             let approval = approval_marker(trigger, theme);
             let approval_width = if approval.is_some() {
-                1
+                2
             } else {
                 0
             };
@@ -161,14 +201,19 @@ pub fn draw_triggers_tab(
                 title_spans.push(Span::styled(tree_prefix, Style::default().fg(theme.muted)));
             }
             if let Some((icon, color)) = approval {
-                title_spans.push(Span::styled(icon, Style::default().fg(color)));
+                title_spans.push(Span::styled(format!("{icon} "), Style::default().fg(color)));
             }
             title_spans.push(Span::styled(
                 display_title,
                 Style::default().fg(theme.foreground),
             ));
 
-            let time_label = if compact {
+            let time_label = if compact && app.is_split_eligible() {
+                trigger
+                    .created_at
+                    .map(super::format_short_time)
+                    .unwrap_or_else(|| "—".into())
+            } else if compact {
                 trigger
                     .created_at
                     .map(|dt| super::detail_common::format_relative_time(dt, chrono::Utc::now()))
@@ -195,11 +240,23 @@ pub fn draw_triggers_tab(
 
             let (status_icon, status_color) = status_emoji(&trigger.status, theme);
 
-            let mut cells = vec![
-                Cell::from(workspace_indicator),
-                Cell::from(Span::styled(time_label, Style::default().fg(theme.muted))),
-                Cell::from(Line::from(title_spans)),
-            ];
+            let source_label = source_badge(&trigger.source).to_string();
+
+            let mut cells = Vec::new();
+            if workspace_col_width > 0 {
+                cells.push(Cell::from(workspace_indicator));
+            }
+            cells.push(Cell::from(Span::styled(
+                time_label,
+                Style::default().fg(theme.muted),
+            )));
+            if mixed_sources {
+                cells.push(Cell::from(
+                    Line::from(Span::styled(source_label, Style::default().fg(theme.muted)))
+                        .alignment(Alignment::Right),
+                ));
+            }
+            cells.push(Cell::from(Line::from(title_spans)));
             if !all_same_kind {
                 let kind_color = kind_color(trigger.kind, theme);
                 let kind_label = if compact {
@@ -284,11 +341,14 @@ pub fn draw_triggers_tab(
         )]
     };
 
-    let mut col_constraints = vec![
-        Constraint::Length(workspace_col_width),
-        Constraint::Length(time_col_width),
-        Constraint::Fill(1),
-    ];
+    let mut col_constraints = vec![Constraint::Length(time_col_width)];
+    if workspace_col_width > 0 {
+        col_constraints.insert(0, Constraint::Length(workspace_col_width));
+    }
+    if mixed_sources {
+        col_constraints.push(Constraint::Length(source_col_width));
+    }
+    col_constraints.push(Constraint::Fill(1));
     if !all_same_kind {
         col_constraints.push(Constraint::Length(kind_col_width));
     }
@@ -362,6 +422,17 @@ pub fn draw_triggers_tab(
 
     frame.render_stateful_widget(table, area, &mut app.issues_state);
     draw_scrollbar(frame, area, count, app.issues_state.selected().unwrap_or(0));
+}
+
+fn source_badge(source: &str) -> &'static str {
+    match source {
+        "github" => "",
+        "gitlab" => "gl",
+        "beads" => "bd",
+        "linear" => "ln",
+        "mock" => "mk",
+        _ => "??",
+    }
 }
 
 fn approval_marker(

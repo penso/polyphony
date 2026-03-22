@@ -16,18 +16,10 @@ pub(crate) const TAB_PADDING_RIGHT: &str = "";
 
 use crate::{LogBuffer, theme::Theme};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToastLevel {
-    Info,
-    Warning,
-    Error,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct Toast {
     pub title: String,
     pub description: Option<String>,
-    pub level: ToastLevel,
     pub created_at: Instant,
 }
 
@@ -47,6 +39,146 @@ pub(crate) enum SelectedAgentRow<'a> {
 pub(crate) struct AgentDetailArtifactCache {
     pub key: String,
     pub saved_context: Option<AgentContextSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DispatchModalState {
+    pub trigger_id: String,
+    pub trigger_identifier: String,
+    pub trigger_title: String,
+    pub agent_name: Option<String>,
+    pub directives: String,
+    pub cursor: usize,
+}
+
+impl DispatchModalState {
+    pub(crate) fn new(
+        trigger_id: String,
+        trigger_identifier: String,
+        trigger_title: String,
+        agent_name: Option<String>,
+    ) -> Self {
+        Self {
+            trigger_id,
+            trigger_identifier,
+            trigger_title,
+            agent_name,
+            directives: String::new(),
+            cursor: 0,
+        }
+    }
+
+    pub(crate) fn normalized_directives(&self) -> Option<String> {
+        let trimmed = self.directives.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    pub(crate) fn insert_char(&mut self, ch: char) {
+        let index = self.byte_index();
+        self.directives.insert(index, ch);
+        self.cursor += 1;
+    }
+
+    pub(crate) fn insert_newline(&mut self) {
+        self.insert_char('\n');
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let remove_at = self.cursor - 1;
+        let before = self.directives.chars().take(remove_at);
+        let after = self.directives.chars().skip(self.cursor);
+        self.directives = before.chain(after).collect();
+        self.cursor = remove_at;
+    }
+
+    pub(crate) fn move_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub(crate) fn move_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.directives.chars().count());
+    }
+
+    pub(crate) fn move_home(&mut self) {
+        self.cursor = line_start(&self.directives, self.cursor);
+    }
+
+    pub(crate) fn move_end(&mut self) {
+        self.cursor = line_end(&self.directives, self.cursor);
+    }
+
+    pub(crate) fn move_up(&mut self) {
+        let current_start = line_start(&self.directives, self.cursor);
+        if current_start == 0 {
+            return;
+        }
+        let column = self.cursor.saturating_sub(current_start);
+        let previous_start = line_start(&self.directives, current_start - 1);
+        let previous_end = line_end(&self.directives, previous_start);
+        self.cursor = previous_start + column.min(previous_end.saturating_sub(previous_start));
+    }
+
+    pub(crate) fn move_down(&mut self) {
+        let current_start = line_start(&self.directives, self.cursor);
+        let current_end = line_end(&self.directives, self.cursor);
+        let Some(next_start) =
+            (current_end < self.directives.chars().count()).then_some(current_end + 1)
+        else {
+            return;
+        };
+        let column = self.cursor.saturating_sub(current_start);
+        let next_end = line_end(&self.directives, next_start);
+        self.cursor = next_start + column.min(next_end.saturating_sub(next_start));
+    }
+
+    pub(crate) fn cursor_line_col(&self) -> (usize, usize) {
+        let mut line = 0;
+        let mut col = 0;
+        for ch in self.directives.chars().take(self.cursor) {
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    fn byte_index(&self) -> usize {
+        self.directives
+            .char_indices()
+            .map(|(index, _)| index)
+            .nth(self.cursor)
+            .unwrap_or(self.directives.len())
+    }
+}
+
+fn line_start(text: &str, cursor: usize) -> usize {
+    let mut start = 0;
+    for (index, ch) in text.chars().enumerate().take(cursor) {
+        if ch == '\n' {
+            start = index + 1;
+        }
+    }
+    start
+}
+
+fn line_end(text: &str, cursor: usize) -> usize {
+    let total = text.chars().count();
+    for (index, ch) in text.chars().enumerate().skip(cursor) {
+        if ch == '\n' {
+            return index;
+        }
+    }
+    total
 }
 
 /// Which section of a detail page has focus.
@@ -332,6 +464,7 @@ pub struct AppState {
     pub show_agent_picker: bool,
     pub agent_picker_selected: usize,
     pub agent_picker_issue_id: Option<String>,
+    pub dispatch_modal: Option<DispatchModalState>,
     /// Last left-click time for double-click detection.
     pub last_click_at: Option<Instant>,
     /// Column/row of last click for double-click detection.
@@ -409,6 +542,7 @@ impl AppState {
             show_agent_picker: false,
             agent_picker_selected: 0,
             agent_picker_issue_id: None,
+            dispatch_modal: None,
             last_click_at: None,
             last_click_pos: (0, 0),
             last_scroll_at: None,
@@ -427,16 +561,10 @@ impl AppState {
     }
 
     /// Show a toast notification that auto-expires after a few seconds.
-    pub fn show_toast(
-        &mut self,
-        level: ToastLevel,
-        title: impl Into<String>,
-        description: Option<String>,
-    ) {
+    pub fn show_toast(&mut self, title: impl Into<String>, description: Option<String>) {
         self.toast = Some(Toast {
             title: title.into(),
             description,
-            level,
             created_at: Instant::now(),
         });
     }
@@ -444,11 +572,7 @@ impl AppState {
     /// Clear expired toasts.
     pub fn expire_toast(&mut self) {
         if let Some(toast) = &self.toast {
-            let ttl = match toast.level {
-                ToastLevel::Error => std::time::Duration::from_secs(5),
-                ToastLevel::Warning => std::time::Duration::from_secs(4),
-                ToastLevel::Info => std::time::Duration::from_secs(3),
-            };
+            let ttl = std::time::Duration::from_secs(3);
             if toast.created_at.elapsed() > ttl {
                 self.toast = None;
             }
@@ -752,10 +876,10 @@ impl AppState {
                     // Find the last task whose started_at <= session started_at
                     let mut best_task = None;
                     for (ti, &task_idx) in sorted_tasks.iter().enumerate() {
-                        if let Some(task_start) = snapshot.tasks[task_idx].started_at {
-                            if task_start <= sess_start {
-                                best_task = Some(ti);
-                            }
+                        if let Some(task_start) = snapshot.tasks[task_idx].started_at
+                            && task_start <= sess_start
+                        {
+                            best_task = Some(ti);
                         }
                     }
                     if let Some(ti) = best_task {

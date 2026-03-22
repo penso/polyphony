@@ -491,6 +491,8 @@ pub struct Movement {
     /// Tracks the current pipeline lifecycle stage for resume-after-restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline_stage: Option<PipelineStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_dispatch_directives: Option<String>,
     pub workspace_key: Option<String>,
     pub workspace_path: Option<PathBuf>,
     #[serde(default)]

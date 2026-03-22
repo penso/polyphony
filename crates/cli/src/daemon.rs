@@ -48,6 +48,7 @@ pub(crate) enum DaemonRequest {
     DispatchIssue {
         issue_id: String,
         agent_name: Option<String>,
+        directives: Option<String>,
     },
     DispatchPullRequestTrigger {
         trigger_id: String,
@@ -255,10 +256,12 @@ fn dispatch_request(request: DaemonRequest, state: &ControlState) -> Result<Daem
         DaemonRequest::DispatchIssue {
             issue_id,
             agent_name,
+            directives,
         } => {
             send_command(&state.command_tx, RuntimeCommand::DispatchIssue {
                 issue_id: issue_id.clone(),
                 agent_name,
+                directives,
             })?;
             Ok(DaemonResponse::Accepted {
                 message: format!("dispatch queued for {issue_id}"),

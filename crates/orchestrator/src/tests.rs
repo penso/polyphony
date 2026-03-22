@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use polyphony_core::{
     AgentSession, Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus,
     DispatchMode, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, StoreBootstrap,
-    Workspace, WorkspaceCommitResult, WorkspaceRequest,
+    UpdateIssueRequest, Workspace, WorkspaceCommitResult, WorkspaceRequest,
 };
 use polyphony_workflow::load_workflow;
 use serde_json::json;
@@ -27,6 +27,7 @@ struct TestTracker {
     issues: Arc<Mutex<HashMap<String, Issue>>>,
     workflow_updates: Arc<Mutex<Vec<String>>>,
     fetch_by_ids_calls: Arc<Mutex<u32>>,
+    issue_updates: Arc<Mutex<Vec<UpdateIssueRequest>>>,
 }
 
 #[derive(Clone)]
@@ -98,6 +99,7 @@ impl TestTracker {
             )),
             workflow_updates: Arc::new(Mutex::new(Vec::new())),
             fetch_by_ids_calls: Arc::new(Mutex::new(0)),
+            issue_updates: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -107,6 +109,10 @@ impl TestTracker {
 
     fn fetch_by_ids_calls(&self) -> u32 {
         *self.fetch_by_ids_calls.lock().unwrap()
+    }
+
+    fn recorded_issue_updates(&self) -> Vec<UpdateIssueRequest> {
+        self.issue_updates.lock().unwrap().clone()
     }
 }
 
@@ -182,6 +188,31 @@ impl IssueTracker for TestTracker {
             .unwrap()
             .push(status.to_string());
         Ok(())
+    }
+
+    async fn update_issue(
+        &self,
+        request: &UpdateIssueRequest,
+    ) -> Result<Issue, polyphony_core::Error> {
+        self.issue_updates.lock().unwrap().push(request.clone());
+        let mut issues = self.issues.lock().unwrap();
+        let issue = issues.get_mut(&request.id).ok_or_else(|| {
+            polyphony_core::Error::Adapter(format!("issue {} not found", request.id))
+        })?;
+        if let Some(state) = &request.state {
+            issue.state = state.clone();
+        }
+        if let Some(title) = &request.title {
+            issue.title = title.clone();
+        }
+        if let Some(description) = &request.description {
+            issue.description = Some(description.clone());
+        }
+        if let Some(priority) = request.priority {
+            issue.priority = Some(priority);
+        }
+        issue.updated_at = Some(Utc::now());
+        Ok(issue.clone())
     }
 }
 
@@ -607,6 +638,14 @@ impl WorkspaceProvisioner for RecordingProvisioner {
             .lock()
             .unwrap()
             .push(request.issue_identifier.clone());
+        if tokio::fs::try_exists(&request.workspace_path)
+            .await
+            .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?
+        {
+            tokio::fs::remove_dir_all(&request.workspace_path)
+                .await
+                .map_err(|error| polyphony_core::Error::Adapter(error.to_string()))?;
+        }
         Ok(())
     }
 }
@@ -624,6 +663,10 @@ impl ScriptedPipelineAgent {
             .iter()
             .map(|(agent_name, _)| agent_name.clone())
             .collect()
+    }
+
+    fn recorded_calls(&self) -> Vec<(String, String)> {
+        self.calls.lock().unwrap().clone()
     }
 }
 
@@ -1177,6 +1220,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
             title: trigger.title.clone(),
             status: MovementStatus::InProgress,
             pipeline_stage: None,
+            manual_dispatch_directives: None,
             workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
             workspace_path: Some(workspace_path.clone()),
             review_target: Some(trigger.review_target()),
@@ -1779,7 +1823,11 @@ async fn manual_dispatch_still_runs_waiting_issue_without_approval_override() {
     let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
     service
         .pending_manual_dispatches
-        .push((issue.id.clone(), None));
+        .push(crate::ManualDispatchRequest {
+            issue_id: issue.id.clone(),
+            agent_name: None,
+            directives: None,
+        });
 
     service.process_manual_dispatches().await;
 
@@ -1813,6 +1861,60 @@ async fn approving_waiting_issue_persists_and_allows_automatic_dispatch() {
     service.tick().await;
 
     assert!(service.state.running.contains_key(&issue.id));
+}
+
+#[tokio::test]
+async fn closing_visible_issue_updates_tracker_and_cleans_workspace() {
+    let workspace_root = unique_workspace_root("close-issue-trigger");
+    let issue = sample_issue("issue-close-1", "FAC-CLOSE-1", "Todo", "Already done");
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let tracker_for_assertions = tracker.clone();
+    let provisioner = RecordingProvisioner::default();
+    let provisioner_for_assertions = provisioner.clone();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+
+    service.tick().await;
+
+    let workspace_key = sanitize_workspace_key(&issue.identifier);
+    service.state.worktree_keys.insert(workspace_key.clone());
+    tokio::fs::create_dir_all(workspace_root.join(&workspace_key))
+        .await
+        .expect("workspace directory created");
+
+    service.pending_issue_closures.push(issue.id.clone());
+    service.process_pending_issue_closures().await;
+
+    assert!(
+        service
+            .state
+            .visible_issues
+            .iter()
+            .all(|row| row.issue_id != issue.id),
+        "closed issue should be removed from active issue rows"
+    );
+    assert_eq!(
+        tracker_for_assertions
+            .issues
+            .lock()
+            .unwrap()
+            .get(&issue.id)
+            .expect("issue exists")
+            .state,
+        "Closed"
+    );
+    assert_eq!(
+        tracker_for_assertions.recorded_issue_updates().len(),
+        1,
+        "tracker should receive one close update"
+    );
+    assert_eq!(
+        provisioner_for_assertions.cleaned_issue_identifiers(),
+        vec![issue.identifier.clone()],
+    );
+    assert!(
+        !service.state.worktree_keys.contains(&workspace_key),
+        "workspace key should be removed after cleanup"
+    );
 }
 
 #[tokio::test]
@@ -2191,7 +2293,7 @@ async fn retry_dispatch_rotates_to_fallback_agent_using_saved_context() {
         });
 
     service
-        .dispatch_issue(workflow, issue.clone(), Some(2), true, None, false)
+        .dispatch_issue(workflow, issue.clone(), Some(2), true, None, false, None)
         .await
         .unwrap();
 
@@ -2390,7 +2492,15 @@ async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github(
     .0;
 
     service
-        .dispatch_issue(workflow.clone(), issue.clone(), None, false, None, false)
+        .dispatch_issue(
+            workflow.clone(),
+            issue.clone(),
+            None,
+            false,
+            None,
+            false,
+            None,
+        )
         .await
         .unwrap();
     handle_next_worker_message(&mut service).await;
@@ -2496,7 +2606,7 @@ async fn pipeline_issue_trigger_writes_workspace_artifacts_and_runs_after_outcom
     .0;
 
     service
-        .dispatch_issue(workflow, issue, None, false, None, false)
+        .dispatch_issue(workflow, issue, None, false, None, false, None)
         .await
         .unwrap();
     handle_next_worker_message(&mut service).await;
@@ -2663,7 +2773,7 @@ async fn pipeline_issue_trigger_can_finish_without_opening_a_pull_request() {
     .0;
 
     service
-        .dispatch_issue(workflow, issue.clone(), None, false, None, false)
+        .dispatch_issue(workflow, issue.clone(), None, false, None, false, None)
         .await
         .unwrap();
     handle_next_worker_message(&mut service).await;
@@ -2714,6 +2824,7 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
         title: "Need a PR".into(),
         status: MovementStatus::Delivered,
         pipeline_stage: None,
+        manual_dispatch_directives: None,
         workspace_key: Some("_7".into()),
         workspace_path: Some(workspace_root.join("_7")),
         review_target: None,
@@ -2757,6 +2868,132 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
     );
 }
 
+#[tokio::test]
+async fn resolving_already_accepted_deliverable_is_ignored() {
+    let workspace_root = unique_workspace_root("deliverable-decision-ignored");
+    let tracker = TestTracker::new(vec![sample_issue("github:7", "#7", "Todo", "Need a PR")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    let now = Utc::now();
+    service.state.movements.insert("mov-1".into(), Movement {
+        id: "mov-1".into(),
+        kind: MovementKind::IssueDelivery,
+        issue_id: Some("github:7".into()),
+        issue_identifier: Some("#7".into()),
+        title: "Need a PR".into(),
+        status: MovementStatus::Delivered,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: Some("_7".into()),
+        workspace_path: Some(workspace_root.join("_7")),
+        review_target: None,
+        deliverable: Some(Deliverable {
+            kind: DeliverableKind::Patch,
+            status: DeliverableStatus::Open,
+            url: None,
+            decision: DeliverableDecision::Accepted,
+            title: None,
+            description: None,
+            metadata: Default::default(),
+        }),
+        created_at: now,
+        updated_at: now,
+    });
+
+    service
+        .pending_deliverable_resolutions
+        .push(("mov-1".into(), DeliverableDecision::Accepted));
+    service.process_pending_deliverable_resolutions().await;
+
+    let movement = service
+        .state
+        .movements
+        .get("mov-1")
+        .expect("movement exists");
+    let deliverable = movement
+        .deliverable
+        .as_ref()
+        .expect("deliverable exists after ignored resolution");
+    assert_eq!(deliverable.decision, DeliverableDecision::Accepted);
+    assert_eq!(
+        service
+            .state
+            .recent_events
+            .front()
+            .expect("ignored event recorded")
+            .message,
+        "deliverable decision ignored: #7 already accepted"
+    );
+}
+
+#[tokio::test]
+async fn startup_cleanup_finalizes_merged_accepted_movements() {
+    let workspace_root = unique_workspace_root("startup-finalize-accepted");
+    let tracker = TestTracker::new(vec![sample_issue("github:7", "#7", "Todo", "Need a PR")]);
+    let tracker_for_assertions = tracker.clone();
+    let provisioner = RecordingProvisioner::default();
+    let provisioner_for_assertions = provisioner.clone();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    let now = Utc::now();
+    service.state.movements.insert("mov-1".into(), Movement {
+        id: "mov-1".into(),
+        kind: MovementKind::IssueDelivery,
+        issue_id: Some("github:7".into()),
+        issue_identifier: Some("#7".into()),
+        title: "Need a PR".into(),
+        status: MovementStatus::Delivered,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: Some("_7".into()),
+        workspace_path: Some(workspace_root.join("_7")),
+        review_target: None,
+        deliverable: Some(Deliverable {
+            kind: DeliverableKind::LocalBranch,
+            status: DeliverableStatus::Merged,
+            url: None,
+            decision: DeliverableDecision::Accepted,
+            title: Some("Branch: task/7".into()),
+            description: None,
+            metadata: std::collections::HashMap::from([(
+                "branch".into(),
+                serde_json::Value::String("task/7".into()),
+            )]),
+        }),
+        created_at: now,
+        updated_at: now,
+    });
+    service.state.worktree_keys.insert("_7".into());
+    tokio::fs::create_dir_all(workspace_root.join("_7"))
+        .await
+        .expect("workspace directory created");
+
+    service.startup_cleanup().await;
+
+    assert_eq!(
+        tracker_for_assertions
+            .issues
+            .lock()
+            .unwrap()
+            .get("github:7")
+            .expect("issue exists")
+            .state,
+        "Closed"
+    );
+    assert_eq!(
+        tracker_for_assertions.recorded_issue_updates().len(),
+        1,
+        "startup cleanup should close the tracker issue once"
+    );
+    assert_eq!(
+        provisioner_for_assertions.cleaned_issue_identifiers(),
+        vec!["#7".to_string()],
+    );
+    assert!(
+        !service.state.worktree_keys.contains("_7"),
+        "startup cleanup should remove the cleaned worktree key"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Stop mode tests
 // ---------------------------------------------------------------------------
@@ -2786,7 +3023,11 @@ async fn manual_dispatch_works_in_stop_mode() {
     service.state.dispatch_mode = polyphony_core::DispatchMode::Stop;
     service
         .pending_manual_dispatches
-        .push(("issue-1".into(), None));
+        .push(crate::ManualDispatchRequest {
+            issue_id: "issue-1".into(),
+            agent_name: None,
+            directives: None,
+        });
 
     service.process_manual_dispatches().await;
 
@@ -2821,7 +3062,11 @@ async fn manual_dispatch_is_processed_on_next_tick() {
     // Queue a manual dispatch
     service
         .pending_manual_dispatches
-        .push((issue.id.clone(), None));
+        .push(crate::ManualDispatchRequest {
+            issue_id: issue.id.clone(),
+            agent_name: None,
+            directives: None,
+        });
 
     // A single tick should process it
     service.tick().await;
@@ -2841,7 +3086,11 @@ async fn manual_dispatch_with_agent_name() {
 
     service
         .pending_manual_dispatches
-        .push((issue.id.clone(), Some("mock".into())));
+        .push(crate::ManualDispatchRequest {
+            issue_id: issue.id.clone(),
+            agent_name: Some("mock".into()),
+            directives: None,
+        });
 
     service.process_manual_dispatches().await;
 
@@ -2853,6 +3102,146 @@ async fn manual_dispatch_with_agent_name() {
     assert_eq!(
         running.agent_name, "mock",
         "should use the explicitly requested agent"
+    );
+}
+
+#[tokio::test]
+async fn manual_dispatch_directives_are_prepended_to_direct_issue_prompt() {
+    let workspace_root = unique_workspace_root("manual-directives-direct");
+    let workflow = test_workflow(&workspace_root);
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let issue = sample_issue(
+        "issue-directives-1",
+        "FAC-DIRECTIVES-1",
+        "Todo",
+        "Verify before fixing",
+    );
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let agent = RecordingSessionAgent::default();
+    let agent_handle = agent.clone();
+    let mut service = RuntimeService::new(
+        Arc::new(tracker),
+        None,
+        Arc::new(agent),
+        Arc::new(RecordingProvisioner::default()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+    let directives = "Please verify this is actually a bug before fixing it.";
+
+    service
+        .dispatch_issue(
+            workflow,
+            issue.clone(),
+            None,
+            false,
+            None,
+            false,
+            Some(directives),
+        )
+        .await
+        .unwrap();
+    handle_next_worker_message(&mut service).await;
+
+    let prompts = agent_handle.prompts();
+    assert!(!prompts.is_empty());
+    assert!(prompts[0].starts_with("## Operator Directives (Highest Priority)"));
+    assert!(prompts[0].contains(directives));
+    assert!(prompts[0].contains("Test prompt"));
+    let movement = service
+        .state
+        .movements
+        .values()
+        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
+        .expect("movement should be created for direct dispatch");
+    assert_eq!(
+        movement.manual_dispatch_directives.as_deref(),
+        Some(directives)
+    );
+}
+
+#[tokio::test]
+async fn manual_dispatch_directives_reach_pipeline_router_and_worker_prompts() {
+    let workspace_root = unique_workspace_root("manual-directives-pipeline");
+    let workflow = pipeline_workflow_with_automation(&workspace_root);
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let issue = sample_issue(
+        "issue-directives-2",
+        "DOG-DIRECTIVES-2",
+        "Todo",
+        "Plan with operator guidance",
+    );
+    let tracker = TestTracker::new(vec![issue.clone()]);
+    let agent = ScriptedPipelineAgent::default();
+    let agent_handle = agent.clone();
+    let mut service = RuntimeService::new(
+        Arc::new(tracker),
+        None,
+        Arc::new(agent),
+        Arc::new(RecordingProvisioner::default()),
+        Some(Arc::new(RecordingCommitter::new(None))),
+        Some(Arc::new(RecordingPullRequestManager::new(PullRequestRef {
+            repository: "penso/polyphony".into(),
+            number: 42,
+            url: Some("https://github.com/penso/polyphony/pull/42".into()),
+        }))),
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+    let directives = "Please verify this is a bug first, then make a plan to fix it.";
+
+    service
+        .dispatch_issue(
+            workflow,
+            issue.clone(),
+            None,
+            false,
+            None,
+            false,
+            Some(directives),
+        )
+        .await
+        .unwrap();
+    handle_next_worker_message(&mut service).await;
+    handle_next_worker_message(&mut service).await;
+
+    let calls = agent_handle.recorded_calls();
+    let router_prompt = calls
+        .iter()
+        .find(|(agent_name, _)| agent_name == "router")
+        .map(|(_, prompt)| prompt)
+        .expect("router prompt should be recorded");
+    assert!(router_prompt.starts_with("## Operator Directives (Highest Priority)"));
+    assert!(router_prompt.contains(directives));
+
+    let worker_prompt = calls
+        .iter()
+        .find(|(agent_name, prompt)| {
+            agent_name == "implementer" && prompt.contains("## Pipeline Task")
+        })
+        .map(|(_, prompt)| prompt)
+        .expect("pipeline worker prompt should be recorded");
+    assert!(worker_prompt.contains(directives));
+
+    let movement = service
+        .state
+        .movements
+        .values()
+        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
+        .expect("movement should be created for pipeline dispatch");
+    assert_eq!(
+        movement.manual_dispatch_directives.as_deref(),
+        Some(directives)
     );
 }
 
@@ -3070,6 +3459,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             title: "Delivered work".into(),
             status: MovementStatus::Delivered,
             pipeline_stage: None,
+            manual_dispatch_directives: None,
             workspace_key: None,
             workspace_path: None,
             review_target: None,
@@ -3098,6 +3488,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             title: "Active work".into(),
             status: MovementStatus::InProgress,
             pipeline_stage: None,
+            manual_dispatch_directives: None,
             workspace_key: None,
             workspace_path: None,
             review_target: None,

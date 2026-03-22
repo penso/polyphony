@@ -620,6 +620,103 @@ impl RuntimeService {
         );
     }
 
+    pub(crate) async fn finalize_accepted_movement(&mut self, movement_id: &str) {
+        self.close_movement_issue(movement_id).await;
+        self.cleanup_movement_workspace(movement_id).await;
+    }
+
+    async fn close_movement_issue(&mut self, movement_id: &str) {
+        let Some((issue_id, movement_label, terminal_state)) =
+            self.state.movements.get(movement_id).and_then(|movement| {
+                movement.issue_id.as_ref().map(|issue_id| {
+                    (
+                        issue_id.clone(),
+                        Self::movement_target_label(movement),
+                        self.workflow()
+                            .config
+                            .tracker
+                            .terminal_states
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "closed".into()),
+                    )
+                })
+            })
+        else {
+            return;
+        };
+
+        let request = polyphony_core::UpdateIssueRequest {
+            id: issue_id.clone(),
+            state: Some(terminal_state.clone()),
+            ..Default::default()
+        };
+        match self.tracker.update_issue(&request).await {
+            Ok(_) => {
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("{movement_label} issue marked {terminal_state}"),
+                );
+            },
+            Err(error) => {
+                warn!(%error, issue_id, "failed to close issue after merge");
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("{movement_label} merged but failed to close issue: {error}"),
+                );
+            },
+        }
+    }
+
+    async fn cleanup_movement_workspace(&mut self, movement_id: &str) {
+        let Some((issue_identifier, branch_name, workspace_key, movement_label)) =
+            self.state.movements.get(movement_id).and_then(|movement| {
+                movement.issue_identifier.as_ref().map(|issue_identifier| {
+                    let branch_name = movement.deliverable.as_ref().and_then(|deliverable| {
+                        deliverable
+                            .metadata
+                            .get("branch")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned)
+                    });
+                    (
+                        issue_identifier.clone(),
+                        branch_name,
+                        movement
+                            .workspace_key
+                            .clone()
+                            .unwrap_or_else(|| sanitize_workspace_key(issue_identifier)),
+                        Self::movement_target_label(movement),
+                    )
+                })
+            })
+        else {
+            return;
+        };
+
+        let workflow = self.workflow();
+        let manager = self.build_workspace_manager(&workflow);
+        match manager
+            .cleanup_workspace(&issue_identifier, branch_name, &workflow.config.hooks)
+            .await
+        {
+            Ok(()) => {
+                self.state.worktree_keys.remove(&workspace_key);
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("{movement_label} workspace cleaned up"),
+                );
+            },
+            Err(error) => {
+                warn!(%error, issue_identifier, "failed to clean up workspace after merge");
+                self.push_event(
+                    EventScope::Handoff,
+                    format!("{movement_label} merged but failed to clean up workspace: {error}"),
+                );
+            },
+        }
+    }
+
     /// Merge a deliverable — either a GitHub PR or a local branch.
     pub(crate) async fn merge_deliverable(&mut self, movement_id: &str) {
         // Extract info needed for the merge before borrowing mutably.
@@ -639,14 +736,8 @@ impl RuntimeService {
                 );
                 return;
             };
-            if deliverable.status == polyphony_core::DeliverableStatus::Merged {
-                self.push_event(
-                    EventScope::Handoff,
-                    format!("{movement_label} already merged"),
-                );
-                return;
-            }
             (
+                deliverable.status == polyphony_core::DeliverableStatus::Merged,
                 deliverable.kind,
                 deliverable
                     .metadata
@@ -664,7 +755,16 @@ impl RuntimeService {
                 movement_label,
             )
         };
-        let (kind, branch, workspace, url, movement_label) = merge_info;
+        let (already_merged, kind, branch, workspace, url, movement_label) = merge_info;
+
+        if already_merged {
+            self.push_event(
+                EventScope::Handoff,
+                format!("{movement_label} already merged"),
+            );
+            self.finalize_accepted_movement(movement_id).await;
+            return;
+        }
 
         let result = match kind {
             polyphony_core::DeliverableKind::LocalBranch => {
@@ -708,40 +808,7 @@ impl RuntimeService {
                 EventScope::Handoff,
                 format!("{movement_label} merged: {}", result.message),
             );
-            // Close the underlying issue in the tracker so the trigger
-            // disappears from the active list.
-            if let Some(movement) = self.state.movements.get(movement_id)
-                && let Some(issue_id) = &movement.issue_id
-            {
-                let terminal_state = self
-                    .workflow()
-                    .config
-                    .tracker
-                    .terminal_states
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "closed".into());
-                let request = polyphony_core::UpdateIssueRequest {
-                    id: issue_id.clone(),
-                    state: Some(terminal_state.clone()),
-                    ..Default::default()
-                };
-                match self.tracker.update_issue(&request).await {
-                    Ok(_) => {
-                        self.push_event(
-                            EventScope::Handoff,
-                            format!("{movement_label} issue marked {terminal_state}"),
-                        );
-                    },
-                    Err(error) => {
-                        warn!(%error, issue_id, "failed to close issue after merge");
-                        self.push_event(
-                            EventScope::Handoff,
-                            format!("{movement_label} merged but failed to close issue: {error}"),
-                        );
-                    },
-                }
-            }
+            self.finalize_accepted_movement(movement_id).await;
         } else {
             self.push_event(
                 EventScope::Handoff,

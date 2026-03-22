@@ -94,6 +94,9 @@ pub enum RuntimeCommand {
         issue_id: polyphony_core::IssueId,
         source: String,
     },
+    CloseIssueTrigger {
+        issue_id: polyphony_core::IssueId,
+    },
     ResolveMovementDeliverable {
         movement_id: polyphony_core::MovementId,
         decision: polyphony_core::DeliverableDecision,
@@ -101,6 +104,7 @@ pub enum RuntimeCommand {
     DispatchIssue {
         issue_id: polyphony_core::IssueId,
         agent_name: Option<String>,
+        directives: Option<String>,
     },
     DispatchPullRequestTrigger {
         trigger_id: String,
@@ -161,11 +165,12 @@ pub struct RuntimeService {
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     pending_refresh: bool,
     pending_issue_approvals: Vec<(polyphony_core::IssueId, String)>,
+    pending_issue_closures: Vec<polyphony_core::IssueId>,
     pending_deliverable_resolutions: Vec<(
         polyphony_core::MovementId,
         polyphony_core::DeliverableDecision,
     )>,
-    pending_manual_dispatches: Vec<(polyphony_core::IssueId, Option<String>)>,
+    pending_manual_dispatches: Vec<ManualDispatchRequest>,
     pending_manual_pull_request_trigger_dispatches: Vec<String>,
     pending_merge_deliverables: Vec<polyphony_core::MovementId>,
     pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
@@ -186,6 +191,13 @@ enum OrchestratorMessage {
         started_at: DateTime<Utc>,
         outcome: AgentRunResult,
     },
+}
+
+#[derive(Debug, Clone)]
+struct ManualDispatchRequest {
+    issue_id: polyphony_core::IssueId,
+    agent_name: Option<String>,
+    directives: Option<String>,
 }
 
 #[derive(Debug)]

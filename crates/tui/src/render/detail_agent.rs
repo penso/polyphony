@@ -100,11 +100,10 @@ pub(crate) fn draw_agent_detail(
     // were "following" and we keep them at the new bottom. Scrolling further up
     // (e.g. pressing k multiple times) disengages auto-scroll.
     let current_scroll = app.current_detail_scroll();
-    if is_running
-        && (current_scroll == u16::MAX || max_scroll.saturating_sub(current_scroll as usize) <= 10)
+    if (is_running
+        && (current_scroll == u16::MAX || max_scroll.saturating_sub(current_scroll as usize) <= 10))
+        || current_scroll as usize > max_scroll
     {
-        app.set_current_detail_scroll(max_scroll as u16);
-    } else if current_scroll as usize > max_scroll {
         app.set_current_detail_scroll(max_scroll as u16);
     }
     let scroll_pos = app.current_detail_scroll();
