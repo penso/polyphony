@@ -1535,9 +1535,26 @@ fn selected_deliverable_movement<'a>(
 ) -> Option<&'a polyphony_core::MovementRow> {
     match app.active_tab {
         app::ActiveTab::Deliverables => app.selected_deliverable(snapshot),
-        app::ActiveTab::Orchestrator => app
-            .selected_movement(snapshot)
-            .filter(|movement| movement.deliverable.is_some()),
+        app::ActiveTab::Orchestrator => {
+            // When a Movement row is selected directly.
+            if let Some(m) = app
+                .selected_movement(snapshot)
+                .filter(|m| m.deliverable.is_some())
+            {
+                return Some(m);
+            }
+            // When a child row (Outcome) is selected, find parent movement.
+            if let Some(app::OrchestratorTreeRow::Outcome {
+                movement_snapshot_index,
+            }) = app.selected_orchestrator_row()
+            {
+                return snapshot
+                    .movements
+                    .get(*movement_snapshot_index)
+                    .filter(|m| m.deliverable.is_some());
+            }
+            None
+        },
         _ => None,
     }
 }
