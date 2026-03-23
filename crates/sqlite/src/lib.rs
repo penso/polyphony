@@ -390,6 +390,7 @@ mod tests {
             agent_catalogs: Vec::new(),
             saved_contexts: Vec::new(),
             recent_events: Vec::new(),
+            pending_user_interactions: Vec::new(),
             movements: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),

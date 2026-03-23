@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 git2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

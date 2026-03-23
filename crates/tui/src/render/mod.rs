@@ -99,13 +99,32 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     // Toast notification
     app.expire_toast();
-    if let Some(toast) = &app.toast {
+    if let Some((title, description, border_color, title_color)) = app
+        .sticky_toast
+        .as_ref()
+        .map(|toast| {
+            (
+                toast.title.as_str(),
+                toast.description.as_deref(),
+                app.theme.warning,
+                app.theme.warning,
+            )
+        })
+        .or_else(|| {
+            app.toast.as_ref().map(|toast| {
+                (
+                    toast.title.as_str(),
+                    toast.description.as_deref(),
+                    app.theme.info,
+                    app.theme.info,
+                )
+            })
+        })
+    {
         let theme = app.theme;
-        let (border_color, title_color) = (theme.info, theme.info);
-        let content_width =
-            toast.title.len() + toast.description.as_ref().map_or(0, |d| d.len() + 3);
+        let content_width = title.len() + description.map_or(0, |value| value.len() + 3);
         let width = (content_width as u16 + 6).min(frame.area().width.saturating_sub(4));
-        let height: u16 = if toast.description.is_some() {
+        let height: u16 = if description.is_some() {
             4
         } else {
             3
@@ -119,14 +138,14 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
         };
         frame.render_widget(ratatui::widgets::Clear, toast_area);
         let mut lines = vec![ratatui::text::Line::from(ratatui::text::Span::styled(
-            toast.title.clone(),
+            title.to_string(),
             ratatui::style::Style::default()
                 .fg(title_color)
                 .add_modifier(ratatui::style::Modifier::BOLD),
         ))];
-        if let Some(desc) = &toast.description {
+        if let Some(desc) = description {
             lines.push(ratatui::text::Line::from(ratatui::text::Span::styled(
-                desc.clone(),
+                desc.to_string(),
                 ratatui::style::Style::default().fg(theme.foreground),
             )));
         }

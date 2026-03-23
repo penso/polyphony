@@ -477,18 +477,18 @@ fn detail_hint_spans(issue: &VisibleTriggerRow, theme: crate::theme::Theme) -> V
         Span::styled("o", Style::default().fg(theme.highlight)),
         Span::styled(":open  ", Style::default().fg(theme.muted)),
     ];
+    spans.push(Span::styled("d", Style::default().fg(theme.highlight)));
+    spans.push(Span::styled(
+        ":dispatch  ",
+        Style::default().fg(theme.muted),
+    ));
     if issue.kind == polyphony_core::VisibleTriggerKind::Issue {
-        spans.push(Span::styled("d", Style::default().fg(theme.highlight)));
-        spans.push(Span::styled(
-            ":dispatch  ",
-            Style::default().fg(theme.muted),
-        ));
         spans.push(Span::styled("x", Style::default().fg(theme.highlight)));
         spans.push(Span::styled(":close  ", Style::default().fg(theme.muted)));
-        if issue.approval_state == IssueApprovalState::Waiting {
-            spans.push(Span::styled("a", Style::default().fg(theme.highlight)));
-            spans.push(Span::styled(":approve  ", Style::default().fg(theme.muted)));
-        }
+    }
+    if issue.approval_state == IssueApprovalState::Waiting {
+        spans.push(Span::styled("a", Style::default().fg(theme.highlight)));
+        spans.push(Span::styled(":approve  ", Style::default().fg(theme.muted)));
     }
     spans.push(Span::styled("e", Style::default().fg(theme.highlight)));
     spans.push(Span::styled(":events  ", Style::default().fg(theme.muted)));

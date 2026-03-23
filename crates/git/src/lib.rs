@@ -1,12 +1,14 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use async_trait::async_trait;
 use polyphony_core::{
-    CheckoutKind, Error as CoreError, Workspace, WorkspaceCommitRequest, WorkspaceCommitResult,
+    CheckoutKind, Error as CoreError, UserInteractionKind, UserInteractionReporter,
+    UserInteractionRequest, Workspace, WorkspaceCommitRequest, WorkspaceCommitResult,
     WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
 };
 use thiserror::Error;
@@ -22,11 +24,47 @@ pub enum Error {
     WorkspacePathCollision(String),
 }
 
-#[derive(Debug, Default)]
-pub struct GitWorkspaceProvisioner;
+pub struct GitWorkspaceProvisioner {
+    interaction_reporter: Mutex<Option<Arc<dyn UserInteractionReporter>>>,
+}
 
-#[derive(Debug, Default)]
-pub struct GitWorkspaceCommitter;
+pub struct GitWorkspaceCommitter {
+    interaction_reporter: Mutex<Option<Arc<dyn UserInteractionReporter>>>,
+}
+
+impl Default for GitWorkspaceProvisioner {
+    fn default() -> Self {
+        Self {
+            interaction_reporter: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for GitWorkspaceCommitter {
+    fn default() -> Self {
+        Self {
+            interaction_reporter: Mutex::new(None),
+        }
+    }
+}
+
+impl GitWorkspaceProvisioner {
+    fn interaction_reporter(&self) -> Option<Arc<dyn UserInteractionReporter>> {
+        self.interaction_reporter
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+}
+
+impl GitWorkspaceCommitter {
+    fn interaction_reporter(&self) -> Option<Arc<dyn UserInteractionReporter>> {
+        self.interaction_reporter
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+}
 
 #[async_trait]
 impl WorkspaceProvisioner for GitWorkspaceProvisioner {
@@ -34,8 +72,15 @@ impl WorkspaceProvisioner for GitWorkspaceProvisioner {
         "workspace:git".into()
     }
 
+    fn set_interaction_reporter(&self, reporter: Option<Arc<dyn UserInteractionReporter>>) {
+        if let Ok(mut slot) = self.interaction_reporter.lock() {
+            *slot = reporter;
+        }
+    }
+
     async fn ensure_workspace(&self, request: WorkspaceRequest) -> Result<Workspace, CoreError> {
-        tokio_wrap(move || ensure_workspace_sync(request)).await
+        let interaction_reporter = self.interaction_reporter();
+        tokio_wrap(move || ensure_workspace_sync(request, interaction_reporter)).await
     }
 
     async fn cleanup_workspace(&self, request: WorkspaceRequest) -> Result<(), CoreError> {
@@ -49,16 +94,26 @@ impl WorkspaceCommitter for GitWorkspaceCommitter {
         "workspace:git-commit".into()
     }
 
+    fn set_interaction_reporter(&self, reporter: Option<Arc<dyn UserInteractionReporter>>) {
+        if let Ok(mut slot) = self.interaction_reporter.lock() {
+            *slot = reporter;
+        }
+    }
+
     async fn commit_and_push(
         &self,
         request: &WorkspaceCommitRequest,
     ) -> Result<Option<WorkspaceCommitResult>, CoreError> {
         let request = request.clone();
-        tokio_wrap(move || commit_and_push_sync(&request)).await
+        let interaction_reporter = self.interaction_reporter();
+        tokio_wrap(move || commit_and_push_sync(&request, interaction_reporter)).await
     }
 }
 
-fn ensure_workspace_sync(request: WorkspaceRequest) -> Result<Workspace, CoreError> {
+fn ensure_workspace_sync(
+    request: WorkspaceRequest,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+) -> Result<Workspace, CoreError> {
     fs::create_dir_all(&request.workspace_root).map_err(map_io)?;
     if let Ok(metadata) = fs::symlink_metadata(&request.workspace_path) {
         if !metadata.is_dir() {
@@ -73,7 +128,7 @@ fn ensure_workspace_sync(request: WorkspaceRequest) -> Result<Workspace, CoreErr
             sync_on_reuse = request.sync_on_reuse,
             "reusing existing workspace"
         );
-        sync_existing_workspace(&request)?;
+        sync_existing_workspace(&request, interaction_reporter.clone())?;
         return Ok(Workspace {
             path: request.workspace_path,
             workspace_key: request.workspace_key,
@@ -84,8 +139,10 @@ fn ensure_workspace_sync(request: WorkspaceRequest) -> Result<Workspace, CoreErr
 
     let create_result = match request.checkout_kind {
         CheckoutKind::Directory => fs::create_dir_all(&request.workspace_path).map_err(map_io),
-        CheckoutKind::LinkedWorktree => add_linked_worktree(&request),
-        CheckoutKind::DiscreteClone => create_discrete_clone(&request),
+        CheckoutKind::LinkedWorktree => add_linked_worktree(&request, interaction_reporter.clone()),
+        CheckoutKind::DiscreteClone => {
+            create_discrete_clone(&request, interaction_reporter.clone())
+        },
     };
     if let Err(error) = create_result {
         cleanup_partial_workspace(&request.workspace_path);
@@ -125,6 +182,7 @@ fn cleanup_workspace_sync(request: WorkspaceRequest) -> Result<(), CoreError> {
 
 fn commit_and_push_sync(
     request: &WorkspaceCommitRequest,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
 ) -> Result<Option<WorkspaceCommitResult>, CoreError> {
     let repo = git2::Repository::open(&request.workspace_path)
         .map_err(|error| CoreError::Adapter(format!("open workspace repo failed: {error}")))?;
@@ -206,11 +264,13 @@ fn commit_and_push_sync(
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed| {
         resolve_remote_credentials(
-            &repo,
+            Some(&repo),
             url,
             username_from_url,
             allowed,
             request.auth_token.as_deref(),
+            interaction_reporter.as_deref(),
+            GitCredentialOperation::PushBranch,
         )
     });
     let mut push_options = git2::PushOptions::new();
@@ -279,7 +339,10 @@ fn branch_is_ahead_of_base(
         .is_some())
 }
 
-fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> {
+fn sync_existing_workspace(
+    request: &WorkspaceRequest,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+) -> Result<(), CoreError> {
     if !request.sync_on_reuse {
         return Ok(());
     }
@@ -294,8 +357,11 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
         CheckoutKind::Directory => Ok(()),
         CheckoutKind::LinkedWorktree => {
             if let Some(source_repo_path) = request.source_repo_path.as_deref()
-                && let Err(error) =
-                    fetch_origin_with_timeout(source_repo_path, request.checkout_ref.as_deref())
+                && let Err(error) = fetch_origin_with_timeout(
+                    source_repo_path,
+                    request.checkout_ref.as_deref(),
+                    interaction_reporter.clone(),
+                )
             {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
@@ -307,9 +373,11 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
             )
         },
         CheckoutKind::DiscreteClone => {
-            if let Err(error) =
-                fetch_origin_with_timeout(&request.workspace_path, request.checkout_ref.as_deref())
-            {
+            if let Err(error) = fetch_origin_with_timeout(
+                &request.workspace_path,
+                request.checkout_ref.as_deref(),
+                interaction_reporter.clone(),
+            ) {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
             sync_existing_repo_checkout(
@@ -322,7 +390,10 @@ fn sync_existing_workspace(request: &WorkspaceRequest) -> Result<(), CoreError> 
     }
 }
 
-fn add_linked_worktree(request: &WorkspaceRequest) -> Result<(), CoreError> {
+fn add_linked_worktree(
+    request: &WorkspaceRequest,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+) -> Result<(), CoreError> {
     let source_path = request
         .source_repo_path
         .as_deref()
@@ -341,7 +412,7 @@ fn add_linked_worktree(request: &WorkspaceRequest) -> Result<(), CoreError> {
         "creating linked worktree"
     );
     let branch_ref = if let Some(checkout_ref) = request.checkout_ref.as_deref() {
-        fetch_checkout_ref(&repo, checkout_ref)?;
+        fetch_checkout_ref(&repo, checkout_ref, interaction_reporter.clone())?;
         ensure_branch_from_ref(&repo, &branch_name, checkout_ref)?
     } else {
         ensure_branch(&repo, &branch_name, request.default_branch.as_deref())?
@@ -353,7 +424,10 @@ fn add_linked_worktree(request: &WorkspaceRequest) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn create_discrete_clone(request: &WorkspaceRequest) -> Result<(), CoreError> {
+fn create_discrete_clone(
+    request: &WorkspaceRequest,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+) -> Result<(), CoreError> {
     let source = request
         .clone_url
         .clone()
@@ -371,10 +445,26 @@ fn create_discrete_clone(request: &WorkspaceRequest) -> Result<(), CoreError> {
         checkout_ref = ?request.checkout_ref,
         "creating discrete clone workspace"
     );
-    let repo = git2::Repository::clone(&source, &request.workspace_path)
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|url, username_from_url, allowed| {
+        resolve_remote_credentials(
+            None,
+            url,
+            username_from_url,
+            allowed,
+            None,
+            interaction_reporter.as_deref(),
+            GitCredentialOperation::CloneRepository,
+        )
+    });
+    let mut fetch_options = git2::FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+    let repo = git2::build::RepoBuilder::new()
+        .fetch_options(fetch_options)
+        .clone(&source, &request.workspace_path)
         .map_err(|error| CoreError::Adapter(format!("clone failed: {error}")))?;
     if let Some(checkout_ref) = request.checkout_ref.as_deref() {
-        fetch_checkout_ref(&repo, checkout_ref)?;
+        fetch_checkout_ref(&repo, checkout_ref, interaction_reporter.clone())?;
         let branch_name = request
             .branch_name
             .as_deref()
@@ -410,6 +500,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 fn fetch_origin_with_timeout(
     repo_path: &Path,
     checkout_ref: Option<&str>,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
 ) -> Result<(), CoreError> {
     let path = repo_path.to_path_buf();
     let checkout_ref = checkout_ref.map(str::to_owned);
@@ -424,7 +515,7 @@ fn fetch_origin_with_timeout(
         let result = (|| {
             let repo = git2::Repository::open(&path)
                 .map_err(|e| CoreError::Adapter(format!("open repo for fetch failed: {e}")))?;
-            fetch_origin(&repo, checkout_ref.as_deref())
+            fetch_origin(&repo, checkout_ref.as_deref(), interaction_reporter)
         })();
         let _ = tx.send(result);
     });
@@ -440,14 +531,26 @@ fn fetch_origin_with_timeout(
     }
 }
 
-fn fetch_origin(repo: &git2::Repository, checkout_ref: Option<&str>) -> Result<(), CoreError> {
+fn fetch_origin(
+    repo: &git2::Repository,
+    checkout_ref: Option<&str>,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+) -> Result<(), CoreError> {
     let Ok(mut remote) = repo.find_remote("origin") else {
         return Ok(());
     };
     debug!("fetching origin for existing workspace");
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed| {
-        resolve_remote_credentials(repo, url, username_from_url, allowed, None)
+        resolve_remote_credentials(
+            Some(repo),
+            url,
+            username_from_url,
+            allowed,
+            None,
+            interaction_reporter.as_deref(),
+            GitCredentialOperation::FetchOrigin,
+        )
     });
     let mut fetch_options = git2::FetchOptions::new();
     fetch_options.remote_callbacks(callbacks);
@@ -468,8 +571,12 @@ fn fetch_origin(repo: &git2::Repository, checkout_ref: Option<&str>) -> Result<(
     Ok(())
 }
 
-fn fetch_checkout_ref(repo: &git2::Repository, checkout_ref: &str) -> Result<(), CoreError> {
-    fetch_origin(repo, Some(checkout_ref))
+fn fetch_checkout_ref(
+    repo: &git2::Repository,
+    checkout_ref: &str,
+    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+) -> Result<(), CoreError> {
+    fetch_origin(repo, Some(checkout_ref), interaction_reporter)
 }
 
 fn resolve_signature(
@@ -501,13 +608,23 @@ fn resolve_signature(
 }
 
 fn resolve_remote_credentials(
-    repo: &git2::Repository,
+    repo: Option<&git2::Repository>,
     url: &str,
     username_from_url: Option<&str>,
     allowed: git2::CredentialType,
     auth_token: Option<&str>,
+    interaction_reporter: Option<&dyn UserInteractionReporter>,
+    operation: GitCredentialOperation,
 ) -> Result<git2::Cred, git2::Error> {
     if allowed.contains(git2::CredentialType::SSH_KEY) {
+        let _interaction = report_git_interaction(
+            interaction_reporter,
+            operation,
+            url,
+            UserInteractionKind::SecurityKeyTouch,
+            "Waiting for SSH key touch",
+            "Touch your security key if prompted.",
+        );
         return git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"));
     }
     if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
@@ -516,12 +633,133 @@ fn resolve_remote_credentials(
         return git2::Cred::userpass_plaintext("x-access-token", token);
     }
     if allowed.contains(git2::CredentialType::DEFAULT) {
+        let _interaction = report_git_interaction(
+            interaction_reporter,
+            operation,
+            url,
+            UserInteractionKind::Authentication,
+            "Waiting for authentication",
+            "Complete any system authentication prompt if one appears.",
+        );
         return git2::Cred::default();
     }
-    match repo.config() {
-        Ok(config) => git2::Cred::credential_helper(&config, url, username_from_url),
-        Err(_) => git2::Cred::default(),
+    let _interaction = report_git_interaction(
+        interaction_reporter,
+        operation,
+        url,
+        UserInteractionKind::ExternalPrompt,
+        "Waiting for credential prompt",
+        "Complete the credential or pinentry prompt if one appears.",
+    );
+    let config = repo
+        .and_then(|repo| repo.config().ok())
+        .or_else(|| git2::Config::open_default().ok());
+    match config {
+        Some(config) => git2::Cred::credential_helper(&config, url, username_from_url),
+        None => git2::Cred::default(),
     }
+}
+
+#[derive(Clone, Copy)]
+enum GitCredentialOperation {
+    CloneRepository,
+    FetchOrigin,
+    PushBranch,
+}
+
+impl GitCredentialOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CloneRepository => "cloning the repository",
+            Self::FetchOrigin => "fetching from origin",
+            Self::PushBranch => "pushing the branch",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::CloneRepository => "clone_repository",
+            Self::FetchOrigin => "fetch_origin",
+            Self::PushBranch => "push_branch",
+        }
+    }
+}
+
+struct ActiveInteraction<'a> {
+    reporter: Option<&'a dyn UserInteractionReporter>,
+    interaction_id: Option<String>,
+}
+
+impl Drop for ActiveInteraction<'_> {
+    fn drop(&mut self) {
+        if let (Some(reporter), Some(interaction_id)) =
+            (self.reporter, self.interaction_id.as_deref())
+        {
+            reporter.end(interaction_id);
+        }
+    }
+}
+
+fn report_git_interaction<'a>(
+    reporter: Option<&'a dyn UserInteractionReporter>,
+    operation: GitCredentialOperation,
+    url: &str,
+    kind: UserInteractionKind,
+    title: &'static str,
+    fallback_description: &'static str,
+) -> ActiveInteraction<'a> {
+    let Some(reporter) = reporter else {
+        return ActiveInteraction {
+            reporter: None,
+            interaction_id: None,
+        };
+    };
+    let target = git_interaction_target(url);
+    let description = Some(match target {
+        Some(target) => format!(
+            "Git is {} on {}. {}",
+            operation.as_str(),
+            target,
+            fallback_description
+        ),
+        None => format!("Git is {}. {}", operation.as_str(), fallback_description),
+    });
+    let interaction_id = format!("git:{}:{url}", operation.key());
+    reporter.begin(UserInteractionRequest {
+        id: interaction_id.clone(),
+        kind,
+        title: title.to_string(),
+        description,
+        started_at: chrono::Utc::now(),
+    });
+    ActiveInteraction {
+        reporter: Some(reporter),
+        interaction_id: Some(interaction_id),
+    }
+}
+
+fn git_interaction_target(url: &str) -> Option<String> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let rest = rest.rsplit('@').next().unwrap_or(rest);
+        return rest
+            .split(['/', ':'])
+            .next()
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
+    if let Some((_, host_and_path)) = url.split_once('@')
+        && let Some((host, _)) = host_and_path.split_once(':')
+        && !host.is_empty()
+    {
+        return Some(host.to_string());
+    }
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split(['/', ':'])
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn remove_linked_worktree(request: &WorkspaceRequest) -> Result<(), CoreError> {
@@ -772,11 +1010,14 @@ where
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::{
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
 
     use polyphony_core::{
-        CheckoutKind, WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProvisioner,
-        WorkspaceRequest,
+        CheckoutKind, UserInteractionKind, UserInteractionReporter, WorkspaceCommitRequest,
+        WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
     };
     use tempfile::tempdir;
 
@@ -784,6 +1025,37 @@ mod tests {
         GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch, detect_github_remote,
         parse_github_owner_repo,
     };
+
+    #[derive(Default)]
+    struct RecordingInteractionReporter {
+        events: Mutex<Vec<String>>,
+    }
+
+    impl RecordingInteractionReporter {
+        fn events(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .map(|events| events.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    impl UserInteractionReporter for RecordingInteractionReporter {
+        fn begin(&self, interaction: polyphony_core::UserInteractionRequest) {
+            if let Ok(mut events) = self.events.lock() {
+                events.push(format!(
+                    "begin:{}:{}:{}",
+                    interaction.id, interaction.kind, interaction.title
+                ));
+            }
+        }
+
+        fn end(&self, interaction_id: &str) {
+            if let Ok(mut events) = self.events.lock() {
+                events.push(format!("end:{interaction_id}"));
+            }
+        }
+    }
 
     fn make_request(
         root: &Path,
@@ -859,7 +1131,7 @@ mod tests {
         let source_path = temp.path().join("source");
         init_repo(&source_path);
         let root = temp.path().join("workspaces");
-        let provisioner = GitWorkspaceProvisioner;
+        let provisioner = GitWorkspaceProvisioner::default();
         let request = make_request(
             &root,
             "FAC-101",
@@ -887,7 +1159,7 @@ mod tests {
         let root = temp.path().join("workspaces");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("FAC-102"), "collision").unwrap();
-        let provisioner = GitWorkspaceProvisioner;
+        let provisioner = GitWorkspaceProvisioner::default();
         let request = make_request(
             &root,
             "FAC-102",
@@ -905,7 +1177,7 @@ mod tests {
         let source_path = temp.path().join("source");
         init_repo(&source_path);
         let root = temp.path().join("workspaces");
-        let provisioner = GitWorkspaceProvisioner;
+        let provisioner = GitWorkspaceProvisioner::default();
         let request = make_request(
             &root,
             "FAC-103",
@@ -933,7 +1205,7 @@ mod tests {
         let source_path = temp.path().join("source");
         init_repo(&source_path);
         let root = temp.path().join("workspaces");
-        let provisioner = GitWorkspaceProvisioner;
+        let provisioner = GitWorkspaceProvisioner::default();
         let mut request = make_request(
             &root,
             "FAC-104",
@@ -973,7 +1245,7 @@ mod tests {
             .unwrap();
 
         let root = temp.path().join("workspaces");
-        let provisioner = GitWorkspaceProvisioner;
+        let provisioner = GitWorkspaceProvisioner::default();
         let mut request = make_request(
             &root,
             "FAC-105",
@@ -1026,7 +1298,7 @@ mod tests {
             .unwrap();
         std::fs::write(repo_path.join("README.md"), "updated\n").unwrap();
 
-        let committer = GitWorkspaceCommitter;
+        let committer = GitWorkspaceCommitter::default();
         let result = committer
             .commit_and_push(&WorkspaceCommitRequest {
                 workspace_path: repo_path.clone(),
@@ -1066,7 +1338,7 @@ mod tests {
             .unwrap();
         std::fs::write(repo_path.join("README.md"), "updated\n").unwrap();
 
-        let committer = GitWorkspaceCommitter;
+        let committer = GitWorkspaceCommitter::default();
         let request = WorkspaceCommitRequest {
             workspace_path: repo_path,
             branch_name: "main".into(),
@@ -1097,7 +1369,7 @@ mod tests {
             .unwrap();
         checkout_branch(&repo, "issue-2", Some("main")).unwrap();
         std::fs::write(repo_path.join("foobar.txt"), "dogfood ok\n").unwrap();
-        let committer = GitWorkspaceCommitter;
+        let committer = GitWorkspaceCommitter::default();
         let request = WorkspaceCommitRequest {
             workspace_path: repo_path.clone(),
             branch_name: "issue-2".into(),
@@ -1139,6 +1411,41 @@ mod tests {
         assert_eq!(
             parse_github_owner_repo("git@github.com:openai/symphony"),
             Some("openai/symphony".into())
+        );
+    }
+
+    #[test]
+    fn git_interaction_guard_reports_begin_and_end() {
+        let reporter = RecordingInteractionReporter::default();
+        {
+            let _interaction = super::report_git_interaction(
+                Some(&reporter),
+                super::GitCredentialOperation::FetchOrigin,
+                "git@github.com:penso/polyphony.git",
+                UserInteractionKind::SecurityKeyTouch,
+                "Waiting for SSH key touch",
+                "Touch your security key if prompted.",
+            );
+        }
+
+        assert_eq!(
+            reporter.events(),
+            vec![
+                "begin:git:fetch_origin:git@github.com:penso/polyphony.git:security_key_touch:Waiting for SSH key touch".to_string(),
+                "end:git:fetch_origin:git@github.com:penso/polyphony.git".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn git_interaction_target_extracts_host() {
+        assert_eq!(
+            super::git_interaction_target("git@github.com:penso/polyphony.git"),
+            Some("github.com".into())
+        );
+        assert_eq!(
+            super::git_interaction_target("https://github.com/penso/polyphony.git"),
+            Some("github.com".into())
         );
     }
 

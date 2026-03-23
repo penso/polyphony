@@ -55,7 +55,12 @@ impl RuntimeService {
                 return;
             }
             if let Err(error) = self
-                .dispatch_pull_request_trigger(workflow.clone(), trigger, Some(retry.row.attempt))
+                .dispatch_pull_request_trigger(
+                    workflow.clone(),
+                    trigger,
+                    Some(retry.row.attempt),
+                    None,
+                )
                 .await
             {
                 self.schedule_retry(

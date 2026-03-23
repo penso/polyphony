@@ -3149,6 +3149,7 @@ name = "polyphony-git"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "git2",
  "polyphony-core",
  "tempfile",

@@ -135,6 +135,7 @@ fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
             user: Some(GithubReviewUser {
                 login: "alice".into(),
             }),
+            author_association: Some(AuthorAssociation::Collaborator),
             labels: vec![GithubReviewLabel {
                 name: "Needs Review".into(),
             }],
@@ -156,6 +157,7 @@ fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
             user: Some(GithubReviewUser {
                 login: "dependabot[bot]".into(),
             }),
+            author_association: Some(AuthorAssociation::Contributor),
             labels: Vec::new(),
             base: GithubReviewBranchRef {
                 name: "main".into(),
@@ -171,6 +173,7 @@ fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
     assert_eq!(triggers[0].number, 42);
     assert_eq!(triggers[0].head_sha, "abc123");
     assert_eq!(triggers[0].author_login.as_deref(), Some("alice"));
+    assert_eq!(triggers[0].approval_state, IssueApprovalState::Approved);
     assert_eq!(triggers[0].labels, vec!["needs review"]);
     assert_eq!(
         triggers[0].checkout_ref.as_deref(),
@@ -178,6 +181,7 @@ fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
     );
     assert_eq!(triggers[1].number, 43);
     assert_eq!(triggers[1].author_login.as_deref(), Some("dependabot[bot]"));
+    assert_eq!(triggers[1].approval_state, IssueApprovalState::Approved);
     assert_eq!(
         triggers[1].checkout_ref.as_deref(),
         Some("refs/pull/43/head")
@@ -228,19 +232,26 @@ fn find_issue_comment_id_with_marker_matches_existing_review_comment() {
 #[test]
 fn github_issue_approval_waits_for_outsiders_and_approves_collaborators() {
     assert_eq!(
-        github_issue_approval_state(&AuthorAssociation::Owner),
+        github_issue_approval_state(Some(&AuthorAssociation::Owner), Some("repo-owner")),
         IssueApprovalState::Approved
     );
     assert_eq!(
-        github_issue_approval_state(&AuthorAssociation::Collaborator),
+        github_issue_approval_state(Some(&AuthorAssociation::Collaborator), Some("teammate"),),
         IssueApprovalState::Approved
     );
     assert_eq!(
-        github_issue_approval_state(&AuthorAssociation::Contributor),
+        github_issue_approval_state(
+            Some(&AuthorAssociation::Contributor),
+            Some("dependabot[bot]"),
+        ),
+        IssueApprovalState::Approved
+    );
+    assert_eq!(
+        github_issue_approval_state(Some(&AuthorAssociation::Contributor), Some("outsider")),
         IssueApprovalState::Waiting
     );
     assert_eq!(
-        github_issue_approval_state(&AuthorAssociation::FirstTimer),
+        github_issue_approval_state(Some(&AuthorAssociation::FirstTimer), Some("newcomer")),
         IssueApprovalState::Waiting
     );
 }

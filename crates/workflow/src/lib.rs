@@ -294,7 +294,7 @@ pub struct AutomationConfig {
     pub git: AutomationGitConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PullRequestReviewConfig {
     pub enabled: bool,
@@ -308,6 +308,24 @@ pub struct PullRequestReviewConfig {
     pub ignore_bot_authors: bool,
     pub comment_mode: String,
     pub prompt: Option<String>,
+}
+
+impl Default for PullRequestReviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: String::new(),
+            agent: None,
+            debounce_seconds: 0,
+            include_drafts: false,
+            only_labels: Vec::new(),
+            ignore_labels: Vec::new(),
+            ignore_authors: Vec::new(),
+            ignore_bot_authors: false,
+            comment_mode: String::new(),
+            prompt: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

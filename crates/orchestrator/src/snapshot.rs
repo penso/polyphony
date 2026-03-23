@@ -138,6 +138,18 @@ impl RuntimeService {
     }
 
     pub(crate) fn snapshot(&self) -> RuntimeSnapshot {
+        let pending_user_interactions = self
+            .user_interactions
+            .lock()
+            .ok()
+            .map(|interactions| interactions.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut pending_user_interactions = pending_user_interactions;
+        pending_user_interactions.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         let live_seconds: f64 = self
             .state
             .running
@@ -321,6 +333,7 @@ impl RuntimeService {
                 .map(saved_context_metadata)
                 .collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
+            pending_user_interactions,
             movements: self
                 .state
                 .movements

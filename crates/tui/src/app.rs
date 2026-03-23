@@ -5,7 +5,7 @@ use std::{
 
 use polyphony_core::{
     AgentContextSnapshot, AgentHistoryRow, MovementRow, RunningRow, RuntimeSnapshot, TaskRow,
-    VisibleTriggerRow,
+    VisibleTriggerKind, VisibleTriggerRow,
 };
 use ratatui::{layout::Rect, widgets::TableState};
 
@@ -21,6 +21,12 @@ pub(crate) struct Toast {
     pub title: String,
     pub description: Option<String>,
     pub created_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StickyToast {
+    pub title: String,
+    pub description: Option<String>,
 }
 
 /// What to launch when the user presses `c` on an agent.
@@ -46,6 +52,7 @@ pub(crate) struct DispatchModalState {
     pub trigger_id: String,
     pub trigger_identifier: String,
     pub trigger_title: String,
+    pub trigger_kind: VisibleTriggerKind,
     pub agent_name: Option<String>,
     pub directives: String,
     pub cursor: usize,
@@ -56,12 +63,14 @@ impl DispatchModalState {
         trigger_id: String,
         trigger_identifier: String,
         trigger_title: String,
+        trigger_kind: VisibleTriggerKind,
         agent_name: Option<String>,
     ) -> Self {
         Self {
             trigger_id,
             trigger_identifier,
             trigger_title,
+            trigger_kind,
             agent_name,
             directives: String::new(),
             cursor: 0,
@@ -489,6 +498,8 @@ pub struct AppState {
     pub pending_cast_playback: Option<CastPlayback>,
     /// Toast notification shown briefly at the bottom of the screen.
     pub toast: Option<Toast>,
+    /// Sticky toast driven by runtime state, e.g. pending auth prompts.
+    pub sticky_toast: Option<StickyToast>,
     /// Trigger IDs that have been dispatched but not yet running.
     /// Cleared when the trigger appears in `snapshot.running`.
     pub dispatching_triggers: HashSet<String>,
@@ -556,6 +567,7 @@ impl AppState {
             sorted_agent_indices: Vec::new(),
             pending_cast_playback: None,
             toast: None,
+            sticky_toast: None,
             dispatching_triggers: HashSet::new(),
         }
     }
@@ -580,24 +592,37 @@ impl AppState {
     }
 
     pub fn on_snapshot(&mut self, snapshot: &RuntimeSnapshot) {
+        self.sync_sticky_toast(snapshot);
         // Clear refresh indicator once we get a live (non-cached) snapshot
         if self.refresh_requested && !snapshot.from_cache {
             self.refresh_requested = false;
         }
-        // Clear dispatching indicators for triggers that are now running or have movements
+        // Clear dispatching indicators for triggers that are now running or have movements.
+        // Trigger IDs are synthetic issue IDs for PR triggers, so compare against
+        // movement.issue_id instead of movement.issue_identifier.
         if !self.dispatching_triggers.is_empty() {
             let running_ids: HashSet<&str> = snapshot
                 .running
                 .iter()
                 .map(|r| r.issue_id.as_str())
                 .collect();
-            let movement_ids: HashSet<&str> = snapshot
+            let movement_identifiers: HashSet<&str> = snapshot
                 .movements
                 .iter()
                 .filter_map(|m| m.issue_identifier.as_deref())
                 .collect();
             self.dispatching_triggers.retain(|id| {
-                !running_ids.contains(id.as_str()) && !movement_ids.contains(id.as_str())
+                if running_ids.contains(id.as_str()) {
+                    return false;
+                }
+                let Some(trigger) = snapshot
+                    .visible_triggers
+                    .iter()
+                    .find(|trigger| trigger.trigger_id == *id)
+                else {
+                    return true;
+                };
+                !movement_identifiers.contains(trigger.identifier.as_str())
             });
         }
         self.rebuild_sorted_indices(snapshot);
@@ -735,6 +760,26 @@ impl AppState {
                 self.detail_stack.pop();
             }
         }
+    }
+
+    fn sync_sticky_toast(&mut self, snapshot: &RuntimeSnapshot) {
+        let Some(interaction) = snapshot.pending_user_interactions.last() else {
+            self.sticky_toast = None;
+            return;
+        };
+        let extra_count = snapshot.pending_user_interactions.len().saturating_sub(1);
+        let description = if extra_count == 0 {
+            interaction.description.clone()
+        } else {
+            Some(match interaction.description.as_deref() {
+                Some(description) => format!("{description} ({extra_count} more pending)"),
+                None => format!("{extra_count} more interactions pending"),
+            })
+        };
+        self.sticky_toast = Some(StickyToast {
+            title: interaction.title.clone(),
+            description,
+        });
     }
 
     pub fn rebuild_orchestrator_tree(&mut self, snapshot: &RuntimeSnapshot) {

@@ -52,6 +52,7 @@ pub(crate) enum DaemonRequest {
     },
     DispatchPullRequestTrigger {
         trigger_id: String,
+        directives: Option<String>,
     },
     Shutdown,
 }
@@ -267,11 +268,15 @@ fn dispatch_request(request: DaemonRequest, state: &ControlState) -> Result<Daem
                 message: format!("dispatch queued for {issue_id}"),
             })
         },
-        DaemonRequest::DispatchPullRequestTrigger { trigger_id } => {
+        DaemonRequest::DispatchPullRequestTrigger {
+            trigger_id,
+            directives,
+        } => {
             send_command(
                 &state.command_tx,
                 RuntimeCommand::DispatchPullRequestTrigger {
                     trigger_id: trigger_id.clone(),
+                    directives,
                 },
             )?;
             Ok(DaemonResponse::Accepted {
@@ -740,7 +745,7 @@ mod tests {
             Arc::new(tracker),
             None,
             Arc::new(agent),
-            Arc::new(polyphony_git::GitWorkspaceProvisioner),
+            Arc::new(polyphony_git::GitWorkspaceProvisioner::default()),
             None,
             None,
             None,

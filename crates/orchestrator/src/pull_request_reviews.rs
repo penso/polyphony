@@ -6,6 +6,7 @@ impl RuntimeService {
         workflow: LoadedWorkflow,
         trigger: PullRequestReviewTrigger,
         attempt: Option<u32>,
+        directives: Option<&str>,
     ) -> Result<(), Error> {
         let issue = synthetic_issue_for_pull_request_review(&trigger);
         let issue_id = issue.id.clone();
@@ -22,40 +23,53 @@ impl RuntimeService {
                 review_agent.name
             ))));
         }
+        let movement_title = trigger.title.clone();
+        let (movement_id, workspace_setup_task_id, review_task_id) = self
+            .prepare_pull_request_dispatch(
+                &workflow,
+                &issue,
+                MovementKind::PullRequestReview,
+                movement_title,
+                review_target.clone(),
+                &review_agent.name,
+                directives,
+            )
+            .await?;
+        self.emit_snapshot().await?;
         let workspace_manager = self.build_workspace_manager(&workflow);
-        let workspace = workspace_manager
+        let workspace = match workspace_manager
             .ensure_workspace_with_ref(
                 &issue.identifier,
                 issue.branch_name.clone(),
                 review_target.checkout_ref.clone(),
                 &workflow.config.hooks,
             )
-            .await?;
+            .await
+        {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                self.fail_pull_request_workspace_setup(
+                    &movement_id,
+                    &workspace_setup_task_id,
+                    &review_task_id,
+                    &error.to_string(),
+                )
+                .await?;
+                return Err(error.into());
+            },
+        };
         self.state
             .worktree_keys
             .insert(workspace.workspace_key.clone());
-        let movement_id = new_movement_id();
-        let now = Utc::now();
-        let movement = Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::PullRequestReview,
-            issue_id: Some(issue_id.clone()),
-            issue_identifier: Some(issue_identifier.clone()),
-            title: trigger.title.clone(),
-            status: MovementStatus::InProgress,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: Some(workspace.workspace_key.clone()),
-            workspace_path: Some(workspace.path.clone()),
-            review_target: Some(review_target.clone()),
-            deliverable: None,
-            created_at: now,
-            updated_at: now,
-        };
-        if let Some(store) = &self.store {
-            store.save_movement(&movement).await?;
-        }
-        self.state.movements.insert(movement_id.clone(), movement);
+        self.finish_pull_request_workspace_setup(
+            &movement_id,
+            &workspace_setup_task_id,
+            &review_task_id,
+            &workspace.workspace_key,
+            &workspace.path,
+            &review_agent.name,
+        )
+        .await?;
 
         let prompt = render_issue_template_with_strings(
             workflow
@@ -93,6 +107,10 @@ impl RuntimeService {
             1,
             workflow.config.agent.max_turns,
         )?;
+        let prompt = prepend_manual_dispatch_directives(
+            prompt,
+            self.manual_dispatch_directives_for_movement(&movement_id),
+        );
         let command_tx = self.command_tx.clone();
         let agent = self.agent.clone();
         let workspace_path = workspace.path.clone();
@@ -187,7 +205,7 @@ impl RuntimeService {
             turn_count: 0,
             rate_limits: None,
             handle,
-            active_task_id: None,
+            active_task_id: Some(review_task_id),
             movement_id: Some(movement_id),
             review_target: Some(review_target),
             review_comment_marker: Some(pull_request_review_comment_marker(
@@ -206,6 +224,7 @@ impl RuntimeService {
         workflow: LoadedWorkflow,
         trigger: PullRequestCommentTrigger,
         attempt: Option<u32>,
+        directives: Option<&str>,
     ) -> Result<(), Error> {
         let issue = synthetic_issue_for_pull_request_comment(&trigger);
         let issue_id = issue.id.clone();
@@ -222,43 +241,56 @@ impl RuntimeService {
                 review_agent.name
             ))));
         }
+        let movement_title = format!(
+            "Review PR comment on {}: {}",
+            trigger.path, trigger.pull_request_title
+        );
+        let (movement_id, workspace_setup_task_id, review_task_id) = self
+            .prepare_pull_request_dispatch(
+                &workflow,
+                &issue,
+                MovementKind::PullRequestCommentReview,
+                movement_title,
+                review_target.clone(),
+                &review_agent.name,
+                directives,
+            )
+            .await?;
+        self.emit_snapshot().await?;
         let workspace_manager = self.build_workspace_manager(&workflow);
-        let workspace = workspace_manager
+        let workspace = match workspace_manager
             .ensure_workspace_with_ref(
                 &issue.identifier,
                 issue.branch_name.clone(),
                 review_target.checkout_ref.clone(),
                 &workflow.config.hooks,
             )
-            .await?;
+            .await
+        {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                self.fail_pull_request_workspace_setup(
+                    &movement_id,
+                    &workspace_setup_task_id,
+                    &review_task_id,
+                    &error.to_string(),
+                )
+                .await?;
+                return Err(error.into());
+            },
+        };
         self.state
             .worktree_keys
             .insert(workspace.workspace_key.clone());
-        let movement_id = new_movement_id();
-        let now = Utc::now();
-        let movement = Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::PullRequestCommentReview,
-            issue_id: Some(issue_id.clone()),
-            issue_identifier: Some(issue_identifier.clone()),
-            title: format!(
-                "Review PR comment on {}: {}",
-                trigger.path, trigger.pull_request_title
-            ),
-            status: MovementStatus::InProgress,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: Some(workspace.workspace_key.clone()),
-            workspace_path: Some(workspace.path.clone()),
-            review_target: Some(review_target.clone()),
-            deliverable: None,
-            created_at: now,
-            updated_at: now,
-        };
-        if let Some(store) = &self.store {
-            store.save_movement(&movement).await?;
-        }
-        self.state.movements.insert(movement_id.clone(), movement);
+        self.finish_pull_request_workspace_setup(
+            &movement_id,
+            &workspace_setup_task_id,
+            &review_task_id,
+            &workspace.workspace_key,
+            &workspace.path,
+            &review_agent.name,
+        )
+        .await?;
 
         let prompt = render_issue_template_with_strings(
             workflow
@@ -305,6 +337,10 @@ impl RuntimeService {
             1,
             workflow.config.agent.max_turns,
         )?;
+        let prompt = prepend_manual_dispatch_directives(
+            prompt,
+            self.manual_dispatch_directives_for_movement(&movement_id),
+        );
         let command_tx = self.command_tx.clone();
         let agent = self.agent.clone();
         let workspace_path = workspace.path.clone();
@@ -399,7 +435,7 @@ impl RuntimeService {
             turn_count: 0,
             rate_limits: None,
             handle,
-            active_task_id: None,
+            active_task_id: Some(review_task_id),
             movement_id: Some(movement_id),
             review_target: Some(review_target),
             review_comment_marker: Some(pull_request_comment_review_comment_marker(
@@ -411,6 +447,262 @@ impl RuntimeService {
             EventScope::Dispatch,
             format!("dispatched PR comment review {issue_identifier}"),
         );
+        Ok(())
+    }
+
+    fn manual_dispatch_directives_for_movement(&self, movement_id: &str) -> Option<&str> {
+        self.state
+            .movements
+            .get(movement_id)
+            .and_then(|movement| movement.manual_dispatch_directives.as_deref())
+    }
+
+    async fn prepare_pull_request_dispatch(
+        &mut self,
+        workflow: &LoadedWorkflow,
+        issue: &Issue,
+        movement_kind: MovementKind,
+        movement_title: String,
+        review_target: ReviewTarget,
+        review_agent_name: &str,
+        directives: Option<&str>,
+    ) -> Result<(MovementId, TaskId, TaskId), Error> {
+        let now = Utc::now();
+        let workspace_key = sanitize_workspace_key(&issue.identifier);
+        let workspace_path = workflow.config.workspace.root.join(&workspace_key);
+        let requested_directives = directives
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned);
+        let movement_id =
+            if let Some(existing_id) = self.find_existing_movement_for_issue(&issue.id) {
+                let directives = requested_directives.or_else(|| {
+                    self.state
+                        .movements
+                        .get(&existing_id)
+                        .and_then(|movement| movement.manual_dispatch_directives.clone())
+                });
+                if let Some(movement) = self.state.movements.get_mut(&existing_id) {
+                    movement.kind = movement_kind;
+                    movement.title = movement_title;
+                    movement.status = MovementStatus::InProgress;
+                    movement.pipeline_stage = None;
+                    movement.manual_dispatch_directives = directives;
+                    movement.workspace_key = Some(workspace_key.clone());
+                    movement.workspace_path = Some(workspace_path.clone());
+                    movement.review_target = Some(review_target.clone());
+                    movement.updated_at = now;
+                    if let Some(store) = &self.store {
+                        store.save_movement(movement).await?;
+                    }
+                }
+                existing_id
+            } else {
+                let movement_id = new_movement_id();
+                let movement = Movement {
+                    id: movement_id.clone(),
+                    kind: movement_kind,
+                    issue_id: Some(issue.id.clone()),
+                    issue_identifier: Some(issue.identifier.clone()),
+                    title: movement_title,
+                    status: MovementStatus::InProgress,
+                    pipeline_stage: None,
+                    manual_dispatch_directives: requested_directives,
+                    workspace_key: Some(workspace_key.clone()),
+                    workspace_path: Some(workspace_path.clone()),
+                    review_target: Some(review_target),
+                    deliverable: None,
+                    created_at: now,
+                    updated_at: now,
+                };
+                if let Some(store) = &self.store {
+                    store.save_movement(&movement).await?;
+                }
+                self.state.movements.insert(movement_id.clone(), movement);
+                movement_id
+            };
+
+        let (workspace_setup_task_id, review_task_id) = self
+            .reset_pull_request_tasks(&movement_id, review_agent_name)
+            .await?;
+        Ok((movement_id, workspace_setup_task_id, review_task_id))
+    }
+
+    async fn reset_pull_request_tasks(
+        &mut self,
+        movement_id: &str,
+        review_agent_name: &str,
+    ) -> Result<(TaskId, TaskId), Error> {
+        let now = Utc::now();
+        let tasks = self.state.tasks.entry(movement_id.to_string()).or_default();
+        let workspace_setup_task_id = upsert_pull_request_task(
+            tasks,
+            movement_id,
+            0,
+            "Creating worktree",
+            polyphony_core::TaskCategory::Research,
+            Some("orchestrator".into()),
+        );
+        let review_task_id = upsert_pull_request_task(
+            tasks,
+            movement_id,
+            1,
+            "Run PR review",
+            polyphony_core::TaskCategory::Review,
+            Some(review_agent_name.to_string()),
+        );
+        for task in tasks.iter_mut() {
+            match task.ordinal {
+                0 => {
+                    task.status = TaskStatus::InProgress;
+                    task.agent_name = Some("orchestrator".into());
+                    task.started_at = Some(now);
+                    task.finished_at = None;
+                    task.error = None;
+                    task.turns_completed = 0;
+                    task.tokens = TokenUsage::default();
+                    task.updated_at = now;
+                },
+                1 => {
+                    task.status = TaskStatus::Pending;
+                    task.agent_name = Some(review_agent_name.to_string());
+                    task.started_at = None;
+                    task.finished_at = None;
+                    task.error = None;
+                    task.turns_completed = 0;
+                    task.tokens = TokenUsage::default();
+                    task.updated_at = now;
+                },
+                _ => {},
+            }
+        }
+        if let Some(store) = &self.store {
+            for task in tasks.iter() {
+                if task.ordinal <= 1 {
+                    store.save_task(task).await?;
+                }
+            }
+        }
+        Ok((workspace_setup_task_id, review_task_id))
+    }
+
+    async fn finish_pull_request_workspace_setup(
+        &mut self,
+        movement_id: &str,
+        workspace_setup_task_id: &str,
+        review_task_id: &str,
+        workspace_key: &str,
+        workspace_path: &Path,
+        review_agent_name: &str,
+    ) -> Result<(), Error> {
+        let now = Utc::now();
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            movement.workspace_key = Some(workspace_key.to_string());
+            movement.workspace_path = Some(workspace_path.to_path_buf());
+            movement.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+        }
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+            for task in tasks.iter_mut() {
+                if task.id == workspace_setup_task_id {
+                    task.status = TaskStatus::Completed;
+                    task.finished_at = Some(now);
+                    task.error = None;
+                    task.updated_at = now;
+                    if let Some(store) = &self.store {
+                        store.save_task(task).await?;
+                    }
+                } else if task.id == review_task_id {
+                    task.status = TaskStatus::InProgress;
+                    task.agent_name = Some(review_agent_name.to_string());
+                    task.started_at = Some(now);
+                    task.finished_at = None;
+                    task.error = None;
+                    task.updated_at = now;
+                    if let Some(store) = &self.store {
+                        store.save_task(task).await?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn fail_pull_request_workspace_setup(
+        &mut self,
+        movement_id: &str,
+        workspace_setup_task_id: &str,
+        review_task_id: &str,
+        error: &str,
+    ) -> Result<(), Error> {
+        let now = Utc::now();
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            movement.status = MovementStatus::Failed;
+            movement.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+        }
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+            for task in tasks.iter_mut() {
+                if task.id == workspace_setup_task_id {
+                    task.status = TaskStatus::Failed;
+                    task.error = Some(error.to_string());
+                    task.finished_at = Some(now);
+                    task.updated_at = now;
+                    if let Some(store) = &self.store {
+                        store.save_task(task).await?;
+                    }
+                } else if task.id == review_task_id {
+                    task.status = TaskStatus::Cancelled;
+                    task.error = Some("workspace setup failed".into());
+                    task.finished_at = Some(now);
+                    task.updated_at = now;
+                    if let Some(store) = &self.store {
+                        store.save_task(task).await?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn finalize_pull_request_review_task(
+        &mut self,
+        movement_id: Option<&str>,
+        task_id: Option<&str>,
+        running: &RunningTask,
+        outcome: &AgentRunResult,
+        task_error: Option<String>,
+    ) -> Result<(), Error> {
+        let Some(movement_id) = movement_id else {
+            return Ok(());
+        };
+        let Some(task_id) = task_id else {
+            return Ok(());
+        };
+        let now = Utc::now();
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id)
+            && let Some(task) = tasks.iter_mut().find(|task| task.id == task_id)
+        {
+            task.status = match outcome.status {
+                AttemptStatus::Succeeded if task_error.is_none() => TaskStatus::Completed,
+                AttemptStatus::CancelledByReconciliation | AttemptStatus::CancelledByUser => {
+                    TaskStatus::Cancelled
+                },
+                _ => TaskStatus::Failed,
+            };
+            task.turns_completed = outcome.turns_completed;
+            task.tokens = running.tokens.clone();
+            task.error = task_error.or_else(|| outcome.error.clone());
+            task.finished_at = Some(now);
+            task.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_task(task).await?;
+            }
+        }
         Ok(())
     }
 
@@ -750,6 +1042,14 @@ impl RuntimeService {
                     .post_pull_request_review_comment(&running, &review_target)
                     .await
                 {
+                    self.finalize_pull_request_review_task(
+                        movement_id.as_deref(),
+                        running.active_task_id.as_deref(),
+                        &running,
+                        &outcome,
+                        Some(error.to_string()),
+                    )
+                    .await?;
                     if let Some(movement_id) = movement_id.as_ref()
                         && let Some(movement) = self.state.movements.get_mut(movement_id)
                     {
@@ -776,6 +1076,14 @@ impl RuntimeService {
                         );
                     }
                 } else {
+                    self.finalize_pull_request_review_task(
+                        movement_id.as_deref(),
+                        running.active_task_id.as_deref(),
+                        &running,
+                        &outcome,
+                        None,
+                    )
+                    .await?;
                     let reviewed = ReviewedPullRequestHead {
                         key: review_target_key(&review_target),
                         target: review_target.clone(),
@@ -794,9 +1102,25 @@ impl RuntimeService {
                 }
             },
             AttemptStatus::CancelledByReconciliation => {
+                self.finalize_pull_request_review_task(
+                    movement_id.as_deref(),
+                    running.active_task_id.as_deref(),
+                    &running,
+                    &outcome,
+                    None,
+                )
+                .await?;
                 self.release_issue(&issue_id);
             },
             _ => {
+                self.finalize_pull_request_review_task(
+                    movement_id.as_deref(),
+                    running.active_task_id.as_deref(),
+                    &running,
+                    &outcome,
+                    None,
+                )
+                .await?;
                 if stopped {
                     self.release_issue(&issue_id);
                 } else {
@@ -898,4 +1222,45 @@ impl RuntimeService {
             .await;
         Ok(())
     }
+}
+
+fn upsert_pull_request_task(
+    tasks: &mut Vec<polyphony_core::Task>,
+    movement_id: &str,
+    ordinal: u32,
+    title: &str,
+    category: polyphony_core::TaskCategory,
+    agent_name: Option<String>,
+) -> TaskId {
+    if let Some(task) = tasks.iter_mut().find(|task| task.ordinal == ordinal) {
+        task.title = title.to_string();
+        task.category = category;
+        task.agent_name = agent_name;
+        return task.id.clone();
+    }
+
+    let now = Utc::now();
+    let task = polyphony_core::Task {
+        id: format!("task-{}", uuid::Uuid::new_v4()),
+        movement_id: movement_id.to_string(),
+        title: title.to_string(),
+        description: None,
+        category,
+        status: TaskStatus::Pending,
+        ordinal,
+        parent_id: None,
+        agent_name,
+        session_id: None,
+        thread_id: None,
+        turns_completed: 0,
+        tokens: TokenUsage::default(),
+        started_at: None,
+        finished_at: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let task_id = task.id.clone();
+    tasks.push(task);
+    task_id
 }

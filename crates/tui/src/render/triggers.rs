@@ -376,9 +376,7 @@ pub fn draw_triggers_tab(
             }
             block
                 .title_bottom(Line::from({
-                    let has_approval_markers = trigger_data
-                        .iter()
-                        .any(|(t, ..)| matches!(t.source.as_str(), "github" | "gitlab"));
+                    let has_approval_markers = !trigger_data.is_empty();
                     let mut legend = vec![
                         Span::styled(" ●", Style::default().fg(theme.highlight)),
                         Span::styled(":workspace  ", Style::default().fg(theme.muted)),
@@ -439,11 +437,6 @@ fn approval_marker(
     trigger: &polyphony_core::VisibleTriggerRow,
     theme: crate::theme::Theme,
 ) -> Option<(&'static str, ratatui::style::Color)> {
-    if trigger.kind != VisibleTriggerKind::Issue
-        || !matches!(trigger.source.as_str(), "github" | "gitlab")
-    {
-        return None;
-    }
     Some(match trigger.approval_state {
         IssueApprovalState::Approved => (APPROVED_ICON, theme.success),
         IssueApprovalState::Waiting => (WAITING_ICON, theme.warning),

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{prelude::*, *};
 
 #[async_trait]
@@ -113,8 +115,14 @@ pub trait AgentProviderRuntime: Send + Sync {
 #[async_trait]
 pub trait WorkspaceProvisioner: Send + Sync {
     fn component_key(&self) -> String;
+    fn set_interaction_reporter(&self, _reporter: Option<Arc<dyn UserInteractionReporter>>) {}
     async fn ensure_workspace(&self, request: WorkspaceRequest) -> Result<Workspace, Error>;
     async fn cleanup_workspace(&self, request: WorkspaceRequest) -> Result<(), Error>;
+}
+
+pub trait UserInteractionReporter: Send + Sync {
+    fn begin(&self, interaction: UserInteractionRequest);
+    fn end(&self, interaction_id: &str);
 }
 
 #[async_trait]
@@ -162,6 +170,7 @@ pub trait PullRequestManager: Send + Sync {
 #[async_trait]
 pub trait WorkspaceCommitter: Send + Sync {
     fn component_key(&self) -> String;
+    fn set_interaction_reporter(&self, _reporter: Option<Arc<dyn UserInteractionReporter>>) {}
     async fn commit_and_push(
         &self,
         request: &WorkspaceCommitRequest,

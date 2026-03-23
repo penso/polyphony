@@ -439,6 +439,7 @@ async fn handle_daemon_command(
             print_json(
                 &send_control_request(workflow_path, DaemonRequest::DispatchPullRequestTrigger {
                     trigger_id,
+                    directives: None,
                 })
                 .await?,
             )?;
@@ -644,7 +645,7 @@ async fn start_runtime(
     });
     let components = build_runtime_components(&workflow)?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
-        Arc::new(polyphony_git::GitWorkspaceProvisioner);
+        Arc::new(polyphony_git::GitWorkspaceProvisioner::default());
     let store = build_store(workflow_path, cli.sqlite_url.as_deref()).await?;
     let cache: Option<Arc<dyn NetworkCache>> = {
         let cache_path = workflow_root_dir(workflow_path)?

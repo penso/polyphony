@@ -281,6 +281,8 @@ pub struct PullRequestReviewTrigger {
     #[serde(default)]
     pub author_login: Option<String>,
     #[serde(default)]
+    pub approval_state: IssueApprovalState,
+    #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
@@ -338,6 +340,8 @@ pub struct PullRequestCommentTrigger {
     #[serde(default)]
     pub author_login: Option<String>,
     #[serde(default)]
+    pub approval_state: IssueApprovalState,
+    #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
@@ -389,6 +393,8 @@ pub struct PullRequestConflictTrigger {
     pub checkout_ref: Option<String>,
     #[serde(default)]
     pub author_login: Option<String>,
+    #[serde(default)]
+    pub approval_state: IssueApprovalState,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]

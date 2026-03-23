@@ -448,61 +448,20 @@ pub(crate) fn build_runtime_components(
         (!registry.is_empty()).then_some(Arc::new(registry))
     };
     #[cfg(feature = "github")]
-    let pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>> =
-        if workflow.config.tracker.kind == TrackerKind::Github
-            && workflow.config.review_triggers.pr_reviews.enabled
-        {
-            let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
-                Error::Config("tracker.repository is required for github PR review triggers".into())
-            })?;
-            let token = workflow.config.tracker.api_key.clone().ok_or_else(|| {
-                Error::Config("tracker.api_key is required for github PR review triggers".into())
-            })?;
-            Some(
-                Arc::new(polyphony_github::GithubPullRequestReviewTriggerSource::new(
-                    repository, token,
-                )?) as Arc<dyn PullRequestTriggerSource>,
-            )
-        } else {
-            None
-        };
+    let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
+        build_github_pull_request_components(workflow, &workflow_root, github_token_from_env())?;
     #[cfg(not(feature = "github"))]
     let pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>> = None;
-    let committer: Option<Arc<dyn WorkspaceCommitter>> =
-        workflow.config.automation.enabled.then_some(
-            Arc::new(polyphony_git::GitWorkspaceCommitter) as Arc<dyn WorkspaceCommitter>,
-        );
-    #[cfg(feature = "github")]
-    let (pull_request_manager, pull_request_commenter) = if workflow.config.tracker.kind
-        == TrackerKind::Github
-    {
-        let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
-            Error::Config(
-                "tracker.repository is required for github pull request integrations".into(),
-            )
-        })?;
-        let token = workflow.config.tracker.api_key.clone().ok_or_else(|| {
-            Error::Config("tracker.api_key is required for github pull request integrations".into())
-        })?;
-        let commenter = Some(Arc::new(polyphony_github::GithubPullRequestCommenter::new(
-            token.clone(),
-        )) as Arc<dyn PullRequestCommenter>);
-        let manager = workflow
-            .config
-            .automation
-            .enabled
-            .then_some(Arc::new(polyphony_github::GithubPullRequestManager::new(
-                repository, token,
-            )?) as Arc<dyn PullRequestManager>);
-        (manager, commenter)
-    } else {
-        (None, None)
-    };
     #[cfg(not(feature = "github"))]
-    let (pull_request_manager, pull_request_commenter): (
-        Option<Arc<dyn PullRequestManager>>,
-        Option<Arc<dyn PullRequestCommenter>>,
-    ) = (None, None);
+    let pull_request_manager: Option<Arc<dyn PullRequestManager>> = None;
+    #[cfg(not(feature = "github"))]
+    let pull_request_commenter: Option<Arc<dyn PullRequestCommenter>> = None;
+    let committer: Option<Arc<dyn WorkspaceCommitter>> = workflow
+        .config
+        .automation
+        .enabled
+        .then_some(Arc::new(polyphony_git::GitWorkspaceCommitter::default())
+            as Arc<dyn WorkspaceCommitter>);
     let tool_executor = polyphony_tools::RegistryToolExecutor::from_runtime_components(
         workflow,
         tracker.clone(),
@@ -574,8 +533,168 @@ pub(crate) fn build_runtime_tracker(
 }
 
 #[cfg(feature = "github")]
+fn build_github_pull_request_components(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_root: &Path,
+    github_token: Option<String>,
+) -> Result<
+    (
+        Option<Arc<dyn PullRequestTriggerSource>>,
+        Option<Arc<dyn PullRequestManager>>,
+        Option<Arc<dyn PullRequestCommenter>>,
+    ),
+    Error,
+> {
+    let integration =
+        resolve_github_pull_request_integration(workflow, workflow_root, github_token)?;
+
+    let pull_request_trigger_source = if workflow.config.review_triggers.pr_reviews.enabled {
+        match integration.as_ref() {
+            Some((repository, token)) => Some(Arc::new(
+                polyphony_github::GithubPullRequestReviewTriggerSource::new(
+                    repository.clone(),
+                    token.clone(),
+                )?,
+            ) as Arc<dyn PullRequestTriggerSource>),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let (pull_request_manager, pull_request_commenter) = match integration {
+        Some((repository, token)) => {
+            let commenter = Some(Arc::new(polyphony_github::GithubPullRequestCommenter::new(
+                token.clone(),
+            )) as Arc<dyn PullRequestCommenter>);
+            let manager = workflow
+                .config
+                .automation
+                .enabled
+                .then_some(Arc::new(polyphony_github::GithubPullRequestManager::new(
+                    repository, token,
+                )?) as Arc<dyn PullRequestManager>);
+            (manager, commenter)
+        },
+        None => (None, None),
+    };
+
+    Ok((
+        pull_request_trigger_source,
+        pull_request_manager,
+        pull_request_commenter,
+    ))
+}
+
+#[cfg(feature = "github")]
+fn resolve_github_pull_request_integration(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_root: &Path,
+    github_token: Option<String>,
+) -> Result<Option<(String, String)>, Error> {
+    if workflow.config.tracker.kind == TrackerKind::Github {
+        let repository = workflow.config.tracker.repository.clone().ok_or_else(|| {
+            Error::Config(
+                "tracker.repository is required for github pull request integrations".into(),
+            )
+        })?;
+        let token = workflow
+            .config
+            .tracker
+            .api_key
+            .clone()
+            .or(github_token)
+            .ok_or_else(|| {
+                Error::Config(
+                    "tracker.api_key is required for github pull request integrations".into(),
+                )
+            })?;
+        return Ok(Some((repository, token)));
+    }
+
+    let Some(repository) = polyphony_git::detect_github_remote(workflow_root) else {
+        return Ok(None);
+    };
+    let Some(token) = github_token else {
+        return Ok(None);
+    };
+    Ok(Some((repository, token)))
+}
+
+#[cfg(feature = "github")]
 fn github_token_from_env() -> Option<String> {
     env::var("GITHUB_TOKEN")
         .ok()
         .or_else(|| env::var("GH_TOKEN").ok())
+}
+
+#[cfg(all(test, feature = "github", feature = "beads"))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::{collections::HashMap, path::PathBuf};
+
+    use super::*;
+
+    fn loaded_workflow(front_matter: &str) -> polyphony_workflow::LoadedWorkflow {
+        let definition =
+            polyphony_workflow::parse_workflow(&format!("{front_matter}---\nPrompt\n")).unwrap();
+        let config = polyphony_workflow::ServiceConfig::from_workflow(&definition).unwrap();
+        polyphony_workflow::LoadedWorkflow {
+            definition,
+            config,
+            path: PathBuf::from("/tmp/WORKFLOW.md"),
+            agent_prompts: HashMap::new(),
+        }
+    }
+
+    fn workspace_repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .unwrap()
+            .to_path_buf()
+    }
+
+    #[test]
+    fn supplemental_github_remote_enables_pr_review_components_for_beads_repos() {
+        let repo_root = workspace_repo_root();
+        let workflow = loaded_workflow(
+            r#"---
+tracker:
+  kind: beads
+review_triggers:
+  pr_reviews:
+    enabled: true
+"#,
+        );
+
+        let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
+            build_github_pull_request_components(&workflow, &repo_root, Some("test-token".into()))
+                .unwrap();
+
+        assert!(pull_request_trigger_source.is_some());
+        assert!(pull_request_commenter.is_some());
+        assert!(pull_request_manager.is_none());
+    }
+
+    #[test]
+    fn supplemental_github_remote_without_token_skips_pr_review_components() {
+        let repo_root = workspace_repo_root();
+        let workflow = loaded_workflow(
+            r#"---
+tracker:
+  kind: beads
+review_triggers:
+  pr_reviews:
+    enabled: true
+"#,
+        );
+
+        let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
+            build_github_pull_request_components(&workflow, &repo_root, None).unwrap();
+
+        assert!(pull_request_trigger_source.is_none());
+        assert!(pull_request_commenter.is_none());
+        assert!(pull_request_manager.is_none());
+    }
 }

@@ -251,7 +251,7 @@ remote_name = "origin"
 [review_triggers]
 
 [review_triggers.pr_reviews]
-# enabled = false
+# enabled = true
 # provider = "github"             # phase 1 supports GitHub polling
 # agent = "reviewer"              # optional, falls back to automation.review_agent or agents.default
 # debounce_seconds = 180          # wait after the latest push before dispatching a review

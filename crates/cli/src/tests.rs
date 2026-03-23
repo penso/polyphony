@@ -41,7 +41,7 @@ mod operator_surface_tests {
             Arc::new(tracker),
             None,
             Arc::new(agent),
-            Arc::new(polyphony_git::GitWorkspaceProvisioner),
+            Arc::new(polyphony_git::GitWorkspaceProvisioner::default()),
             None,
             None,
             None,

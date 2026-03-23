@@ -620,6 +620,27 @@ agents:
 }
 
 #[test]
+fn review_triggers_default_to_enabled() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+tracker:
+  kind: beads
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+
+    assert!(config.review_triggers.pr_reviews.enabled);
+    assert_eq!(config.review_triggers.pr_reviews.provider, "github");
+    assert_eq!(config.review_triggers.pr_reviews.comment_mode, "summary");
+    assert_eq!(config.review_triggers.pr_reviews.debounce_seconds, 180);
+}
+
+#[test]
 fn review_triggers_parse_and_reuse_review_agent_defaults() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"

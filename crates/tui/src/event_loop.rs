@@ -814,7 +814,6 @@ fn handle_key(
         KeyCode::Char('a') => {
             if app.active_tab == app::ActiveTab::Triggers
                 && let Some(trigger) = app.selected_trigger(snapshot)
-                && trigger.kind == VisibleTriggerKind::Issue
                 && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
             {
                 app.show_toast(format!("Approving {}", trigger.identifier), None);
@@ -1083,7 +1082,6 @@ fn handle_detail_key(
             },
             KeyCode::Char('a') => {
                 if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                    && trigger.kind == VisibleTriggerKind::Issue
                     && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
                 {
                     app.show_toast(format!("Approving {}", trigger.identifier), None);
@@ -2260,26 +2258,14 @@ fn start_dispatch_for_trigger(
     trigger: &polyphony_core::VisibleTriggerRow,
     agent_name: Option<String>,
 ) -> Option<RuntimeCommand> {
-    match trigger.kind {
-        VisibleTriggerKind::Issue => {
-            app.dispatch_modal = Some(crate::app::DispatchModalState::new(
-                trigger.trigger_id.clone(),
-                trigger.identifier.clone(),
-                trigger.title.clone(),
-                agent_name,
-            ));
-            None
-        },
-        VisibleTriggerKind::PullRequestReview
-        | VisibleTriggerKind::PullRequestComment
-        | VisibleTriggerKind::PullRequestConflict => {
-            app.show_toast(format!("Dispatching {}", trigger.identifier), None);
-            app.dispatching_triggers.insert(trigger.trigger_id.clone());
-            Some(RuntimeCommand::DispatchPullRequestTrigger {
-                trigger_id: trigger.trigger_id.clone(),
-            })
-        },
-    }
+    app.dispatch_modal = Some(crate::app::DispatchModalState::new(
+        trigger.trigger_id.clone(),
+        trigger.identifier.clone(),
+        trigger.title.clone(),
+        trigger.kind,
+        agent_name,
+    ));
+    None
 }
 
 fn handle_dispatch_modal_key(app: &mut AppState, key: event::KeyEvent) -> Option<RuntimeCommand> {
@@ -2327,11 +2313,21 @@ fn submit_dispatch_modal(app: &mut AppState) -> Option<RuntimeCommand> {
         directives.clone(),
     );
     app.dispatching_triggers.insert(modal.trigger_id.clone());
-    Some(RuntimeCommand::DispatchIssue {
-        issue_id: modal.trigger_id,
-        agent_name: modal.agent_name,
-        directives,
-    })
+    match modal.trigger_kind {
+        VisibleTriggerKind::Issue => Some(RuntimeCommand::DispatchIssue {
+            issue_id: modal.trigger_id,
+            agent_name: modal.agent_name,
+            directives,
+        }),
+        VisibleTriggerKind::PullRequestReview
+        | VisibleTriggerKind::PullRequestComment
+        | VisibleTriggerKind::PullRequestConflict => {
+            Some(RuntimeCommand::DispatchPullRequestTrigger {
+                trigger_id: modal.trigger_id,
+                directives,
+            })
+        },
+    }
 }
 
 fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
@@ -2479,6 +2475,43 @@ mod tests {
     }
 
     #[test]
+    fn triggers_tab_approves_waiting_pull_request_trigger() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.visible_triggers = vec![VisibleTriggerRow {
+            trigger_id: "pr_review:github:penso/polyphony:7:abc123".into(),
+            kind: VisibleTriggerKind::PullRequestReview,
+            source: "github".into(),
+            identifier: "penso/polyphony#7".into(),
+            title: "Review me".into(),
+            status: "waiting_approval".into(),
+            approval_state: IssueApprovalState::Waiting,
+            priority: None,
+            labels: vec![],
+            description: None,
+            url: None,
+            author: Some("outsider".into()),
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        }];
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Triggers;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('a'), &snapshot);
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::ApproveIssueTrigger {
+                issue_id,
+                source,
+            }) if issue_id == "pr_review:github:penso/polyphony:7:abc123" && source == "github"
+        ));
+    }
+
+    #[test]
     fn triggers_tab_closes_selected_issue() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
@@ -2549,7 +2582,45 @@ mod tests {
         assert_eq!(modal.trigger_id, "7");
         assert_eq!(modal.trigger_identifier, "#7");
         assert_eq!(modal.trigger_title, "Needs operator guidance");
+        assert_eq!(modal.trigger_kind, VisibleTriggerKind::Issue);
         assert!(modal.agent_name.is_none());
+    }
+
+    #[test]
+    fn triggers_tab_opens_dispatch_modal_for_pull_request_review() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.visible_triggers = vec![VisibleTriggerRow {
+            trigger_id: "pr-review-7".into(),
+            kind: VisibleTriggerKind::PullRequestReview,
+            source: "github".into(),
+            identifier: "penso/polyphony#7".into(),
+            title: "Review me".into(),
+            status: "ready".into(),
+            approval_state: IssueApprovalState::Approved,
+            priority: None,
+            labels: vec![],
+            description: None,
+            url: None,
+            author: Some("penso".into()),
+            parent_id: None,
+            updated_at: None,
+            created_at: None,
+            has_workspace: false,
+        }];
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Triggers;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('d'), &snapshot);
+
+        assert!(command.is_none());
+        let modal = app
+            .dispatch_modal
+            .as_ref()
+            .expect("dispatch modal should open");
+        assert_eq!(modal.trigger_id, "pr-review-7");
+        assert_eq!(modal.trigger_kind, VisibleTriggerKind::PullRequestReview);
     }
 
     #[test]
@@ -2560,6 +2631,7 @@ mod tests {
             "7".into(),
             "#7".into(),
             "Needs operator guidance".into(),
+            VisibleTriggerKind::Issue,
             Some("router".into()),
         ));
 
@@ -2600,6 +2672,54 @@ mod tests {
         ));
         assert!(app.dispatch_modal.is_none());
         assert!(app.dispatching_triggers.contains("7"));
+    }
+
+    #[test]
+    fn dispatch_modal_submits_pull_request_trigger_with_directives() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.dispatch_modal = Some(crate::app::DispatchModalState::new(
+            "pr-review-7".into(),
+            "penso/polyphony#7".into(),
+            "Review me".into(),
+            VisibleTriggerKind::PullRequestReview,
+            None,
+        ));
+
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()),
+        );
+        let _ = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()),
+        );
+        let command = crate::event_loop::handle_dispatch_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::DispatchPullRequestTrigger {
+                trigger_id,
+                directives,
+            }) if trigger_id == "pr-review-7" && directives.as_deref() == Some("Check")
+        ));
+        assert!(app.dispatch_modal.is_none());
+        assert!(app.dispatching_triggers.contains("pr-review-7"));
     }
 
     #[test]
@@ -2769,6 +2889,7 @@ mod tests {
             agent_catalogs: vec![],
             saved_contexts: vec![],
             recent_events: vec![],
+            pending_user_interactions: vec![],
             movements: vec![polyphony_core::MovementRow {
                 id: "mov-1".into(),
                 kind: polyphony_core::MovementKind::IssueDelivery,

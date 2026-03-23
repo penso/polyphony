@@ -106,6 +106,7 @@ pub(crate) struct GithubReviewPullRequestResponse {
     pub(crate) updated_at: DateTime<Utc>,
     pub(crate) draft: Option<bool>,
     pub(crate) user: Option<GithubReviewUser>,
+    pub(crate) author_association: Option<AuthorAssociation>,
     #[serde(default)]
     pub(crate) labels: Vec<GithubReviewLabel>,
     pub(crate) base: GithubReviewBranchRef,
@@ -149,28 +150,35 @@ pub(crate) fn pull_request_review_triggers_from_responses(
         .filter(|pull_request| {
             !pull_request.head.name.is_empty() && !pull_request.head.sha.is_empty()
         })
-        .map(|pull_request| PullRequestReviewTrigger {
-            provider: ReviewProviderKind::Github,
-            repository: repository_name.to_string(),
-            number: pull_request.number,
-            title: pull_request.title,
-            url: Some(pull_request.html_url),
-            base_branch: pull_request.base.name,
-            head_branch: pull_request.head.name,
-            head_sha: pull_request.head.sha,
-            checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
-            author_login: pull_request
+        .map(|pull_request| {
+            let author_login = pull_request
                 .user
-                .map(|user| user.login.to_ascii_lowercase()),
-            labels: pull_request
-                .labels
-                .into_iter()
-                .map(|label| label.name.trim().to_ascii_lowercase())
-                .filter(|label| !label.is_empty())
-                .collect(),
-            created_at: Some(pull_request.created_at),
-            updated_at: Some(pull_request.updated_at),
-            is_draft: pull_request.draft.unwrap_or(false),
+                .map(|user| user.login.to_ascii_lowercase());
+            PullRequestReviewTrigger {
+                provider: ReviewProviderKind::Github,
+                repository: repository_name.to_string(),
+                number: pull_request.number,
+                title: pull_request.title,
+                url: Some(pull_request.html_url),
+                base_branch: pull_request.base.name,
+                head_branch: pull_request.head.name,
+                head_sha: pull_request.head.sha,
+                checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
+                author_login: author_login.clone(),
+                approval_state: github_issue_approval_state(
+                    pull_request.author_association.as_ref(),
+                    author_login.as_deref(),
+                ),
+                labels: pull_request
+                    .labels
+                    .into_iter()
+                    .map(|label| label.name.trim().to_ascii_lowercase())
+                    .filter(|label| !label.is_empty())
+                    .collect(),
+                created_at: Some(pull_request.created_at),
+                updated_at: Some(pull_request.updated_at),
+                is_draft: pull_request.draft.unwrap_or(false),
+            }
         })
         .collect()
 }
@@ -187,6 +195,10 @@ fn pull_request_triggers_from_graphql(
             .author
             .as_ref()
             .map(|author| author.login.to_ascii_lowercase());
+        let approval_state = github_graphql_approval_state(
+            &pull_request.author_association,
+            author_login.as_deref(),
+        );
         let review_trigger = PullRequestReviewTrigger {
             provider: ReviewProviderKind::Github,
             repository: repository_name.to_string(),
@@ -198,6 +210,7 @@ fn pull_request_triggers_from_graphql(
             head_sha: pull_request.head_ref_oid.clone(),
             checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
             author_login: author_login.clone(),
+            approval_state,
             labels: pull_request
                 .labels
                 .and_then(|labels| labels.nodes)
@@ -223,6 +236,7 @@ fn pull_request_triggers_from_graphql(
                 head_sha: pull_request.head_ref_oid.clone(),
                 checkout_ref: Some(format!("refs/pull/{}/head", pull_request.number)),
                 author_login: author_login.clone(),
+                approval_state,
                 labels: review_trigger.labels.clone(),
                 created_at: Some(pull_request.created_at),
                 updated_at: Some(pull_request.updated_at),
@@ -255,6 +269,10 @@ fn pull_request_triggers_from_graphql(
             if body.is_empty() {
                 continue;
             }
+            let comment_author_login = comment
+                .author
+                .as_ref()
+                .map(|author| author.login.to_ascii_lowercase());
             triggers.push(PullRequestTrigger::Comment(PullRequestCommentTrigger {
                 provider: ReviewProviderKind::Github,
                 repository: review_target.repository.clone(),
@@ -273,9 +291,11 @@ fn pull_request_triggers_from_graphql(
                     .map(|line| line as u32)
                     .or(thread.original_line.map(|line| line as u32)),
                 body,
-                author_login: comment
-                    .author
-                    .map(|author| author.login.to_ascii_lowercase()),
+                author_login: comment_author_login.clone(),
+                approval_state: github_graphql_approval_state(
+                    &comment.author_association,
+                    comment_author_login.as_deref(),
+                ),
                 labels: review_labels.clone(),
                 created_at: Some(comment.created_at),
                 updated_at: Some(comment.updated_at),
@@ -284,6 +304,21 @@ fn pull_request_triggers_from_graphql(
         }
     }
     triggers
+}
+
+fn github_graphql_approval_state(
+    association: &fetch_pull_request_triggers::CommentAuthorAssociation,
+    author_login: Option<&str>,
+) -> IssueApprovalState {
+    use fetch_pull_request_triggers::CommentAuthorAssociation::{COLLABORATOR, MEMBER, OWNER};
+
+    if author_login.is_some_and(|login| login.eq_ignore_ascii_case("dependabot[bot]"))
+        || matches!(association, OWNER | MEMBER | COLLABORATOR)
+    {
+        IssueApprovalState::Approved
+    } else {
+        IssueApprovalState::Waiting
+    }
 }
 
 fn latest_unresolved_thread_comment(

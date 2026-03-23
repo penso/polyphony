@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime},
 };
 
@@ -13,8 +13,8 @@ use polyphony_core::{
     PullRequestConflictTrigger, PullRequestManager, PullRequestReviewTrigger, PullRequestTrigger,
     PullRequestTriggerSource, RateLimitSignal, RetryRow, ReviewTarget, ReviewedPullRequestHead,
     RuntimeEvent, RuntimeSnapshot, StateStore, Task, TaskId, ThrottleWindow, TokenUsage,
-    TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerRow, WorkspaceCommitter,
-    WorkspaceProvisioner,
+    TrackerConnectionStatus, UserInteractionRequest, VisibleIssueRow, VisibleTriggerRow,
+    WorkspaceCommitter, WorkspaceProvisioner,
 };
 use polyphony_feedback::FeedbackRegistry;
 use polyphony_workflow::LoadedWorkflow;
@@ -108,6 +108,7 @@ pub enum RuntimeCommand {
     },
     DispatchPullRequestTrigger {
         trigger_id: String,
+        directives: Option<String>,
     },
     MergeDeliverable {
         movement_id: polyphony_core::MovementId,
@@ -171,12 +172,13 @@ pub struct RuntimeService {
         polyphony_core::DeliverableDecision,
     )>,
     pending_manual_dispatches: Vec<ManualDispatchRequest>,
-    pending_manual_pull_request_trigger_dispatches: Vec<String>,
+    pending_manual_pull_request_trigger_dispatches: Vec<ManualPullRequestDispatchRequest>,
     pending_merge_deliverables: Vec<polyphony_core::MovementId>,
     pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_task_retries: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_agent_stops: Vec<polyphony_core::IssueId>,
     state: RuntimeState,
+    user_interactions: Arc<Mutex<HashMap<String, UserInteractionRequest>>>,
     reload_support: Option<WorkflowReloadSupport>,
 }
 
@@ -197,6 +199,12 @@ enum OrchestratorMessage {
 struct ManualDispatchRequest {
     issue_id: polyphony_core::IssueId,
     agent_name: Option<String>,
+    directives: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ManualPullRequestDispatchRequest {
+    trigger_id: String,
     directives: Option<String>,
 }
 
@@ -256,6 +264,7 @@ enum IssueClaimState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReviewTriggerSuppression {
+    AwaitingApproval,
     Draft,
     AlreadyRunning,
     AlreadyReviewed,

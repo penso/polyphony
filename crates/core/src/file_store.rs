@@ -223,6 +223,7 @@ fn compact_snapshot_for_store(mut snapshot: RuntimeSnapshot) -> RuntimeSnapshot 
         .into_iter()
         .map(|context| compact_saved_context(context, MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES))
         .collect();
+    snapshot.pending_user_interactions.clear();
     snapshot.loading = crate::LoadingState::default();
     snapshot.from_cache = false;
     snapshot.cached_at = None;
@@ -393,6 +394,7 @@ mod tests {
                 scope: crate::EventScope::Worker,
                 message: "done".into(),
             }],
+            pending_user_interactions: Vec::new(),
             movements: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),
@@ -495,6 +497,7 @@ mod tests {
                         message: format!("{index}-{}", "y".repeat(1_000)),
                     })
                     .collect(),
+                pending_user_interactions: Vec::new(),
                 movements: Vec::new(),
                 tasks: Vec::new(),
                 loading: LoadingState::default(),

@@ -68,6 +68,35 @@ pub struct RuntimeEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserInteractionKind {
+    Authentication,
+    SecurityKeyTouch,
+    ExternalPrompt,
+}
+
+impl fmt::Display for UserInteractionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Authentication => "authentication",
+            Self::SecurityKeyTouch => "security_key_touch",
+            Self::ExternalPrompt => "external_prompt",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserInteractionRequest {
+    pub id: String,
+    pub kind: UserInteractionKind,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub started_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeCadence {
     pub tracker_poll_interval_ms: u64,
@@ -177,6 +206,8 @@ pub struct RuntimeSnapshot {
     pub agent_catalogs: Vec<AgentModelCatalog>,
     pub saved_contexts: Vec<AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
+    #[serde(default)]
+    pub pending_user_interactions: Vec<UserInteractionRequest>,
     #[serde(default)]
     pub movements: Vec<MovementRow>,
     #[serde(default)]

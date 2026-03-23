@@ -1,6 +1,72 @@
+use std::{collections::HashMap, sync::Mutex};
+
+use polyphony_core::{UserInteractionReporter, UserInteractionRequest};
+
 use crate::{prelude::*, *};
 
 const SLOW_TRACKER_FETCH_WARN_THRESHOLD: Duration = Duration::from_millis(750);
+
+struct RuntimeInteractionReporter {
+    snapshot_tx: watch::Sender<RuntimeSnapshot>,
+    snapshot_rx: Mutex<watch::Receiver<RuntimeSnapshot>>,
+    user_interactions: Arc<Mutex<HashMap<String, UserInteractionRequest>>>,
+}
+
+impl RuntimeInteractionReporter {
+    fn new(
+        snapshot_tx: watch::Sender<RuntimeSnapshot>,
+        snapshot_rx: watch::Receiver<RuntimeSnapshot>,
+        user_interactions: Arc<Mutex<HashMap<String, UserInteractionRequest>>>,
+    ) -> Self {
+        Self {
+            snapshot_tx,
+            snapshot_rx: Mutex::new(snapshot_rx),
+            user_interactions,
+        }
+    }
+
+    fn publish_snapshot(&self) {
+        let mut snapshot = self
+            .snapshot_rx
+            .lock()
+            .ok()
+            .map(|receiver| receiver.borrow().clone())
+            .unwrap_or_else(empty_snapshot);
+        snapshot.pending_user_interactions = self.pending_user_interactions();
+        let _ = self.snapshot_tx.send(snapshot);
+    }
+
+    fn pending_user_interactions(&self) -> Vec<UserInteractionRequest> {
+        let mut interactions = self
+            .user_interactions
+            .lock()
+            .ok()
+            .map(|interactions| interactions.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        interactions.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        interactions
+    }
+}
+
+impl UserInteractionReporter for RuntimeInteractionReporter {
+    fn begin(&self, interaction: UserInteractionRequest) {
+        if let Ok(mut interactions) = self.user_interactions.lock() {
+            interactions.insert(interaction.id.clone(), interaction);
+        }
+        self.publish_snapshot();
+    }
+
+    fn end(&self, interaction_id: &str) {
+        if let Ok(mut interactions) = self.user_interactions.lock() {
+            interactions.remove(interaction_id);
+        }
+        self.publish_snapshot();
+    }
+}
 
 impl RuntimeService {
     pub fn new(
@@ -19,6 +85,17 @@ impl RuntimeService {
         let (snapshot_tx, snapshot_rx) = watch::channel(empty_snapshot());
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (external_command_tx, external_command_rx) = mpsc::unbounded_channel();
+        let user_interactions = Arc::new(Mutex::new(HashMap::new()));
+        let interaction_reporter: Arc<dyn UserInteractionReporter> =
+            Arc::new(RuntimeInteractionReporter::new(
+                snapshot_tx.clone(),
+                snapshot_rx.clone(),
+                user_interactions.clone(),
+            ));
+        provisioner.set_interaction_reporter(Some(interaction_reporter.clone()));
+        if let Some(ref committer) = committer {
+            committer.set_interaction_reporter(Some(interaction_reporter));
+        }
         let initial_dispatch_mode = workflow_rx.borrow().config.startup_dispatch_mode();
         let state = RuntimeState {
             dispatch_mode: initial_dispatch_mode,
@@ -53,6 +130,7 @@ impl RuntimeService {
                 pending_agent_stops: Vec::new(),
                 reload_support: None,
                 state,
+                user_interactions,
             },
             RuntimeHandle {
                 snapshot_rx,
@@ -187,10 +265,18 @@ impl RuntimeService {
                             });
                             next_tick = Instant::now();
                         }
-                        RuntimeCommand::DispatchPullRequestTrigger { trigger_id } => {
-                            info!(%trigger_id, "manual pull request trigger dispatch queued (event loop)");
-                            self.pending_manual_pull_request_trigger_dispatches
-                                .push(trigger_id);
+                        RuntimeCommand::DispatchPullRequestTrigger {
+                            trigger_id,
+                            directives,
+                        } => {
+                            info!(%trigger_id, has_directives = directives.is_some(), "manual pull request trigger dispatch queued (event loop)");
+                            self.pending_manual_pull_request_trigger_dispatches.push(
+                                ManualPullRequestDispatchRequest {
+                                    trigger_id,
+                                    directives,
+                                },
+                            );
+                            next_tick = Instant::now();
                             let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::MergeDeliverable { movement_id } => {
@@ -360,10 +446,17 @@ impl RuntimeService {
                         directives,
                     });
                 },
-                Ok(RuntimeCommand::DispatchPullRequestTrigger { trigger_id }) => {
-                    info!(%trigger_id, "manual pull request trigger dispatch queued");
-                    self.pending_manual_pull_request_trigger_dispatches
-                        .push(trigger_id);
+                Ok(RuntimeCommand::DispatchPullRequestTrigger {
+                    trigger_id,
+                    directives,
+                }) => {
+                    info!(%trigger_id, has_directives = directives.is_some(), "manual pull request trigger dispatch queued");
+                    self.pending_manual_pull_request_trigger_dispatches.push(
+                        ManualPullRequestDispatchRequest {
+                            trigger_id,
+                            directives,
+                        },
+                    );
                 },
                 Ok(RuntimeCommand::MergeDeliverable { movement_id }) => {
                     info!(%movement_id, "merge deliverable queued");
@@ -437,6 +530,19 @@ impl RuntimeService {
                 self.push_event(
                     EventScope::Dispatch,
                     format!("{issue_identifier} approved and ready for manual dispatch"),
+                );
+                continue;
+            }
+            if let Some(trigger) = self.visible_pull_request_trigger(&issue_id)
+                && self.pull_request_trigger_approval_state(&trigger)
+                    == IssueApprovalState::Approved
+            {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "{} approved and ready for manual dispatch",
+                        trigger.display_identifier()
+                    ),
                 );
             }
         }
@@ -922,6 +1028,32 @@ impl RuntimeService {
         row.approval_state == IssueApprovalState::Approved
     }
 
+    pub(crate) fn pull_request_trigger_approval_state(
+        &self,
+        trigger: &PullRequestTrigger,
+    ) -> IssueApprovalState {
+        let approval_key = match trigger {
+            PullRequestTrigger::Review(trigger) => {
+                issue_key_for_source(&trigger.provider.to_string(), &trigger.dedupe_key())
+            },
+            PullRequestTrigger::Comment(trigger) => {
+                issue_key_for_source(&trigger.provider.to_string(), &trigger.dedupe_key())
+            },
+            PullRequestTrigger::Conflict(trigger) => {
+                issue_key_for_source(&trigger.provider.to_string(), &trigger.dedupe_key())
+            },
+        };
+        if self.state.approved_issue_keys.contains(&approval_key) {
+            IssueApprovalState::Approved
+        } else {
+            match trigger {
+                PullRequestTrigger::Review(trigger) => trigger.approval_state,
+                PullRequestTrigger::Comment(trigger) => trigger.approval_state,
+                PullRequestTrigger::Conflict(trigger) => trigger.approval_state,
+            }
+        }
+    }
+
     pub(crate) fn issue_trigger_row(
         &self,
         tracker_kind: polyphony_core::TrackerKind,
@@ -972,7 +1104,9 @@ impl RuntimeService {
                 title: trigger.title.clone(),
                 status: self
                     .pull_request_trigger_status(&PullRequestTrigger::Review(trigger.clone())),
-                approval_state: IssueApprovalState::Approved,
+                approval_state: self.pull_request_trigger_approval_state(
+                    &PullRequestTrigger::Review(trigger.clone()),
+                ),
                 priority: None,
                 labels: trigger.labels.clone(),
                 description: Some(format!(
@@ -1009,7 +1143,9 @@ impl RuntimeService {
                 ),
                 status: self
                     .pull_request_trigger_status(&PullRequestTrigger::Comment(trigger.clone())),
-                approval_state: IssueApprovalState::Approved,
+                approval_state: self.pull_request_trigger_approval_state(
+                    &PullRequestTrigger::Comment(trigger.clone()),
+                ),
                 priority: None,
                 labels: trigger.labels.clone(),
                 description: Some(format!(
@@ -1050,7 +1186,9 @@ impl RuntimeService {
                 ),
                 status: self
                     .pull_request_trigger_status(&PullRequestTrigger::Conflict(trigger.clone())),
-                approval_state: IssueApprovalState::Approved,
+                approval_state: self.pull_request_trigger_approval_state(
+                    &PullRequestTrigger::Conflict(trigger.clone()),
+                ),
                 priority: None,
                 labels: trigger.labels.clone(),
                 description: Some(format!(
@@ -1110,8 +1248,8 @@ impl RuntimeService {
     }
 
     pub(crate) async fn process_manual_pull_request_trigger_dispatches(&mut self) {
-        let trigger_ids = std::mem::take(&mut self.pending_manual_pull_request_trigger_dispatches);
-        if trigger_ids.is_empty() {
+        let dispatches = std::mem::take(&mut self.pending_manual_pull_request_trigger_dispatches);
+        if dispatches.is_empty() {
             return;
         }
         if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
@@ -1123,11 +1261,12 @@ impl RuntimeService {
             return;
         }
         info!(
-            count = trigger_ids.len(),
+            count = dispatches.len(),
             "processing manual pull request trigger dispatches"
         );
         let workflow = self.workflow();
-        for trigger_id in trigger_ids {
+        for request in dispatches {
+            let trigger_id = request.trigger_id;
             let Some(trigger) = self.visible_pull_request_trigger(&trigger_id) else {
                 self.push_event(
                     EventScope::Dispatch,
@@ -1148,7 +1287,12 @@ impl RuntimeService {
                 continue;
             }
             if let Err(error) = self
-                .dispatch_pull_request_trigger(workflow.clone(), trigger.clone(), None)
+                .dispatch_pull_request_trigger(
+                    workflow.clone(),
+                    trigger.clone(),
+                    None,
+                    request.directives.as_deref(),
+                )
                 .await
             {
                 self.push_event(

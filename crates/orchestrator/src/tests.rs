@@ -650,6 +650,32 @@ impl WorkspaceProvisioner for RecordingProvisioner {
     }
 }
 
+#[derive(Clone)]
+struct FailingProvisioner {
+    message: String,
+}
+
+#[async_trait]
+impl WorkspaceProvisioner for FailingProvisioner {
+    fn component_key(&self) -> String {
+        "workspace:failing".into()
+    }
+
+    async fn ensure_workspace(
+        &self,
+        _request: WorkspaceRequest,
+    ) -> Result<Workspace, polyphony_core::Error> {
+        Err(polyphony_core::Error::Adapter(self.message.clone()))
+    }
+
+    async fn cleanup_workspace(
+        &self,
+        _request: WorkspaceRequest,
+    ) -> Result<(), polyphony_core::Error> {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Default)]
 struct ScriptedPipelineAgent {
     calls: Arc<Mutex<Vec<(String, String)>>>,
@@ -834,7 +860,7 @@ fn test_service(
     workspace_root: &Path,
 ) -> RuntimeService {
     let workflow = test_workflow(workspace_root);
-    let (_tx, rx) = watch::channel(workflow);
+    let (_tx, rx) = watch::channel(workflow.clone());
     RuntimeService::new(
         Arc::new(tracker),
         None,
@@ -910,6 +936,7 @@ fn sample_pull_request_comment_trigger() -> PullRequestCommentTrigger {
         line: Some(42),
         body: "Please fix this branch.".into(),
         author_login: Some("greptileai".into()),
+        approval_state: IssueApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(now - chrono::Duration::minutes(5)),
         updated_at: Some(now - chrono::Duration::minutes(2)),
@@ -930,6 +957,7 @@ fn sample_pull_request_conflict_trigger() -> PullRequestConflictTrigger {
         head_sha: "def456".into(),
         checkout_ref: Some("refs/pull/43/head".into()),
         author_login: Some("alice".into()),
+        approval_state: IssueApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(now - chrono::Duration::minutes(10)),
         updated_at: Some(now - chrono::Duration::minutes(3)),
@@ -1011,7 +1039,7 @@ async fn tick_tracks_visible_issues_when_no_agents_are_configured() {
         &workspace_root,
         "---\ntracker:\n  kind: none\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  by_state: {}\n  by_label: {}\n  profiles: {}\n---\nTest prompt\n",
     );
-    let (_tx, rx) = watch::channel(workflow);
+    let (_tx, rx) = watch::channel(workflow.clone());
     let tracker = TestTracker::new(vec![
         sample_issue("issue-1", "FAC-1", "Todo", "First"),
         sample_issue("issue-2", "FAC-2", "In Progress", "Second"),
@@ -1165,7 +1193,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         &workspace_root,
         "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
     );
-    let (_tx, rx) = watch::channel(workflow);
+    let (_tx, rx) = watch::channel(workflow.clone());
     let trigger = PullRequestReviewTrigger {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
@@ -1177,6 +1205,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         head_sha: "abc123".into(),
         checkout_ref: Some("refs/pull/42/head".into()),
         author_login: Some("alice".into()),
+        approval_state: IssueApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
@@ -1371,6 +1400,7 @@ fn review_trigger_suppression_respects_authors_labels_and_bots() {
         head_sha: "sha1".into(),
         checkout_ref: Some("refs/pull/1/head".into()),
         author_login: Some("skip-me".into()),
+        approval_state: IssueApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
@@ -1440,6 +1470,76 @@ fn review_trigger_suppression_respects_authors_labels_and_bots() {
     );
 }
 
+#[tokio::test]
+async fn untrusted_pull_request_triggers_require_manual_approval() {
+    let workspace_root = unique_workspace_root("pr-review-approval");
+    let workflow = test_workflow_with_front_matter(
+        &workspace_root,
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
+    );
+    let (_tx, rx) = watch::channel(workflow);
+    let mut service = RuntimeService::new(
+        Arc::new(TestTracker::new(Vec::new())),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(RecordingProvisioner::default()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+    let trigger = PullRequestReviewTrigger {
+        provider: polyphony_core::ReviewProviderKind::Github,
+        repository: "penso/polyphony".into(),
+        number: 9,
+        title: "Review me carefully".into(),
+        url: Some("https://github.com/penso/polyphony/pull/9".into()),
+        base_branch: "main".into(),
+        head_branch: "feature/review".into(),
+        head_sha: "sha9".into(),
+        checkout_ref: Some("refs/pull/9/head".into()),
+        author_login: Some("outsider".into()),
+        approval_state: IssueApprovalState::Waiting,
+        labels: vec!["ready".into()],
+        created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
+        updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
+        is_draft: false,
+    };
+    service
+        .state
+        .visible_review_triggers
+        .insert(trigger.dedupe_key(), trigger.clone());
+
+    assert_eq!(
+        service.pull_request_trigger_suppression(
+            &service.workflow(),
+            &PullRequestTrigger::Review(trigger.clone()),
+        ),
+        Some(ReviewTriggerSuppression::AwaitingApproval)
+    );
+
+    service
+        .pending_issue_approvals
+        .push((trigger.dedupe_key(), "github".into()));
+    service.process_pending_issue_approvals().await;
+
+    assert_eq!(
+        service.pull_request_trigger_approval_state(&PullRequestTrigger::Review(trigger.clone())),
+        IssueApprovalState::Approved
+    );
+    let approved = service
+        .snapshot()
+        .visible_triggers
+        .into_iter()
+        .find(|row| row.trigger_id == trigger.dedupe_key())
+        .expect("missing visible trigger after approval");
+    assert_eq!(approved.approval_state, IssueApprovalState::Approved);
+}
+
 #[test]
 fn pull_request_comment_triggers_are_suppressed_after_a_newer_review() {
     let workspace_root = unique_workspace_root("pr-comment-suppression");
@@ -1480,6 +1580,7 @@ fn pull_request_comment_triggers_are_suppressed_after_a_newer_review() {
         line: Some(42),
         body: "Please fix this branch.".into(),
         author_login: Some("greptileai".into()),
+        approval_state: IssueApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(now - chrono::Duration::minutes(5)),
         updated_at: Some(now - chrono::Duration::minutes(2)),
@@ -1638,6 +1739,7 @@ async fn inline_pull_request_review_comments_are_submitted_when_requested() {
         head_sha: "abc123".into(),
         checkout_ref: Some("refs/pull/42/head".into()),
         author_login: Some("alice".into()),
+        approval_state: IssueApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
@@ -2685,6 +2787,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
                 ..context.clone()
             })],
             recent_events: Vec::new(),
+            pending_user_interactions: Vec::new(),
             movements: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),
@@ -3074,6 +3177,84 @@ async fn manual_dispatch_is_processed_on_next_tick() {
     assert!(
         service.state.running.contains_key(&issue.id),
         "manual dispatch should be processed on the immediate next tick"
+    );
+}
+
+#[tokio::test]
+async fn manual_pull_request_dispatch_failure_creates_visible_failed_movement() {
+    let workspace_root = unique_workspace_root("manual-pr-dispatch-failure");
+    let workflow = test_workflow_with_front_matter(
+        &workspace_root,
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+    );
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let trigger = PullRequestReviewTrigger {
+        provider: polyphony_core::ReviewProviderKind::Github,
+        repository: "penso/polyphony".into(),
+        number: 89,
+        title: "Review me".into(),
+        url: Some("https://github.com/penso/polyphony/pull/89".into()),
+        base_branch: "main".into(),
+        head_branch: "feature/review".into(),
+        head_sha: "abc123".into(),
+        checkout_ref: Some("refs/pull/89/head".into()),
+        author_login: Some("alice".into()),
+        approval_state: IssueApprovalState::Approved,
+        labels: vec!["ready".into()],
+        created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
+        updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
+        is_draft: false,
+    };
+    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let mut service = RuntimeService::new(
+        Arc::new(TestTracker::new(Vec::new())),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(FailingProvisioner {
+            message: "ssh auth failed".into(),
+        }),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+    let dispatch = service
+        .dispatch_pull_request_review(workflow, trigger, None, Some("Check auth"))
+        .await;
+    assert!(
+        dispatch.is_err(),
+        "workspace setup should fail in this test"
+    );
+
+    let (movement_id, movement) = service
+        .state
+        .movements
+        .iter()
+        .next()
+        .expect("movement should be created before workspace setup succeeds");
+    assert_eq!(movement.issue_id.as_deref(), Some(issue.id.as_str()));
+    assert_eq!(movement.status, MovementStatus::Failed);
+    assert_eq!(
+        movement.manual_dispatch_directives.as_deref(),
+        Some("Check auth")
+    );
+    let tasks = service
+        .state
+        .tasks
+        .get(movement_id)
+        .expect("tasks should exist for PR dispatch");
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].title, "Creating worktree");
+    assert_eq!(tasks[0].status, TaskStatus::Failed);
+    assert_eq!(tasks[1].title, "Run PR review");
+    assert_eq!(tasks[1].status, TaskStatus::Cancelled);
+    assert!(
+        !service.state.running.contains_key(&issue.id),
+        "worker should not start when workspace setup fails"
     );
 }
 
@@ -3546,6 +3727,7 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
             agent_catalogs: Vec::new(),
             saved_contexts: Vec::new(),
             recent_events: Vec::new(),
+            pending_user_interactions: Vec::new(),
             movements: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),

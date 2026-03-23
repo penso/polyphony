@@ -552,7 +552,7 @@ async fn load_runtime_snapshot(
 ) -> Result<RuntimeSnapshot, Error> {
     let components = build_runtime_components(workflow)?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
-        Arc::new(polyphony_git::GitWorkspaceProvisioner);
+        Arc::new(polyphony_git::GitWorkspaceProvisioner::default());
     let store = build_store(workflow_path, sqlite_url).await?;
     let cache_path = workflow_root_dir(workflow_path)?
         .join(".polyphony")
@@ -633,7 +633,7 @@ async fn list_workspace_entries(
 ) -> Result<serde_json::Value, Error> {
     let manager = polyphony_workspace::WorkspaceManager::new(
         workflow.config.workspace.root.clone(),
-        Arc::new(polyphony_git::GitWorkspaceProvisioner),
+        Arc::new(polyphony_git::GitWorkspaceProvisioner::default()),
         workflow.config.workspace.checkout_kind,
         workflow.config.workspace.sync_on_reuse,
         workflow.config.workspace.transient_paths.clone(),

@@ -2,11 +2,10 @@ use crate::{prelude::*, *};
 
 pub(crate) fn to_issue(issue: GithubIssue, comments: Vec<GithubComment>) -> Issue {
     let state = normalize_issue_state(&issue);
-    let approval_state = issue
-        .author_association
-        .as_ref()
-        .map(github_issue_approval_state)
-        .unwrap_or(IssueApprovalState::Waiting);
+    let approval_state = github_issue_approval_state(
+        issue.author_association.as_ref(),
+        Some(issue.user.login.as_str()),
+    );
     Issue {
         id: issue.number.to_string(),
         identifier: format!("#{}", issue.number),
@@ -92,19 +91,33 @@ pub(crate) fn github_trust_level(association: &AuthorAssociation) -> String {
     }
 }
 
-pub(crate) fn github_issue_approval_state(association: &AuthorAssociation) -> IssueApprovalState {
-    match association {
-        AuthorAssociation::Owner | AuthorAssociation::Member | AuthorAssociation::Collaborator => {
-            IssueApprovalState::Approved
-        },
-        AuthorAssociation::Contributor
-        | AuthorAssociation::FirstTimer
-        | AuthorAssociation::FirstTimeContributor
-        | AuthorAssociation::Mannequin
-        | AuthorAssociation::None
-        | AuthorAssociation::Other(_) => IssueApprovalState::Waiting,
-        _ => IssueApprovalState::Waiting,
+pub(crate) fn github_issue_approval_state(
+    association: Option<&AuthorAssociation>,
+    author_login: Option<&str>,
+) -> IssueApprovalState {
+    if github_login_is_auto_approved(author_login) {
+        return IssueApprovalState::Approved;
     }
+
+    match association {
+        Some(
+            AuthorAssociation::Owner | AuthorAssociation::Member | AuthorAssociation::Collaborator,
+        ) => IssueApprovalState::Approved,
+        Some(
+            AuthorAssociation::Contributor
+            | AuthorAssociation::FirstTimer
+            | AuthorAssociation::FirstTimeContributor
+            | AuthorAssociation::Mannequin
+            | AuthorAssociation::None
+            | AuthorAssociation::Other(_),
+        )
+        | None => IssueApprovalState::Waiting,
+        Some(_) => IssueApprovalState::Waiting,
+    }
+}
+
+fn github_login_is_auto_approved(author_login: Option<&str>) -> bool {
+    author_login.is_some_and(|login| login.eq_ignore_ascii_case("dependabot[bot]"))
 }
 
 pub(crate) fn normalize_issue_state(issue: &GithubIssue) -> String {

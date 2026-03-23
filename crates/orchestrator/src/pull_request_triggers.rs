@@ -91,7 +91,7 @@ impl RuntimeService {
                 break;
             }
             if let Err(error) = self
-                .dispatch_pull_request_trigger(workflow.clone(), trigger.clone(), None)
+                .dispatch_pull_request_trigger(workflow.clone(), trigger.clone(), None, None)
                 .await
             {
                 self.state
@@ -147,6 +147,9 @@ impl RuntimeService {
                 trigger.is_draft,
             ),
         };
+        if self.pull_request_trigger_approval_state(trigger) == IssueApprovalState::Waiting {
+            return Some(ReviewTriggerSuppression::AwaitingApproval);
+        }
         if !workflow.config.review_triggers.pr_reviews.include_drafts && is_draft {
             return Some(ReviewTriggerSuppression::Draft);
         }
@@ -258,6 +261,9 @@ impl RuntimeService {
             .map(|trigger| pull_request_trigger_subject(&trigger))
             .unwrap_or_else(|| "pull request trigger".into());
         let message = match suppression {
+            ReviewTriggerSuppression::AwaitingApproval => {
+                format!("suppressed {subject}: awaiting approval")
+            },
             ReviewTriggerSuppression::Draft => format!("suppressed {subject}: draft"),
             ReviewTriggerSuppression::AlreadyRunning => {
                 format!("suppressed {subject}: already running")
@@ -318,6 +324,7 @@ impl RuntimeService {
             .review_trigger_suppressions
             .get(&trigger.dedupe_key())
         {
+            Some(ReviewTriggerSuppression::AwaitingApproval) => "waiting_approval".into(),
             Some(ReviewTriggerSuppression::Draft) => "draft".into(),
             Some(ReviewTriggerSuppression::AlreadyRunning) => "running".into(),
             Some(ReviewTriggerSuppression::AlreadyReviewed) => "reviewed".into(),
@@ -335,14 +342,15 @@ impl RuntimeService {
         workflow: LoadedWorkflow,
         trigger: PullRequestTrigger,
         attempt: Option<u32>,
+        directives: Option<&str>,
     ) -> Result<(), Error> {
         match trigger {
             PullRequestTrigger::Review(trigger) => {
-                self.dispatch_pull_request_review(workflow, trigger, attempt)
+                self.dispatch_pull_request_review(workflow, trigger, attempt, directives)
                     .await
             },
             PullRequestTrigger::Comment(trigger) => {
-                self.dispatch_pull_request_comment_review(workflow, trigger, attempt)
+                self.dispatch_pull_request_comment_review(workflow, trigger, attempt, directives)
                     .await
             },
             PullRequestTrigger::Conflict(trigger) => Err(Error::Core(CoreError::Adapter(format!(

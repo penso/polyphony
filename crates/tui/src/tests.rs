@@ -2,8 +2,8 @@ use chrono::{TimeZone, Utc};
 use polyphony_core::{
     BudgetSnapshot, CodexTotals, Deliverable, DeliverableDecision, DeliverableKind,
     DeliverableStatus, DispatchMode, IssueApprovalState, RuntimeCadence, RuntimeSnapshot,
-    SnapshotCounts, TrackerConnectionStatus, VisibleIssueRow, VisibleTriggerKind,
-    VisibleTriggerRow,
+    SnapshotCounts, TrackerConnectionStatus, UserInteractionKind, UserInteractionRequest,
+    VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
 };
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
@@ -70,6 +70,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
         agent_catalogs: vec![],
         saved_contexts: vec![],
         recent_events: vec![],
+        pending_user_interactions: vec![],
         movements: vec![],
         tasks: vec![],
         loading: Default::default(),
@@ -195,6 +196,45 @@ fn render_help_modal_mentions_close_issue_keybind() {
 }
 
 #[test]
+fn sticky_auth_toast_renders_until_interaction_clears() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(1);
+    snapshot.pending_user_interactions = vec![UserInteractionRequest {
+        id: "git:fetch:github.com".into(),
+        kind: UserInteractionKind::SecurityKeyTouch,
+        title: "Waiting for SSH key touch".into(),
+        description: Some(
+            "Git is fetching from origin on github.com. Touch your security key if prompted."
+                .into(),
+        ),
+        started_at: Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap(),
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("Waiting for SSH key touch"), "{screen}");
+    assert!(screen.contains("Touch your security key"), "{screen}");
+
+    snapshot.pending_user_interactions.clear();
+    app.on_snapshot(&snapshot);
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(!screen.contains("Waiting for SSH key touch"), "{screen}");
+}
+
+#[test]
 fn render_dispatch_modal_shows_full_operator_directives_copy() {
     let backend = TestBackend::new(160, 32);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -205,6 +245,7 @@ fn render_dispatch_modal_shows_full_operator_directives_copy() {
         "issue-1".into(),
         "4x3".into(),
         "Investigate high Arbor CPU during embedded agent terminal activity".into(),
+        VisibleTriggerKind::Issue,
         None,
     ));
 
@@ -584,6 +625,42 @@ fn render_triggers_show_approved_icon_for_verified_github_issue() {
     let screen = buffer_text(terminal.backend().buffer());
     // ID column removed; approval icon now appears before the title
     assert!(screen.contains("✓ Approved issue"), "{screen}");
+}
+
+#[test]
+fn render_triggers_show_clock_icon_for_waiting_pull_request_review() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.visible_triggers = vec![VisibleTriggerRow {
+        trigger_id: "pr-review-76".into(),
+        kind: VisibleTriggerKind::PullRequestReview,
+        source: "github".into(),
+        identifier: "penso/polyphony#76".into(),
+        title: "Waiting PR review".into(),
+        status: "waiting_approval".into(),
+        approval_state: IssueApprovalState::Waiting,
+        priority: Some(2),
+        labels: vec![],
+        description: None,
+        url: None,
+        author: Some("outsider".into()),
+        parent_id: None,
+        updated_at: None,
+        created_at: None,
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("◷ Waiting PR review"), "{screen}");
 }
 
 #[test]
