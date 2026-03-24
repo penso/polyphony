@@ -3,6 +3,11 @@ Author: {{ pull_request_author }}
 Labels: {{ pull_request_labels }}
 
 Inspect the diff and repository state, then write a structured markdown review to `.polyphony/review.md`.
+
+Before reviewing the code, check whether this PR is stale:
+- Compare the PR branch diff against the current base branch (`origin/{{ base_branch }}`).
+- Use `git log origin/{{ base_branch }}` to search for commits that may have already landed the same work under different PRs or cherry-picks.
+- If the meaningful changes already exist on the base branch, note this in the Summary, set the verdict to `comment`, and recommend closing the PR as stale. You do not need to fill the Changed Files, Risks, or Required Fixes sections for a stale PR — just explain what already landed and where.
 Use these exact sections (all are required):
 
 ### Summary
