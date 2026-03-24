@@ -21,9 +21,9 @@ pub(crate) use polyphony_core::{
     TrackerConnectionStatus, TrackerKind, VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
     WorkspaceCommitRequest, WorkspaceCommitter, WorkspaceProgressUpdate, WorkspaceProvisioner,
     is_synthetic_issue_id, load_workspace_saved_context_artifact, new_movement_id,
-    sanitize_workspace_key,
-    workspace_agent_events_artifact_path, workspace_run_history_artifact_path,
-    workspace_runtime_artifact_dir, workspace_saved_context_artifact_path,
+    sanitize_workspace_key, workspace_agent_events_artifact_path,
+    workspace_run_history_artifact_path, workspace_runtime_artifact_dir,
+    workspace_saved_context_artifact_path,
 };
 pub(crate) use polyphony_feedback::FeedbackRegistry;
 pub(crate) use polyphony_workflow::{

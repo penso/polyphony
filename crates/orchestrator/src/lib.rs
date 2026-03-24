@@ -42,16 +42,12 @@ pub enum Error {
 
 const DEFAULT_AUTOMATION_COMMIT_MESSAGE: &str = "fix({{ issue.identifier }}): {{ issue.title }}";
 const DEFAULT_AUTOMATION_PR_TITLE: &str = "{{ issue.identifier }}: {{ issue.title }}";
-const DEFAULT_AUTOMATION_PR_BODY: &str =
-    include_str!("prompts/automation_pr_body.md");
-const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str =
-    include_str!("prompts/automation_review.md");
-const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str =
-    include_str!("prompts/pull_request_review.md");
+const DEFAULT_AUTOMATION_PR_BODY: &str = include_str!("prompts/automation_pr_body.md");
+const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str = include_str!("prompts/automation_review.md");
+const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str = include_str!("prompts/pull_request_review.md");
 const DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT: &str =
     include_str!("prompts/pull_request_comment_review.md");
-const DEFAULT_PLANNER_PROMPT: &str =
-    include_str!("prompts/planner.md");
+const DEFAULT_PLANNER_PROMPT: &str = include_str!("prompts/planner.md");
 
 #[derive(Debug, Deserialize)]
 struct GithubViewerIdentity {

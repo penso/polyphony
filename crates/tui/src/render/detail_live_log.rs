@@ -128,9 +128,7 @@ pub(crate) fn draw_live_log_detail(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "── agent finished ──",
-            Style::default()
-                .fg(theme.muted)
-                .add_modifier(Modifier::DIM),
+            Style::default().fg(theme.muted).add_modifier(Modifier::DIM),
         )));
     }
 
@@ -191,9 +189,7 @@ fn classify_log_line_style(line: &str, theme: crate::theme::Theme) -> Style {
     } else if line.contains("Output:") || line.starts_with("              ") {
         Style::default().fg(theme.muted)
     } else if line.contains("Tool:") || line.contains("Exec:") {
-        Style::default()
-            .fg(theme.info)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.info).add_modifier(Modifier::BOLD)
     } else if line.contains('←') {
         Style::default().fg(theme.info)
     } else {

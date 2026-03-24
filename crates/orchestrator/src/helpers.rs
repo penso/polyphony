@@ -456,7 +456,10 @@ pub(crate) async fn load_pull_request_review_comments(
             path: path.to_string(),
             line: draft.line,
             body: body.to_string(),
-            title: draft.title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+            title: draft
+                .title
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty()),
             priority: draft.priority.filter(|&p| p <= 4),
         });
     }
@@ -530,8 +533,7 @@ pub(crate) fn extract_review_summary(review_body: &str) -> String {
     let mut lines = Vec::new();
     for line in review_body.lines() {
         let trimmed = line.trim();
-        if trimmed.eq_ignore_ascii_case("### Summary")
-            || trimmed.eq_ignore_ascii_case("## Summary")
+        if trimmed.eq_ignore_ascii_case("### Summary") || trimmed.eq_ignore_ascii_case("## Summary")
         {
             in_summary = true;
             continue;
@@ -553,9 +555,7 @@ pub(crate) fn extract_review_summary(review_body: &str) -> String {
         .lines()
         .find(|l| {
             let t = l.trim();
-            !t.is_empty()
-                && !t.starts_with('#')
-                && !t.to_ascii_lowercase().starts_with("verdict")
+            !t.is_empty() && !t.starts_with('#') && !t.to_ascii_lowercase().starts_with("verdict")
         })
         .unwrap_or("PR reviewed")
         .trim()
@@ -1287,28 +1287,31 @@ mod tests {
     #[test]
     fn extract_review_summary_joins_multiline() {
         let body = "### Summary\nFirst line.\nSecond line.\n\n### Risks\nNone.\n";
-        assert_eq!(
-            extract_review_summary(body),
-            "First line. Second line."
-        );
+        assert_eq!(extract_review_summary(body), "First line. Second line.");
     }
 
     #[test]
     fn extract_review_summary_falls_back_to_first_line() {
         let body = "This is just a blob of text.\nVerdict: approve\n";
-        assert_eq!(
-            extract_review_summary(body),
-            "This is just a blob of text."
-        );
+        assert_eq!(extract_review_summary(body), "This is just a blob of text.");
     }
 
     #[test]
     fn truncate_strips_html_tags() {
         let input = r#"**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Skip signing in dry-run**"#;
         let result = truncate_for_trigger_title(input, 80);
-        assert!(!result.contains("<sub>"), "HTML tags should be stripped: {result}");
-        assert!(!result.contains("img.shields.io"), "Image URL should be stripped: {result}");
-        assert!(result.contains("Skip signing"), "Title text should remain: {result}");
+        assert!(
+            !result.contains("<sub>"),
+            "HTML tags should be stripped: {result}"
+        );
+        assert!(
+            !result.contains("img.shields.io"),
+            "Image URL should be stripped: {result}"
+        );
+        assert!(
+            result.contains("Skip signing"),
+            "Title text should remain: {result}"
+        );
     }
 
     #[test]
@@ -1316,8 +1319,14 @@ mod tests {
         let input = r##"<a href="#"><img alt="P2" src="https://greptile-static-assets.s3.amazonaws.com/badges/P2.svg"></a> Some issue title"##;
         let result = truncate_for_trigger_title(input, 80);
         assert!(!result.contains("<a"), "HTML should be stripped: {result}");
-        assert!(!result.contains("greptile"), "badge URL should be stripped: {result}");
-        assert!(result.contains("Some issue title"), "Title text should remain: {result}");
+        assert!(
+            !result.contains("greptile"),
+            "badge URL should be stripped: {result}"
+        );
+        assert!(
+            result.contains("Some issue title"),
+            "Title text should remain: {result}"
+        );
     }
 
     #[test]

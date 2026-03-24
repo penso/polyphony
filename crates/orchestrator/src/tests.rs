@@ -1374,10 +1374,19 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
     );
     // Verify deliverable was created for the PR review movement.
     let movement = service.state.movements.get("mov-review").unwrap();
-    let deliverable = movement.deliverable.as_ref().expect("deliverable should be set for PR review");
+    let deliverable = movement
+        .deliverable
+        .as_ref()
+        .expect("deliverable should be set for PR review");
     assert_eq!(deliverable.kind, DeliverableKind::PullRequestReview);
     assert_eq!(deliverable.status, DeliverableStatus::Reviewed);
-    assert!(deliverable.description.as_ref().unwrap().contains("Summary"));
+    assert!(
+        deliverable
+            .description
+            .as_ref()
+            .unwrap()
+            .contains("Summary")
+    );
 
     tokio::fs::write(
         workspace_root

@@ -623,10 +623,8 @@ fn draw_movements_table(
                     spans.extend(diff_spans);
                     // Show verdict and confidence for PR reviews.
                     if deliverable.kind == polyphony_core::DeliverableKind::PullRequestReview {
-                        if let Some(verdict) = deliverable
-                            .metadata
-                            .get("verdict")
-                            .and_then(|v| v.as_str())
+                        if let Some(verdict) =
+                            deliverable.metadata.get("verdict").and_then(|v| v.as_str())
                         {
                             let (icon, color) = match verdict {
                                 "approve" => ("✓", theme.success),

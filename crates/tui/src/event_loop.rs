@@ -342,7 +342,10 @@ fn handle_key_event(
                 app.split_focus = crate::app::SplitFocus::default();
             },
             KeyCode::Enter => {},
-            KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('c') | KeyCode::Char('w')
+            KeyCode::Char('e')
+            | KeyCode::Char('E')
+            | KeyCode::Char('c')
+            | KeyCode::Char('w')
             | KeyCode::Char('O') => {
                 if let Some(cmd) = handle_detail_key(app, key.code, snapshot, command_tx) {
                     let _ = command_tx.send(cmd);

@@ -196,11 +196,9 @@ fn output_label(deliverable: &Deliverable) -> String {
             .map(|b| format!("branch:{b}"))
             .unwrap_or_else(|| "branch".into()),
         DeliverableKind::Patch => "Patch".into(),
-        DeliverableKind::PullRequestReview => deliverable
-            .title
-            .as_deref()
-            .unwrap_or("Review")
-            .to_string(),
+        DeliverableKind::PullRequestReview => {
+            deliverable.title.as_deref().unwrap_or("Review").to_string()
+        },
     }
 }
 

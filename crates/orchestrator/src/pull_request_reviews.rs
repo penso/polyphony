@@ -1463,7 +1463,8 @@ impl RuntimeService {
             number: review_target.number,
             url: review_target.url.clone(),
         };
-        let uses_review_api = comment_mode == "inline" || verdict != polyphony_core::ReviewVerdict::Comment;
+        let uses_review_api =
+            comment_mode == "inline" || verdict != polyphony_core::ReviewVerdict::Comment;
         if uses_review_api {
             commenter
                 .sync_pull_request_review(
