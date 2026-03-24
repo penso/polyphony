@@ -342,7 +342,8 @@ fn handle_key_event(
                 app.split_focus = crate::app::SplitFocus::default();
             },
             KeyCode::Enter => {},
-            KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('c') | KeyCode::Char('w') => {
+            KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('c') | KeyCode::Char('w')
+            | KeyCode::Char('O') => {
                 if let Some(cmd) = handle_detail_key(app, key.code, snapshot, command_tx) {
                     let _ = command_tx.send(cmd);
                 }
@@ -1346,11 +1347,20 @@ fn handle_detail_key(
                 scroll_detail_back(app, 8);
             },
             KeyCode::Char('O') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && let Some(deliverable) = &movement.deliverable
-                    && let Some(url) = &deliverable.url
-                {
-                    open_url(url);
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
+                    let url = movement
+                        .deliverable
+                        .as_ref()
+                        .and_then(|d| d.url.as_deref())
+                        .or_else(|| {
+                            movement
+                                .review_target
+                                .as_ref()
+                                .and_then(|t| t.url.as_deref())
+                        });
+                    if let Some(url) = url {
+                        open_url(url);
+                    }
                 }
             },
             KeyCode::Char('a') => {
