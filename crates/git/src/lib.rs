@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -9,7 +10,8 @@ use async_trait::async_trait;
 use polyphony_core::{
     CheckoutKind, Error as CoreError, UserInteractionKind, UserInteractionReporter,
     UserInteractionRequest, Workspace, WorkspaceCommitRequest, WorkspaceCommitResult,
-    WorkspaceCommitter, WorkspaceProvisioner, WorkspaceRequest,
+    WorkspaceCommitter, WorkspaceProgressReporter, WorkspaceProgressUpdate, WorkspaceProvisioner,
+    WorkspaceRequest,
 };
 use thiserror::Error;
 use tracing::{debug, info, warn};
@@ -24,8 +26,24 @@ pub enum Error {
     WorkspacePathCollision(String),
 }
 
+#[derive(Clone)]
+struct WorkspaceProgressContext {
+    issue_identifier: String,
+    workspace_key: String,
+}
+
+impl WorkspaceProgressContext {
+    fn from_request(request: &WorkspaceRequest) -> Self {
+        Self {
+            issue_identifier: request.issue_identifier.clone(),
+            workspace_key: request.workspace_key.clone(),
+        }
+    }
+}
+
 pub struct GitWorkspaceProvisioner {
     interaction_reporter: Mutex<Option<Arc<dyn UserInteractionReporter>>>,
+    progress_reporter: Mutex<Option<Arc<dyn WorkspaceProgressReporter>>>,
 }
 
 pub struct GitWorkspaceCommitter {
@@ -36,6 +54,7 @@ impl Default for GitWorkspaceProvisioner {
     fn default() -> Self {
         Self {
             interaction_reporter: Mutex::new(None),
+            progress_reporter: Mutex::new(None),
         }
     }
 }
@@ -51,6 +70,13 @@ impl Default for GitWorkspaceCommitter {
 impl GitWorkspaceProvisioner {
     fn interaction_reporter(&self) -> Option<Arc<dyn UserInteractionReporter>> {
         self.interaction_reporter
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    fn progress_reporter(&self) -> Option<Arc<dyn WorkspaceProgressReporter>> {
+        self.progress_reporter
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
@@ -78,9 +104,17 @@ impl WorkspaceProvisioner for GitWorkspaceProvisioner {
         }
     }
 
+    fn set_progress_reporter(&self, reporter: Option<Arc<dyn WorkspaceProgressReporter>>) {
+        if let Ok(mut slot) = self.progress_reporter.lock() {
+            *slot = reporter;
+        }
+    }
+
     async fn ensure_workspace(&self, request: WorkspaceRequest) -> Result<Workspace, CoreError> {
         let interaction_reporter = self.interaction_reporter();
-        tokio_wrap(move || ensure_workspace_sync(request, interaction_reporter)).await
+        let progress_reporter = self.progress_reporter();
+        tokio_wrap(move || ensure_workspace_sync(request, interaction_reporter, progress_reporter))
+            .await
     }
 
     async fn cleanup_workspace(&self, request: WorkspaceRequest) -> Result<(), CoreError> {
@@ -113,7 +147,9 @@ impl WorkspaceCommitter for GitWorkspaceCommitter {
 fn ensure_workspace_sync(
     request: WorkspaceRequest,
     interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+    progress_reporter: Option<Arc<dyn WorkspaceProgressReporter>>,
 ) -> Result<Workspace, CoreError> {
+    let progress_context = WorkspaceProgressContext::from_request(&request);
     fs::create_dir_all(&request.workspace_root).map_err(map_io)?;
     if let Ok(metadata) = fs::symlink_metadata(&request.workspace_path) {
         if !metadata.is_dir() {
@@ -128,7 +164,20 @@ fn ensure_workspace_sync(
             sync_on_reuse = request.sync_on_reuse,
             "reusing existing workspace"
         );
-        sync_existing_workspace(&request, interaction_reporter.clone())?;
+        report_workspace_progress(
+            progress_reporter.as_deref(),
+            &progress_context,
+            format!(
+                "Reusing existing workspace at {}",
+                request.workspace_path.display()
+            ),
+        );
+        sync_existing_workspace(
+            &request,
+            interaction_reporter.clone(),
+            progress_reporter.clone(),
+            &progress_context,
+        )?;
         return Ok(Workspace {
             path: request.workspace_path,
             workspace_key: request.workspace_key,
@@ -139,10 +188,18 @@ fn ensure_workspace_sync(
 
     let create_result = match request.checkout_kind {
         CheckoutKind::Directory => fs::create_dir_all(&request.workspace_path).map_err(map_io),
-        CheckoutKind::LinkedWorktree => add_linked_worktree(&request, interaction_reporter.clone()),
-        CheckoutKind::DiscreteClone => {
-            create_discrete_clone(&request, interaction_reporter.clone())
-        },
+        CheckoutKind::LinkedWorktree => add_linked_worktree(
+            &request,
+            interaction_reporter.clone(),
+            progress_reporter.clone(),
+            &progress_context,
+        ),
+        CheckoutKind::DiscreteClone => create_discrete_clone(
+            &request,
+            interaction_reporter.clone(),
+            progress_reporter.clone(),
+            &progress_context,
+        ),
     };
     if let Err(error) = create_result {
         cleanup_partial_workspace(&request.workspace_path);
@@ -270,6 +327,8 @@ fn commit_and_push_sync(
             allowed,
             request.auth_token.as_deref(),
             interaction_reporter.as_deref(),
+            None,
+            None,
             GitCredentialOperation::PushBranch,
         )
     });
@@ -279,9 +338,49 @@ fn commit_and_push_sync(
         "refs/heads/{}:refs/heads/{}",
         request.branch_name, request.branch_name
     );
-    remote
-        .push(&[refspec], Some(&mut push_options))
-        .map_err(|error| CoreError::Adapter(format!("push branch failed: {error}")))?;
+    let remote_url = remote.url().map(str::to_owned);
+    if should_prefer_system_git_for_ssh(remote_url.as_deref(), GitOperationKind::PushBranch) {
+        info!(
+            remote = remote_url.as_deref().unwrap_or("origin"),
+            workspace_path = %request.workspace_path.display(),
+            branch_name = %request.branch_name,
+            "pushing branch with system git for ssh remote"
+        );
+        push_with_system_git(
+            &request.workspace_path,
+            &request.remote_name,
+            &refspec,
+            remote_url.as_deref(),
+            interaction_reporter.as_deref(),
+        )?;
+    } else {
+        let push_result = remote
+            .push(&[refspec.as_str()], Some(&mut push_options))
+            .map_err(|error| git_operation_error("push branch", error));
+        if let Err(CoreError::Adapter(message)) = &push_result
+            && should_fallback_to_system_git(
+                remote_url.as_deref(),
+                message,
+                GitOperationKind::PushBranch,
+            )
+        {
+            info!(
+                remote = remote_url.as_deref().unwrap_or("origin"),
+                workspace_path = %request.workspace_path.display(),
+                branch_name = %request.branch_name,
+                "retrying push with system git after libgit2 ssh auth failure"
+            );
+            push_with_system_git(
+                &request.workspace_path,
+                &request.remote_name,
+                &refspec,
+                remote_url.as_deref(),
+                interaction_reporter.as_deref(),
+            )?;
+        } else {
+            push_result?;
+        }
+    }
 
     info!(
         workspace_path = %request.workspace_path.display(),
@@ -342,6 +441,8 @@ fn branch_is_ahead_of_base(
 fn sync_existing_workspace(
     request: &WorkspaceRequest,
     interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+    progress_reporter: Option<Arc<dyn WorkspaceProgressReporter>>,
+    progress_context: &WorkspaceProgressContext,
 ) -> Result<(), CoreError> {
     if !request.sync_on_reuse {
         return Ok(());
@@ -361,6 +462,8 @@ fn sync_existing_workspace(
                     source_repo_path,
                     request.checkout_ref.as_deref(),
                     interaction_reporter.clone(),
+                    progress_reporter.clone(),
+                    progress_context.clone(),
                 )
             {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
@@ -377,6 +480,8 @@ fn sync_existing_workspace(
                 &request.workspace_path,
                 request.checkout_ref.as_deref(),
                 interaction_reporter.clone(),
+                progress_reporter.clone(),
+                progress_context.clone(),
             ) {
                 warn!(%error, "fetch origin failed during workspace sync, continuing without remote update");
             }
@@ -393,13 +498,18 @@ fn sync_existing_workspace(
 fn add_linked_worktree(
     request: &WorkspaceRequest,
     interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+    progress_reporter: Option<Arc<dyn WorkspaceProgressReporter>>,
+    progress_context: &WorkspaceProgressContext,
 ) -> Result<(), CoreError> {
     let source_path = request
         .source_repo_path
         .as_deref()
         .ok_or_else(|| CoreError::Adapter(Error::MissingRepositorySource.to_string()))?;
-    let repo = git2::Repository::open(source_path)
-        .map_err(|error| CoreError::Adapter(format!("open source repo failed: {error}")))?;
+    report_workspace_progress(
+        progress_reporter.as_deref(),
+        progress_context,
+        format!("Opening source repository {}", source_path.display()),
+    );
     let branch_name = request
         .branch_name
         .clone()
@@ -411,8 +521,32 @@ fn add_linked_worktree(
         checkout_ref = ?request.checkout_ref,
         "creating linked worktree"
     );
+    report_workspace_progress(
+        progress_reporter.as_deref(),
+        progress_context,
+        format!(
+            "Creating linked worktree {} on branch {}",
+            request.workspace_path.display(),
+            branch_name
+        ),
+    );
+    if let Some(checkout_ref) = request.checkout_ref.as_deref() {
+        report_workspace_progress(
+            progress_reporter.as_deref(),
+            progress_context,
+            format!("Fetching checkout ref {checkout_ref}"),
+        );
+        fetch_origin_with_timeout(
+            source_path,
+            Some(checkout_ref),
+            interaction_reporter.clone(),
+            progress_reporter.clone(),
+            progress_context.clone(),
+        )?;
+    }
+    let repo = git2::Repository::open(source_path)
+        .map_err(|error| CoreError::Adapter(format!("open source repo failed: {error}")))?;
     let branch_ref = if let Some(checkout_ref) = request.checkout_ref.as_deref() {
-        fetch_checkout_ref(&repo, checkout_ref, interaction_reporter.clone())?;
         ensure_branch_from_ref(&repo, &branch_name, checkout_ref)?
     } else {
         ensure_branch(&repo, &branch_name, request.default_branch.as_deref())?
@@ -427,6 +561,8 @@ fn add_linked_worktree(
 fn create_discrete_clone(
     request: &WorkspaceRequest,
     interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+    progress_reporter: Option<Arc<dyn WorkspaceProgressReporter>>,
+    progress_context: &WorkspaceProgressContext,
 ) -> Result<(), CoreError> {
     let source = request
         .clone_url
@@ -445,6 +581,15 @@ fn create_discrete_clone(
         checkout_ref = ?request.checkout_ref,
         "creating discrete clone workspace"
     );
+    report_workspace_progress(
+        progress_reporter.as_deref(),
+        progress_context,
+        format!(
+            "Cloning repository into {}",
+            request.workspace_path.display()
+        ),
+    );
+    let credential_progress_context = progress_context.clone();
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed| {
         resolve_remote_credentials(
@@ -454,6 +599,8 @@ fn create_discrete_clone(
             allowed,
             None,
             interaction_reporter.as_deref(),
+            progress_reporter.as_deref(),
+            Some(&credential_progress_context),
             GitCredentialOperation::CloneRepository,
         )
     });
@@ -462,9 +609,22 @@ fn create_discrete_clone(
     let repo = git2::build::RepoBuilder::new()
         .fetch_options(fetch_options)
         .clone(&source, &request.workspace_path)
-        .map_err(|error| CoreError::Adapter(format!("clone failed: {error}")))?;
+        .map_err(|error| git_operation_error("clone", error))?;
     if let Some(checkout_ref) = request.checkout_ref.as_deref() {
-        fetch_checkout_ref(&repo, checkout_ref, interaction_reporter.clone())?;
+        report_workspace_progress(
+            progress_reporter.as_deref(),
+            progress_context,
+            format!("Fetching checkout ref {checkout_ref}"),
+        );
+        fetch_origin_with_timeout(
+            &request.workspace_path,
+            Some(checkout_ref),
+            interaction_reporter.clone(),
+            progress_reporter.clone(),
+            progress_context.clone(),
+        )?;
+        let repo = git2::Repository::open(&request.workspace_path)
+            .map_err(|error| CoreError::Adapter(format!("open cloned repo failed: {error}")))?;
         let branch_name = request
             .branch_name
             .as_deref()
@@ -501,6 +661,8 @@ fn fetch_origin_with_timeout(
     repo_path: &Path,
     checkout_ref: Option<&str>,
     interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+    progress_reporter: Option<Arc<dyn WorkspaceProgressReporter>>,
+    progress_context: WorkspaceProgressContext,
 ) -> Result<(), CoreError> {
     let path = repo_path.to_path_buf();
     let checkout_ref = checkout_ref.map(str::to_owned);
@@ -510,12 +672,23 @@ fn fetch_origin_with_timeout(
         checkout_ref = ?checkout_ref,
         "fetching origin for workspace reuse"
     );
+    report_workspace_progress(
+        progress_reporter.as_deref(),
+        &progress_context,
+        "Fetching origin".to_string(),
+    );
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| {
             let repo = git2::Repository::open(&path)
                 .map_err(|e| CoreError::Adapter(format!("open repo for fetch failed: {e}")))?;
-            fetch_origin(&repo, checkout_ref.as_deref(), interaction_reporter)
+            fetch_origin(
+                &repo,
+                checkout_ref.as_deref(),
+                interaction_reporter,
+                progress_reporter,
+                &progress_context,
+            )
         })();
         let _ = tx.send(result);
     });
@@ -535,11 +708,32 @@ fn fetch_origin(
     repo: &git2::Repository,
     checkout_ref: Option<&str>,
     interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+    progress_reporter: Option<Arc<dyn WorkspaceProgressReporter>>,
+    progress_context: &WorkspaceProgressContext,
 ) -> Result<(), CoreError> {
     let Ok(mut remote) = repo.find_remote("origin") else {
         return Ok(());
     };
     debug!("fetching origin for existing workspace");
+    let remote_url = remote.url().map(str::to_owned);
+    if should_prefer_system_git_for_ssh(remote_url.as_deref(), GitOperationKind::FetchOrigin) {
+        let repo_dir = repo_command_dir(repo)?;
+        report_workspace_progress(
+            progress_reporter.as_deref(),
+            progress_context,
+            "Fetching origin with system git".to_string(),
+        );
+        fetch_with_system_git(
+            &repo_dir,
+            checkout_ref,
+            remote_url.as_deref(),
+            interaction_reporter.as_deref(),
+            progress_reporter.as_deref(),
+            progress_context,
+        )?;
+        return Ok(());
+    }
+    let credential_progress_context = progress_context.clone();
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username_from_url, allowed| {
         resolve_remote_credentials(
@@ -549,6 +743,8 @@ fn fetch_origin(
             allowed,
             None,
             interaction_reporter.as_deref(),
+            progress_reporter.as_deref(),
+            Some(&credential_progress_context),
             GitCredentialOperation::FetchOrigin,
         )
     });
@@ -561,22 +757,256 @@ fn fetch_origin(
             local_checkout_ref_name(checkout_ref)
         ));
     }
-    remote
+    let fetch_result = remote
         .fetch(
             &refspecs.iter().map(String::as_str).collect::<Vec<_>>(),
             Some(&mut fetch_options),
             None,
         )
-        .map_err(|error| CoreError::Adapter(format!("fetch origin failed: {error}")))?;
+        .map_err(|error| git_operation_error("fetch origin", error));
+    if let Err(CoreError::Adapter(message)) = &fetch_result
+        && should_fallback_to_system_git(
+            remote_url.as_deref(),
+            message,
+            GitOperationKind::FetchOrigin,
+        )
+    {
+        let repo_dir = repo_command_dir(repo)?;
+        report_workspace_progress(
+            progress_reporter.as_deref(),
+            progress_context,
+            "SSH auth via libgit2 failed, retrying fetch with system git".to_string(),
+        );
+        info!(
+            remote = remote_url.as_deref().unwrap_or("origin"),
+            repo_path = %repo_dir.display(),
+            checkout_ref = ?checkout_ref,
+            "retrying fetch with system git after libgit2 ssh auth failure"
+        );
+        fetch_with_system_git(
+            &repo_dir,
+            checkout_ref,
+            remote_url.as_deref(),
+            interaction_reporter.as_deref(),
+            progress_reporter.as_deref(),
+            progress_context,
+        )?;
+    } else {
+        fetch_result?;
+    }
     Ok(())
 }
 
-fn fetch_checkout_ref(
-    repo: &git2::Repository,
-    checkout_ref: &str,
-    interaction_reporter: Option<Arc<dyn UserInteractionReporter>>,
+fn git_operation_error(operation: &'static str, error: git2::Error) -> CoreError {
+    CoreError::Adapter(format_git_operation_error(operation, &error))
+}
+
+fn format_git_operation_error(operation: &'static str, error: &git2::Error) -> String {
+    if let Some(message) = classify_git_auth_error(operation, error) {
+        return format!("{message} Details: {error}");
+    }
+    format!("{operation} failed: {error}")
+}
+
+fn classify_git_auth_error(operation: &'static str, error: &git2::Error) -> Option<String> {
+    let message = error.message().to_ascii_lowercase();
+    let is_ssh_auth = error.class() == git2::ErrorClass::Ssh
+        || message.contains("ssh")
+        || message.contains("publickey")
+        || message.contains("sign_and_send_pubkey")
+        || message.contains("failed getting response");
+    if is_ssh_auth {
+        return Some(format!(
+            "SSH authentication failed while {}. Approve the security key or SSH prompt, then retry.",
+            describe_git_operation(operation)
+        ));
+    }
+
+    let is_auth = error.code() == git2::ErrorCode::Auth
+        || message.contains("authentication")
+        || message.contains("credential")
+        || message.contains("pinentry")
+        || message.contains("password");
+    if is_auth {
+        return Some(format!(
+            "Authentication failed while {}. Complete the credential or pinentry prompt, then retry.",
+            describe_git_operation(operation)
+        ));
+    }
+
+    None
+}
+
+#[derive(Clone, Copy)]
+enum GitOperationKind {
+    FetchOrigin,
+    PushBranch,
+}
+
+fn should_fallback_to_system_git(
+    remote_url: Option<&str>,
+    error_message: &str,
+    operation: GitOperationKind,
+) -> bool {
+    let Some(remote_url) = remote_url else {
+        return false;
+    };
+    if !is_ssh_remote_url(remote_url) {
+        return false;
+    }
+    match operation {
+        GitOperationKind::FetchOrigin => {
+            error_message.contains("SSH authentication failed while fetching origin")
+        },
+        GitOperationKind::PushBranch => {
+            error_message.contains("SSH authentication failed while pushing the branch")
+        },
+    }
+}
+
+fn should_prefer_system_git_for_ssh(remote_url: Option<&str>, operation: GitOperationKind) -> bool {
+    remote_url.is_some_and(|remote_url| {
+        is_ssh_remote_url(remote_url)
+            && matches!(
+                operation,
+                GitOperationKind::FetchOrigin | GitOperationKind::PushBranch
+            )
+    })
+}
+
+fn describe_git_operation(operation: &'static str) -> &'static str {
+    match operation {
+        "fetch origin" => "fetching origin",
+        "clone" => "cloning the repository",
+        "push branch" => "pushing the branch",
+        _ => operation,
+    }
+}
+
+fn repo_command_dir(repo: &git2::Repository) -> Result<PathBuf, CoreError> {
+    if let Some(workdir) = repo.workdir() {
+        return Ok(workdir.to_path_buf());
+    }
+    let git_dir = repo.path();
+    git_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| CoreError::Adapter("resolve repository command directory failed".into()))
+}
+
+fn is_ssh_remote_url(url: &str) -> bool {
+    url.starts_with("git@") || url.starts_with("ssh://")
+}
+
+fn fetch_with_system_git(
+    repo_dir: &Path,
+    checkout_ref: Option<&str>,
+    remote_url: Option<&str>,
+    interaction_reporter: Option<&dyn UserInteractionReporter>,
+    progress_reporter: Option<&dyn WorkspaceProgressReporter>,
+    progress_context: &WorkspaceProgressContext,
 ) -> Result<(), CoreError> {
-    fetch_origin(repo, Some(checkout_ref), interaction_reporter)
+    report_workspace_progress(
+        progress_reporter,
+        progress_context,
+        "Running system git fetch".to_string(),
+    );
+    let _interaction = remote_url.map(|url| {
+        report_git_interaction(
+            interaction_reporter,
+            GitCredentialOperation::FetchOrigin,
+            url,
+            UserInteractionKind::SecurityKeyTouch,
+            "Waiting for SSH key touch",
+            "Touch your security key if prompted.",
+        )
+    });
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo_dir).arg("fetch").arg("origin");
+    command.arg("refs/heads/*:refs/remotes/origin/*");
+    if let Some(checkout_ref) = checkout_ref {
+        command.arg(format!(
+            "{checkout_ref}:{}",
+            local_checkout_ref_name(checkout_ref)
+        ));
+    }
+    let output = command.output().map_err(|error| {
+        CoreError::Adapter(format!("system git fetch failed to start: {error}"))
+    })?;
+    if output.status.success() {
+        report_workspace_progress(
+            progress_reporter,
+            progress_context,
+            "Fetched origin with system git".to_string(),
+        );
+        return Ok(());
+    }
+    Err(CoreError::Adapter(format!(
+        "system git fetch failed: {}",
+        command_output_summary(&output)
+    )))
+}
+
+fn push_with_system_git(
+    repo_dir: &Path,
+    remote_name: &str,
+    refspec: &str,
+    remote_url: Option<&str>,
+    interaction_reporter: Option<&dyn UserInteractionReporter>,
+) -> Result<(), CoreError> {
+    let _interaction = remote_url.map(|url| {
+        report_git_interaction(
+            interaction_reporter,
+            GitCredentialOperation::PushBranch,
+            url,
+            UserInteractionKind::SecurityKeyTouch,
+            "Waiting for SSH key touch",
+            "Touch your security key if prompted.",
+        )
+    });
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .arg("push")
+        .arg(remote_name)
+        .arg(refspec)
+        .output()
+        .map_err(|error| CoreError::Adapter(format!("system git push failed to start: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(CoreError::Adapter(format!(
+        "system git push failed: {}",
+        command_output_summary(&output)
+    )))
+}
+
+fn command_output_summary(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    if !stdout.is_empty() {
+        return stdout;
+    }
+    format!("exit status {}", output.status)
+}
+
+fn report_workspace_progress(
+    reporter: Option<&dyn WorkspaceProgressReporter>,
+    context: &WorkspaceProgressContext,
+    message: String,
+) {
+    let Some(reporter) = reporter else {
+        return;
+    };
+    reporter.log(WorkspaceProgressUpdate {
+        issue_identifier: context.issue_identifier.clone(),
+        workspace_key: context.workspace_key.clone(),
+        message,
+        at: chrono::Utc::now(),
+    });
 }
 
 fn resolve_signature(
@@ -614,9 +1044,19 @@ fn resolve_remote_credentials(
     allowed: git2::CredentialType,
     auth_token: Option<&str>,
     interaction_reporter: Option<&dyn UserInteractionReporter>,
+    progress_reporter: Option<&dyn WorkspaceProgressReporter>,
+    progress_context: Option<&WorkspaceProgressContext>,
     operation: GitCredentialOperation,
 ) -> Result<git2::Cred, git2::Error> {
     if allowed.contains(git2::CredentialType::SSH_KEY) {
+        if let Some(progress_context) = progress_context {
+            let host = git_interaction_target(url).unwrap_or_else(|| "remote".into());
+            report_workspace_progress(
+                progress_reporter,
+                progress_context,
+                format!("Waiting for SSH key touch on {host}"),
+            );
+        }
         let _interaction = report_git_interaction(
             interaction_reporter,
             operation,
@@ -633,6 +1073,13 @@ fn resolve_remote_credentials(
         return git2::Cred::userpass_plaintext("x-access-token", token);
     }
     if allowed.contains(git2::CredentialType::DEFAULT) {
+        if let Some(progress_context) = progress_context {
+            report_workspace_progress(
+                progress_reporter,
+                progress_context,
+                "Waiting for system authentication prompt".to_string(),
+            );
+        }
         let _interaction = report_git_interaction(
             interaction_reporter,
             operation,
@@ -642,6 +1089,13 @@ fn resolve_remote_credentials(
             "Complete any system authentication prompt if one appears.",
         );
         return git2::Cred::default();
+    }
+    if let Some(progress_context) = progress_context {
+        report_workspace_progress(
+            progress_reporter,
+            progress_context,
+            "Waiting for credential or pinentry prompt".to_string(),
+        );
     }
     let _interaction = report_git_interaction(
         interaction_reporter,
@@ -1022,8 +1476,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch, detect_github_remote,
-        parse_github_owner_repo,
+        GitOperationKind, GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch,
+        detect_github_remote, fetch_with_system_git, local_checkout_ref_name,
+        parse_github_owner_repo, push_with_system_git, should_fallback_to_system_git,
+        should_prefer_system_git_for_ssh,
     };
 
     #[derive(Default)]
@@ -1513,5 +1969,150 @@ mod tests {
         init_repo(&repo_path);
 
         assert_eq!(detect_github_remote(&repo_path), None);
+    }
+
+    #[test]
+    fn fallback_to_system_git_is_only_used_for_ssh_auth_failures() {
+        assert!(should_fallback_to_system_git(
+            Some("git@github.com:penso/arbor.git"),
+            "SSH authentication failed while fetching origin. Approve the security key or SSH prompt, then retry. Details: ...",
+            GitOperationKind::FetchOrigin,
+        ));
+        assert!(!should_fallback_to_system_git(
+            Some("https://github.com/penso/arbor.git"),
+            "SSH authentication failed while fetching origin. Approve the security key or SSH prompt, then retry. Details: ...",
+            GitOperationKind::FetchOrigin,
+        ));
+        assert!(!should_fallback_to_system_git(
+            Some("git@github.com:penso/arbor.git"),
+            "fetch origin failed: reference not found",
+            GitOperationKind::FetchOrigin,
+        ));
+    }
+
+    #[test]
+    fn ssh_fetch_and_push_prefer_system_git_up_front() {
+        assert!(should_prefer_system_git_for_ssh(
+            Some("git@github.com:penso/arbor.git"),
+            GitOperationKind::FetchOrigin,
+        ));
+        assert!(should_prefer_system_git_for_ssh(
+            Some("ssh://git@github.com/penso/arbor.git"),
+            GitOperationKind::PushBranch,
+        ));
+        assert!(!should_prefer_system_git_for_ssh(
+            Some("https://github.com/penso/arbor.git"),
+            GitOperationKind::FetchOrigin,
+        ));
+    }
+
+    #[test]
+    fn system_git_fetch_updates_pull_request_ref() {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("source");
+        let source_repo = init_repo(&source_path);
+        commit_on_branch(&source_repo, "feature/review", "review.txt", "first");
+        let feature_commit = source_repo.head().unwrap().peel_to_commit().unwrap();
+        source_repo
+            .reference(
+                "refs/pull/42/head",
+                feature_commit.id(),
+                true,
+                "test pr ref",
+            )
+            .unwrap();
+
+        let target_path = temp.path().join("target");
+        let target_repo = init_repo(&target_path);
+        target_repo
+            .remote("origin", &source_path.display().to_string())
+            .unwrap();
+
+        fetch_with_system_git(
+            &target_path,
+            Some("refs/pull/42/head"),
+            Some("git@github.com:penso/arbor.git"),
+            None,
+            None,
+            &super::WorkspaceProgressContext {
+                issue_identifier: "penso/arbor#42".into(),
+                workspace_key: "penso_arbor_42".into(),
+            },
+        )
+        .unwrap();
+
+        let target_repo = git2::Repository::open(&target_path).unwrap();
+        let pull_ref = target_repo
+            .find_reference(&local_checkout_ref_name("refs/pull/42/head"))
+            .unwrap();
+        assert_eq!(pull_ref.peel_to_commit().unwrap().id(), feature_commit.id());
+    }
+
+    #[test]
+    fn system_git_push_updates_remote_branch() {
+        let temp = tempdir().unwrap();
+        let remote_path = temp.path().join("remote.git");
+        git2::Repository::init_bare(&remote_path).unwrap();
+
+        let repo_path = temp.path().join("repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", &remote_path.display().to_string())
+            .unwrap();
+        std::fs::write(repo_path.join("README.md"), "updated\n").unwrap();
+        commit_all(&repo, "update");
+
+        push_with_system_git(
+            &repo_path,
+            "origin",
+            "refs/heads/main:refs/heads/main",
+            Some("git@github.com:penso/arbor.git"),
+            None,
+        )
+        .unwrap();
+
+        let remote = git2::Repository::open_bare(&remote_path).unwrap();
+        assert!(remote.find_reference("refs/heads/main").is_ok());
+    }
+
+    #[test]
+    fn format_git_operation_error_labels_ssh_auth_failures() {
+        let error = git2::Error::new(
+            git2::ErrorCode::Auth,
+            git2::ErrorClass::Ssh,
+            "remote rejected authentication: Failed getting response",
+        );
+
+        assert_eq!(
+            super::format_git_operation_error("fetch origin", &error),
+            "SSH authentication failed while fetching origin. Approve the security key or SSH prompt, then retry. Details: remote rejected authentication: Failed getting response; class=Ssh (23); code=Auth (-16)"
+        );
+    }
+
+    #[test]
+    fn format_git_operation_error_labels_generic_auth_failures() {
+        let error = git2::Error::new(
+            git2::ErrorCode::Auth,
+            git2::ErrorClass::Net,
+            "could not authenticate with credential helper",
+        );
+
+        assert_eq!(
+            super::format_git_operation_error("push branch", &error),
+            "Authentication failed while pushing the branch. Complete the credential or pinentry prompt, then retry. Details: could not authenticate with credential helper; class=Net (12); code=Auth (-16)"
+        );
+    }
+
+    #[test]
+    fn format_git_operation_error_keeps_non_auth_failures_raw() {
+        let error = git2::Error::new(
+            git2::ErrorCode::NotFound,
+            git2::ErrorClass::Reference,
+            "reference not found",
+        );
+
+        assert_eq!(
+            super::format_git_operation_error("fetch origin", &error),
+            "fetch origin failed: reference not found; class=Reference (4); code=NotFound (-3)"
+        );
     }
 }

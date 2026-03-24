@@ -515,6 +515,8 @@ pub struct Task {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub activity_log: Vec<String>,
     pub category: TaskCategory,
     pub status: TaskStatus,
     pub ordinal: u32,
@@ -567,6 +569,7 @@ impl PlannedTask {
             movement_id: movement_id.to_string(),
             title: self.title.clone(),
             description: self.description.clone(),
+            activity_log: Vec::new(),
             category,
             status: TaskStatus::Pending,
             ordinal,
@@ -614,6 +617,8 @@ pub struct TaskRow {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub activity_log: Vec<String>,
     pub category: TaskCategory,
     pub status: TaskStatus,
     pub ordinal: u32,

@@ -97,6 +97,14 @@ pub struct UserInteractionRequest {
     pub started_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceProgressUpdate {
+    pub issue_identifier: String,
+    pub workspace_key: String,
+    pub message: String,
+    pub at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeCadence {
     pub tracker_poll_interval_ms: u64,

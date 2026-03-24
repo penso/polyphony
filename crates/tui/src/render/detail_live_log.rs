@@ -25,21 +25,24 @@ pub(crate) fn draw_live_log_detail(
             issue_identifier,
             cached_content,
             log_path,
+            task_id,
             ..
         }) = app.current_detail()
         {
-            // Check if the agent is still running
-            let still_running = snapshot
+            let running_row_active = snapshot
                 .running
                 .iter()
                 .any(|r| r.agent_name == *agent_name && r.issue_identifier == *issue_identifier);
-            // Also check if the log file is still growing (fallback: file exists)
-            let file_exists = log_path.exists();
+            let task_active = task_id.as_ref().is_some_and(|task_id| {
+                snapshot.tasks.iter().any(|task| {
+                    task.id == *task_id && task.status == polyphony_core::TaskStatus::InProgress
+                })
+            });
             (
                 agent_name.clone(),
                 issue_identifier.clone(),
                 cached_content.clone(),
-                still_running && file_exists,
+                task_active || (running_row_active && log_path.exists()),
             )
         } else {
             return;

@@ -375,6 +375,7 @@ impl RuntimeService {
                         movement_id: t.movement_id.clone(),
                         title: t.title.clone(),
                         description: t.description.clone(),
+                        activity_log: t.activity_log.clone(),
                         category: t.category,
                         status: t.status,
                         ordinal: t.ordinal,

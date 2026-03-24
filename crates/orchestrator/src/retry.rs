@@ -235,6 +235,10 @@ impl RuntimeService {
                 self.register_throttle(signal);
                 self.emit_snapshot().await?;
             },
+            OrchestratorMessage::WorkspaceProgress(update) => {
+                self.record_workspace_progress(update).await?;
+                self.emit_snapshot().await?;
+            },
             OrchestratorMessage::WorkerFinished {
                 issue_id,
                 issue_identifier,

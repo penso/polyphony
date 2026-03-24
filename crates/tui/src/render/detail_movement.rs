@@ -26,6 +26,57 @@ pub(crate) fn draw_movement_detail(
         return;
     };
 
+    let mut hint_spans = vec![
+        Span::styled("Tab", Style::default().fg(theme.highlight)),
+        Span::styled(":focus  ", Style::default().fg(theme.muted)),
+        Span::styled("j/k", Style::default().fg(theme.highlight)),
+        Span::styled(":scroll  ", Style::default().fg(theme.muted)),
+        Span::styled("Shift+O", Style::default().fg(theme.highlight)),
+        Span::styled(":open  ", Style::default().fg(theme.muted)),
+    ];
+    let movement_can_retry = if movement.status == polyphony_core::MovementStatus::Failed {
+        true
+    } else if movement.status == polyphony_core::MovementStatus::InProgress {
+        let mut has_retryable_task = false;
+        for task in snapshot
+            .tasks
+            .iter()
+            .filter(|task| task.movement_id == movement.id)
+        {
+            match task.status {
+                polyphony_core::TaskStatus::Failed => {
+                    has_retryable_task = true;
+                    break;
+                },
+                polyphony_core::TaskStatus::Pending | polyphony_core::TaskStatus::Cancelled => {
+                    has_retryable_task = true;
+                },
+                polyphony_core::TaskStatus::InProgress => {
+                    has_retryable_task = false;
+                    break;
+                },
+                polyphony_core::TaskStatus::Completed => {},
+            }
+        }
+        has_retryable_task
+    } else {
+        false
+    };
+    if movement_can_retry {
+        hint_spans.push(Span::styled("t", Style::default().fg(theme.highlight)));
+        hint_spans.push(Span::styled(":retry  ", Style::default().fg(theme.muted)));
+    }
+    hint_spans.extend([
+        Span::styled("a", Style::default().fg(theme.highlight)),
+        Span::styled(":accept  ", Style::default().fg(theme.muted)),
+        Span::styled("x", Style::default().fg(theme.highlight)),
+        Span::styled(":reject  ", Style::default().fg(theme.muted)),
+        Span::styled("e", Style::default().fg(theme.highlight)),
+        Span::styled(":events  ", Style::default().fg(theme.muted)),
+        Span::styled("Esc", Style::default().fg(theme.highlight)),
+        Span::styled(":back ", Style::default().fg(theme.muted)),
+    ]);
+
     let block = Block::default()
         .title(Line::from(vec![
             Span::styled(" Movement ", Style::default().fg(theme.info)),
@@ -39,25 +90,7 @@ pub(crate) fn draw_movement_detail(
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
-        .title_bottom(
-            Line::from(vec![
-                Span::styled("Tab", Style::default().fg(theme.highlight)),
-                Span::styled(":focus  ", Style::default().fg(theme.muted)),
-                Span::styled("j/k", Style::default().fg(theme.highlight)),
-                Span::styled(":scroll  ", Style::default().fg(theme.muted)),
-                Span::styled("Shift+O", Style::default().fg(theme.highlight)),
-                Span::styled(":open  ", Style::default().fg(theme.muted)),
-                Span::styled("a", Style::default().fg(theme.highlight)),
-                Span::styled(":accept  ", Style::default().fg(theme.muted)),
-                Span::styled("x", Style::default().fg(theme.highlight)),
-                Span::styled(":reject  ", Style::default().fg(theme.muted)),
-                Span::styled("e", Style::default().fg(theme.highlight)),
-                Span::styled(":events  ", Style::default().fg(theme.muted)),
-                Span::styled("Esc", Style::default().fg(theme.highlight)),
-                Span::styled(":back ", Style::default().fg(theme.muted)),
-            ])
-            .right_aligned(),
-        )
+        .title_bottom(Line::from(hint_spans).right_aligned())
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if app.detail_border_focused {

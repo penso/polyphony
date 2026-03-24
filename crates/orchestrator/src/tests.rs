@@ -3259,6 +3259,468 @@ async fn manual_pull_request_dispatch_failure_creates_visible_failed_movement() 
 }
 
 #[tokio::test]
+async fn workspace_progress_updates_are_appended_to_worktree_task() {
+    let workspace_root = unique_workspace_root("workspace-progress");
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let now = Utc::now();
+    let movement_id = "mov-progress-1".to_string();
+    let task_id = "task-progress-1".to_string();
+    let issue_identifier = "penso/polyphony#89".to_string();
+    let workspace_key = "penso_polyphony_89".to_string();
+
+    service
+        .state
+        .movements
+        .insert(movement_id.clone(), Movement {
+            id: movement_id.clone(),
+            kind: MovementKind::PullRequestReview,
+            issue_id: Some("pr_review:github:penso/polyphony:89:head".into()),
+            issue_identifier: Some(issue_identifier.clone()),
+            title: "Review me".into(),
+            status: MovementStatus::InProgress,
+            pipeline_stage: None,
+            manual_dispatch_directives: None,
+            workspace_key: Some(workspace_key.clone()),
+            workspace_path: None,
+            review_target: None,
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        });
+    service.state.tasks.insert(movement_id.clone(), vec![Task {
+        id: task_id.clone(),
+        movement_id: movement_id.clone(),
+        title: "Creating worktree".into(),
+        description: None,
+        activity_log: Vec::new(),
+        category: polyphony_core::TaskCategory::Research,
+        status: TaskStatus::InProgress,
+        ordinal: 0,
+        parent_id: None,
+        agent_name: Some("orchestrator".into()),
+        session_id: None,
+        thread_id: None,
+        turns_completed: 0,
+        tokens: TokenUsage::default(),
+        started_at: Some(now),
+        finished_at: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    }]);
+    service
+        .state
+        .workspace_setup_tasks_by_issue_identifier
+        .insert(
+            issue_identifier.clone(),
+            (movement_id.clone(), task_id.clone()),
+        );
+    service.state.workspace_setup_tasks_by_key.insert(
+        workspace_key.clone(),
+        (movement_id.clone(), task_id.clone()),
+    );
+
+    let update = WorkspaceProgressUpdate {
+        issue_identifier: issue_identifier.clone(),
+        workspace_key: workspace_key.clone(),
+        message: "Fetching origin".into(),
+        at: now,
+    };
+    service
+        .record_workspace_progress(update.clone())
+        .await
+        .unwrap();
+    service.record_workspace_progress(update).await.unwrap();
+    service
+        .record_workspace_progress(WorkspaceProgressUpdate {
+            issue_identifier,
+            workspace_key,
+            message: "Waiting for SSH key touch on github.com".into(),
+            at: now + chrono::Duration::seconds(1),
+        })
+        .await
+        .unwrap();
+    service
+        .record_workspace_progress(WorkspaceProgressUpdate {
+            issue_identifier: "penso/arbor#89".into(),
+            workspace_key: "penso_arbor_89".into(),
+            message: "Waiting for SSH key touch on github.com".into(),
+            at: now + chrono::Duration::seconds(2),
+        })
+        .await
+        .unwrap();
+
+    let tasks = service.state.tasks.get(&movement_id).unwrap();
+    assert_eq!(tasks[0].activity_log.len(), 2);
+    assert!(tasks[0].activity_log[0].ends_with("Fetching origin"));
+    assert!(tasks[0].activity_log[1].ends_with("Waiting for SSH key touch on github.com"));
+
+    let snapshot = service.snapshot();
+    let task_row = snapshot
+        .tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .unwrap();
+    assert_eq!(task_row.activity_log.len(), 2);
+    assert!(task_row.activity_log[0].ends_with("Fetching origin"));
+}
+
+#[tokio::test]
+async fn task_retry_ignores_non_failed_tasks() {
+    let workspace_root = unique_workspace_root("retry-only-failed");
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let now = Utc::now();
+    let movement_id = "mov-retry-1".to_string();
+    let task_id = "task-retry-1".to_string();
+
+    service
+        .state
+        .movements
+        .insert(movement_id.clone(), Movement {
+            id: movement_id.clone(),
+            kind: MovementKind::PullRequestReview,
+            issue_id: Some("pr_review:github:penso/polyphony:89:head".into()),
+            issue_identifier: Some("penso/polyphony#89".into()),
+            title: "Retry me".into(),
+            status: MovementStatus::Failed,
+            pipeline_stage: Some(PipelineStage::Executing),
+            manual_dispatch_directives: None,
+            workspace_key: Some("penso_polyphony_89".into()),
+            workspace_path: Some(workspace_root.join("penso_polyphony_89")),
+            review_target: None,
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        });
+    service.state.tasks.insert(movement_id.clone(), vec![Task {
+        id: task_id.clone(),
+        movement_id: movement_id.clone(),
+        title: "Creating worktree".into(),
+        description: None,
+        activity_log: Vec::new(),
+        category: polyphony_core::TaskCategory::Research,
+        status: TaskStatus::Completed,
+        ordinal: 0,
+        parent_id: None,
+        agent_name: Some("orchestrator".into()),
+        session_id: None,
+        thread_id: None,
+        turns_completed: 0,
+        tokens: TokenUsage::default(),
+        started_at: Some(now),
+        finished_at: Some(now),
+        error: None,
+        created_at: now,
+        updated_at: now,
+    }]);
+    service
+        .pending_task_retries
+        .push((movement_id.clone(), task_id.clone()));
+
+    service.process_pending_task_retries().await;
+
+    let task = service
+        .state
+        .tasks
+        .get(&movement_id)
+        .and_then(|tasks| tasks.iter().find(|task| task.id == task_id))
+        .expect("task should remain present");
+    assert_eq!(task.status, TaskStatus::Completed);
+    assert!(task.finished_at.is_some());
+    assert!(
+        service
+            .state
+            .recent_events
+            .iter()
+            .any(|event| event.message.contains("only failed tasks can retry")),
+        "runtime should record why the retry was ignored"
+    );
+}
+
+#[tokio::test]
+async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() {
+    let workspace_root = unique_workspace_root("retry-pr-movement");
+    let workflow = test_workflow_with_front_matter(
+        &workspace_root,
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+    );
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let trigger = PullRequestReviewTrigger {
+        provider: polyphony_core::ReviewProviderKind::Github,
+        repository: "penso/polyphony".into(),
+        number: 89,
+        title: "Retry me".into(),
+        url: Some("https://github.com/penso/polyphony/pull/89".into()),
+        base_branch: "main".into(),
+        head_branch: "feature/retry".into(),
+        head_sha: "abc123".into(),
+        checkout_ref: Some("refs/pull/89/head".into()),
+        author_login: Some("alice".into()),
+        approval_state: IssueApprovalState::Approved,
+        labels: vec!["ready".into()],
+        created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
+        updated_at: Some(Utc::now() - chrono::Duration::minutes(1)),
+        is_draft: false,
+    };
+    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let workspace_key = sanitize_workspace_key(&issue.identifier);
+    let workspace_path = workspace_root.join(&workspace_key);
+    let movement_id = "mov-retry-pr-1".to_string();
+    let workspace_task_id = "task-retry-pr-setup".to_string();
+    let review_task_id = "task-retry-pr-review".to_string();
+    let now = Utc::now();
+
+    let mut service = RuntimeService::new(
+        Arc::new(TestTracker::new(Vec::new())),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(RecordingProvisioner::default()),
+        None,
+        None,
+        Some(Arc::new(RecordingPullRequestCommenter::default())),
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+
+    service
+        .state
+        .movements
+        .insert(movement_id.clone(), Movement {
+            id: movement_id.clone(),
+            kind: MovementKind::PullRequestReview,
+            issue_id: Some(issue.id.clone()),
+            issue_identifier: Some(issue.identifier.clone()),
+            title: issue.title.clone(),
+            status: MovementStatus::Failed,
+            pipeline_stage: None,
+            manual_dispatch_directives: Some("Check auth".into()),
+            workspace_key: Some(workspace_key.clone()),
+            workspace_path: Some(workspace_path.clone()),
+            review_target: Some(trigger.review_target()),
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        });
+    service.state.tasks.insert(movement_id.clone(), vec![
+        Task {
+            id: workspace_task_id.clone(),
+            movement_id: movement_id.clone(),
+            title: "Creating worktree".into(),
+            description: None,
+            activity_log: Vec::new(),
+            category: polyphony_core::TaskCategory::Research,
+            status: TaskStatus::Failed,
+            ordinal: 0,
+            parent_id: None,
+            agent_name: Some("orchestrator".into()),
+            session_id: None,
+            thread_id: None,
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: Some(now),
+            finished_at: Some(now),
+            error: Some("auth failed".into()),
+            created_at: now,
+            updated_at: now,
+        },
+        Task {
+            id: review_task_id.clone(),
+            movement_id: movement_id.clone(),
+            title: "Run PR review".into(),
+            description: None,
+            activity_log: Vec::new(),
+            category: polyphony_core::TaskCategory::Review,
+            status: TaskStatus::Cancelled,
+            ordinal: 1,
+            parent_id: None,
+            agent_name: Some("reviewer".into()),
+            session_id: None,
+            thread_id: None,
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: None,
+            finished_at: Some(now),
+            error: Some("workspace setup failed".into()),
+            created_at: now,
+            updated_at: now,
+        },
+    ]);
+    service.state.pull_request_retry_triggers.insert(
+        issue.id.clone(),
+        PullRequestTrigger::Review(trigger.clone()),
+    );
+    service.pending_movement_retries.push(movement_id.clone());
+
+    service.process_pending_movement_retries().await;
+
+    let movement = service
+        .state
+        .movements
+        .get(&movement_id)
+        .expect("movement should remain present");
+    assert_eq!(movement.status, MovementStatus::InProgress);
+
+    let tasks = service
+        .state
+        .tasks
+        .get(&movement_id)
+        .expect("tasks should remain present");
+    assert_eq!(tasks[0].status, TaskStatus::Completed);
+    assert_eq!(tasks[0].error, None);
+    assert_eq!(tasks[1].status, TaskStatus::InProgress);
+    assert_eq!(tasks[1].error, None);
+
+    let running = service
+        .state
+        .running
+        .get(&issue.id)
+        .expect("review worker should be relaunched");
+    assert_eq!(
+        running.active_task_id.as_deref(),
+        Some(review_task_id.as_str())
+    );
+    assert_eq!(running.movement_id.as_deref(), Some(movement_id.as_str()));
+    assert_eq!(running.issue.identifier, issue.identifier);
+}
+
+#[tokio::test]
+async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
+    let workspace_root = unique_workspace_root("retry-pr-stalled");
+    let workflow = test_workflow_with_front_matter(
+        &workspace_root,
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+    );
+    let (_tx, rx) = watch::channel(workflow.clone());
+    let trigger = PullRequestReviewTrigger {
+        provider: polyphony_core::ReviewProviderKind::Github,
+        repository: "penso/polyphony".into(),
+        number: 90,
+        title: "Retry stale review".into(),
+        url: Some("https://github.com/penso/polyphony/pull/90".into()),
+        base_branch: "main".into(),
+        head_branch: "feature/stalled".into(),
+        head_sha: "def456".into(),
+        checkout_ref: Some("refs/pull/90/head".into()),
+        author_login: Some("alice".into()),
+        approval_state: IssueApprovalState::Approved,
+        labels: vec!["ready".into()],
+        created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
+        updated_at: Some(Utc::now() - chrono::Duration::minutes(1)),
+        is_draft: false,
+    };
+    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let workspace_key = sanitize_workspace_key(&issue.identifier);
+    let workspace_path = workspace_root.join(&workspace_key);
+    let movement_id = "mov-retry-pr-stalled".to_string();
+    let workspace_task_id = "task-retry-pr-stalled-setup".to_string();
+    let review_task_id = "task-retry-pr-stalled-review".to_string();
+    let now = Utc::now();
+
+    let mut service = RuntimeService::new(
+        Arc::new(TestTracker::new(Vec::new())),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(RecordingProvisioner::default()),
+        None,
+        None,
+        Some(Arc::new(RecordingPullRequestCommenter::default())),
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0;
+
+    service
+        .state
+        .movements
+        .insert(movement_id.clone(), Movement {
+            id: movement_id.clone(),
+            kind: MovementKind::PullRequestReview,
+            issue_id: Some(issue.id.clone()),
+            issue_identifier: Some(issue.identifier.clone()),
+            title: issue.title.clone(),
+            status: MovementStatus::InProgress,
+            pipeline_stage: None,
+            manual_dispatch_directives: None,
+            workspace_key: Some(workspace_key.clone()),
+            workspace_path: Some(workspace_path.clone()),
+            review_target: Some(trigger.review_target()),
+            deliverable: None,
+            created_at: now,
+            updated_at: now,
+        });
+    service.state.tasks.insert(movement_id.clone(), vec![
+        Task {
+            id: workspace_task_id.clone(),
+            movement_id: movement_id.clone(),
+            title: "Creating worktree".into(),
+            description: None,
+            activity_log: Vec::new(),
+            category: polyphony_core::TaskCategory::Research,
+            status: TaskStatus::Pending,
+            ordinal: 0,
+            parent_id: None,
+            agent_name: Some("orchestrator".into()),
+            session_id: None,
+            thread_id: None,
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        },
+        Task {
+            id: review_task_id.clone(),
+            movement_id: movement_id.clone(),
+            title: "Run PR review".into(),
+            description: None,
+            activity_log: Vec::new(),
+            category: polyphony_core::TaskCategory::Review,
+            status: TaskStatus::Cancelled,
+            ordinal: 1,
+            parent_id: None,
+            agent_name: Some("reviewer".into()),
+            session_id: None,
+            thread_id: None,
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: None,
+            finished_at: Some(now),
+            error: Some("workspace setup failed".into()),
+            created_at: now,
+            updated_at: now,
+        },
+    ]);
+    service
+        .state
+        .visible_review_triggers
+        .insert(trigger.dedupe_key(), trigger.clone());
+    service.pending_movement_retries.push(movement_id.clone());
+
+    service.process_pending_movement_retries().await;
+
+    let tasks = service
+        .state
+        .tasks
+        .get(&movement_id)
+        .expect("tasks should remain present");
+    assert_eq!(tasks[0].status, TaskStatus::Completed);
+    assert_eq!(tasks[1].status, TaskStatus::InProgress);
+    assert!(
+        service.state.running.contains_key(&issue.id),
+        "stalled movement retry should relaunch the review worker"
+    );
+}
+
+#[tokio::test]
 async fn manual_dispatch_with_agent_name() {
     let workspace_root = unique_workspace_root("manual-agent");
     let issue = sample_issue("issue-agent-1", "FAC-AGENT-1", "Todo", "Agent test");
@@ -3755,5 +4217,194 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
         service.state.dispatch_mode,
         DispatchMode::Stop,
         "dispatch mode should be restored from snapshot"
+    );
+}
+
+#[tokio::test]
+async fn normalize_restored_in_progress_movements_marks_stale_running_task_failed() {
+    let workspace_root = unique_workspace_root("normalize-stale-running-task");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    let now = Utc::now();
+    let movement_id = "mov-stale-running".to_string();
+    let task_id = "task-stale-running".to_string();
+
+    service.restore_bootstrap(StoreBootstrap {
+        snapshot: None,
+        retrying: std::collections::HashMap::new(),
+        throttles: std::collections::HashMap::new(),
+        budgets: std::collections::HashMap::new(),
+        saved_contexts: std::collections::HashMap::new(),
+        recent_events: Vec::new(),
+        movements: std::collections::HashMap::from([(
+            movement_id.clone(),
+            polyphony_core::Movement {
+                id: movement_id.clone(),
+                kind: polyphony_core::MovementKind::PullRequestReview,
+                issue_id: Some("issue-89".into()),
+                issue_identifier: Some("penso/arbor#89".into()),
+                title: "Review PR".into(),
+                status: polyphony_core::MovementStatus::Cancelled,
+                pipeline_stage: None,
+                manual_dispatch_directives: None,
+                workspace_key: Some("penso_arbor_89".into()),
+                workspace_path: Some(workspace_root.join("penso_arbor_89")),
+                review_target: None,
+                deliverable: None,
+                created_at: now,
+                updated_at: now,
+            },
+        )]),
+        tasks: std::collections::HashMap::from([(task_id.clone(), polyphony_core::Task {
+            id: task_id.clone(),
+            movement_id: movement_id.clone(),
+            title: "Run PR review".into(),
+            description: None,
+            activity_log: Vec::new(),
+            category: polyphony_core::TaskCategory::Review,
+            status: polyphony_core::TaskStatus::InProgress,
+            ordinal: 1,
+            parent_id: None,
+            agent_name: Some("reviewer".into()),
+            session_id: None,
+            thread_id: None,
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: Some(now),
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        })]),
+        reviewed_pull_request_heads: std::collections::HashMap::new(),
+        run_history: Vec::new(),
+    });
+
+    service
+        .normalize_restored_in_progress_movements()
+        .await
+        .unwrap();
+
+    let movement = service.state.movements.get(&movement_id).unwrap();
+    assert_eq!(movement.status, polyphony_core::MovementStatus::Failed);
+    let task = service
+        .state
+        .tasks
+        .get(&movement_id)
+        .unwrap()
+        .first()
+        .unwrap();
+    assert_eq!(task.status, polyphony_core::TaskStatus::Failed);
+    assert_eq!(
+        task.error.as_deref(),
+        Some("restored without an active agent session; retry the movement to continue")
+    );
+    assert!(task.finished_at.is_some());
+}
+
+#[tokio::test]
+async fn normalize_restored_in_progress_movements_marks_first_pending_task_failed() {
+    let workspace_root = unique_workspace_root("normalize-stale-pending-task");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+    let now = Utc::now();
+    let movement_id = "mov-stale-pending".to_string();
+    let workspace_task_id = "task-worktree".to_string();
+    let review_task_id = "task-review".to_string();
+
+    service.restore_bootstrap(StoreBootstrap {
+        snapshot: None,
+        retrying: std::collections::HashMap::new(),
+        throttles: std::collections::HashMap::new(),
+        budgets: std::collections::HashMap::new(),
+        saved_contexts: std::collections::HashMap::new(),
+        recent_events: Vec::new(),
+        movements: std::collections::HashMap::from([(
+            movement_id.clone(),
+            polyphony_core::Movement {
+                id: movement_id.clone(),
+                kind: polyphony_core::MovementKind::PullRequestReview,
+                issue_id: Some("issue-89".into()),
+                issue_identifier: Some("penso/arbor#89".into()),
+                title: "Review PR".into(),
+                status: polyphony_core::MovementStatus::InProgress,
+                pipeline_stage: None,
+                manual_dispatch_directives: None,
+                workspace_key: Some("penso_arbor_89".into()),
+                workspace_path: Some(workspace_root.join("penso_arbor_89")),
+                review_target: None,
+                deliverable: None,
+                created_at: now,
+                updated_at: now,
+            },
+        )]),
+        tasks: std::collections::HashMap::from([
+            (workspace_task_id.clone(), polyphony_core::Task {
+                id: workspace_task_id.clone(),
+                movement_id: movement_id.clone(),
+                title: "Creating worktree".into(),
+                description: None,
+                activity_log: Vec::new(),
+                category: polyphony_core::TaskCategory::Research,
+                status: polyphony_core::TaskStatus::Completed,
+                ordinal: 0,
+                parent_id: None,
+                agent_name: Some("orchestrator".into()),
+                session_id: None,
+                thread_id: None,
+                turns_completed: 0,
+                tokens: TokenUsage::default(),
+                started_at: Some(now),
+                finished_at: Some(now),
+                error: None,
+                created_at: now,
+                updated_at: now,
+            }),
+            (review_task_id.clone(), polyphony_core::Task {
+                id: review_task_id.clone(),
+                movement_id: movement_id.clone(),
+                title: "Run PR review".into(),
+                description: None,
+                activity_log: Vec::new(),
+                category: polyphony_core::TaskCategory::Review,
+                status: polyphony_core::TaskStatus::Pending,
+                ordinal: 1,
+                parent_id: None,
+                agent_name: Some("reviewer".into()),
+                session_id: None,
+                thread_id: None,
+                turns_completed: 0,
+                tokens: TokenUsage::default(),
+                started_at: None,
+                finished_at: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            }),
+        ]),
+        reviewed_pull_request_heads: std::collections::HashMap::new(),
+        run_history: Vec::new(),
+    });
+
+    service
+        .normalize_restored_in_progress_movements()
+        .await
+        .unwrap();
+
+    let movement = service.state.movements.get(&movement_id).unwrap();
+    assert_eq!(movement.status, polyphony_core::MovementStatus::Failed);
+    let tasks = service.state.tasks.get(&movement_id).unwrap();
+    let workspace_task = tasks
+        .iter()
+        .find(|task| task.id == workspace_task_id)
+        .unwrap();
+    assert_eq!(workspace_task.status, polyphony_core::TaskStatus::Completed);
+    let review_task = tasks.iter().find(|task| task.id == review_task_id).unwrap();
+    assert_eq!(review_task.status, polyphony_core::TaskStatus::Failed);
+    assert_eq!(
+        review_task.error.as_deref(),
+        Some("restored without an active agent session; retry the movement to continue")
     );
 }

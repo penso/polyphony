@@ -2,8 +2,9 @@ use chrono::{TimeZone, Utc};
 use polyphony_core::{
     BudgetSnapshot, CodexTotals, Deliverable, DeliverableDecision, DeliverableKind,
     DeliverableStatus, DispatchMode, IssueApprovalState, RuntimeCadence, RuntimeSnapshot,
-    SnapshotCounts, TrackerConnectionStatus, UserInteractionKind, UserInteractionRequest,
-    VisibleIssueRow, VisibleTriggerKind, VisibleTriggerRow,
+    SnapshotCounts, TaskCategory, TaskRow, TaskStatus, TrackerConnectionStatus,
+    UserInteractionKind, UserInteractionRequest, VisibleIssueRow, VisibleTriggerKind,
+    VisibleTriggerRow,
 };
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
@@ -208,7 +209,7 @@ fn sticky_auth_toast_renders_until_interaction_clears() {
             "Git is fetching from origin on github.com. Touch your security key if prompted."
                 .into(),
         ),
-        started_at: Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap(),
+        started_at: Utc::now() - chrono::Duration::seconds(1),
     }];
     let mut app = AppState::new(default_theme(), LogBuffer::default());
     app.on_snapshot(&snapshot);
@@ -230,6 +231,34 @@ fn sticky_auth_toast_renders_until_interaction_clears() {
             render::render(frame, &snapshot, &mut app);
         })
         .unwrap();
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(!screen.contains("Waiting for SSH key touch"), "{screen}");
+}
+
+#[test]
+fn sticky_auth_toast_is_debounced_for_brief_interactions() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(1);
+    snapshot.pending_user_interactions = vec![UserInteractionRequest {
+        id: "git:fetch:github.com".into(),
+        kind: UserInteractionKind::SecurityKeyTouch,
+        title: "Waiting for SSH key touch".into(),
+        description: Some(
+            "Git is fetching from origin on github.com. Touch your security key if prompted."
+                .into(),
+        ),
+        started_at: Utc::now() - chrono::Duration::milliseconds(50),
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
     let screen = buffer_text(terminal.backend().buffer());
     assert!(!screen.contains("Waiting for SSH key touch"), "{screen}");
 }
@@ -1217,4 +1246,95 @@ fn render_narrow_detail_does_not_panic() {
             render::render(frame, &snapshot, &mut app);
         })
         .unwrap();
+}
+
+#[test]
+fn task_detail_renders_activity_log() {
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(1);
+    snapshot.tasks = vec![TaskRow {
+        id: "task-1".into(),
+        movement_id: "mov-1".into(),
+        title: "Creating worktree".into(),
+        description: None,
+        activity_log: vec![
+            "[10:54:31] Fetching origin".into(),
+            "[10:54:45] Waiting for SSH key touch on github.com".into(),
+        ],
+        category: TaskCategory::Research,
+        status: TaskStatus::InProgress,
+        ordinal: 0,
+        agent_name: Some("orchestrator".into()),
+        turns_completed: 0,
+        total_tokens: 0,
+        started_at: Some(Utc::now()),
+        finished_at: None,
+        error: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::Task {
+        task_id: "task-1".into(),
+        scroll: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("Activity"), "{screen}");
+    assert!(screen.contains("Fetching origin"), "{screen}");
+    assert!(screen.contains("Waiting for SSH key touch"), "{screen}");
+}
+
+#[test]
+fn live_log_detail_uses_task_status_when_running_row_is_missing() {
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(1);
+    snapshot.tasks = vec![TaskRow {
+        id: "task-live-log".into(),
+        movement_id: "mov-1".into(),
+        title: "Run PR review".into(),
+        description: None,
+        activity_log: Vec::new(),
+        category: TaskCategory::Review,
+        status: TaskStatus::InProgress,
+        ordinal: 1,
+        agent_name: Some("reviewer".into()),
+        turns_completed: 0,
+        total_tokens: 0,
+        started_at: Some(Utc::now()),
+        finished_at: None,
+        error: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.push_detail(app::DetailView::LiveLog {
+        log_path: std::env::temp_dir().join("polyphony-missing-live-log.log"),
+        agent_name: "reviewer".into(),
+        issue_identifier: "penso/arbor#89".into(),
+        task_id: Some("task-live-log".into()),
+        scroll: 0,
+        cached_content: String::new(),
+        auto_scroll: true,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("streaming"), "{screen}");
+    assert!(!screen.contains("[finished]"), "{screen}");
 }

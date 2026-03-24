@@ -14,7 +14,7 @@ use polyphony_core::{
     PullRequestTriggerSource, RateLimitSignal, RetryRow, ReviewTarget, ReviewedPullRequestHead,
     RuntimeEvent, RuntimeSnapshot, StateStore, Task, TaskId, ThrottleWindow, TokenUsage,
     TrackerConnectionStatus, UserInteractionRequest, VisibleIssueRow, VisibleTriggerRow,
-    WorkspaceCommitter, WorkspaceProvisioner,
+    WorkspaceCommitter, WorkspaceProgressUpdate, WorkspaceProvisioner,
 };
 use polyphony_feedback::FeedbackRegistry;
 use polyphony_workflow::LoadedWorkflow;
@@ -113,6 +113,9 @@ pub enum RuntimeCommand {
     MergeDeliverable {
         movement_id: polyphony_core::MovementId,
     },
+    RetryMovement {
+        movement_id: polyphony_core::MovementId,
+    },
     /// Mark a pipeline task as completed (manual override) and resume the pipeline.
     ResolveTask {
         movement_id: polyphony_core::MovementId,
@@ -174,6 +177,7 @@ pub struct RuntimeService {
     pending_manual_dispatches: Vec<ManualDispatchRequest>,
     pending_manual_pull_request_trigger_dispatches: Vec<ManualPullRequestDispatchRequest>,
     pending_merge_deliverables: Vec<polyphony_core::MovementId>,
+    pending_movement_retries: Vec<polyphony_core::MovementId>,
     pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_task_retries: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_agent_stops: Vec<polyphony_core::IssueId>,
@@ -186,6 +190,7 @@ pub struct RuntimeService {
 enum OrchestratorMessage {
     AgentEvent(AgentEvent),
     RateLimited(RateLimitSignal),
+    WorkspaceProgress(WorkspaceProgressUpdate),
     WorkerFinished {
         issue_id: polyphony_core::IssueId,
         issue_identifier: String,
@@ -311,6 +316,8 @@ struct RuntimeState {
     dispatch_mode: polyphony_core::DispatchMode,
     movements: HashMap<MovementId, Movement>,
     tasks: HashMap<MovementId, Vec<Task>>,
+    workspace_setup_tasks_by_issue_identifier: HashMap<String, (MovementId, TaskId)>,
+    workspace_setup_tasks_by_key: HashMap<String, (MovementId, TaskId)>,
     worktree_keys: HashSet<String>,
     /// Workspace keys from orphaned workspaces detected at startup, pending dispatch.
     orphan_dispatch_keys: HashSet<String>,
@@ -360,6 +367,8 @@ impl Default for RuntimeState {
             dispatch_mode: polyphony_core::DispatchMode::default(),
             movements: HashMap::new(),
             tasks: HashMap::new(),
+            workspace_setup_tasks_by_issue_identifier: HashMap::new(),
+            workspace_setup_tasks_by_key: HashMap::new(),
             worktree_keys: HashSet::new(),
             orphan_dispatch_keys: HashSet::new(),
             reviewed_pull_request_heads: HashMap::new(),

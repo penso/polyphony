@@ -158,209 +158,7 @@ pub async fn run(
                 key_handled = true;
             },
             Event::Key(key) => {
-                if app.leaving {
-                    // Ignore keys while leaving
-                } else if app.show_agent_picker {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.show_agent_picker = false;
-                            app.agent_picker_issue_id = None;
-                        },
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            let count = snapshot.agent_profiles.len();
-                            if count > 0 {
-                                app.agent_picker_selected = (app.agent_picker_selected + 1) % count;
-                            }
-                        },
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            let count = snapshot.agent_profiles.len();
-                            if count > 0 {
-                                app.agent_picker_selected =
-                                    (app.agent_picker_selected + count - 1) % count;
-                            }
-                        },
-                        KeyCode::Enter => {
-                            if let Some(issue_id) = app.agent_picker_issue_id.take() {
-                                let agent_name = snapshot
-                                    .agent_profiles
-                                    .get(app.agent_picker_selected)
-                                    .map(|p| p.name.clone());
-                                app.show_agent_picker = false;
-                                if let Some(trigger) = find_trigger_by_id(&snapshot, &issue_id) {
-                                    let _ =
-                                        start_dispatch_for_trigger(&mut app, trigger, agent_name);
-                                }
-                            }
-                        },
-                        _ => {},
-                    }
-                } else if let Some(command) = handle_dispatch_modal_key(&mut app, key) {
-                    tracing::info!(?command, "TUI sending command");
-                    let _ = command_tx.send(command);
-                } else if app.confirm_quit {
-                    match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                            app.confirm_quit = false;
-                            let _ = command_tx.send(RuntimeCommand::Shutdown);
-                            app.leaving = true;
-                            app.leaving_since = Some(Instant::now());
-                        },
-                        _ => {
-                            app.confirm_quit = false;
-                        },
-                    }
-                } else if app.show_help_modal {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
-                            app.show_help_modal = false;
-                        },
-                        _ => {},
-                    }
-                } else if app.show_mode_modal {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.show_mode_modal = false;
-                        },
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            app.mode_modal_selected = (app.mode_modal_selected + 1) % 5;
-                        },
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            app.mode_modal_selected = (app.mode_modal_selected + 4) % 5;
-                        },
-                        KeyCode::Enter => {
-                            let modes = [
-                                DispatchMode::Manual,
-                                DispatchMode::Automatic,
-                                DispatchMode::Nightshift,
-                                DispatchMode::Idle,
-                                DispatchMode::Stop,
-                            ];
-                            let selected = modes[app.mode_modal_selected];
-                            app.show_mode_modal = false;
-                            let _ = command_tx.send(RuntimeCommand::SetMode(selected));
-                        },
-                        _ => {},
-                    }
-                } else if app.has_detail() && app.split_focus == crate::app::SplitFocus::Detail {
-                    if let Some(cmd) = handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
-                    {
-                        let _ = command_tx.send(cmd);
-                    }
-                } else if app.has_detail() && app.split_focus == crate::app::SplitFocus::List {
-                    // Split mode, list focused: route to list handler
-                    // but Tab toggles focus, Esc closes the detail
-                    match key.code {
-                        KeyCode::Tab => {
-                            app.split_focus = crate::app::SplitFocus::Detail;
-                        },
-                        KeyCode::Esc => {
-                            app.pop_detail();
-                            app.split_focus = crate::app::SplitFocus::default();
-                        },
-                        KeyCode::Enter => {
-                            // In split mode the detail pane already shows the
-                            // selected item — Enter is a no-op to avoid pushing
-                            // duplicate details onto the stack.
-                        },
-                        KeyCode::Char('e')
-                        | KeyCode::Char('E')
-                        | KeyCode::Char('c')
-                        | KeyCode::Char('w') => {
-                            // Forward to detail handler so the events/cast/workspace
-                            // actions work regardless of which pane has focus.
-                            if let Some(cmd) =
-                                handle_detail_key(&mut app, key.code, &snapshot, &command_tx)
-                            {
-                                let _ = command_tx.send(cmd);
-                            }
-                        },
-                        _ => {
-                            if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
-                                let shutdown = matches!(command, RuntimeCommand::Shutdown);
-                                if matches!(command, RuntimeCommand::Refresh) {
-                                    app.refresh_requested = true;
-                                }
-                                tracing::info!(?command, "TUI sending command");
-                                let _ = command_tx.send(command);
-                                if shutdown {
-                                    app.leaving = true;
-                                    app.leaving_since = Some(Instant::now());
-                                }
-                            }
-                            // After list navigation, update the detail entry
-                            update_split_detail_from_selection(&mut app, &snapshot);
-                        },
-                    }
-                } else if app.search_active {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.search_active = false;
-                            app.search_query.clear();
-                            app.rebuild_sorted_indices(&snapshot);
-                            sync_selection_after_search(&mut app, &snapshot);
-                        },
-                        KeyCode::Enter => {
-                            app.search_active = false;
-                            // Keep filter active, just exit input mode
-                        },
-                        KeyCode::Backspace => {
-                            app.search_query.pop();
-                            app.rebuild_sorted_indices(&snapshot);
-                            sync_selection_after_search(&mut app, &snapshot);
-                        },
-                        KeyCode::Char(c) => {
-                            app.search_query.push(c);
-                            app.rebuild_sorted_indices(&snapshot);
-                            sync_selection_after_search(&mut app, &snapshot);
-                        },
-                        _ => {},
-                    }
-                } else if app.movements_search_active {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.movements_search_active = false;
-                            app.movements_search_query.clear();
-                        },
-                        KeyCode::Enter => {
-                            app.movements_search_active = false;
-                        },
-                        KeyCode::Backspace => {
-                            app.movements_search_query.pop();
-                        },
-                        KeyCode::Char(c) => {
-                            app.movements_search_query.push(c);
-                        },
-                        _ => {},
-                    }
-                } else if app.logs_search_active {
-                    match key.code {
-                        KeyCode::Esc => {
-                            app.logs_search_active = false;
-                            app.logs_search_query.clear();
-                        },
-                        KeyCode::Enter => {
-                            app.logs_search_active = false;
-                        },
-                        KeyCode::Backspace => {
-                            app.logs_search_query.pop();
-                        },
-                        KeyCode::Char(c) => {
-                            app.logs_search_query.push(c);
-                        },
-                        _ => {},
-                    }
-                } else if let Some(command) = handle_key(&mut app, key.code, &snapshot) {
-                    let shutdown = matches!(command, RuntimeCommand::Shutdown);
-                    if matches!(command, RuntimeCommand::Refresh) {
-                        app.refresh_requested = true;
-                    }
-                    tracing::info!(?command, "TUI sending command");
-                    let _ = command_tx.send(command);
-                    if shutdown {
-                        app.leaving = true;
-                        app.leaving_since = Some(Instant::now());
-                    }
-                }
+                handle_key_event(&mut app, key, &snapshot, &command_tx);
                 key_handled = true;
             },
             _ => {},
@@ -439,6 +237,200 @@ async fn refresh_agent_detail_artifact(app: &mut AppState, snapshot: &RuntimeSna
             key: request_key,
             saved_context: loaded,
         });
+    }
+}
+
+fn handle_key_event(
+    app: &mut AppState,
+    key: event::KeyEvent,
+    snapshot: &RuntimeSnapshot,
+    command_tx: &mpsc::UnboundedSender<RuntimeCommand>,
+) {
+    if app.leaving {
+    } else if app.show_agent_picker {
+        match key.code {
+            KeyCode::Esc => {
+                app.show_agent_picker = false;
+                app.agent_picker_issue_id = None;
+            },
+            KeyCode::Char('j') | KeyCode::Down => {
+                let count = snapshot.agent_profiles.len();
+                if count > 0 {
+                    app.agent_picker_selected = (app.agent_picker_selected + 1) % count;
+                }
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                let count = snapshot.agent_profiles.len();
+                if count > 0 {
+                    app.agent_picker_selected = (app.agent_picker_selected + count - 1) % count;
+                }
+            },
+            KeyCode::Enter => {
+                if let Some(issue_id) = app.agent_picker_issue_id.take() {
+                    let agent_name = snapshot
+                        .agent_profiles
+                        .get(app.agent_picker_selected)
+                        .map(|p| p.name.clone());
+                    app.show_agent_picker = false;
+                    if let Some(trigger) = find_trigger_by_id(snapshot, &issue_id) {
+                        let _ = start_dispatch_for_trigger(app, trigger, agent_name);
+                    }
+                }
+            },
+            _ => {},
+        }
+    } else if app.dispatch_modal.is_some() {
+        if let Some(command) = handle_dispatch_modal_key(app, key) {
+            tracing::info!(?command, "TUI sending command");
+            let _ = command_tx.send(command);
+        }
+    } else if app.confirm_quit {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                app.confirm_quit = false;
+                let _ = command_tx.send(RuntimeCommand::Shutdown);
+                app.leaving = true;
+                app.leaving_since = Some(Instant::now());
+            },
+            _ => {
+                app.confirm_quit = false;
+            },
+        }
+    } else if app.show_help_modal {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                app.show_help_modal = false;
+            },
+            _ => {},
+        }
+    } else if app.show_mode_modal {
+        match key.code {
+            KeyCode::Esc => {
+                app.show_mode_modal = false;
+            },
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.mode_modal_selected = (app.mode_modal_selected + 1) % 5;
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.mode_modal_selected = (app.mode_modal_selected + 4) % 5;
+            },
+            KeyCode::Enter => {
+                let modes = [
+                    DispatchMode::Manual,
+                    DispatchMode::Automatic,
+                    DispatchMode::Nightshift,
+                    DispatchMode::Idle,
+                    DispatchMode::Stop,
+                ];
+                let selected = modes[app.mode_modal_selected];
+                app.show_mode_modal = false;
+                let _ = command_tx.send(RuntimeCommand::SetMode(selected));
+            },
+            _ => {},
+        }
+    } else if app.has_detail() && app.split_focus == crate::app::SplitFocus::Detail {
+        if let Some(cmd) = handle_detail_key(app, key.code, snapshot, command_tx) {
+            let _ = command_tx.send(cmd);
+        }
+    } else if app.has_detail() && app.split_focus == crate::app::SplitFocus::List {
+        match key.code {
+            KeyCode::Tab => {
+                app.split_focus = crate::app::SplitFocus::Detail;
+            },
+            KeyCode::Esc => {
+                app.pop_detail();
+                app.split_focus = crate::app::SplitFocus::default();
+            },
+            KeyCode::Enter => {},
+            KeyCode::Char('e') | KeyCode::Char('E') | KeyCode::Char('c') | KeyCode::Char('w') => {
+                if let Some(cmd) = handle_detail_key(app, key.code, snapshot, command_tx) {
+                    let _ = command_tx.send(cmd);
+                }
+            },
+            _ => {
+                if let Some(command) = handle_key(app, key.code, snapshot) {
+                    let shutdown = matches!(command, RuntimeCommand::Shutdown);
+                    if matches!(command, RuntimeCommand::Refresh) {
+                        app.refresh_requested = true;
+                    }
+                    tracing::info!(?command, "TUI sending command");
+                    let _ = command_tx.send(command);
+                    if shutdown {
+                        app.leaving = true;
+                        app.leaving_since = Some(Instant::now());
+                    }
+                }
+                update_split_detail_from_selection(app, snapshot);
+            },
+        }
+    } else if app.search_active {
+        match key.code {
+            KeyCode::Esc => {
+                app.search_active = false;
+                app.search_query.clear();
+                app.rebuild_sorted_indices(snapshot);
+                sync_selection_after_search(app, snapshot);
+            },
+            KeyCode::Enter => {
+                app.search_active = false;
+            },
+            KeyCode::Backspace => {
+                app.search_query.pop();
+                app.rebuild_sorted_indices(snapshot);
+                sync_selection_after_search(app, snapshot);
+            },
+            KeyCode::Char(c) => {
+                app.search_query.push(c);
+                app.rebuild_sorted_indices(snapshot);
+                sync_selection_after_search(app, snapshot);
+            },
+            _ => {},
+        }
+    } else if app.movements_search_active {
+        match key.code {
+            KeyCode::Esc => {
+                app.movements_search_active = false;
+                app.movements_search_query.clear();
+            },
+            KeyCode::Enter => {
+                app.movements_search_active = false;
+            },
+            KeyCode::Backspace => {
+                app.movements_search_query.pop();
+            },
+            KeyCode::Char(c) => {
+                app.movements_search_query.push(c);
+            },
+            _ => {},
+        }
+    } else if app.logs_search_active {
+        match key.code {
+            KeyCode::Esc => {
+                app.logs_search_active = false;
+                app.logs_search_query.clear();
+            },
+            KeyCode::Enter => {
+                app.logs_search_active = false;
+            },
+            KeyCode::Backspace => {
+                app.logs_search_query.pop();
+            },
+            KeyCode::Char(c) => {
+                app.logs_search_query.push(c);
+            },
+            _ => {},
+        }
+    } else if let Some(command) = handle_key(app, key.code, snapshot) {
+        let shutdown = matches!(command, RuntimeCommand::Shutdown);
+        if matches!(command, RuntimeCommand::Refresh) {
+            app.refresh_requested = true;
+        }
+        tracing::info!(?command, "TUI sending command");
+        let _ = command_tx.send(command);
+        if shutdown {
+            app.leaving = true;
+            app.leaving_since = Some(Instant::now());
+        }
     }
 }
 
@@ -948,22 +940,37 @@ fn handle_key(
             }
         },
 
-        // Retry failed task (reset to Pending and re-dispatch)
+        // Retry failed movement from its first failed task
         KeyCode::Char('t') => {
             if app.active_tab == app::ActiveTab::Orchestrator
-                && let Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) =
-                    app.selected_orchestrator_row().cloned()
+                && let Some(row) = app.selected_orchestrator_row().cloned()
             {
-                let task = &snapshot.tasks[snapshot_index];
-                if matches!(
-                    task.status,
-                    polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::Completed
-                ) {
-                    app.show_toast(format!("Retrying: {}", task.title), None);
-                    return Some(RuntimeCommand::RetryTask {
-                        movement_id: task.movement_id.clone(),
-                        task_id: task.id.clone(),
-                    });
+                match row {
+                    app::OrchestratorTreeRow::Movement { snapshot_index, .. } => {
+                        let movement = &snapshot.movements[snapshot_index];
+                        if movement_can_retry(snapshot, &movement.id) {
+                            let label = movement
+                                .issue_identifier
+                                .as_deref()
+                                .unwrap_or(&movement.title);
+                            app.show_toast(format!("Retrying {label}"), None);
+                            return Some(RuntimeCommand::RetryMovement {
+                                movement_id: movement.id.clone(),
+                            });
+                        }
+                    },
+                    app::OrchestratorTreeRow::Task { snapshot_index, .. } => {
+                        let task = &snapshot.tasks[snapshot_index];
+                        if task.status != polyphony_core::TaskStatus::Completed
+                            && movement_can_retry(snapshot, &task.movement_id)
+                        {
+                            app.show_toast(format!("Retrying: {}", task.title), None);
+                            return Some(RuntimeCommand::RetryMovement {
+                                movement_id: task.movement_id.clone(),
+                            });
+                        }
+                    },
+                    _ => {},
                 }
             }
         },
@@ -1152,6 +1159,17 @@ fn handle_detail_key(
                     }
                 }
             },
+            KeyCode::Char('t') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && movement_can_retry(snapshot, &movement.id)
+                {
+                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    app.show_toast(format!("Retrying {label}"), None);
+                    return Some(RuntimeCommand::RetryMovement {
+                        movement_id: movement.id.clone(),
+                    });
+                }
+            },
             KeyCode::Char('a') => {
                 if let Some(movement) = find_movement_by_id(snapshot, movement_id)
                     && movement_can_resolve_deliverable(movement)
@@ -1204,11 +1222,14 @@ fn handle_detail_key(
             },
             _ => {},
         },
-        crate::app::DetailView::Task { .. } => match key {
+        crate::app::DetailView::Task { ref task_id, .. } => match key {
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
             KeyCode::Enter => {},
+            KeyCode::Char('c') => {
+                request_cast_playback_from_detail(app, snapshot);
+            },
             KeyCode::Char('j') | KeyCode::Down => {
                 scroll_detail(app, 1);
             },
@@ -1220,6 +1241,31 @@ fn handle_detail_key(
             },
             KeyCode::PageUp => {
                 scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('t') => {
+                if let Some(task) = snapshot.tasks.iter().find(|task| task.id == *task_id)
+                    && task.status != polyphony_core::TaskStatus::Completed
+                    && movement_can_retry(snapshot, &task.movement_id)
+                {
+                    app.show_toast(format!("Retrying: {}", task.title), None);
+                    return Some(RuntimeCommand::RetryMovement {
+                        movement_id: task.movement_id.clone(),
+                    });
+                }
+            },
+            KeyCode::Char('R') => {
+                if let Some(task) = snapshot.tasks.iter().find(|task| task.id == *task_id)
+                    && matches!(
+                        task.status,
+                        polyphony_core::TaskStatus::Failed | polyphony_core::TaskStatus::InProgress
+                    )
+                {
+                    app.show_toast(format!("Resolved: {}", task.title), None);
+                    return Some(RuntimeCommand::ResolveTask {
+                        movement_id: task.movement_id.clone(),
+                        task_id: task.id.clone(),
+                    });
+                }
             },
             _ => {},
         },
@@ -1534,6 +1580,35 @@ fn movement_can_resolve_deliverable(movement: &polyphony_core::MovementRow) -> b
     })
 }
 
+fn movement_can_retry(snapshot: &RuntimeSnapshot, movement_id: &str) -> bool {
+    let Some(movement) = find_movement_by_id(snapshot, movement_id) else {
+        return false;
+    };
+    if movement.status == polyphony_core::MovementStatus::Failed {
+        return true;
+    }
+    if movement.status != polyphony_core::MovementStatus::InProgress {
+        return false;
+    }
+
+    let mut has_retryable_task = false;
+    for task in snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.movement_id == movement_id)
+    {
+        match task.status {
+            polyphony_core::TaskStatus::Failed => return true,
+            polyphony_core::TaskStatus::Pending | polyphony_core::TaskStatus::Cancelled => {
+                has_retryable_task = true;
+            },
+            polyphony_core::TaskStatus::InProgress => return false,
+            polyphony_core::TaskStatus::Completed => {},
+        }
+    }
+    has_retryable_task
+}
+
 fn trigger_can_close_issue(
     snapshot: &RuntimeSnapshot,
     trigger: &polyphony_core::VisibleTriggerRow,
@@ -1677,22 +1752,48 @@ fn open_terminal_at(path: &std::path::Path) {
 /// Handle `c` key press: for running agents, open a live log detail view;
 /// for finished agents, open the `.cast` replay in the browser.
 fn request_cast_playback_for_agent(app: &mut AppState, agent: crate::app::SelectedAgentRow<'_>) {
-    let (workspace_path, agent_name, issue_identifier, is_running) = match agent {
-        crate::app::SelectedAgentRow::Running(r) => (
-            Some(r.workspace_path.clone()),
-            r.agent_name.clone(),
-            r.issue_identifier.clone(),
-            true,
-        ),
-        crate::app::SelectedAgentRow::History(h) => (
-            h.workspace_path.clone(),
-            h.agent_name.clone(),
-            h.issue_identifier.clone(),
-            false,
-        ),
+    let target = match agent {
+        crate::app::SelectedAgentRow::Running(r) => CastPlaybackTarget {
+            workspace_path: Some(r.workspace_path.clone()),
+            agent_name: r.agent_name.clone(),
+            issue_identifier: r.issue_identifier.clone(),
+            is_running: true,
+            task_id: None,
+        },
+        crate::app::SelectedAgentRow::History(h) => CastPlaybackTarget {
+            workspace_path: h.workspace_path.clone(),
+            agent_name: h.agent_name.clone(),
+            issue_identifier: h.issue_identifier.clone(),
+            is_running: false,
+            task_id: None,
+        },
     };
+    request_cast_playback_for_target(app, target);
+}
+
+#[derive(Debug, Clone)]
+struct CastPlaybackTarget {
+    workspace_path: Option<std::path::PathBuf>,
+    agent_name: String,
+    issue_identifier: String,
+    is_running: bool,
+    task_id: Option<String>,
+}
+
+fn request_cast_playback_for_target(app: &mut AppState, target: CastPlaybackTarget) {
+    let CastPlaybackTarget {
+        workspace_path,
+        agent_name,
+        issue_identifier,
+        is_running,
+        task_id,
+    } = target;
     let Some(ws) = workspace_path else {
         tracing::debug!(agent_name, "cast playback: no workspace path");
+        app.show_toast(
+            format!("No recording for {agent_name}"),
+            Some("No workspace path is available for this task or agent yet.".into()),
+        );
         return;
     };
     // Ensure absolute path — workspace paths may be stored relative to CWD.
@@ -1715,6 +1816,7 @@ fn request_cast_playback_for_agent(app: &mut AppState, agent: crate::app::Select
                     log_path: path,
                     agent_name,
                     issue_identifier,
+                    task_id,
                     scroll: u16::MAX,
                     cached_content: String::new(),
                     auto_scroll: true,
@@ -1739,6 +1841,75 @@ fn request_cast_playback_for_agent(app: &mut AppState, agent: crate::app::Select
     );
 }
 
+fn cast_playback_target_for_task(
+    snapshot: &RuntimeSnapshot,
+    task: &polyphony_core::TaskRow,
+) -> Option<CastPlaybackTarget> {
+    let agent_name = task.agent_name.clone()?;
+    let movement = find_movement_by_id(snapshot, &task.movement_id)?;
+    let issue_identifier = movement
+        .issue_identifier
+        .clone()
+        .unwrap_or_else(|| movement.id.clone());
+
+    if let Some(running) = snapshot.running.iter().find(|running| {
+        running.agent_name == agent_name && running.issue_identifier == issue_identifier
+    }) {
+        return Some(CastPlaybackTarget {
+            workspace_path: Some(running.workspace_path.clone()),
+            agent_name: running.agent_name.clone(),
+            issue_identifier: running.issue_identifier.clone(),
+            is_running: true,
+            task_id: Some(task.id.clone()),
+        });
+    }
+
+    if task.status == polyphony_core::TaskStatus::InProgress {
+        return Some(CastPlaybackTarget {
+            workspace_path: movement.workspace_path.clone(),
+            agent_name,
+            issue_identifier,
+            is_running: true,
+            task_id: Some(task.id.clone()),
+        });
+    }
+
+    let latest_history = snapshot
+        .agent_history
+        .iter()
+        .filter(|history| {
+            history.agent_name == agent_name && history.issue_identifier == issue_identifier
+        })
+        .max_by_key(|history| history.started_at);
+    if let Some(history) = latest_history {
+        return Some(CastPlaybackTarget {
+            workspace_path: history.workspace_path.clone(),
+            agent_name: history.agent_name.clone(),
+            issue_identifier: history.issue_identifier.clone(),
+            is_running: false,
+            task_id: Some(task.id.clone()),
+        });
+    }
+
+    Some(CastPlaybackTarget {
+        workspace_path: movement.workspace_path.clone(),
+        agent_name,
+        issue_identifier,
+        is_running: false,
+        task_id: Some(task.id.clone()),
+    })
+}
+
+fn request_cast_playback_for_task(
+    app: &mut AppState,
+    snapshot: &RuntimeSnapshot,
+    task: &polyphony_core::TaskRow,
+) {
+    if let Some(target) = cast_playback_target_for_task(snapshot, task) {
+        request_cast_playback_for_target(app, target);
+    }
+}
+
 /// Set `pending_cast_playback` on the app for the currently selected agent.
 fn request_cast_playback(app: &mut AppState, snapshot: &RuntimeSnapshot) {
     let agent = match app.active_tab {
@@ -1752,6 +1923,12 @@ fn request_cast_playback(app: &mut AppState, snapshot: &RuntimeSnapshot) {
                 .running
                 .get(running_index)
                 .map(crate::app::SelectedAgentRow::Running),
+            Some(crate::app::OrchestratorTreeRow::Task { snapshot_index, .. }) => {
+                if let Some(task) = snapshot.tasks.get(snapshot_index) {
+                    request_cast_playback_for_task(app, snapshot, task);
+                }
+                return;
+            },
             _ => None,
         },
         _ => None,
@@ -1763,12 +1940,18 @@ fn request_cast_playback(app: &mut AppState, snapshot: &RuntimeSnapshot) {
 
 /// Set `pending_cast_playback` for the agent shown in the current detail view.
 fn request_cast_playback_from_detail(app: &mut AppState, snapshot: &RuntimeSnapshot) {
-    let agent_index = match app.current_detail() {
-        Some(crate::app::DetailView::Agent { agent_index, .. }) => *agent_index,
-        _ => return,
-    };
-    if let Some(agent) = app.resolve_agent(snapshot, agent_index) {
-        request_cast_playback_for_agent(app, agent);
+    match app.current_detail() {
+        Some(crate::app::DetailView::Agent { agent_index, .. }) => {
+            if let Some(agent) = app.resolve_agent(snapshot, *agent_index) {
+                request_cast_playback_for_agent(app, agent);
+            }
+        },
+        Some(crate::app::DetailView::Task { task_id, .. }) => {
+            if let Some(task) = snapshot.tasks.iter().find(|task| task.id == *task_id) {
+                request_cast_playback_for_task(app, snapshot, task);
+            }
+        },
+        _ => {},
     }
 }
 
@@ -2348,6 +2531,8 @@ fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use chrono::Utc;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use polyphony_core::{
@@ -2357,6 +2542,7 @@ mod tests {
         VisibleTriggerRow, workspace_run_history_artifact_path,
         workspace_saved_context_artifact_path,
     };
+    use tokio::sync::mpsc;
 
     use crate::{LogBuffer, event_loop::AgentArtifactRequest};
 
@@ -2723,6 +2909,120 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_modal_consumes_typed_keys_before_global_keybinds() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.dispatch_modal = Some(crate::app::DispatchModalState::new(
+            "7".into(),
+            "#7".into(),
+            "Needs operator guidance".into(),
+            VisibleTriggerKind::Issue,
+            None,
+        ));
+        let snapshot = test_snapshot_with_deliverable();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        let modal = app
+            .dispatch_modal
+            .as_ref()
+            .expect("dispatch modal should remain open");
+        assert_eq!(modal.directives, "oq");
+        assert!(!app.confirm_quit);
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn trigger_search_consumes_typed_keys_before_global_keybinds() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        app.search_active = true;
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert_eq!(app.search_query, "oq");
+        assert!(!app.confirm_quit);
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn movement_search_consumes_typed_keys_before_global_keybinds() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        app.movements_search_active = true;
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert_eq!(app.movements_search_query, "oq");
+        assert!(!app.confirm_quit);
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn logs_search_consumes_typed_keys_before_global_keybinds() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        app.logs_search_active = true;
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert_eq!(app.logs_search_query, "oq");
+        assert!(!app.confirm_quit);
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn mouse_scroll_in_logs_disables_auto_scroll_and_moves_selection() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
@@ -2923,5 +3223,504 @@ mod tests {
             agent_profile_names: vec![],
             agent_profiles: vec![],
         }
+    }
+
+    fn test_snapshot_with_task(status: polyphony_core::TaskStatus) -> RuntimeSnapshot {
+        let now = Utc::now();
+        RuntimeSnapshot {
+            generated_at: now,
+            counts: SnapshotCounts::default(),
+            cadence: Default::default(),
+            visible_issues: vec![],
+            visible_triggers: vec![],
+            approved_issue_keys: vec![],
+            running: vec![],
+            agent_history: vec![],
+            retrying: vec![],
+            codex_totals: Default::default(),
+            rate_limits: None,
+            throttles: vec![],
+            budgets: vec![],
+            agent_catalogs: vec![],
+            saved_contexts: vec![],
+            recent_events: vec![],
+            pending_user_interactions: vec![],
+            movements: vec![polyphony_core::MovementRow {
+                id: "mov-task-1".into(),
+                kind: polyphony_core::MovementKind::PullRequestReview,
+                issue_identifier: Some("penso/arbor#89".into()),
+                title: "Retry me".into(),
+                status: polyphony_core::MovementStatus::Failed,
+                task_count: 1,
+                tasks_completed: 0,
+                deliverable: None,
+                has_deliverable: false,
+                review_target: None,
+                workspace_key: Some("penso_arbor_89".into()),
+                workspace_path: None,
+                created_at: now,
+            }],
+            tasks: vec![polyphony_core::TaskRow {
+                id: "task-1".into(),
+                movement_id: "mov-task-1".into(),
+                title: "Creating worktree".into(),
+                description: None,
+                activity_log: vec![],
+                category: polyphony_core::TaskCategory::Research,
+                status,
+                ordinal: 0,
+                agent_name: Some("orchestrator".into()),
+                turns_completed: 0,
+                total_tokens: 0,
+                started_at: Some(now),
+                finished_at: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            }],
+            loading: Default::default(),
+            dispatch_mode: Default::default(),
+            tracker_kind: Default::default(),
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: vec![],
+            agent_profiles: vec![],
+        }
+    }
+
+    fn test_snapshot_with_review_task_log(
+        workspace_path: std::path::PathBuf,
+        status: polyphony_core::TaskStatus,
+    ) -> RuntimeSnapshot {
+        let now = Utc::now();
+        RuntimeSnapshot {
+            generated_at: now,
+            counts: SnapshotCounts::default(),
+            cadence: Default::default(),
+            visible_issues: vec![],
+            visible_triggers: vec![],
+            approved_issue_keys: vec![],
+            running: vec![],
+            agent_history: vec![],
+            retrying: vec![],
+            codex_totals: Default::default(),
+            rate_limits: None,
+            throttles: vec![],
+            budgets: vec![],
+            agent_catalogs: vec![],
+            saved_contexts: vec![],
+            recent_events: vec![],
+            pending_user_interactions: vec![],
+            movements: vec![polyphony_core::MovementRow {
+                id: "mov-review-1".into(),
+                kind: polyphony_core::MovementKind::PullRequestReview,
+                issue_identifier: Some("penso/arbor#89".into()),
+                title: "Review me".into(),
+                status: polyphony_core::MovementStatus::InProgress,
+                task_count: 2,
+                tasks_completed: 1,
+                deliverable: None,
+                has_deliverable: false,
+                review_target: None,
+                workspace_key: Some("penso_arbor_89".into()),
+                workspace_path: Some(workspace_path),
+                created_at: now,
+            }],
+            tasks: vec![polyphony_core::TaskRow {
+                id: "task-review-1".into(),
+                movement_id: "mov-review-1".into(),
+                title: "Run PR review".into(),
+                description: None,
+                activity_log: vec![],
+                category: polyphony_core::TaskCategory::Review,
+                status,
+                ordinal: 1,
+                agent_name: Some("reviewer".into()),
+                turns_completed: 0,
+                total_tokens: 0,
+                started_at: Some(now),
+                finished_at: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            }],
+            loading: Default::default(),
+            dispatch_mode: Default::default(),
+            tracker_kind: Default::default(),
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: vec![],
+            agent_profiles: vec![],
+        }
+    }
+
+    fn unique_temp_workspace(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn orchestrator_retry_key_retries_failed_movement() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.active_tab = crate::app::ActiveTab::Orchestrator;
+        let failed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Failed);
+        app.on_snapshot(&failed_snapshot);
+        app.rebuild_orchestrator_tree(&failed_snapshot);
+        let movement_index = app
+            .orchestrator_tree_rows
+            .iter()
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Movement { .. }))
+            .expect("movement row");
+        app.movements_state.select(Some(movement_index));
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()),
+            &failed_snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            command_rx.try_recv().ok(),
+            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
+                if movement_id == "mov-task-1"
+        ));
+
+        app.toggle_movement_collapse("mov-task-1");
+        app.rebuild_orchestrator_tree(&failed_snapshot);
+        let task_index = app
+            .orchestrator_tree_rows
+            .iter()
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Task { .. }))
+            .expect("task row");
+        app.movements_state.select(Some(task_index));
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()),
+            &failed_snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            command_rx.try_recv().ok(),
+            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
+                if movement_id == "mov-task-1"
+        ));
+
+        let completed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Completed);
+        app.on_snapshot(&completed_snapshot);
+        let completed_index = app
+            .orchestrator_tree_rows
+            .iter()
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Task { .. }))
+            .expect("task row");
+        app.movements_state.select(Some(completed_index));
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()),
+            &completed_snapshot,
+            &command_tx,
+        );
+
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn task_detail_retry_key_retries_parent_movement() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let failed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Failed);
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        app.push_detail(crate::app::DetailView::Task {
+            task_id: "task-1".into(),
+            scroll: 0,
+        });
+        app.split_focus = crate::app::SplitFocus::Detail;
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()),
+            &failed_snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            command_rx.try_recv().ok(),
+            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
+                if movement_id == "mov-task-1"
+        ));
+
+        let completed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Completed);
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()),
+            &completed_snapshot,
+            &command_tx,
+        );
+
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn orchestrator_retry_key_retries_stalled_movement_with_pending_task() {
+        let now = Utc::now();
+        let stale_snapshot = RuntimeSnapshot {
+            generated_at: now,
+            counts: SnapshotCounts::default(),
+            cadence: Default::default(),
+            visible_issues: vec![],
+            visible_triggers: vec![],
+            approved_issue_keys: vec![],
+            running: vec![],
+            agent_history: vec![],
+            retrying: vec![],
+            codex_totals: Default::default(),
+            rate_limits: None,
+            throttles: vec![],
+            budgets: vec![],
+            agent_catalogs: vec![],
+            saved_contexts: vec![],
+            recent_events: vec![],
+            pending_user_interactions: vec![],
+            movements: vec![polyphony_core::MovementRow {
+                id: "mov-stalled-1".into(),
+                kind: polyphony_core::MovementKind::PullRequestReview,
+                issue_identifier: Some("penso/arbor#89".into()),
+                title: "Retry stale movement".into(),
+                status: polyphony_core::MovementStatus::InProgress,
+                task_count: 2,
+                tasks_completed: 0,
+                deliverable: None,
+                has_deliverable: false,
+                review_target: None,
+                workspace_key: Some("penso_arbor_89".into()),
+                workspace_path: None,
+                created_at: now,
+            }],
+            tasks: vec![
+                polyphony_core::TaskRow {
+                    id: "task-stalled-1".into(),
+                    movement_id: "mov-stalled-1".into(),
+                    title: "Creating worktree".into(),
+                    description: None,
+                    activity_log: vec![],
+                    category: polyphony_core::TaskCategory::Research,
+                    status: polyphony_core::TaskStatus::Pending,
+                    ordinal: 0,
+                    agent_name: Some("orchestrator".into()),
+                    turns_completed: 0,
+                    total_tokens: 0,
+                    started_at: None,
+                    finished_at: None,
+                    error: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+                polyphony_core::TaskRow {
+                    id: "task-stalled-2".into(),
+                    movement_id: "mov-stalled-1".into(),
+                    title: "Run PR review".into(),
+                    description: None,
+                    activity_log: vec![],
+                    category: polyphony_core::TaskCategory::Review,
+                    status: polyphony_core::TaskStatus::Cancelled,
+                    ordinal: 1,
+                    agent_name: Some("reviewer".into()),
+                    turns_completed: 0,
+                    total_tokens: 0,
+                    started_at: None,
+                    finished_at: Some(now),
+                    error: Some("workspace setup failed".into()),
+                    created_at: now,
+                    updated_at: now,
+                },
+            ],
+            loading: Default::default(),
+            dispatch_mode: Default::default(),
+            tracker_kind: Default::default(),
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: vec![],
+            agent_profiles: vec![],
+        };
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.active_tab = crate::app::ActiveTab::Orchestrator;
+        app.on_snapshot(&stale_snapshot);
+        app.rebuild_orchestrator_tree(&stale_snapshot);
+        let movement_index = app
+            .orchestrator_tree_rows
+            .iter()
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Movement { .. }))
+            .expect("movement row");
+        app.movements_state.select(Some(movement_index));
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()),
+            &stale_snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            command_rx.try_recv().ok(),
+            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
+                if movement_id == "mov-stalled-1"
+        ));
+    }
+
+    #[test]
+    fn orchestrator_task_cast_key_opens_live_log_from_task_workspace() {
+        let workspace = unique_temp_workspace("polyphony-tui-task-cast-orchestrator");
+        fs::create_dir_all(workspace.join(".polyphony")).unwrap();
+        let log_path = workspace.join(".polyphony/reviewer-pty.log");
+        fs::write(&log_path, "review output\n").unwrap();
+
+        let snapshot = test_snapshot_with_review_task_log(
+            workspace.clone(),
+            polyphony_core::TaskStatus::InProgress,
+        );
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.active_tab = crate::app::ActiveTab::Orchestrator;
+        app.on_snapshot(&snapshot);
+        app.rebuild_orchestrator_tree(&snapshot);
+        let task_index = app
+            .orchestrator_tree_rows
+            .iter()
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Task { .. }))
+            .expect("task row");
+        app.movements_state.select(Some(task_index));
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            app.current_detail(),
+            Some(crate::app::DetailView::LiveLog { log_path: path, agent_name, issue_identifier, .. })
+                if *path == log_path && agent_name == "reviewer" && issue_identifier == "penso/arbor#89"
+        ));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn task_detail_cast_key_opens_live_log_from_task_workspace() {
+        let workspace = unique_temp_workspace("polyphony-tui-task-cast-detail");
+        fs::create_dir_all(workspace.join(".polyphony")).unwrap();
+        let log_path = workspace.join(".polyphony/reviewer-pty.log");
+        fs::write(&log_path, "review output\n").unwrap();
+
+        let snapshot = test_snapshot_with_review_task_log(
+            workspace.clone(),
+            polyphony_core::TaskStatus::InProgress,
+        );
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.push_detail(crate::app::DetailView::Task {
+            task_id: "task-review-1".into(),
+            scroll: 0,
+        });
+        app.split_focus = crate::app::SplitFocus::Detail;
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            app.current_detail(),
+            Some(crate::app::DetailView::LiveLog { log_path: path, agent_name, issue_identifier, .. })
+                if *path == log_path && agent_name == "reviewer" && issue_identifier == "penso/arbor#89"
+        ));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn task_cast_prefers_live_log_over_previous_history_cast() {
+        let workspace = unique_temp_workspace("polyphony-tui-task-cast-prefer-live");
+        fs::create_dir_all(workspace.join(".polyphony")).unwrap();
+        let log_path = workspace.join(".polyphony/reviewer-pty.log");
+        fs::write(&log_path, "review output\n").unwrap();
+        let old_workspace = unique_temp_workspace("polyphony-tui-task-cast-old");
+        fs::create_dir_all(old_workspace.join(".polyphony")).unwrap();
+        fs::write(
+            old_workspace.join(".polyphony/reviewer-pty.cast"),
+            "cast data\n",
+        )
+        .unwrap();
+
+        let mut snapshot = test_snapshot_with_review_task_log(
+            workspace.clone(),
+            polyphony_core::TaskStatus::InProgress,
+        );
+        snapshot
+            .agent_history
+            .push(polyphony_core::AgentHistoryRow {
+                issue_id: "issue-89".into(),
+                issue_identifier: "penso/arbor#89".into(),
+                agent_name: "reviewer".into(),
+                model: Some("gpt-5.4".into()),
+                status: AttemptStatus::CancelledByUser,
+                attempt: Some(1),
+                max_turns: 10,
+                turn_count: 1,
+                session_id: None,
+                thread_id: None,
+                turn_id: None,
+                codex_app_server_pid: None,
+                last_event: Some("cancelled".into()),
+                last_message: Some("previous attempt".into()),
+                started_at: Utc::now(),
+                finished_at: Some(Utc::now()),
+                last_event_at: Some(Utc::now()),
+                tokens: TokenUsage::default(),
+                workspace_path: Some(old_workspace.clone()),
+                error: Some("cancelled".into()),
+                saved_context: None,
+            });
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.push_detail(crate::app::DetailView::Task {
+            task_id: "task-review-1".into(),
+            scroll: 0,
+        });
+        app.split_focus = crate::app::SplitFocus::Detail;
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert!(matches!(
+            app.current_detail(),
+            Some(crate::app::DetailView::LiveLog { log_path: path, .. }) if *path == log_path
+        ));
+        assert!(app.pending_cast_playback.is_none());
+        fs::remove_dir_all(workspace).unwrap();
+        fs::remove_dir_all(old_workspace).unwrap();
     }
 }

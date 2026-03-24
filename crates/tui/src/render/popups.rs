@@ -399,24 +399,87 @@ pub fn draw_dispatch_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
 
     if modal.directives.is_empty() {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
+            Paragraph::new(wrap_text_for_textarea(
                 "Leave empty to dispatch with the normal prompt.",
-                Style::default().fg(theme.muted),
-            )))
-            .wrap(Wrap { trim: false }),
+                textarea_inner.width as usize,
+                Some(Style::default().fg(theme.muted)),
+            )),
             textarea_inner,
         );
     } else {
         frame.render_widget(
-            Paragraph::new(modal.directives.as_str()).wrap(Wrap { trim: false }),
+            Paragraph::new(wrap_text_for_textarea(
+                &modal.directives,
+                textarea_inner.width as usize,
+                None,
+            )),
             textarea_inner,
         );
     }
 
-    let (line, col) = modal.cursor_line_col();
+    let (line, col) = visual_cursor_position(
+        &modal.directives,
+        modal.cursor,
+        textarea_inner.width as usize,
+    );
     let cursor_x = textarea_inner.x + (col as u16).min(textarea_inner.width.saturating_sub(1));
     let cursor_y = textarea_inner.y + (line as u16).min(textarea_inner.height.saturating_sub(1));
     frame.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn visual_cursor_position(text: &str, cursor: usize, width: usize) -> (usize, usize) {
+    let width = width.max(1);
+    let mut completed_rows = 0usize;
+    let mut current_line_len = 0usize;
+
+    for ch in text.chars().take(cursor) {
+        if ch == '\n' {
+            completed_rows += wrapped_line_rows(current_line_len, width);
+            current_line_len = 0;
+        } else {
+            current_line_len += 1;
+        }
+    }
+
+    (
+        completed_rows + current_line_len / width,
+        current_line_len % width,
+    )
+}
+
+fn wrapped_line_rows(line_len: usize, width: usize) -> usize {
+    line_len.div_ceil(width).max(1)
+}
+
+fn wrap_text_for_textarea(text: &str, width: usize, style: Option<Style>) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+
+    for raw_line in text.split('\n') {
+        if raw_line.is_empty() {
+            lines.push(styled_line(String::new(), style));
+            continue;
+        }
+
+        let chars = raw_line.chars().collect::<Vec<_>>();
+        for chunk in chars.chunks(width) {
+            let chunk = chunk.iter().collect::<String>();
+            lines.push(styled_line(chunk, style));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(styled_line(String::new(), style));
+    }
+
+    lines
+}
+
+fn styled_line(text: String, style: Option<Style>) -> Line<'static> {
+    match style {
+        Some(style) => Line::from(Span::styled(text, style)),
+        None => Line::from(text),
+    }
 }
 
 pub(crate) fn draw_confirm_quit(frame: &mut ratatui::Frame<'_>, app: &AppState) {
@@ -506,7 +569,11 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             "close/reject",
             "Close an existing trigger issue or reject a deliverable",
         ),
-        ("t", "retry task", "Retry a failed pipeline task"),
+        (
+            "t",
+            "retry movement",
+            "Retry a failed movement from its first failed task",
+        ),
         ("R", "resolve task", "Mark a task as completed manually"),
         (
             "m",
@@ -592,4 +659,45 @@ pub(crate) fn centered_rect(area: Rect, max_width: u16, max_height: u16) -> Rect
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 2;
     Rect::new(x, y, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn visual_cursor_position_tracks_wrapped_lines() {
+        let text = "abcdefghijklmnop";
+        assert_eq!(
+            super::visual_cursor_position(text, text.chars().count(), 8),
+            (2, 0)
+        );
+    }
+
+    #[test]
+    fn visual_cursor_position_tracks_newlines_after_wrapped_lines() {
+        let text = "abcdefghij\nqweq";
+        assert_eq!(
+            super::visual_cursor_position(text, text.chars().count(), 8),
+            (2, 4)
+        );
+    }
+
+    #[test]
+    fn wrap_text_for_textarea_splits_long_words_by_width() {
+        let lines = super::wrap_text_for_textarea("small change and", 10, None);
+        let rendered = lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(rendered, vec!["small chan", "ge and"]);
+    }
+
+    #[test]
+    fn wrap_text_for_textarea_preserves_explicit_newlines() {
+        let lines = super::wrap_text_for_textarea("abc\ndef", 8, None);
+        let rendered = lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(rendered, vec!["abc", "def"]);
+    }
 }

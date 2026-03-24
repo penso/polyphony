@@ -24,6 +24,8 @@ kind = "none"
 [workspace]
 checkout_kind = "linked_worktree"
 source_repo_path = "{{SOURCE_REPO_PATH}}"
+# Linked worktrees fetch through libgit2 first and fall back to system git on SSH auth failures.
+# Hardware-backed SSH keys may behave more reliably with discrete_clone or an HTTPS clone_url.
 sync_on_reuse = true
 # default_branch = "main"
 

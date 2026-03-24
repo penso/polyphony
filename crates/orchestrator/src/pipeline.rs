@@ -282,6 +282,7 @@ impl RuntimeService {
                     movement_id: movement_id.to_string(),
                     title: format!("{} stage", stage.category),
                     description: None,
+                    activity_log: Vec::new(),
                     category,
                     status: TaskStatus::Pending,
                     ordinal: (index + 1) as u32,

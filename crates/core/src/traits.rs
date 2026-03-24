@@ -116,6 +116,7 @@ pub trait AgentProviderRuntime: Send + Sync {
 pub trait WorkspaceProvisioner: Send + Sync {
     fn component_key(&self) -> String;
     fn set_interaction_reporter(&self, _reporter: Option<Arc<dyn UserInteractionReporter>>) {}
+    fn set_progress_reporter(&self, _reporter: Option<Arc<dyn WorkspaceProgressReporter>>) {}
     async fn ensure_workspace(&self, request: WorkspaceRequest) -> Result<Workspace, Error>;
     async fn cleanup_workspace(&self, request: WorkspaceRequest) -> Result<(), Error>;
 }
@@ -123,6 +124,10 @@ pub trait WorkspaceProvisioner: Send + Sync {
 pub trait UserInteractionReporter: Send + Sync {
     fn begin(&self, interaction: UserInteractionRequest);
     fn end(&self, interaction_id: &str);
+}
+
+pub trait WorkspaceProgressReporter: Send + Sync {
+    fn log(&self, update: WorkspaceProgressUpdate);
 }
 
 #[async_trait]

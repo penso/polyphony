@@ -3,6 +3,7 @@ use std::{
     time::Instant,
 };
 
+use chrono::{DateTime, Utc};
 use polyphony_core::{
     AgentContextSnapshot, AgentHistoryRow, MovementRow, RunningRow, RuntimeSnapshot, TaskRow,
     VisibleTriggerKind, VisibleTriggerRow,
@@ -27,6 +28,7 @@ pub(crate) struct Toast {
 pub(crate) struct StickyToast {
     pub title: String,
     pub description: Option<String>,
+    pub started_at: DateTime<Utc>,
 }
 
 /// What to launch when the user presses `c` on an agent.
@@ -147,20 +149,6 @@ impl DispatchModalState {
         self.cursor = next_start + column.min(next_end.saturating_sub(next_start));
     }
 
-    pub(crate) fn cursor_line_col(&self) -> (usize, usize) {
-        let mut line = 0;
-        let mut col = 0;
-        for ch in self.directives.chars().take(self.cursor) {
-            if ch == '\n' {
-                line += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-        (line, col)
-    }
-
     fn byte_index(&self) -> usize {
         self.directives
             .char_indices()
@@ -249,6 +237,7 @@ pub(crate) enum DetailView {
         log_path: std::path::PathBuf,
         agent_name: String,
         issue_identifier: String,
+        task_id: Option<String>,
         scroll: u16,
         /// Cached rendered content — refreshed each tick.
         cached_content: String,
@@ -779,6 +768,7 @@ impl AppState {
         self.sticky_toast = Some(StickyToast {
             title: interaction.title.clone(),
             description,
+            started_at: interaction.started_at,
         });
     }
 

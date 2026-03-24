@@ -72,6 +72,13 @@ Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): descripti
 - Collapse nested `if` / `if let` statements when possible (clippy `collapsible_if`).
 - **Never shell out to external CLIs** (`gh`, `git` via `Command::new`, etc.) for GitHub API calls or operations that can be done with Rust crates. Use `octocrab`, `reqwest`, or other Rust HTTP/API crates instead. The only acceptable use of `std::process::Command` is where no Rust crate equivalent exists.
 
+## Testing Policy
+
+- Every feature, behavior change, and bug fix must ship with tests. If the change is not testable yet, improve the design until it is or stop and discuss the tradeoff.
+- Bug fixes need a regression test that fails before the fix and passes after it. Do not rely on manual QA as the only proof.
+- TUI changes need coverage for the affected render path and/or key routing path. Runtime and orchestrator changes need coverage for the control-flow path that changed.
+- Prefer focused crate-level tests for the touched paths while developing, then run the relevant package suites before handoff.
+
 ## Module Organization
 
 - Split large files by domain: types, constants, helpers, actions. Keep files under ~800 lines where practical.

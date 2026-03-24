@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use polyphony_core::{UserInteractionReporter, UserInteractionRequest};
+use polyphony_core::{
+    UserInteractionReporter, UserInteractionRequest, WorkspaceProgressReporter,
+    WorkspaceProgressUpdate,
+};
 
 use crate::{prelude::*, *};
 
@@ -10,6 +13,37 @@ struct RuntimeInteractionReporter {
     snapshot_tx: watch::Sender<RuntimeSnapshot>,
     snapshot_rx: Mutex<watch::Receiver<RuntimeSnapshot>>,
     user_interactions: Arc<Mutex<HashMap<String, UserInteractionRequest>>>,
+}
+
+struct RuntimeWorkspaceProgressReporter {
+    snapshot_tx: watch::Sender<RuntimeSnapshot>,
+    snapshot_rx: Mutex<watch::Receiver<RuntimeSnapshot>>,
+    command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
+}
+
+impl RuntimeWorkspaceProgressReporter {
+    fn new(
+        snapshot_tx: watch::Sender<RuntimeSnapshot>,
+        snapshot_rx: watch::Receiver<RuntimeSnapshot>,
+        command_tx: mpsc::UnboundedSender<OrchestratorMessage>,
+    ) -> Self {
+        Self {
+            snapshot_tx,
+            snapshot_rx: Mutex::new(snapshot_rx),
+            command_tx,
+        }
+    }
+
+    fn publish_snapshot(&self, update: &WorkspaceProgressUpdate) {
+        let mut snapshot = self
+            .snapshot_rx
+            .lock()
+            .ok()
+            .map(|receiver| receiver.borrow().clone())
+            .unwrap_or_else(empty_snapshot);
+        apply_workspace_progress_to_snapshot(&mut snapshot, update);
+        let _ = self.snapshot_tx.send(snapshot);
+    }
 }
 
 impl RuntimeInteractionReporter {
@@ -68,6 +102,58 @@ impl UserInteractionReporter for RuntimeInteractionReporter {
     }
 }
 
+impl WorkspaceProgressReporter for RuntimeWorkspaceProgressReporter {
+    fn log(&self, update: WorkspaceProgressUpdate) {
+        self.publish_snapshot(&update);
+        let _ = self
+            .command_tx
+            .send(OrchestratorMessage::WorkspaceProgress(update));
+    }
+}
+
+fn apply_workspace_progress_to_snapshot(
+    snapshot: &mut RuntimeSnapshot,
+    update: &WorkspaceProgressUpdate,
+) {
+    let movement_id = snapshot
+        .movements
+        .iter()
+        .find(|movement| {
+            movement.workspace_key.as_deref() == Some(update.workspace_key.as_str())
+                || movement.issue_identifier.as_deref() == Some(update.issue_identifier.as_str())
+        })
+        .map(|movement| movement.id.clone());
+    let Some(movement_id) = movement_id else {
+        return;
+    };
+    let Some(task) = snapshot
+        .tasks
+        .iter_mut()
+        .find(|task| task.movement_id == movement_id && task.ordinal == 0)
+    else {
+        return;
+    };
+    if activity_log_ends_with_message(&task.activity_log, &update.message) {
+        return;
+    }
+    let line = format!("[{}] {}", update.at.format("%H:%M:%S"), update.message);
+    task.activity_log.push(line);
+    const TASK_ACTIVITY_LOG_LIMIT: usize = 64;
+    if task.activity_log.len() > TASK_ACTIVITY_LOG_LIMIT {
+        let excess = task.activity_log.len() - TASK_ACTIVITY_LOG_LIMIT;
+        task.activity_log.drain(0..excess);
+    }
+    task.updated_at = update.at;
+}
+
+fn activity_log_ends_with_message(activity_log: &[String], message: &str) -> bool {
+    activity_log.last().is_some_and(|line| {
+        line.strip_prefix('[')
+            .and_then(|line| line.split_once("] "))
+            .map_or(line == message, |(_, suffix)| suffix == message)
+    })
+}
+
 impl RuntimeService {
     pub fn new(
         tracker: Arc<dyn IssueTracker>,
@@ -92,7 +178,14 @@ impl RuntimeService {
                 snapshot_rx.clone(),
                 user_interactions.clone(),
             ));
+        let progress_reporter: Arc<dyn WorkspaceProgressReporter> =
+            Arc::new(RuntimeWorkspaceProgressReporter::new(
+                snapshot_tx.clone(),
+                snapshot_rx.clone(),
+                command_tx.clone(),
+            ));
         provisioner.set_interaction_reporter(Some(interaction_reporter.clone()));
+        provisioner.set_progress_reporter(Some(progress_reporter));
         if let Some(ref committer) = committer {
             committer.set_interaction_reporter(Some(interaction_reporter));
         }
@@ -125,6 +218,7 @@ impl RuntimeService {
                 pending_manual_dispatches: Vec::new(),
                 pending_manual_pull_request_trigger_dispatches: Vec::new(),
                 pending_merge_deliverables: Vec::new(),
+                pending_movement_retries: Vec::new(),
                 pending_task_resolutions: Vec::new(),
                 pending_task_retries: Vec::new(),
                 pending_agent_stops: Vec::new(),
@@ -177,6 +271,7 @@ impl RuntimeService {
         if !self.state.bootstrap_restored {
             self.state.dispatch_mode = self.workflow_rx.borrow().config.startup_dispatch_mode();
         }
+        self.normalize_restored_in_progress_movements().await?;
         self.refresh_tracker_connection(true).await;
         self.emit_snapshot().await?;
         // startup_cleanup is deferred to the first tick so the select loop
@@ -282,6 +377,12 @@ impl RuntimeService {
                         RuntimeCommand::MergeDeliverable { movement_id } => {
                             info!(%movement_id, "merge deliverable requested (event loop)");
                             self.merge_deliverable(&movement_id).await;
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::RetryMovement { movement_id } => {
+                            info!(%movement_id, "movement retry requested");
+                            self.pending_movement_retries.push(movement_id);
+                            self.process_pending_movement_retries().await;
                             let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::ResolveTask {
@@ -461,6 +562,10 @@ impl RuntimeService {
                 Ok(RuntimeCommand::MergeDeliverable { movement_id }) => {
                     info!(%movement_id, "merge deliverable queued");
                     self.pending_merge_deliverables.push(movement_id);
+                },
+                Ok(RuntimeCommand::RetryMovement { movement_id }) => {
+                    info!(%movement_id, "movement retry queued");
+                    self.pending_movement_retries.push(movement_id);
                 },
                 Ok(RuntimeCommand::ResolveTask {
                     movement_id,
@@ -859,87 +964,332 @@ impl RuntimeService {
         }
 
         for (movement_id, task_id) in retries {
-            // Reset the task to Pending
-            let task_found = if let Some(tasks) = self.state.tasks.get_mut(&movement_id) {
-                if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                    task.status = polyphony_core::TaskStatus::Pending;
-                    task.error = None;
-                    task.finished_at = None;
-                    task.started_at = None;
-                    task.turns_completed = 0;
-                    task.tokens = TokenUsage::default();
-                    task.updated_at = Utc::now();
-                    if let Some(store) = &self.store {
-                        let _ = store.save_task(task).await;
-                    }
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            if !task_found {
+            let Some(task) = self
+                .state
+                .tasks
+                .get(&movement_id)
+                .and_then(|tasks| tasks.iter().find(|task| task.id == task_id))
+                .cloned()
+            else {
                 self.push_event(
                     EventScope::Dispatch,
                     format!("task retry ignored: task {task_id} not found in {movement_id}"),
                 );
                 continue;
+            };
+            if task.status != polyphony_core::TaskStatus::Failed {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "task retry ignored: task {task_id} in {movement_id} is {}, only failed tasks can retry",
+                        task.status
+                    ),
+                );
+                continue;
             }
-
-            // Reset the movement back to Executing
-            if let Some(movement) = self.state.movements.get_mut(&movement_id) {
-                movement.status = MovementStatus::InProgress;
-                movement.pipeline_stage = Some(PipelineStage::Executing);
-                movement.updated_at = Utc::now();
-                if let Some(store) = &self.store {
-                    let _ = store.save_movement(movement).await;
-                }
-            }
-
-            info!(
-                movement_id,
-                task_id, "task reset to pending — dispatching retry"
-            );
-            self.push_event(EventScope::Dispatch, format!("task {task_id} retrying"));
-
-            // Build a minimal Issue and dispatch
-            let movement_info = self.state.movements.get(&movement_id).map(|m| {
-                (
-                    m.issue_id.clone().unwrap_or_default(),
-                    m.issue_identifier.clone().unwrap_or_default(),
-                    m.title.clone(),
-                    m.workspace_path.clone(),
-                )
-            });
-            if let Some((issue_id, identifier, title, Some(ws))) = movement_info {
-                let issue = polyphony_core::Issue {
-                    id: issue_id,
-                    identifier,
-                    title,
-                    description: None,
-                    priority: None,
-                    state: "In Progress".into(),
-                    branch_name: None,
-                    url: None,
-                    author: None,
-                    labels: Vec::new(),
-                    comments: Vec::new(),
-                    blocked_by: Vec::new(),
-                    approval_state: polyphony_core::IssueApprovalState::Approved,
-                    parent_id: None,
-                    created_at: None,
-                    updated_at: None,
-                };
-                if let Err(error) = self
-                    .dispatch_next_task(self.workflow(), issue, None, false, &movement_id, &ws)
-                    .await
-                {
-                    warn!(%error, movement_id, "failed to dispatch task retry");
-                }
+            if let Err(error) = self
+                .retry_failed_movement_from_task(&movement_id, Some(task.id.clone()))
+                .await
+            {
+                warn!(%error, movement_id, task_id, "failed to dispatch task retry");
             }
         }
+    }
+
+    pub(crate) async fn process_pending_movement_retries(&mut self) {
+        let retries = std::mem::take(&mut self.pending_movement_retries);
+        if retries.is_empty() {
+            return;
+        }
+
+        for movement_id in retries {
+            if let Err(error) = self
+                .retry_failed_movement_from_task(&movement_id, None)
+                .await
+            {
+                warn!(%error, movement_id, "failed to dispatch movement retry");
+            }
+        }
+    }
+
+    async fn retry_failed_movement_from_task(
+        &mut self,
+        movement_id: &str,
+        requested_task_id: Option<TaskId>,
+    ) -> Result<(), Error> {
+        let Some(movement) = self.state.movements.get(movement_id).cloned() else {
+            self.push_event(
+                EventScope::Dispatch,
+                format!("movement retry ignored: movement {movement_id} not found"),
+            );
+            return Ok(());
+        };
+        let movement_has_running_worker = self
+            .state
+            .running
+            .values()
+            .any(|running| running.movement_id.as_deref() == Some(movement_id));
+        let can_retry_stalled_movement = requested_task_id.is_none()
+            && movement.status == MovementStatus::InProgress
+            && !movement_has_running_worker;
+        if movement.status != MovementStatus::Failed && !can_retry_stalled_movement {
+            self.push_event(
+                EventScope::Dispatch,
+                format!(
+                    "movement retry ignored: movement {movement_id} is {}, only failed or stalled movements can retry",
+                    movement.status
+                ),
+            );
+            return Ok(());
+        }
+
+        let failed_task = {
+            let Some(tasks) = self.state.tasks.get(movement_id) else {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("movement retry ignored: movement {movement_id} has no tasks"),
+                );
+                return Ok(());
+            };
+            if let Some(task_id) = requested_task_id.as_ref() {
+                let Some(task) = tasks.iter().find(|task| &task.id == task_id).cloned() else {
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("task retry ignored: task {task_id} not found in {movement_id}"),
+                    );
+                    return Ok(());
+                };
+                task
+            } else {
+                let first_failed_task = tasks
+                    .iter()
+                    .filter(|task| task.status == TaskStatus::Failed)
+                    .min_by_key(|task| task.ordinal)
+                    .cloned();
+                let next_retryable_task = tasks
+                    .iter()
+                    .filter(|task| {
+                        matches!(
+                            task.status,
+                            TaskStatus::Pending | TaskStatus::Cancelled | TaskStatus::InProgress
+                        )
+                    })
+                    .min_by_key(|task| task.ordinal)
+                    .cloned();
+                let Some(task) = first_failed_task.or(next_retryable_task) else {
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!(
+                            "movement retry ignored: movement {movement_id} has no retryable tasks"
+                        ),
+                    );
+                    return Ok(());
+                };
+                task
+            }
+        };
+
+        if requested_task_id.is_some() && failed_task.status != TaskStatus::Failed {
+            self.push_event(
+                EventScope::Dispatch,
+                format!(
+                    "task retry ignored: task {} in {movement_id} is {}, only failed tasks can retry",
+                    failed_task.id, failed_task.status
+                ),
+            );
+            return Ok(());
+        }
+
+        info!(
+            movement_id,
+            task_id = %failed_task.id,
+            task_ordinal = failed_task.ordinal,
+            "retrying movement from first failed task"
+        );
+        self.push_event(
+            EventScope::Dispatch,
+            format!("movement {movement_id} retrying from {}", failed_task.title),
+        );
+
+        match movement.kind {
+            MovementKind::IssueDelivery => {
+                self.retry_pipeline_task(&movement, &failed_task).await?;
+            },
+            MovementKind::PullRequestReview | MovementKind::PullRequestCommentReview => {
+                self.retry_pull_request_movement(self.workflow(), movement_id, failed_task.ordinal)
+                    .await?;
+            },
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn normalize_restored_in_progress_movements(&mut self) -> Result<(), Error> {
+        let now = Utc::now();
+        let stale_error =
+            "restored without an active agent session; retry the movement to continue";
+        let movement_ids = self.state.movements.keys().cloned().collect::<Vec<_>>();
+
+        for movement_id in movement_ids {
+            let Some(movement_snapshot) = self.state.movements.get(&movement_id).cloned() else {
+                continue;
+            };
+            let has_active_running = self.state.running.values().any(|running| {
+                running.movement_id.as_deref() == Some(movement_id.as_str())
+                    || movement_snapshot
+                        .issue_id
+                        .as_deref()
+                        .is_some_and(|issue_id| running.issue.id == issue_id)
+                    || movement_snapshot.issue_identifier.as_deref().is_some_and(
+                        |issue_identifier| running.issue.identifier == issue_identifier,
+                    )
+            });
+            if has_active_running {
+                continue;
+            }
+
+            let Some(tasks) = self.state.tasks.get_mut(&movement_id) else {
+                continue;
+            };
+            let has_stale_in_progress_task = tasks
+                .iter()
+                .any(|task| task.status == TaskStatus::InProgress);
+            let needs_retryable_failure = has_stale_in_progress_task
+                || matches!(
+                    movement_snapshot.status,
+                    MovementStatus::InProgress | MovementStatus::Planning | MovementStatus::Review
+                ) && tasks
+                    .iter()
+                    .any(|task| matches!(task.status, TaskStatus::Pending | TaskStatus::Cancelled));
+            if !needs_retryable_failure {
+                continue;
+            }
+
+            let mut normalized_task_ids = Vec::new();
+            let mut selected_fallback = false;
+            for task in tasks
+                .iter_mut()
+                .filter(|task| task.status == TaskStatus::InProgress)
+            {
+                task.status = TaskStatus::Failed;
+                task.error = Some(stale_error.into());
+                task.finished_at = Some(now);
+                task.updated_at = now;
+                normalized_task_ids.push(task.id.clone());
+            }
+            if normalized_task_ids.is_empty()
+                && let Some(task) = tasks
+                    .iter_mut()
+                    .find(|task| matches!(task.status, TaskStatus::Pending | TaskStatus::Cancelled))
+            {
+                task.status = TaskStatus::Failed;
+                task.error = Some(stale_error.into());
+                task.finished_at = Some(now);
+                task.updated_at = now;
+                normalized_task_ids.push(task.id.clone());
+                selected_fallback = true;
+            }
+            if normalized_task_ids.is_empty() {
+                continue;
+            }
+
+            if let Some(store) = &self.store {
+                for task_id in &normalized_task_ids {
+                    if let Some(task) = tasks.iter().find(|task| &task.id == task_id) {
+                        store.save_task(task).await?;
+                    }
+                }
+            }
+
+            let Some(movement) = self.state.movements.get_mut(&movement_id) else {
+                continue;
+            };
+            movement.status = MovementStatus::Failed;
+            movement.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+
+            let normalized_count = normalized_task_ids.len();
+            let reason = if selected_fallback {
+                "movement was restored active without an agent session"
+            } else {
+                "restored in-progress task had no active agent session"
+            };
+            self.push_event(
+                EventScope::Startup,
+                format!(
+                    "marked stale movement {movement_id} as failed, {reason} ({normalized_count} task(s))"
+                ),
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn retry_pipeline_task(
+        &mut self,
+        movement: &Movement,
+        failed_task: &Task,
+    ) -> Result<(), Error> {
+        if let Some(tasks) = self.state.tasks.get_mut(&movement.id)
+            && let Some(task) = tasks.iter_mut().find(|task| task.id == failed_task.id)
+        {
+            task.status = TaskStatus::Pending;
+            task.error = None;
+            task.finished_at = None;
+            task.started_at = None;
+            task.session_id = None;
+            task.thread_id = None;
+            task.turns_completed = 0;
+            task.tokens = TokenUsage::default();
+            task.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_task(task).await?;
+            }
+        }
+        if let Some(movement_row) = self.state.movements.get_mut(&movement.id) {
+            movement_row.status = MovementStatus::InProgress;
+            movement_row.pipeline_stage = Some(PipelineStage::Executing);
+            movement_row.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_movement(movement_row).await?;
+            }
+        }
+
+        let Some(workspace_path) = movement.workspace_path.clone() else {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "movement {} has no workspace path for retry",
+                movement.id
+            ))));
+        };
+        let issue = polyphony_core::Issue {
+            id: movement.issue_id.clone().unwrap_or_default(),
+            identifier: movement.issue_identifier.clone().unwrap_or_default(),
+            title: movement.title.clone(),
+            description: None,
+            priority: None,
+            state: "In Progress".into(),
+            branch_name: None,
+            url: None,
+            author: None,
+            labels: Vec::new(),
+            comments: Vec::new(),
+            blocked_by: Vec::new(),
+            approval_state: polyphony_core::IssueApprovalState::Approved,
+            parent_id: None,
+            created_at: None,
+            updated_at: None,
+        };
+        self.dispatch_next_task(
+            self.workflow(),
+            issue,
+            None,
+            false,
+            &movement.id,
+            &workspace_path,
+        )
+        .await
     }
 
     pub(crate) async fn process_pending_agent_stops(&mut self) {
@@ -1429,6 +1779,7 @@ impl RuntimeService {
             self.merge_deliverable(&movement_id).await;
         }
 
+        self.process_pending_movement_retries().await;
         self.process_pending_task_resolutions().await;
         self.process_pending_task_retries().await;
         self.process_pending_agent_stops().await;
@@ -1692,5 +2043,99 @@ impl RuntimeService {
         }
         let _ = self.emit_snapshot().await;
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use chrono::Utc;
+    use polyphony_core::{
+        MovementKind, MovementRow, MovementStatus, RuntimeCadence, RuntimeSnapshot, SnapshotCounts,
+        TaskCategory, TaskRow, TaskStatus, WorkspaceProgressUpdate,
+    };
+
+    use super::apply_workspace_progress_to_snapshot;
+
+    #[test]
+    fn workspace_progress_updates_current_snapshot_immediately() {
+        let now = Utc::now();
+        let mut snapshot = RuntimeSnapshot {
+            generated_at: now,
+            counts: SnapshotCounts::default(),
+            cadence: RuntimeCadence::default(),
+            visible_issues: Vec::new(),
+            visible_triggers: Vec::new(),
+            approved_issue_keys: Vec::new(),
+            running: Vec::new(),
+            agent_history: Vec::new(),
+            retrying: Vec::new(),
+            codex_totals: Default::default(),
+            rate_limits: None,
+            throttles: Vec::new(),
+            budgets: Vec::new(),
+            agent_catalogs: Vec::new(),
+            saved_contexts: Vec::new(),
+            recent_events: Vec::new(),
+            pending_user_interactions: Vec::new(),
+            movements: vec![MovementRow {
+                id: "mov-1".into(),
+                kind: MovementKind::PullRequestReview,
+                issue_identifier: Some("penso/arbor#89".into()),
+                title: "Review me".into(),
+                status: MovementStatus::InProgress,
+                task_count: 2,
+                tasks_completed: 0,
+                deliverable: None,
+                has_deliverable: false,
+                review_target: None,
+                workspace_key: Some("penso_arbor_89".into()),
+                workspace_path: None,
+                created_at: now,
+            }],
+            tasks: vec![TaskRow {
+                id: "task-1".into(),
+                movement_id: "mov-1".into(),
+                title: "Creating worktree".into(),
+                description: None,
+                activity_log: Vec::new(),
+                category: TaskCategory::Research,
+                status: TaskStatus::InProgress,
+                ordinal: 0,
+                agent_name: Some("orchestrator".into()),
+                turns_completed: 0,
+                total_tokens: 0,
+                started_at: Some(now),
+                finished_at: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            }],
+            loading: Default::default(),
+            dispatch_mode: Default::default(),
+            tracker_kind: Default::default(),
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
+        };
+
+        apply_workspace_progress_to_snapshot(&mut snapshot, &WorkspaceProgressUpdate {
+            issue_identifier: "penso/arbor#89".into(),
+            workspace_key: "penso_arbor_89".into(),
+            message: "Fetching origin".into(),
+            at: now,
+        });
+        apply_workspace_progress_to_snapshot(&mut snapshot, &WorkspaceProgressUpdate {
+            issue_identifier: "penso/arbor#89".into(),
+            workspace_key: "penso_arbor_89".into(),
+            message: "Fetching origin".into(),
+            at: now + chrono::Duration::seconds(1),
+        });
+
+        assert_eq!(snapshot.tasks[0].activity_log.len(), 1);
+        assert!(snapshot.tasks[0].activity_log[0].ends_with("Fetching origin"));
     }
 }

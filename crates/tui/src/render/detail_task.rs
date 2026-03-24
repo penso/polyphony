@@ -25,6 +25,56 @@ pub(crate) fn draw_task_detail(
         return;
     };
 
+    let mut hint_spans = vec![
+        Span::styled("j/k", Style::default().fg(theme.highlight)),
+        Span::styled(":scroll  ", Style::default().fg(theme.muted)),
+    ];
+    let movement_can_retry = snapshot
+        .movements
+        .iter()
+        .find(|movement| movement.id == task.movement_id)
+        .is_some_and(|movement| {
+            if movement.status == polyphony_core::MovementStatus::Failed {
+                return true;
+            }
+            if movement.status != polyphony_core::MovementStatus::InProgress {
+                return false;
+            }
+            let mut has_retryable_task = false;
+            for sibling in snapshot
+                .tasks
+                .iter()
+                .filter(|sibling| sibling.movement_id == task.movement_id)
+            {
+                match sibling.status {
+                    TaskStatus::Failed => return true,
+                    TaskStatus::Pending | TaskStatus::Cancelled => {
+                        has_retryable_task = true;
+                    },
+                    TaskStatus::InProgress => return false,
+                    TaskStatus::Completed => {},
+                }
+            }
+            has_retryable_task
+        });
+    if task.status != TaskStatus::Completed && movement_can_retry {
+        hint_spans.push(Span::styled("t", Style::default().fg(theme.highlight)));
+        hint_spans.push(Span::styled(
+            ":retry movement  ",
+            Style::default().fg(theme.muted),
+        ));
+    }
+    if task.agent_name.is_some() {
+        hint_spans.push(Span::styled("c", Style::default().fg(theme.highlight)));
+        hint_spans.push(Span::styled(":cast  ", Style::default().fg(theme.muted)));
+    }
+    if matches!(task.status, TaskStatus::Failed | TaskStatus::InProgress) {
+        hint_spans.push(Span::styled("R", Style::default().fg(theme.highlight)));
+        hint_spans.push(Span::styled(":resolve  ", Style::default().fg(theme.muted)));
+    }
+    hint_spans.push(Span::styled("Esc", Style::default().fg(theme.highlight)));
+    hint_spans.push(Span::styled(":back ", Style::default().fg(theme.muted)));
+
     let block = Block::default()
         .title(Line::from(vec![
             Span::styled(" Task ", Style::default().fg(theme.info)),
@@ -35,19 +85,7 @@ pub(crate) fn draw_task_detail(
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
-        .title_bottom(
-            Line::from(vec![
-                Span::styled("j/k", Style::default().fg(theme.highlight)),
-                Span::styled(":scroll  ", Style::default().fg(theme.muted)),
-                Span::styled("t", Style::default().fg(theme.highlight)),
-                Span::styled(":retry  ", Style::default().fg(theme.muted)),
-                Span::styled("R", Style::default().fg(theme.highlight)),
-                Span::styled(":resolve  ", Style::default().fg(theme.muted)),
-                Span::styled("Esc", Style::default().fg(theme.highlight)),
-                Span::styled(":back ", Style::default().fg(theme.muted)),
-            ])
-            .right_aligned(),
-        )
+        .title_bottom(Line::from(hint_spans).right_aligned())
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(if app.detail_border_focused {
@@ -138,6 +176,19 @@ pub(crate) fn draw_task_detail(
         for line in description.lines() {
             lines.push(Line::from(Span::styled(
                 line.to_string(),
+                Style::default().fg(theme.foreground),
+            )));
+        }
+    }
+    if !task.activity_log.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Activity",
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+        )));
+        for line in &task.activity_log {
+            lines.push(Line::from(Span::styled(
+                line.clone(),
                 Style::default().fg(theme.foreground),
             )));
         }

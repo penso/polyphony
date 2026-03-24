@@ -1,6 +1,59 @@
 use crate::{prelude::*, *};
 
 impl RuntimeService {
+    fn pull_request_retry_trigger(
+        &self,
+        issue_id: &str,
+        review_target: Option<&ReviewTarget>,
+    ) -> Option<PullRequestTrigger> {
+        self.state
+            .pull_request_retry_triggers
+            .get(issue_id)
+            .cloned()
+            .or_else(|| {
+                self.state
+                    .visible_review_triggers
+                    .values()
+                    .find(|trigger| {
+                        trigger.synthetic_issue_id() == issue_id
+                            || review_target.is_some_and(|target| {
+                                review_target_key(&trigger.review_target())
+                                    == review_target_key(target)
+                            })
+                    })
+                    .cloned()
+                    .map(PullRequestTrigger::Review)
+            })
+            .or_else(|| {
+                self.state
+                    .visible_comment_triggers
+                    .values()
+                    .find(|trigger| {
+                        trigger.synthetic_issue_id() == issue_id
+                            || review_target.is_some_and(|target| {
+                                review_target_key(&trigger.review_target())
+                                    == review_target_key(target)
+                            })
+                    })
+                    .cloned()
+                    .map(PullRequestTrigger::Comment)
+            })
+            .or_else(|| {
+                self.state
+                    .visible_conflict_triggers
+                    .values()
+                    .find(|trigger| {
+                        trigger.synthetic_issue_id() == issue_id
+                            || review_target.is_some_and(|target| {
+                                review_target_key(&trigger.review_target())
+                                    == review_target_key(target)
+                            })
+                    })
+                    .cloned()
+                    .map(PullRequestTrigger::Conflict)
+            })
+    }
+
     pub(crate) async fn dispatch_pull_request_review(
         &mut self,
         workflow: LoadedWorkflow,
@@ -70,153 +123,33 @@ impl RuntimeService {
             &review_agent.name,
         )
         .await?;
-
-        let prompt = render_issue_template_with_strings(
-            workflow
-                .config
-                .review_triggers
-                .pr_reviews
-                .prompt
-                .as_deref()
-                .unwrap_or(DEFAULT_PULL_REQUEST_REVIEW_PROMPT),
-            &issue,
-            attempt,
-            &[
-                ("repository", review_target.repository.clone()),
-                ("base_branch", review_target.base_branch.clone()),
-                ("head_branch", review_target.head_branch.clone()),
-                ("head_sha", review_target.head_sha.clone()),
-                (
-                    "pull_request_url",
-                    review_target.url.clone().unwrap_or_default(),
-                ),
-                ("pull_request_number", review_target.number.to_string()),
-                (
-                    "pull_request_author",
-                    trigger.author_login.clone().unwrap_or_default(),
-                ),
-                ("pull_request_labels", trigger.labels.join(", ")),
-            ],
-        )?;
-        let prompt = apply_agent_prompt_template(
+        self.state
+            .pull_request_retry_triggers
+            .insert(issue_id, PullRequestTrigger::Review(trigger.clone()));
+        let prompt = self.build_pull_request_review_prompt(
             &workflow,
-            &review_agent.name,
-            prompt,
+            &trigger,
             &issue,
+            &review_agent.name,
+            &movement_id,
             attempt,
-            1,
-            workflow.config.agent.max_turns,
         )?;
-        let prompt = prepend_manual_dispatch_directives(
-            prompt,
-            self.manual_dispatch_directives_for_movement(&movement_id),
-        );
-        let command_tx = self.command_tx.clone();
-        let agent = self.agent.clone();
-        let workspace_path = workspace.path.clone();
-        let hooks = workflow.config.hooks.clone();
-        let active_states = workflow.config.tracker.active_states.clone();
-        let max_turns = workflow.config.agent.max_turns;
-        let provisioner = self.provisioner.clone();
-        let tracker = self.tracker.clone();
-        let selected_agent_name = review_agent.name.clone();
-        let started_at = Utc::now();
-        let trigger_for_retry = trigger.clone();
-        let issue_for_task = issue.clone();
-        let issue_identifier_for_task = issue_identifier.clone();
-        let issue_id_for_task = issue_id.clone();
-        let worker_span = info_span!(
-            "pull_request_review_worker",
-            issue_identifier = %issue_identifier_for_task,
-            agent = %selected_agent_name,
-            attempt = attempt.unwrap_or(0)
-        );
-        let handle = tokio::spawn(
-            async move {
-                let manager = WorkspaceManager::new(
-                    workflow.config.workspace.root.clone(),
-                    provisioner,
-                    workflow.config.workspace.checkout_kind,
-                    workflow.config.workspace.sync_on_reuse,
-                    workflow.config.workspace.transient_paths.clone(),
-                    workflow.config.workspace.source_repo_path.clone(),
-                    workflow.config.workspace.clone_url.clone(),
-                    workflow.config.workspace.default_branch.clone(),
-                );
-                let outcome = run_worker_attempt(
-                    &manager,
-                    &hooks,
-                    agent,
-                    tracker,
-                    issue_for_task,
-                    attempt,
-                    workspace_path,
-                    prompt,
-                    active_states,
-                    max_turns,
-                    workflow.config.agent.continuation_prompt.clone(),
-                    review_agent_for_task,
-                    None,
-                    command_tx.clone(),
-                )
-                .await;
-                let outcome = match outcome {
-                    Ok(result) => result,
-                    Err(error) => agent_run_result_from_error(&error),
-                };
-                let _ = command_tx.send(OrchestratorMessage::WorkerFinished {
-                    issue_id: issue_id_for_task,
-                    issue_identifier: issue_identifier_for_task,
-                    attempt,
-                    started_at,
-                    outcome,
-                });
-            }
-            .instrument(worker_span),
-        );
-
-        self.claim_issue(issue_id.clone(), IssueClaimState::Running);
-        self.state.retrying.remove(&issue_id);
-        self.state.pull_request_retry_triggers.insert(
-            issue_id.clone(),
-            PullRequestTrigger::Review(trigger_for_retry),
-        );
-        self.state.running.insert(issue_id.clone(), RunningTask {
+        self.start_pull_request_worker(
+            workflow,
             issue,
-            agent_name: selected_agent_name,
-            model: review_agent
-                .model
-                .clone()
-                .or_else(|| review_agent.models.first().cloned()),
             attempt,
-            workspace_path: workspace.path,
-            stall_timeout_ms: review_agent.stall_timeout_ms,
-            max_turns,
-            started_at,
-            session_id: None,
-            thread_id: None,
-            turn_id: None,
-            codex_app_server_pid: None,
-            last_event: Some("dispatch_started".into()),
-            last_message: Some("PR review worker launched".into()),
-            last_event_at: Some(Utc::now()),
-            tokens: TokenUsage::default(),
-            last_reported_tokens: TokenUsage::default(),
-            turn_count: 0,
-            rate_limits: None,
-            handle,
-            active_task_id: Some(review_task_id),
-            movement_id: Some(movement_id),
-            review_target: Some(review_target),
-            review_comment_marker: Some(pull_request_review_comment_marker(
-                &trigger.review_target(),
-            )),
-        });
-        self.push_event(
-            EventScope::Dispatch,
+            workspace.path,
+            prompt,
+            review_agent_for_task,
+            &movement_id,
+            &review_task_id,
+            review_target,
+            pull_request_review_comment_marker(&trigger.review_target()),
             format!("dispatched PR review {issue_identifier}"),
-        );
-        Ok(())
+            "PR review worker launched",
+            "pull_request_review_worker",
+        )
+        .await
     }
 
     pub(crate) async fn dispatch_pull_request_comment_review(
@@ -291,7 +224,100 @@ impl RuntimeService {
             &review_agent.name,
         )
         .await?;
+        self.state
+            .pull_request_retry_triggers
+            .insert(issue_id, PullRequestTrigger::Comment(trigger.clone()));
+        let prompt = self.build_pull_request_comment_review_prompt(
+            &workflow,
+            &trigger,
+            &issue,
+            &review_agent.name,
+            &movement_id,
+            attempt,
+        )?;
+        self.start_pull_request_worker(
+            workflow,
+            issue,
+            attempt,
+            workspace.path,
+            prompt,
+            review_agent_for_task,
+            &movement_id,
+            &review_task_id,
+            review_target,
+            pull_request_comment_review_comment_marker(
+                &trigger.review_target(),
+                &trigger.thread_id,
+            ),
+            format!("dispatched PR comment review {issue_identifier}"),
+            "PR comment review worker launched",
+            "pull_request_comment_review_worker",
+        )
+        .await
+    }
 
+    fn build_pull_request_review_prompt(
+        &self,
+        workflow: &LoadedWorkflow,
+        trigger: &PullRequestReviewTrigger,
+        issue: &Issue,
+        review_agent_name: &str,
+        movement_id: &str,
+        attempt: Option<u32>,
+    ) -> Result<String, Error> {
+        let review_target = trigger.review_target();
+        let prompt = render_issue_template_with_strings(
+            workflow
+                .config
+                .review_triggers
+                .pr_reviews
+                .prompt
+                .as_deref()
+                .unwrap_or(DEFAULT_PULL_REQUEST_REVIEW_PROMPT),
+            issue,
+            attempt,
+            &[
+                ("repository", review_target.repository.clone()),
+                ("base_branch", review_target.base_branch.clone()),
+                ("head_branch", review_target.head_branch.clone()),
+                ("head_sha", review_target.head_sha.clone()),
+                (
+                    "pull_request_url",
+                    review_target.url.clone().unwrap_or_default(),
+                ),
+                ("pull_request_number", review_target.number.to_string()),
+                (
+                    "pull_request_author",
+                    trigger.author_login.clone().unwrap_or_default(),
+                ),
+                ("pull_request_labels", trigger.labels.join(", ")),
+            ],
+        )?;
+        let prompt = apply_agent_prompt_template(
+            workflow,
+            review_agent_name,
+            prompt,
+            issue,
+            attempt,
+            1,
+            workflow.config.agent.max_turns,
+        )?;
+        Ok(prepend_manual_dispatch_directives(
+            prompt,
+            self.manual_dispatch_directives_for_movement(movement_id),
+        ))
+    }
+
+    fn build_pull_request_comment_review_prompt(
+        &self,
+        workflow: &LoadedWorkflow,
+        trigger: &PullRequestCommentTrigger,
+        issue: &Issue,
+        review_agent_name: &str,
+        movement_id: &str,
+        attempt: Option<u32>,
+    ) -> Result<String, Error> {
+        let review_target = trigger.review_target();
         let prompt = render_issue_template_with_strings(
             workflow
                 .config
@@ -300,7 +326,7 @@ impl RuntimeService {
                 .prompt
                 .as_deref()
                 .unwrap_or(DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT),
-            &issue,
+            issue,
             attempt,
             &[
                 ("repository", review_target.repository.clone()),
@@ -329,21 +355,38 @@ impl RuntimeService {
             ],
         )?;
         let prompt = apply_agent_prompt_template(
-            &workflow,
-            &review_agent.name,
+            workflow,
+            review_agent_name,
             prompt,
-            &issue,
+            issue,
             attempt,
             1,
             workflow.config.agent.max_turns,
         )?;
-        let prompt = prepend_manual_dispatch_directives(
+        Ok(prepend_manual_dispatch_directives(
             prompt,
-            self.manual_dispatch_directives_for_movement(&movement_id),
-        );
+            self.manual_dispatch_directives_for_movement(movement_id),
+        ))
+    }
+
+    async fn start_pull_request_worker(
+        &mut self,
+        workflow: LoadedWorkflow,
+        issue: Issue,
+        attempt: Option<u32>,
+        workspace_path: PathBuf,
+        prompt: String,
+        review_agent: polyphony_core::AgentDefinition,
+        movement_id: &str,
+        review_task_id: &str,
+        review_target: ReviewTarget,
+        review_comment_marker: String,
+        dispatch_event: String,
+        running_message: &'static str,
+        worker_span_name: &'static str,
+    ) -> Result<(), Error> {
         let command_tx = self.command_tx.clone();
         let agent = self.agent.clone();
-        let workspace_path = workspace.path.clone();
         let hooks = workflow.config.hooks.clone();
         let active_states = workflow.config.tracker.active_states.clone();
         let max_turns = workflow.config.agent.max_turns;
@@ -351,12 +394,14 @@ impl RuntimeService {
         let tracker = self.tracker.clone();
         let selected_agent_name = review_agent.name.clone();
         let started_at = Utc::now();
-        let trigger_for_retry = trigger.clone();
         let issue_for_task = issue.clone();
-        let issue_identifier_for_task = issue_identifier.clone();
-        let issue_id_for_task = issue_id.clone();
+        let issue_identifier_for_task = issue.identifier.clone();
+        let issue_id_for_task = issue.id.clone();
+        let workspace_path_for_task = workspace_path.clone();
+        let review_agent_for_task = review_agent.clone();
         let worker_span = info_span!(
-            "pull_request_comment_review_worker",
+            "pull_request_review_worker",
+            kind = worker_span_name,
             issue_identifier = %issue_identifier_for_task,
             agent = %selected_agent_name,
             attempt = attempt.unwrap_or(0)
@@ -380,7 +425,7 @@ impl RuntimeService {
                     tracker,
                     issue_for_task,
                     attempt,
-                    workspace_path,
+                    workspace_path_for_task,
                     prompt,
                     active_states,
                     max_turns,
@@ -405,13 +450,9 @@ impl RuntimeService {
             .instrument(worker_span),
         );
 
-        self.claim_issue(issue_id.clone(), IssueClaimState::Running);
-        self.state.retrying.remove(&issue_id);
-        self.state.pull_request_retry_triggers.insert(
-            issue_id.clone(),
-            PullRequestTrigger::Comment(trigger_for_retry.clone()),
-        );
-        self.state.running.insert(issue_id.clone(), RunningTask {
+        self.claim_issue(issue.id.clone(), IssueClaimState::Running);
+        self.state.retrying.remove(&issue.id);
+        self.state.running.insert(issue.id.clone(), RunningTask {
             issue,
             agent_name: selected_agent_name,
             model: review_agent
@@ -419,7 +460,7 @@ impl RuntimeService {
                 .clone()
                 .or_else(|| review_agent.models.first().cloned()),
             attempt,
-            workspace_path: workspace.path,
+            workspace_path,
             stall_timeout_ms: review_agent.stall_timeout_ms,
             max_turns,
             started_at,
@@ -428,25 +469,19 @@ impl RuntimeService {
             turn_id: None,
             codex_app_server_pid: None,
             last_event: Some("dispatch_started".into()),
-            last_message: Some("PR comment review worker launched".into()),
+            last_message: Some(running_message.into()),
             last_event_at: Some(Utc::now()),
             tokens: TokenUsage::default(),
             last_reported_tokens: TokenUsage::default(),
             turn_count: 0,
             rate_limits: None,
             handle,
-            active_task_id: Some(review_task_id),
-            movement_id: Some(movement_id),
+            active_task_id: Some(review_task_id.to_string()),
+            movement_id: Some(movement_id.to_string()),
             review_target: Some(review_target),
-            review_comment_marker: Some(pull_request_comment_review_comment_marker(
-                &trigger.review_target(),
-                &trigger.thread_id,
-            )),
+            review_comment_marker: Some(review_comment_marker),
         });
-        self.push_event(
-            EventScope::Dispatch,
-            format!("dispatched PR comment review {issue_identifier}"),
-        );
+        self.push_event(EventScope::Dispatch, dispatch_event);
         Ok(())
     }
 
@@ -525,6 +560,14 @@ impl RuntimeService {
         let (workspace_setup_task_id, review_task_id) = self
             .reset_pull_request_tasks(&movement_id, review_agent_name)
             .await?;
+        self.state.workspace_setup_tasks_by_issue_identifier.insert(
+            issue.identifier.clone(),
+            (movement_id.clone(), workspace_setup_task_id.clone()),
+        );
+        self.state.workspace_setup_tasks_by_key.insert(
+            workspace_key,
+            (movement_id.clone(), workspace_setup_task_id.clone()),
+        );
         Ok((movement_id, workspace_setup_task_id, review_task_id))
     }
 
@@ -559,6 +602,7 @@ impl RuntimeService {
                     task.started_at = Some(now);
                     task.finished_at = None;
                     task.error = None;
+                    task.activity_log.clear();
                     task.turns_completed = 0;
                     task.tokens = TokenUsage::default();
                     task.updated_at = now;
@@ -569,6 +613,7 @@ impl RuntimeService {
                     task.started_at = None;
                     task.finished_at = None;
                     task.error = None;
+                    task.activity_log.clear();
                     task.turns_completed = 0;
                     task.tokens = TokenUsage::default();
                     task.updated_at = now;
@@ -586,6 +631,41 @@ impl RuntimeService {
         Ok((workspace_setup_task_id, review_task_id))
     }
 
+    async fn reset_pull_request_review_task_for_retry(
+        &mut self,
+        movement_id: &str,
+        review_task_id: &str,
+        review_agent_name: &str,
+    ) -> Result<(), Error> {
+        let now = Utc::now();
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            movement.status = MovementStatus::InProgress;
+            movement.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
+            }
+        }
+        if let Some(tasks) = self.state.tasks.get_mut(movement_id)
+            && let Some(task) = tasks.iter_mut().find(|task| task.id == review_task_id)
+        {
+            task.status = TaskStatus::InProgress;
+            task.agent_name = Some(review_agent_name.to_string());
+            task.started_at = Some(now);
+            task.finished_at = None;
+            task.error = None;
+            task.activity_log.clear();
+            task.session_id = None;
+            task.thread_id = None;
+            task.turns_completed = 0;
+            task.tokens = TokenUsage::default();
+            task.updated_at = now;
+            if let Some(store) = &self.store {
+                store.save_task(task).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn finish_pull_request_workspace_setup(
         &mut self,
         movement_id: &str,
@@ -597,6 +677,16 @@ impl RuntimeService {
     ) -> Result<(), Error> {
         let now = Utc::now();
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            if let Some(issue_identifier) = movement.issue_identifier.clone() {
+                self.state
+                    .workspace_setup_tasks_by_issue_identifier
+                    .remove(&issue_identifier);
+            }
+            if let Some(workspace_key) = movement.workspace_key.clone() {
+                self.state
+                    .workspace_setup_tasks_by_key
+                    .remove(&workspace_key);
+            }
             movement.workspace_key = Some(workspace_key.to_string());
             movement.workspace_path = Some(workspace_path.to_path_buf());
             movement.updated_at = now;
@@ -639,6 +729,16 @@ impl RuntimeService {
     ) -> Result<(), Error> {
         let now = Utc::now();
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            if let Some(issue_identifier) = movement.issue_identifier.clone() {
+                self.state
+                    .workspace_setup_tasks_by_issue_identifier
+                    .remove(&issue_identifier);
+            }
+            if let Some(workspace_key) = movement.workspace_key.clone() {
+                self.state
+                    .workspace_setup_tasks_by_key
+                    .remove(&workspace_key);
+            }
             movement.status = MovementStatus::Failed;
             movement.updated_at = now;
             if let Some(store) = &self.store {
@@ -667,6 +767,174 @@ impl RuntimeService {
             }
         }
         Ok(())
+    }
+
+    pub(crate) async fn record_workspace_progress(
+        &mut self,
+        update: WorkspaceProgressUpdate,
+    ) -> Result<(), Error> {
+        let task_ref = self
+            .state
+            .workspace_setup_tasks_by_key
+            .get(&update.workspace_key)
+            .cloned()
+            .or_else(|| {
+                self.state
+                    .workspace_setup_tasks_by_issue_identifier
+                    .get(&update.issue_identifier)
+                    .cloned()
+            });
+        let Some((movement_id, task_id)) = task_ref else {
+            return Ok(());
+        };
+        if let Some(tasks) = self.state.tasks.get_mut(&movement_id)
+            && let Some(task) = tasks.iter_mut().find(|task| task.id == task_id)
+        {
+            if task.activity_log.last().is_some_and(|line| {
+                line.strip_prefix('[')
+                    .and_then(|line| line.split_once("] "))
+                    .map_or(line == update.message.as_str(), |(_, suffix)| {
+                        suffix == update.message
+                    })
+            }) {
+                return Ok(());
+            }
+            let line = format!("[{}] {}", update.at.format("%H:%M:%S"), update.message);
+            task.activity_log.push(line);
+            const TASK_ACTIVITY_LOG_LIMIT: usize = 64;
+            if task.activity_log.len() > TASK_ACTIVITY_LOG_LIMIT {
+                let excess = task.activity_log.len() - TASK_ACTIVITY_LOG_LIMIT;
+                task.activity_log.drain(0..excess);
+            }
+            task.updated_at = update.at;
+            if let Some(store) = &self.store {
+                store.save_task(task).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn retry_pull_request_movement(
+        &mut self,
+        workflow: LoadedWorkflow,
+        movement_id: &str,
+        failed_task_ordinal: u32,
+    ) -> Result<(), Error> {
+        let Some(movement) = self.state.movements.get(movement_id).cloned() else {
+            return Ok(());
+        };
+        let Some(issue_id) = movement.issue_id.clone() else {
+            return Ok(());
+        };
+        let Some(trigger) =
+            self.pull_request_retry_trigger(&issue_id, movement.review_target.as_ref())
+        else {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "no retry trigger available for movement {movement_id}"
+            ))));
+        };
+        let workspace_path = movement.workspace_path.clone();
+        if failed_task_ordinal == 0 || workspace_path.is_none() {
+            return self
+                .dispatch_pull_request_trigger(workflow, trigger, None, None)
+                .await;
+        }
+        let Some(workspace_path) = workspace_path else {
+            return self
+                .dispatch_pull_request_trigger(workflow, trigger, None, None)
+                .await;
+        };
+
+        let review_agent = workflow
+            .config
+            .pr_review_agent()?
+            .ok_or_else(|| CoreError::Adapter("PR review agent is not available".into()))?;
+        let review_task_id = self
+            .state
+            .tasks
+            .get(movement_id)
+            .and_then(|tasks| {
+                tasks
+                    .iter()
+                    .find(|task| task.ordinal == failed_task_ordinal)
+                    .map(|task| task.id.clone())
+            })
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(format!(
+                    "movement {movement_id} has no task at ordinal {failed_task_ordinal}"
+                )))
+            })?;
+        self.reset_pull_request_review_task_for_retry(
+            movement_id,
+            &review_task_id,
+            &review_agent.name,
+        )
+        .await?;
+
+        match trigger {
+            PullRequestTrigger::Review(trigger) => {
+                let issue = synthetic_issue_for_pull_request_review(&trigger);
+                let issue_identifier = issue.identifier.clone();
+                let prompt = self.build_pull_request_review_prompt(
+                    &workflow,
+                    &trigger,
+                    &issue,
+                    &review_agent.name,
+                    movement_id,
+                    None,
+                )?;
+                self.start_pull_request_worker(
+                    workflow,
+                    issue,
+                    None,
+                    workspace_path.clone(),
+                    prompt,
+                    review_agent,
+                    movement_id,
+                    &review_task_id,
+                    trigger.review_target(),
+                    pull_request_review_comment_marker(&trigger.review_target()),
+                    format!("retried PR review {issue_identifier}"),
+                    "PR review worker relaunched",
+                    "review",
+                )
+                .await
+            },
+            PullRequestTrigger::Comment(trigger) => {
+                let issue = synthetic_issue_for_pull_request_comment(&trigger);
+                let issue_identifier = issue.identifier.clone();
+                let prompt = self.build_pull_request_comment_review_prompt(
+                    &workflow,
+                    &trigger,
+                    &issue,
+                    &review_agent.name,
+                    movement_id,
+                    None,
+                )?;
+                self.start_pull_request_worker(
+                    workflow,
+                    issue,
+                    None,
+                    workspace_path,
+                    prompt,
+                    review_agent,
+                    movement_id,
+                    &review_task_id,
+                    trigger.review_target(),
+                    pull_request_comment_review_comment_marker(
+                        &trigger.review_target(),
+                        &trigger.thread_id,
+                    ),
+                    format!("retried PR comment review {issue_identifier}"),
+                    "PR comment review worker relaunched",
+                    "comment",
+                )
+                .await
+            },
+            PullRequestTrigger::Conflict(_) => Err(Error::Core(CoreError::Adapter(
+                "retry for PR conflict review is not implemented".into(),
+            ))),
+        }
     }
 
     async fn finalize_pull_request_review_task(
@@ -1245,6 +1513,7 @@ fn upsert_pull_request_task(
         movement_id: movement_id.to_string(),
         title: title.to_string(),
         description: None,
+        activity_log: Vec::new(),
         category,
         status: TaskStatus::Pending,
         ordinal,

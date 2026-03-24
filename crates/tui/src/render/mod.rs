@@ -24,6 +24,8 @@ use crate::app::{ActiveTab, AppState, SplitFocus};
 /// Minimum terminal width to engage the side-by-side master-detail layout.
 const SPLIT_MIN_WIDTH: u16 = 140;
 
+const STICKY_TOAST_DEBOUNCE_MS: i64 = 100;
+
 pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &mut AppState) {
     app.frame_count = app.frame_count.wrapping_add(1);
 
@@ -102,6 +104,12 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
     if let Some((title, description, border_color, title_color)) = app
         .sticky_toast
         .as_ref()
+        .filter(|toast| {
+            chrono::Utc::now()
+                .signed_duration_since(toast.started_at)
+                .num_milliseconds()
+                >= STICKY_TOAST_DEBOUNCE_MS
+        })
         .map(|toast| {
             (
                 toast.title.as_str(),

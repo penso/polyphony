@@ -27,6 +27,8 @@ workspace:
   # when the checked-in workflow is a shared template.
   # checkout_kind: linked_worktree
   # source_repo_path: /abs/path/to/this/repo
+  # Linked worktrees fetch through libgit2 first and fall back to system git on SSH auth failures.
+  # Hardware-backed SSH keys may behave more reliably with discrete_clone or an HTTPS clone_url.
   # default_branch: main
   # checkout_kind: discrete_clone
   # clone_url: git@github.com:owner/repo.git
