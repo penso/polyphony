@@ -360,12 +360,72 @@ pub(crate) fn pull_request_trigger_kind_label(trigger: &PullRequestTrigger) -> &
 }
 
 pub(crate) fn truncate_for_trigger_title(value: &str, max_chars: usize) -> String {
-    let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cleaned = strip_markup_for_title(value);
+    let trimmed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     if trimmed.chars().count() <= max_chars {
         return trimmed;
     }
     let end = trimmed.floor_char_boundary(max_chars.saturating_sub(1));
     format!("{}…", &trimmed[..end])
+}
+
+/// Remove HTML tags and markdown image syntax from text so trigger titles
+/// display cleanly in the TUI listing.
+fn strip_markup_for_title(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            // Strip HTML tags.
+            '<' => {
+                while let Some(&c) = chars.peek() {
+                    chars.next();
+                    if c == '>' {
+                        break;
+                    }
+                }
+            },
+            // Strip markdown images: ![alt](url)
+            '!' if chars.peek() == Some(&'[') => {
+                // Skip ![...]
+                chars.next(); // consume '['
+                let mut depth = 1u32;
+                while let Some(&c) = chars.peek() {
+                    chars.next();
+                    match c {
+                        '[' => depth += 1,
+                        ']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+                // Skip (...) if immediately following
+                if chars.peek() == Some(&'(') {
+                    chars.next();
+                    let mut depth = 1u32;
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        match c {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            },
+                            _ => {},
+                        }
+                    }
+                }
+            },
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 pub(crate) async fn load_pull_request_review_comments(
@@ -1193,6 +1253,32 @@ mod tests {
         assert_eq!(
             extract_review_summary(body),
             "This is just a blob of text."
+        );
+    }
+
+    #[test]
+    fn truncate_strips_html_tags() {
+        let input = r#"**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Skip signing in dry-run**"#;
+        let result = truncate_for_trigger_title(input, 80);
+        assert!(!result.contains("<sub>"), "HTML tags should be stripped: {result}");
+        assert!(!result.contains("img.shields.io"), "Image URL should be stripped: {result}");
+        assert!(result.contains("Skip signing"), "Title text should remain: {result}");
+    }
+
+    #[test]
+    fn truncate_strips_greptile_html_badges() {
+        let input = r##"<a href="#"><img alt="P2" src="https://greptile-static-assets.s3.amazonaws.com/badges/P2.svg"></a> Some issue title"##;
+        let result = truncate_for_trigger_title(input, 80);
+        assert!(!result.contains("<a"), "HTML should be stripped: {result}");
+        assert!(!result.contains("greptile"), "badge URL should be stripped: {result}");
+        assert!(result.contains("Some issue title"), "Title text should remain: {result}");
+    }
+
+    #[test]
+    fn truncate_preserves_plain_text() {
+        assert_eq!(
+            truncate_for_trigger_title("Simple title", 80),
+            "Simple title"
         );
     }
 }
