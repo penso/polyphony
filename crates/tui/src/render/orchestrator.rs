@@ -644,7 +644,7 @@ fn draw_movements_table(
                             .and_then(|v| v.as_str())
                         {
                             spans.push(Span::styled(
-                                format!("  ({confidence})"),
+                                format!("  confidence:{confidence}"),
                                 Style::default().fg(theme.muted),
                             ));
                         }
