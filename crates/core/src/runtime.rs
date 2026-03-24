@@ -566,6 +566,12 @@ pub struct PullRequestReviewComment {
     pub path: String,
     pub line: u32,
     pub body: String,
+    /// Short title for the finding (rendered bold before the body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Priority level: 0 (critical) through 4 (nit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

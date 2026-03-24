@@ -147,7 +147,7 @@ impl GithubPullRequestCommenter {
                         path: comment.path.clone(),
                         line: comment.line,
                         side: "RIGHT".to_string(),
-                        body: comment.body.clone(),
+                        body: format_review_comment_body(comment),
                     })
                     .collect(),
             })
@@ -498,6 +498,41 @@ struct CreatePullRequestReviewComment {
     body: String,
 }
 
+/// Format a review comment body with an optional priority badge and title.
+///
+/// When a priority (0-4) is present, a shields.io badge is prepended:
+/// `![P1](https://img.shields.io/badge/P1-orange?style=flat-square)`
+///
+/// When a title is present, it is rendered bold after the badge.
+fn format_review_comment_body(comment: &PullRequestReviewComment) -> String {
+    let mut parts = Vec::new();
+    if let Some(priority) = comment.priority {
+        let (label, color) = match priority {
+            0 => ("P0", "red"),
+            1 => ("P1", "orange"),
+            2 => ("P2", "yellow"),
+            3 => ("P3", "blue"),
+            _ => ("P4", "lightgrey"),
+        };
+        parts.push(format!(
+            "![{label}](https://img.shields.io/badge/{label}-{color}?style=flat-square)"
+        ));
+    }
+    if let Some(title) = &comment.title {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            parts.push(format!("**{trimmed}**"));
+        }
+    }
+    if parts.is_empty() {
+        comment.body.clone()
+    } else {
+        // Badge and title on one line, body below separated by a blank line.
+        let header = parts.join("  ");
+        format!("{header}\n\n{}", comment.body)
+    }
+}
+
 pub(crate) fn find_issue_comment_id_with_marker(
     comments: &[GithubIssueCommentResponse],
     marker: &str,
@@ -518,4 +553,66 @@ struct CreatePullRequestBody {
     base: String,
     body: String,
     draft: bool,
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use polyphony_core::PullRequestReviewComment;
+
+    use super::*;
+
+    #[test]
+    fn format_comment_body_plain() {
+        let comment = PullRequestReviewComment {
+            path: "src/lib.rs".into(),
+            line: 10,
+            body: "This looks wrong.".into(),
+            title: None,
+            priority: None,
+        };
+        assert_eq!(format_review_comment_body(&comment), "This looks wrong.");
+    }
+
+    #[test]
+    fn format_comment_body_with_priority_and_title() {
+        let comment = PullRequestReviewComment {
+            path: "src/auth.rs".into(),
+            line: 42,
+            body: "Use `map_err` instead.".into(),
+            title: Some("Unchecked unwrap".into()),
+            priority: Some(1),
+        };
+        let body = format_review_comment_body(&comment);
+        assert!(body.contains("img.shields.io/badge/P1-orange"));
+        assert!(body.contains("**Unchecked unwrap**"));
+        assert!(body.contains("Use `map_err` instead."));
+    }
+
+    #[test]
+    fn format_comment_body_p0_is_red() {
+        let comment = PullRequestReviewComment {
+            path: "x.rs".into(),
+            line: 1,
+            body: "Critical.".into(),
+            title: None,
+            priority: Some(0),
+        };
+        let body = format_review_comment_body(&comment);
+        assert!(body.contains("P0-red"));
+    }
+
+    #[test]
+    fn format_comment_body_priority_only() {
+        let comment = PullRequestReviewComment {
+            path: "x.rs".into(),
+            line: 1,
+            body: "Minor issue.".into(),
+            title: None,
+            priority: Some(3),
+        };
+        let body = format_review_comment_body(&comment);
+        assert!(body.contains("P3-blue"));
+        assert!(body.contains("\n\nMinor issue."));
+    }
 }

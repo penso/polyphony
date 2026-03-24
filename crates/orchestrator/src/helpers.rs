@@ -396,6 +396,8 @@ pub(crate) async fn load_pull_request_review_comments(
             path: path.to_string(),
             line: draft.line,
             body: body.to_string(),
+            title: draft.title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+            priority: draft.priority.filter(|&p| p <= 4),
         });
     }
     Ok(comments)
