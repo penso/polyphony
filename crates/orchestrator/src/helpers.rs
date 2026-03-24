@@ -473,14 +473,42 @@ pub(crate) async fn load_pull_request_review_comments(
 ///
 /// If no verdict line is found, falls back to `ReviewVerdict::Comment`.
 pub(crate) fn parse_review_verdict(review_body: &str) -> polyphony_core::ReviewVerdict {
+    let mut under_verdict_heading = false;
     for line in review_body.lines() {
         let trimmed = line.trim();
-        if let Some(value) = trimmed
+
+        // Check for `### Verdict` or `## Verdict` heading.
+        let heading_body = trimmed
+            .strip_prefix("###")
+            .or_else(|| trimmed.strip_prefix("##"))
+            .map(|s| s.trim());
+        if let Some(h) = heading_body {
+            if h.eq_ignore_ascii_case("Verdict") {
+                under_verdict_heading = true;
+                continue;
+            }
+            // Any other heading ends the verdict section.
+            if under_verdict_heading {
+                break;
+            }
+        }
+
+        // Check for inline `Verdict: value` or a bare value under the heading.
+        let value = trimmed
             .strip_prefix("Verdict:")
             .or_else(|| trimmed.strip_prefix("verdict:"))
             .or_else(|| trimmed.strip_prefix("VERDICT:"))
-        {
-            let value = value.trim().to_ascii_lowercase();
+            .map(|v| v.trim().to_ascii_lowercase())
+            .or_else(|| {
+                if under_verdict_heading && !trimmed.is_empty() {
+                    // Strip markdown backticks around the value.
+                    Some(trimmed.trim_matches('`').to_ascii_lowercase())
+                } else {
+                    None
+                }
+            });
+
+        if let Some(value) = value {
             return match value.as_str() {
                 "approve" | "approved" | "lgtm" => polyphony_core::ReviewVerdict::Approve,
                 "request_changes" | "request changes" | "changes_requested"
@@ -1196,6 +1224,24 @@ mod tests {
         assert_eq!(
             parse_review_verdict("VERDICT: request changes"),
             polyphony_core::ReviewVerdict::RequestChanges
+        );
+    }
+
+    #[test]
+    fn parse_review_verdict_under_heading() {
+        let body = "### Summary\nLooks good.\n\n### Verdict\nrequest_changes\n";
+        assert_eq!(
+            parse_review_verdict(body),
+            polyphony_core::ReviewVerdict::RequestChanges
+        );
+    }
+
+    #[test]
+    fn parse_review_verdict_under_heading_with_backticks() {
+        let body = "### Verdict\n`approve`\n";
+        assert_eq!(
+            parse_review_verdict(body),
+            polyphony_core::ReviewVerdict::Approve
         );
     }
 
