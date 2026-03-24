@@ -477,6 +477,15 @@ fn draw_movements_table(
                     format!(" {duration}"),
                     Style::default().fg(theme.muted),
                 ));
+                if session.tokens.total_tokens > 0 {
+                    title_spans.push(Span::styled(
+                        format!(
+                            " {}tok",
+                            super::agents::format_tokens_pub(session.tokens.total_tokens)
+                        ),
+                        Style::default().fg(theme.muted),
+                    ));
+                }
                 // Show error excerpt for failed sessions
                 if session.status == polyphony_core::AttemptStatus::Failed
                     && let Some(error) = &session.error
@@ -534,6 +543,15 @@ fn draw_movements_table(
                     format!(" {duration}"),
                     Style::default().fg(theme.muted),
                 ));
+                if running.tokens.total_tokens > 0 {
+                    title_spans.push(Span::styled(
+                        format!(
+                            " {}tok",
+                            super::agents::format_tokens_pub(running.tokens.total_tokens)
+                        ),
+                        Style::default().fg(theme.muted),
+                    ));
+                }
                 // Show last event or message as status hint
                 if let Some(msg) = running
                     .last_message
