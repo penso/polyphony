@@ -10,16 +10,14 @@ pub fn visible_issues(snapshot: &Value) -> Vec<&Value> {
 
 /// Find an issue in the visible_issues array by substring match on issue_identifier.
 pub fn find_issue_by_id<'a>(snapshot: &'a Value, id_substring: &str) -> Option<&'a Value> {
-    visible_issues(snapshot)
-        .into_iter()
-        .find(|issue| {
-            issue["issue_identifier"]
+    visible_issues(snapshot).into_iter().find(|issue| {
+        issue["issue_identifier"]
+            .as_str()
+            .is_some_and(|id| id.contains(id_substring))
+            || issue["issue_id"]
                 .as_str()
                 .is_some_and(|id| id.contains(id_substring))
-                || issue["issue_id"]
-                    .as_str()
-                    .is_some_and(|id| id.contains(id_substring))
-        })
+    })
 }
 
 /// Extract the "running" array from a snapshot.
@@ -48,7 +46,9 @@ pub fn recent_events(snapshot: &Value) -> Vec<&Value> {
 
 /// Check if the snapshot indicates the tracker has polled at least once.
 pub fn tracker_has_polled(snapshot: &Value) -> bool {
-    snapshot["cadence"]["last_tracker_poll_at"].as_str().is_some()
+    snapshot["cadence"]["last_tracker_poll_at"]
+        .as_str()
+        .is_some()
 }
 
 /// Check if loading is complete (no active loading flags).

@@ -1,5 +1,7 @@
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::{
+    process::{Child, Command, Output, Stdio},
+    time::{Duration, Instant},
+};
 
 use super::repo::TestRepo;
 
@@ -21,7 +23,7 @@ impl PolyphonyProcess {
                 "daemon",
                 "run",
             ])
-            .envs(repo.env_vars().into_iter().map(|(k, v)| (k, v)))
+            .envs(repo.env_vars())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -37,10 +39,10 @@ impl PolyphonyProcess {
     pub fn wait_ready(repo: &TestRepo, timeout: Duration) -> bool {
         let started = Instant::now();
         while started.elapsed() < timeout {
-            if let Some(snap) = daemon_snapshot(repo) {
-                if snapshot_is_ready_for_daemon(&snap) {
-                    return true;
-                }
+            if let Some(snap) = daemon_snapshot(repo)
+                && snapshot_is_ready_for_daemon(&snap)
+            {
+                return true;
             }
             std::thread::sleep(Duration::from_millis(300));
         }
@@ -104,7 +106,7 @@ pub fn run_polyphony(repo: &TestRepo, args: &[&str]) -> Output {
 
     Command::new(TestRepo::polyphony_bin())
         .args(&full_args)
-        .envs(repo.env_vars().into_iter().map(|(k, v)| (k, v)))
+        .envs(repo.env_vars())
         .output()
         .expect("run polyphony command")
 }
@@ -141,14 +143,12 @@ where
     let started = Instant::now();
     while started.elapsed() < timeout {
         let output = run_polyphony(repo, data_args);
-        if output.status.success() {
-            if let Ok(json) =
+        if output.status.success()
+            && let Ok(json) =
                 serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&output.stdout))
-            {
-                if condition(&json) {
-                    return Some(json);
-                }
-            }
+            && condition(&json)
+        {
+            return Some(json);
         }
         std::thread::sleep(Duration::from_millis(300));
     }
@@ -182,10 +182,10 @@ where
 {
     let started = Instant::now();
     while started.elapsed() < timeout {
-        if let Some(snapshot) = daemon_snapshot(repo) {
-            if condition(&snapshot) {
-                return Some(snapshot);
-            }
+        if let Some(snapshot) = daemon_snapshot(repo)
+            && condition(&snapshot)
+        {
+            return Some(snapshot);
         }
         std::thread::sleep(Duration::from_millis(300));
     }

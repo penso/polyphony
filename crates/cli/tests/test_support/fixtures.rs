@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 /// Write deterministic fake-agent scripts into the temp repo.
 ///

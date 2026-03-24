@@ -50,14 +50,15 @@ fn daemon_snapshot_returns_valid_json() {
         dump_daemon_logs(&repo),
     );
 
-    let snapshot = wait_for_daemon_snapshot(&repo, Duration::from_secs(10), |s| {
-        snapshot_is_ready(s)
-    });
+    let snapshot = wait_for_daemon_snapshot(&repo, Duration::from_secs(10), snapshot_is_ready);
     assert!(snapshot.is_some(), "daemon snapshot never became ready");
 
     let snapshot = snapshot.unwrap();
     assert!(snapshot["visible_issues"].is_array());
-    assert!(!visible_issues(&snapshot).is_empty(), "no issues in daemon snapshot");
+    assert!(
+        !visible_issues(&snapshot).is_empty(),
+        "no issues in daemon snapshot"
+    );
 
     daemon.stop_and_kill(&repo);
 }
@@ -76,10 +77,8 @@ fn daemon_refresh_triggers_new_poll() {
     );
 
     // Wait for initial poll to complete.
-    let snap1 = wait_for_daemon_snapshot(&repo, Duration::from_secs(10), |s| {
-        snapshot_is_ready(s)
-    })
-    .expect("initial snapshot never ready");
+    let snap1 = wait_for_daemon_snapshot(&repo, Duration::from_secs(10), snapshot_is_ready)
+        .expect("initial snapshot never ready");
 
     let _poll1 = snap1["cadence"]["last_tracker_poll_at"]
         .as_str()

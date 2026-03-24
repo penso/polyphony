@@ -146,7 +146,10 @@ stall_timeout_ms = 30000
     // Now query via `data running` against the daemon snapshot.
     let snap = daemon_snapshot(&repo).expect("daemon snapshot");
     let running = running_agents(&snap);
-    assert!(!running.is_empty(), "data running should show the active agent");
+    assert!(
+        !running.is_empty(),
+        "data running should show the active agent"
+    );
 
     let agent = &running[0];
     assert_eq!(agent["issue_id"].as_str(), Some(issue_id.as_str()));
@@ -175,7 +178,11 @@ fn data_history_returns_completed_runs() {
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
         !agent_history(s).is_empty()
     });
-    assert!(snap.is_some(), "run never completed\n{}", dump_daemon_logs(&repo));
+    assert!(
+        snap.is_some(),
+        "run never completed\n{}",
+        dump_daemon_logs(&repo)
+    );
 
     let snap = snap.unwrap();
     let history = agent_history(&snap);
@@ -219,9 +226,15 @@ fn daemon_snapshot_contains_runtime_events() {
     );
 
     let event = &events[0];
-    assert!(event["at"].as_str().is_some(), "event should have timestamp");
+    assert!(
+        event["at"].as_str().is_some(),
+        "event should have timestamp"
+    );
     assert!(event["scope"].as_str().is_some(), "event should have scope");
-    assert!(event["message"].as_str().is_some(), "event should have message");
+    assert!(
+        event["message"].as_str().is_some(),
+        "event should have message"
+    );
 
     daemon.stop_and_kill(&repo);
 }

@@ -1,5 +1,7 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use tempfile::TempDir;
 
@@ -132,7 +134,13 @@ completion_sentinel = "POLYPHONY_AGENT_DONE"
     /// Create a beads issue and return its full ID.
     pub fn create_beads_issue(&self, title: &str) -> String {
         let output = Command::new("bd")
-            .args(["create", "--json", &format!("--title={title}"), "--type=task", "--priority=2"])
+            .args([
+                "create",
+                "--json",
+                &format!("--title={title}"),
+                "--type=task",
+                "--priority=2",
+            ])
             .current_dir(self.root())
             .output()
             .expect("run bd create");
@@ -143,7 +151,10 @@ completion_sentinel = "POLYPHONY_AGENT_DONE"
         );
         let json: serde_json::Value =
             serde_json::from_slice(&output.stdout).expect("parse bd create JSON");
-        json["id"].as_str().expect("bd create returned id").to_string()
+        json["id"]
+            .as_str()
+            .expect("bd create returned id")
+            .to_string()
     }
 
     /// Update a beads issue status.
@@ -194,7 +205,10 @@ completion_sentinel = "POLYPHONY_AGENT_DONE"
     pub fn env_vars(&self) -> Vec<(&str, String)> {
         vec![
             ("HOME", self.home().display().to_string()),
-            ("XDG_CONFIG_HOME", self.home().join(".config").display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                self.home().join(".config").display().to_string(),
+            ),
         ]
     }
 }

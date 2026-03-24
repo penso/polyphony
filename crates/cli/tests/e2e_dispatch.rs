@@ -45,7 +45,10 @@ fn manual_dispatch_runs_agent_and_records_history() {
 
     let snap = snap.unwrap();
     let history = agent_history(&snap);
-    assert!(!history.is_empty(), "history should have at least one entry");
+    assert!(
+        !history.is_empty(),
+        "history should have at least one entry"
+    );
 
     // Verify the history entry matches our dispatch.
     let entry = &history[0];
@@ -305,7 +308,11 @@ fn dispatch_creates_workspace() {
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
         !agent_history(s).is_empty()
     });
-    assert!(snap.is_some(), "run never completed\n{}", dump_daemon_logs(&repo));
+    assert!(
+        snap.is_some(),
+        "run never completed\n{}",
+        dump_daemon_logs(&repo)
+    );
 
     let snap = snap.unwrap();
 
@@ -314,15 +321,18 @@ fn dispatch_creates_workspace() {
     if ws_output.status.success() {
         let stdout = String::from_utf8_lossy(&ws_output.stdout);
         // If there's workspace data, it should have some content.
-        assert!(!stdout.trim().is_empty(), "workspaces output should not be empty");
+        assert!(
+            !stdout.trim().is_empty(),
+            "workspaces output should not be empty"
+        );
     }
 
     // The history entry should have a workspace_path.
     let history = agent_history(&snap);
-    if let Some(entry) = history.first() {
-        if let Some(ws_path) = entry["workspace_path"].as_str() {
-            assert!(!ws_path.is_empty(), "workspace_path should be populated");
-        }
+    if let Some(entry) = history.first()
+        && let Some(ws_path) = entry["workspace_path"].as_str()
+    {
+        assert!(!ws_path.is_empty(), "workspace_path should be populated");
     }
 
     daemon.stop_and_kill(&repo);
@@ -348,16 +358,17 @@ fn dispatch_records_events() {
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
         !agent_history(s).is_empty()
     });
-    assert!(snap.is_some(), "run never completed\n{}", dump_daemon_logs(&repo));
+    assert!(
+        snap.is_some(),
+        "run never completed\n{}",
+        dump_daemon_logs(&repo)
+    );
 
     let snap = snap.unwrap();
     let events = recent_events(&snap);
 
     // There should be dispatch-related events.
-    assert!(
-        !events.is_empty(),
-        "expected runtime events after dispatch"
-    );
+    assert!(!events.is_empty(), "expected runtime events after dispatch");
 
     // Look for dispatch or worker events.
     let has_dispatch_event = events.iter().any(|e| {

@@ -1,0 +1,47 @@
+name: CLI E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY_TOOLCHAIN: nightly-2025-11-30
+  RUST_BACKTRACE: "1"
+
+jobs:
+  cli-e2e:
+    name: CLI E2E (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - e2e_daemon_control
+          - e2e_dispatch
+          - e2e_headless
+          - e2e_retry_and_data
+          - e2e_scheduling
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install ${{ env.NIGHTLY_TOOLCHAIN }} --profile minimal
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Run ${{ matrix.suite }}
+        run: >
+          bash ./scripts/ci/with-sanitized-env.sh
+          cargo +${{ env.NIGHTLY_TOOLCHAIN }} test --locked
+          -p polyphony-cli --test ${{ matrix.suite }} -- --nocapture
