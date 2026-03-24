@@ -160,6 +160,7 @@ pub enum DeliverableKind {
     GitlabMergeRequest,
     LocalBranch,
     Patch,
+    PullRequestReview,
 }
 
 impl fmt::Display for DeliverableKind {
@@ -169,6 +170,7 @@ impl fmt::Display for DeliverableKind {
             Self::GitlabMergeRequest => "gitlab_merge_request",
             Self::LocalBranch => "local_branch",
             Self::Patch => "patch",
+            Self::PullRequestReview => "pull_request_review",
         };
         f.write_str(s)
     }
@@ -181,6 +183,7 @@ pub enum DeliverableStatus {
     Open,
     Merged,
     Closed,
+    Reviewed,
 }
 
 impl fmt::Display for DeliverableStatus {
@@ -190,6 +193,7 @@ impl fmt::Display for DeliverableStatus {
             Self::Open => "open",
             Self::Merged => "merged",
             Self::Closed => "closed",
+            Self::Reviewed => "reviewed",
         };
         f.write_str(s)
     }
@@ -250,6 +254,41 @@ impl fmt::Display for ReviewProviderKind {
             Self::Github => "github",
         };
         f.write_str(s)
+    }
+}
+
+/// The verdict an agent signals by writing a `.polyphony/review-verdict.txt`
+/// file or embedding a verdict header in `review.md`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewVerdict {
+    /// Submit as a neutral comment (default when no signal is found).
+    #[default]
+    Comment,
+    /// Approve the pull request.
+    Approve,
+    /// Request changes.
+    RequestChanges,
+}
+
+impl ReviewVerdict {
+    /// The GitHub Pull Request Review API event string.
+    pub fn github_event(&self) -> &'static str {
+        match self {
+            Self::Comment => "COMMENT",
+            Self::Approve => "APPROVE",
+            Self::RequestChanges => "REQUEST_CHANGES",
+        }
+    }
+}
+
+impl fmt::Display for ReviewVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Comment => "comment",
+            Self::Approve => "approve",
+            Self::RequestChanges => "request_changes",
+        })
     }
 }
 
@@ -475,6 +514,18 @@ impl PullRequestTrigger {
             Self::Conflict(trigger) => trigger.review_target(),
         }
     }
+}
+
+/// Synthetic issue IDs are created by the orchestrator for PR triggers
+/// (reviews, comments, conflicts) and have no corresponding tracker-side
+/// state.  They must be excluded from tracker refresh calls during
+/// reconciliation because no tracker will recognise them.
+const SYNTHETIC_ISSUE_ID_PREFIXES: &[&str] = &["pr_review:", "pr_comment:", "pr_conflict:"];
+
+pub fn is_synthetic_issue_id(issue_id: &str) -> bool {
+    SYNTHETIC_ISSUE_ID_PREFIXES
+        .iter()
+        .any(|prefix| issue_id.starts_with(prefix))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

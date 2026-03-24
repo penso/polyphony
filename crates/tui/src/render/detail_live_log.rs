@@ -8,7 +8,7 @@ use ratatui::{
     },
 };
 
-use super::detail_common::render_scroll_indicator;
+use super::{detail_common::render_scroll_indicator, orchestrator::wrapped_line_count};
 use crate::app::AppState;
 
 pub(crate) fn draw_live_log_detail(
@@ -97,7 +97,7 @@ pub(crate) fn draw_live_log_detail(
         horizontal: 2,
     });
 
-    let lines: Vec<Line<'_>> = if cached_content.is_empty() {
+    let mut lines: Vec<Line<'_>> = if cached_content.is_empty() {
         if is_running {
             vec![Line::from(vec![
                 Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
@@ -116,16 +116,33 @@ pub(crate) fn draw_live_log_detail(
         cached_content
             .lines()
             .map(|line| {
-                Line::from(Span::styled(
-                    line.to_owned(),
-                    Style::default().fg(theme.foreground),
-                ))
+                let style = classify_log_line_style(line, theme);
+                Line::from(Span::styled(line.to_owned(), style))
             })
             .collect()
     };
 
+    // Append a separator when the agent has finished so the user can see the
+    // end of the transcript without wondering whether more output is coming.
+    if !is_running && !cached_content.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "── agent finished ──",
+            Style::default()
+                .fg(theme.muted)
+                .add_modifier(Modifier::DIM),
+        )));
+    }
+
+    // Reserve 1 column on the right for the scrollbar so it doesn't overlap text.
+    let text_width = inner.width.saturating_sub(1).max(1);
+    let text_area = Rect {
+        width: text_width,
+        ..inner
+    };
     let visible_height = inner.height as usize;
-    let total_lines = lines.len();
+    // Account for line wrapping when computing scroll limits.
+    let total_lines = wrapped_line_count(&lines, text_width);
     let max_scroll = total_lines.saturating_sub(visible_height);
     let current_scroll = app.current_detail_scroll();
     if current_scroll as usize > max_scroll {
@@ -137,7 +154,7 @@ pub(crate) fn draw_live_log_detail(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll_pos, 0)),
-        inner,
+        text_area,
     );
 
     if total_lines > visible_height {
@@ -150,4 +167,36 @@ pub(crate) fn draw_live_log_detail(
     }
 
     render_scroll_indicator(frame, inner, scroll_pos, total_lines, visible_height, theme);
+}
+
+/// Classify a transcript log line by content and return the appropriate style.
+/// Mirrors the CSS classes used in the HTML cast replay (line-sent, line-agent, etc.).
+fn classify_log_line_style(line: &str, theme: crate::theme::Theme) -> Style {
+    if line.contains('→') {
+        Style::default().fg(theme.success)
+    } else if line.contains("✓ turn completed") || line.contains("✓ Tool:") {
+        Style::default()
+            .fg(theme.success)
+            .add_modifier(Modifier::BOLD)
+    } else if line.contains('✕') || line.contains("turn failed") {
+        Style::default()
+            .fg(theme.danger)
+            .add_modifier(Modifier::BOLD)
+    } else if line.contains("Agent:") {
+        Style::default().fg(theme.warning)
+    } else if line.contains("Prompt:") || line.contains("Plan:") {
+        Style::default().fg(ratatui::style::Color::Magenta)
+    } else if line.contains("Diff:") {
+        Style::default().fg(theme.info)
+    } else if line.contains("Output:") || line.starts_with("              ") {
+        Style::default().fg(theme.muted)
+    } else if line.contains("Tool:") || line.contains("Exec:") {
+        Style::default()
+            .fg(theme.info)
+            .add_modifier(Modifier::BOLD)
+    } else if line.contains('←') {
+        Style::default().fg(theme.info)
+    } else {
+        Style::default().fg(theme.foreground)
+    }
 }

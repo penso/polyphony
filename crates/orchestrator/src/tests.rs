@@ -313,6 +313,7 @@ impl PullRequestCommenter for RecordingPullRequestCommenter {
         body: &str,
         comments: &[PullRequestReviewComment],
         commit_sha: &str,
+        _verdict: polyphony_core::ReviewVerdict,
     ) -> Result<(), polyphony_core::Error> {
         let mut reviews = self.reviews.lock().unwrap();
         if reviews.iter().any(|review| review.1.contains(marker)) {
@@ -1033,6 +1034,64 @@ async fn reconcile_running_releases_missing_issue() {
 }
 
 #[tokio::test]
+async fn reconcile_running_preserves_synthetic_pr_review_issue() {
+    let workspace_root = unique_workspace_root("synthetic-pr");
+    let provisioner = RecordingProvisioner::default();
+    // Empty tracker — no issues will be returned by fetch_issues_by_ids.
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let synthetic_id = "pr_review:github:penso/arbor:89:abc123";
+    let issue = Issue {
+        id: synthetic_id.to_string(),
+        identifier: "penso/arbor#89".into(),
+        title: "Review PR #89: bump rustls-webpki".into(),
+        state: "Review".into(),
+        ..Issue::default()
+    };
+    let workspace_path = workspace_root.join("penso_arbor_89");
+    service.state.running.insert(
+        issue.id.clone(),
+        make_running_task(issue.clone(), workspace_path),
+    );
+    service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+
+    service.reconcile_running().await;
+
+    // Synthetic issue must NOT be stopped — it has no tracker-side state.
+    assert!(
+        service.state.running.contains_key(synthetic_id),
+        "synthetic PR review issue should survive reconciliation"
+    );
+    assert!(service.is_claimed(synthetic_id));
+}
+
+#[tokio::test]
+async fn reconcile_running_preserves_synthetic_pr_comment_issue() {
+    let workspace_root = unique_workspace_root("synthetic-comment");
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let synthetic_id = "pr_comment:github:penso/arbor:42:thread-1";
+    let issue = Issue {
+        id: synthetic_id.to_string(),
+        identifier: "penso/arbor#42".into(),
+        title: "Comment on PR #42".into(),
+        state: "Review".into(),
+        ..Issue::default()
+    };
+    let workspace_path = workspace_root.join("penso_arbor_42");
+    service.state.running.insert(
+        issue.id.clone(),
+        make_running_task(issue.clone(), workspace_path),
+    );
+
+    service.reconcile_running().await;
+
+    assert!(
+        service.state.running.contains_key(synthetic_id),
+        "synthetic PR comment issue should survive reconciliation"
+    );
+}
+
+#[tokio::test]
 async fn tick_tracks_visible_issues_when_no_agents_are_configured() {
     let workspace_root = unique_workspace_root("visible-issues");
     let workflow = test_workflow_with_front_matter(
@@ -1313,6 +1372,12 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         ),
         Some(ReviewTriggerSuppression::AlreadyReviewed)
     );
+    // Verify deliverable was created for the PR review movement.
+    let movement = service.state.movements.get("mov-review").unwrap();
+    let deliverable = movement.deliverable.as_ref().expect("deliverable should be set for PR review");
+    assert_eq!(deliverable.kind, DeliverableKind::PullRequestReview);
+    assert_eq!(deliverable.status, DeliverableStatus::Reviewed);
+    assert!(deliverable.description.as_ref().unwrap().contains("Summary"));
 
     tokio::fs::write(
         workspace_root
@@ -1892,6 +1957,117 @@ async fn first_tick_shows_issues_before_startup_cleanup_finishes() {
     .expect("first issue snapshot should not wait for startup cleanup");
 
     tracker.cleanup_gate.notify_waiters();
+    let _ = command_tx.send(RuntimeCommand::Shutdown);
+    service_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
+    let workspace_root = unique_workspace_root("startup-normalize-stale-movement");
+    let tracker = TestTracker::new(Vec::new());
+    let workflow = test_workflow(&workspace_root);
+    let (_tx, workflow_rx) = watch::channel(workflow);
+    let store = Arc::new(polyphony_core::file_store::JsonStateStore::new(
+        workspace_root.join("state.json"),
+    ));
+    let now = Utc::now();
+    let movement = Movement {
+        id: "mov-startup-stale".into(),
+        kind: MovementKind::PullRequestReview,
+        issue_id: Some("issue-89".into()),
+        issue_identifier: Some("penso/arbor#89".into()),
+        title: "Review PR".into(),
+        status: MovementStatus::Cancelled,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: Some("penso_arbor_89".into()),
+        workspace_path: Some(workspace_root.join("penso_arbor_89")),
+        review_target: None,
+        deliverable: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let task = Task {
+        id: "task-startup-stale".into(),
+        movement_id: movement.id.clone(),
+        title: "Run PR review".into(),
+        description: None,
+        activity_log: Vec::new(),
+        category: polyphony_core::TaskCategory::Review,
+        status: TaskStatus::InProgress,
+        ordinal: 1,
+        parent_id: None,
+        agent_name: Some("reviewer".into()),
+        session_id: None,
+        thread_id: None,
+        turns_completed: 0,
+        tokens: TokenUsage::default(),
+        started_at: Some(now),
+        finished_at: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    polyphony_core::StateStore::save_movement(store.as_ref(), &movement)
+        .await
+        .unwrap();
+    polyphony_core::StateStore::save_task(store.as_ref(), &task)
+        .await
+        .unwrap();
+
+    let (service, handle) = RuntimeService::new(
+        Arc::new(tracker),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(RecordingProvisioner::default()),
+        None,
+        None,
+        None,
+        None,
+        Some(store),
+        None,
+        workflow_rx,
+    );
+    let mut snapshot_rx = handle.snapshot_rx.clone();
+    let command_tx = handle.command_tx.clone();
+    let service_task = tokio::spawn(async move { service.run().await });
+
+    let snapshot = timeout(Duration::from_secs(2), async {
+        loop {
+            let snapshot = snapshot_rx.borrow().clone();
+            if snapshot
+                .movements
+                .iter()
+                .any(|row| row.id == movement.id && row.status == MovementStatus::Failed)
+            {
+                break snapshot;
+            }
+            snapshot_rx
+                .changed()
+                .await
+                .expect("snapshot channel closed");
+        }
+    })
+    .await
+    .expect("startup snapshot should include normalized stale movement");
+
+    let movement_row = snapshot
+        .movements
+        .iter()
+        .find(|row| row.id == movement.id)
+        .expect("movement row");
+    assert_eq!(movement_row.status, MovementStatus::Failed);
+    let task_row = snapshot
+        .tasks
+        .iter()
+        .find(|row| row.id == task.id)
+        .expect("task row");
+    assert_eq!(task_row.status, TaskStatus::Failed);
+    assert_eq!(
+        task_row.error.as_deref(),
+        Some("restored without an active agent session; retry the movement to continue")
+    );
+
     let _ = command_tx.send(RuntimeCommand::Shutdown);
     service_task.await.unwrap().unwrap();
 }

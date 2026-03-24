@@ -126,6 +126,7 @@ impl GithubPullRequestCommenter {
         body: &str,
         comments: &[PullRequestReviewComment],
         commit_sha: &str,
+        verdict: polyphony_core::ReviewVerdict,
     ) -> Result<(), CoreError> {
         let (owner, repo) = split_repo(&pull_request.repository)?;
         let response = self
@@ -138,7 +139,7 @@ impl GithubPullRequestCommenter {
             .header("User-Agent", "polyphony")
             .json(&CreatePullRequestReviewBody {
                 body: body.to_string(),
-                event: "COMMENT".to_string(),
+                event: verdict.github_event().to_string(),
                 commit_id: commit_sha.to_string(),
                 comments: comments
                     .iter()
@@ -331,8 +332,11 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
         body: &str,
         comments: &[PullRequestReviewComment],
         commit_sha: &str,
+        verdict: polyphony_core::ReviewVerdict,
     ) -> Result<(), CoreError> {
-        if comments.is_empty() {
+        // When there are no inline comments and the verdict is a plain comment,
+        // fall back to a regular issue comment (editable, idempotent).
+        if comments.is_empty() && verdict == polyphony_core::ReviewVerdict::Comment {
             return self
                 .sync_pull_request_comment(pull_request, marker, body)
                 .await;
@@ -344,7 +348,7 @@ impl PullRequestCommenter for GithubPullRequestCommenter {
         {
             return Ok(());
         }
-        self.submit_pull_request_review(pull_request, body, comments, commit_sha)
+        self.submit_pull_request_review(pull_request, body, comments, commit_sha, verdict)
             .await
     }
 }

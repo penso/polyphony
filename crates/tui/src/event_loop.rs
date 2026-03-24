@@ -65,10 +65,10 @@ pub async fn run(
                 needs_draw = true;
                 continue;
             }
-            _ = tokio::time::sleep(if snapshot.running.is_empty() {
-                Duration::from_secs(1)
-            } else {
+            _ = tokio::time::sleep(if !snapshot.running.is_empty() || snapshot.loading.any_active() {
                 Duration::from_millis(80)
+            } else {
+                Duration::from_secs(1)
             }) => {
                 refresh_live_log_content(&mut app);
                 needs_draw = true;
@@ -3615,8 +3615,11 @@ mod tests {
 
         assert!(matches!(
             app.current_detail(),
-            Some(crate::app::DetailView::LiveLog { log_path: path, agent_name, issue_identifier, .. })
-                if *path == log_path && agent_name == "reviewer" && issue_identifier == "penso/arbor#89"
+            Some(crate::app::DetailView::LiveLog { log_path: path, agent_name, issue_identifier, task_id, .. })
+                if *path == log_path
+                    && agent_name == "reviewer"
+                    && issue_identifier == "penso/arbor#89"
+                    && task_id.as_deref() == Some("task-review-1")
         ));
         fs::remove_dir_all(workspace).unwrap();
     }
@@ -3650,8 +3653,11 @@ mod tests {
 
         assert!(matches!(
             app.current_detail(),
-            Some(crate::app::DetailView::LiveLog { log_path: path, agent_name, issue_identifier, .. })
-                if *path == log_path && agent_name == "reviewer" && issue_identifier == "penso/arbor#89"
+            Some(crate::app::DetailView::LiveLog { log_path: path, agent_name, issue_identifier, task_id, .. })
+                if *path == log_path
+                    && agent_name == "reviewer"
+                    && issue_identifier == "penso/arbor#89"
+                    && task_id.as_deref() == Some("task-review-1")
         ));
         fs::remove_dir_all(workspace).unwrap();
     }
@@ -3717,7 +3723,8 @@ mod tests {
 
         assert!(matches!(
             app.current_detail(),
-            Some(crate::app::DetailView::LiveLog { log_path: path, .. }) if *path == log_path
+            Some(crate::app::DetailView::LiveLog { log_path: path, task_id, .. })
+                if *path == log_path && task_id.as_deref() == Some("task-review-1")
         ));
         assert!(app.pending_cast_playback.is_none());
         fs::remove_dir_all(workspace).unwrap();

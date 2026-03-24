@@ -29,7 +29,15 @@ impl RuntimeService {
                 .await;
         }
 
-        let running_ids = self.state.running.keys().cloned().collect::<Vec<_>>();
+        // Synthetic issue IDs (PR reviews, comments, conflicts) have no
+        // tracker-side state — skip them so they are not treated as "missing".
+        let running_ids = self
+            .state
+            .running
+            .keys()
+            .filter(|id| !is_synthetic_issue_id(id))
+            .cloned()
+            .collect::<Vec<_>>();
         if running_ids.is_empty() {
             return;
         }

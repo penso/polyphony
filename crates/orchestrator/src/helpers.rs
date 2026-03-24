@@ -401,6 +401,102 @@ pub(crate) async fn load_pull_request_review_comments(
     Ok(comments)
 }
 
+/// Parse the review verdict from `review.md` content.
+///
+/// The agent signals a verdict by including a line matching one of these
+/// patterns (case-insensitive):
+///   - `Verdict: approve`
+///   - `Verdict: request_changes` / `Verdict: request changes`
+///   - `Verdict: comment`
+///
+/// If no verdict line is found, falls back to `ReviewVerdict::Comment`.
+pub(crate) fn parse_review_verdict(review_body: &str) -> polyphony_core::ReviewVerdict {
+    for line in review_body.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed
+            .strip_prefix("Verdict:")
+            .or_else(|| trimmed.strip_prefix("verdict:"))
+            .or_else(|| trimmed.strip_prefix("VERDICT:"))
+        {
+            let value = value.trim().to_ascii_lowercase();
+            return match value.as_str() {
+                "approve" | "approved" | "lgtm" => polyphony_core::ReviewVerdict::Approve,
+                "request_changes" | "request changes" | "changes_requested"
+                | "changes requested" => polyphony_core::ReviewVerdict::RequestChanges,
+                _ => polyphony_core::ReviewVerdict::Comment,
+            };
+        }
+    }
+    polyphony_core::ReviewVerdict::Comment
+}
+
+/// Extract the Summary section text from a structured review body.
+///
+/// Looks for a `### Summary` heading and collects all lines until the next
+/// heading or end-of-string.  Falls back to the first non-heading,
+/// non-verdict line if no Summary heading is found.
+pub(crate) fn extract_review_summary(review_body: &str) -> String {
+    let mut in_summary = false;
+    let mut lines = Vec::new();
+    for line in review_body.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("### Summary")
+            || trimmed.eq_ignore_ascii_case("## Summary")
+        {
+            in_summary = true;
+            continue;
+        }
+        if in_summary {
+            if trimmed.starts_with("###") || trimmed.starts_with("## ") {
+                break;
+            }
+            if !trimmed.is_empty() {
+                lines.push(trimmed);
+            }
+        }
+    }
+    if !lines.is_empty() {
+        return lines.join(" ");
+    }
+    // Fallback: first meaningful non-heading line.
+    review_body
+        .lines()
+        .find(|l| {
+            let t = l.trim();
+            !t.is_empty()
+                && !t.starts_with('#')
+                && !t.to_ascii_lowercase().starts_with("verdict")
+        })
+        .unwrap_or("PR reviewed")
+        .trim()
+        .to_string()
+}
+
+/// Extract a confidence score (1-5) from the review body.
+///
+/// Looks for patterns like `3/5` on lines that mention "confidence" or
+/// that live under a `### Confidence` heading.  Returns `None` if no
+/// score is found.
+pub(crate) fn parse_review_confidence(review_body: &str) -> Option<u8> {
+    for line in review_body.lines() {
+        let trimmed = line.trim().trim_start_matches('#').trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("confidence") || lower.contains("/5") {
+            // Look for N/5 pattern.
+            if let Some(pos) = trimmed.find("/5") {
+                // Walk backwards from the `/5` to find the digit.
+                let before = &trimmed[..pos];
+                let digit_char = before.chars().rev().find(|c| c.is_ascii_digit())?;
+                let n = digit_char.to_digit(10)? as u8;
+                if (1..=5).contains(&n) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn build_continuation_prompt(
     issue: &Issue,
     attempt: Option<u32>,
@@ -1009,5 +1105,92 @@ mod tests {
         assert!(saved_context.contains("\"issue_identifier\": \"DOG-7\""));
         assert!(runs.contains("\"issue_identifier\":\"DOG-7\""));
         std::fs::remove_dir_all(&workspace_path).unwrap();
+    }
+
+    #[test]
+    fn parse_review_verdict_detects_approve() {
+        let body = "## Summary\nLooks good.\n\nVerdict: approve\n";
+        assert_eq!(
+            parse_review_verdict(body),
+            polyphony_core::ReviewVerdict::Approve
+        );
+    }
+
+    #[test]
+    fn parse_review_verdict_detects_request_changes() {
+        let body = "Verdict: request_changes\nPlease fix the tests.";
+        assert_eq!(
+            parse_review_verdict(body),
+            polyphony_core::ReviewVerdict::RequestChanges
+        );
+    }
+
+    #[test]
+    fn parse_review_verdict_case_insensitive() {
+        assert_eq!(
+            parse_review_verdict("verdict: APPROVE"),
+            polyphony_core::ReviewVerdict::Approve
+        );
+        assert_eq!(
+            parse_review_verdict("VERDICT: request changes"),
+            polyphony_core::ReviewVerdict::RequestChanges
+        );
+    }
+
+    #[test]
+    fn parse_review_verdict_defaults_to_comment() {
+        let body = "## Summary\nThis is a clean bump.\n## Risks\nNone.";
+        assert_eq!(
+            parse_review_verdict(body),
+            polyphony_core::ReviewVerdict::Comment
+        );
+    }
+
+    #[test]
+    fn parse_review_verdict_accepts_lgtm() {
+        assert_eq!(
+            parse_review_verdict("Verdict: lgtm"),
+            polyphony_core::ReviewVerdict::Approve
+        );
+    }
+
+    #[test]
+    fn parse_review_confidence_extracts_score() {
+        let body = "### Summary\nLooks good.\n\n### Confidence\n4/5 — straightforward bump\n";
+        assert_eq!(parse_review_confidence(body), Some(4));
+    }
+
+    #[test]
+    fn parse_review_confidence_inline_format() {
+        assert_eq!(parse_review_confidence("Confidence: 2/5"), Some(2));
+    }
+
+    #[test]
+    fn parse_review_confidence_returns_none_when_missing() {
+        assert_eq!(parse_review_confidence("### Summary\nNo score here."), None);
+    }
+
+    #[test]
+    fn extract_review_summary_gets_section_content() {
+        let body = "### Summary\nThis PR bumps rustls.\n\n### Risks\nNone.\n";
+        assert_eq!(extract_review_summary(body), "This PR bumps rustls.");
+    }
+
+    #[test]
+    fn extract_review_summary_joins_multiline() {
+        let body = "### Summary\nFirst line.\nSecond line.\n\n### Risks\nNone.\n";
+        assert_eq!(
+            extract_review_summary(body),
+            "First line. Second line."
+        );
+    }
+
+    #[test]
+    fn extract_review_summary_falls_back_to_first_line() {
+        let body = "This is just a blob of text.\nVerdict: approve\n";
+        assert_eq!(
+            extract_review_summary(body),
+            "This is just a blob of text."
+        );
     }
 }

@@ -42,43 +42,16 @@ pub enum Error {
 
 const DEFAULT_AUTOMATION_COMMIT_MESSAGE: &str = "fix({{ issue.identifier }}): {{ issue.title }}";
 const DEFAULT_AUTOMATION_PR_TITLE: &str = "{{ issue.identifier }}: {{ issue.title }}";
-const DEFAULT_AUTOMATION_PR_BODY: &str = "Automated handoff for {{ issue.identifier }}.\n\nIssue: {{ issue.url }}\nBase branch: {{ base_branch }}\nHead branch: {{ head_branch }}\nCommit: {{ commit_sha }}";
-const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str = "Review the current branch against {{ base_branch }}.\nInspect the repository state and write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Recommended human checks\nDo not modify tracked source files other than `.polyphony/review.md`.";
-const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str = "Review pull request {{ issue.identifier }} against {{ base_branch }} at commit {{ head_sha }}.\nAuthor: {{ pull_request_author }}\nLabels: {{ pull_request_labels }}\nInspect the diff and repository state, then write a concise markdown review to `.polyphony/review.md`.\nInclude these sections:\n- Summary\n- Risks\n- Required fixes\n- Optional improvements\nIf you have precise file-level findings, you may also write `.polyphony/review-comments.json` as a JSON array of objects with `path`, `line`, and `body`.\nDo not modify tracked source files other than `.polyphony/review.md` and `.polyphony/review-comments.json`.";
-const DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT: &str = "Review unresolved pull request feedback for {{ issue.identifier }} at commit {{ head_sha }}.\nComment author: {{ pull_request_comment_author }}\nComment path: {{ pull_request_comment_path }}\nComment line: {{ pull_request_comment_line }}\nComment body:\n{{ pull_request_comment_body }}\n\nInspect the diff and repository state, determine whether the unresolved feedback still requires changes, then write a concise markdown response to `.polyphony/review.md`.\nInclude these sections:\n- Summary
-- Requested action
-- Suggested response\nIf you have precise file-level findings, you may also write `.polyphony/review-comments.json` as a JSON array of objects with `path`, `line`, and `body`.\nDo not modify tracked source files other than `.polyphony/review.md` and `.polyphony/review-comments.json`.";
-
-const DEFAULT_PLANNER_PROMPT: &str = r#"You are a planning agent for issue {{ issue.identifier }}: {{ issue.title }}.
-
-{{ issue.description }}
-
-Analyze this issue and produce a structured execution plan.
-Write the plan to `.polyphony/plan.json` with this format:
-
-```json
-{
-  "tasks": [
-    {
-      "title": "Short task title",
-      "category": "research|coding|testing|review",
-      "description": "What to do and why",
-      "agent": "optional-agent-name"
-    }
-  ]
-}
-```
-
-Guidelines:
-- Break the issue into concrete, sequentially executable tasks
-- Each task should be completable by a single agent session
-- Use "research" for investigation, "coding" for implementation,
-  "testing" for test writing/validation, "review" for code review
-- Use available specialist agents such as `researcher`, `implementer`, `tester`, and `reviewer`
-- The agent field is optional; omit it to use the default agent
-- Keep the plan focused — 2-5 tasks is typical
-- Write the plan file, then stop
-"#;
+const DEFAULT_AUTOMATION_PR_BODY: &str =
+    include_str!("prompts/automation_pr_body.md");
+const DEFAULT_AUTOMATION_REVIEW_PROMPT: &str =
+    include_str!("prompts/automation_review.md");
+const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str =
+    include_str!("prompts/pull_request_review.md");
+const DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT: &str =
+    include_str!("prompts/pull_request_comment_review.md");
+const DEFAULT_PLANNER_PROMPT: &str =
+    include_str!("prompts/planner.md");
 
 #[derive(Debug, Deserialize)]
 struct GithubViewerIdentity {

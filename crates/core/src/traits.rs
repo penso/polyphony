@@ -145,9 +145,11 @@ pub trait PullRequestCommenter: Send + Sync {
         body: &str,
         comments: &[PullRequestReviewComment],
         commit_sha: &str,
+        verdict: crate::ReviewVerdict,
     ) -> Result<(), Error> {
         let _ = comments;
         let _ = commit_sha;
+        let _ = verdict;
         self.sync_pull_request_comment(pull_request, marker, body)
             .await
     }

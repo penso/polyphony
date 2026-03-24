@@ -1424,6 +1424,7 @@ impl RuntimeService {
                 "PR review agent produced an empty `.polyphony/review.md`".into(),
             )));
         }
+        let verdict = parse_review_verdict(trimmed);
         let comment_mode = self
             .workflow()
             .config
@@ -1451,7 +1452,8 @@ impl RuntimeService {
             number: review_target.number,
             url: review_target.url.clone(),
         };
-        if comment_mode == "inline" && !review_comments.is_empty() {
+        let uses_review_api = comment_mode == "inline" || verdict != polyphony_core::ReviewVerdict::Comment;
+        if uses_review_api {
             commenter
                 .sync_pull_request_review(
                     &pull_request,
@@ -1459,6 +1461,7 @@ impl RuntimeService {
                     &body,
                     &review_comments,
                     &review_target.head_sha,
+                    verdict,
                 )
                 .await?;
         } else {
@@ -1466,11 +1469,51 @@ impl RuntimeService {
                 .sync_pull_request_comment(&pull_request, &marker, &body)
                 .await?;
         }
+
+        // Create a deliverable so the movement detail shows the review outcome.
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            "verdict".into(),
+            serde_json::Value::String(verdict.to_string()),
+        );
+        if !review_comments.is_empty() {
+            metadata.insert(
+                "inline_comments".into(),
+                serde_json::Value::Number(review_comments.len().into()),
+            );
+        }
+        if let Some(confidence) = parse_review_confidence(trimmed) {
+            metadata.insert(
+                "confidence".into(),
+                serde_json::Value::String(format!("{confidence}/5")),
+            );
+        }
+        // Extract the Summary section content as a short description for the
+        // deliverable.  Falls back to the first non-heading, non-verdict line.
+        let summary = extract_review_summary(trimmed);
+        if let Some(movement_id) = running.movement_id.as_ref()
+            && let Some(movement) = self.state.movements.get_mut(movement_id)
+        {
+            movement.deliverable = Some(polyphony_core::Deliverable {
+                kind: polyphony_core::DeliverableKind::PullRequestReview,
+                status: polyphony_core::DeliverableStatus::Reviewed,
+                url: review_target.url.clone(),
+                decision: polyphony_core::DeliverableDecision::Accepted,
+                title: Some(format!("Review: {verdict}")),
+                description: Some(summary),
+                metadata,
+            });
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+
         self.push_event(
             EventScope::Handoff,
-            if comment_mode == "inline" && !review_comments.is_empty() {
+            if uses_review_api && !review_comments.is_empty() {
                 format!(
-                    "{} reviewed PR #{} at {} with {} inline comments",
+                    "{} reviewed PR #{} at {} ({verdict}) with {} inline comments",
                     running.issue.identifier,
                     review_target.number,
                     review_target.head_sha,
@@ -1478,7 +1521,7 @@ impl RuntimeService {
                 )
             } else {
                 format!(
-                    "{} reviewed PR #{} at {}",
+                    "{} reviewed PR #{} at {} ({verdict})",
                     running.issue.identifier, review_target.number, review_target.head_sha
                 )
             },

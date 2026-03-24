@@ -565,6 +565,7 @@ fn draw_movements_table(
                         polyphony_core::DeliverableKind::GitlabMergeRequest => "MR",
                         polyphony_core::DeliverableKind::LocalBranch => "branch",
                         polyphony_core::DeliverableKind::Patch => "patch",
+                        polyphony_core::DeliverableKind::PullRequestReview => "review",
                     };
                     let url_label = deliverable
                         .url
@@ -602,6 +603,34 @@ fn draw_movements_table(
                         Span::styled(url_label.to_string(), Style::default().fg(theme.info)),
                     ];
                     spans.extend(diff_spans);
+                    // Show verdict and confidence for PR reviews.
+                    if deliverable.kind == polyphony_core::DeliverableKind::PullRequestReview {
+                        if let Some(verdict) = deliverable
+                            .metadata
+                            .get("verdict")
+                            .and_then(|v| v.as_str())
+                        {
+                            let (icon, color) = match verdict {
+                                "approve" => ("✓", theme.success),
+                                "request_changes" => ("✕", theme.danger),
+                                _ => ("●", theme.muted),
+                            };
+                            spans.push(Span::styled(
+                                format!("  {icon} {verdict}"),
+                                Style::default().fg(color),
+                            ));
+                        }
+                        if let Some(confidence) = deliverable
+                            .metadata
+                            .get("confidence")
+                            .and_then(|v| v.as_str())
+                        {
+                            spans.push(Span::styled(
+                                format!("  ({confidence})"),
+                                Style::default().fg(theme.muted),
+                            ));
+                        }
+                    }
                     child_row(Line::from(spans))
                 } else {
                     // No deliverable — show terminal status with workspace path
@@ -789,7 +818,7 @@ fn movement_output_emoji(
         movement.kind,
         polyphony_core::MovementKind::PullRequestReview
     ) {
-        ("🔍", theme.highlight)
+        ("⟐", theme.highlight)
     } else {
         ("—", theme.muted)
     }
@@ -822,7 +851,7 @@ fn render_event_line(
     ])
 }
 
-fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
+pub(crate) fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
     let width = width.max(1) as usize;
     lines
         .iter()
@@ -1096,7 +1125,10 @@ mod tests {
         MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget,
     };
 
-    use crate::render::orchestrator::{movement_target_label, render_event_line};
+    use crate::{
+        render::orchestrator::{movement_output_emoji, movement_target_label, render_event_line},
+        theme::default_theme,
+    };
 
     #[test]
     fn movement_target_label_prefers_review_target() {
@@ -1126,6 +1158,28 @@ mod tests {
         };
 
         assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
+    }
+
+    #[test]
+    fn pull_request_review_movements_use_compact_review_icon() {
+        let movement = MovementRow {
+            id: "movement-1".to_string(),
+            kind: MovementKind::PullRequestReview,
+            issue_identifier: Some("penso/polyphony#123".to_string()),
+            title: "Review PR".to_string(),
+            status: MovementStatus::InProgress,
+            task_count: 0,
+            tasks_completed: 0,
+            deliverable: None,
+            has_deliverable: false,
+            review_target: None,
+            workspace_key: None,
+            workspace_path: None,
+            created_at: chrono::Utc::now(),
+        };
+
+        let (icon, _) = movement_output_emoji(&movement, default_theme());
+        assert_eq!(icon, "⟐");
     }
 
     #[test]
