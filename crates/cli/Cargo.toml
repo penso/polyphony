@@ -84,3 +84,7 @@ polyphony-tui = { path = "../tui", optional = true }
 polyphony-tools = { path = "../tools" }
 polyphony-workspace = { path = "../workspace" }
 polyphony-workflow = { path = "../workflow" }
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
