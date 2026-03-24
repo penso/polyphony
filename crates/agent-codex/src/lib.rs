@@ -1052,6 +1052,9 @@ fn extract_usage(value: &Value) -> Option<TokenUsage> {
         .or_else(|| value.pointer("/params/totalTokenUsage"))
         .or_else(|| value.pointer("/result/total_token_usage"))
         .or_else(|| value.pointer("/result/totalTokenUsage"))
+        // Codex app-server nests cumulative totals under tokenUsage.total
+        .or_else(|| value.pointer("/params/tokenUsage/total"))
+        .or_else(|| value.pointer("/result/tokenUsage/total"))
         .or_else(|| value.pointer("/params/token_usage"))
         .or_else(|| value.pointer("/params/tokenUsage"))
         .or_else(|| value.pointer("/result/token_usage"))
@@ -1670,6 +1673,36 @@ done
         }));
 
         assert!(usage.is_none());
+    }
+
+    #[test]
+    fn extracts_usage_from_codex_nested_total_format() {
+        let usage = extract_usage(&json!({
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": "thread-1",
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 1000,
+                        "outputTokens": 50,
+                        "totalTokens": 1050
+                    },
+                    "modelContextWindow": 258400,
+                    "total": {
+                        "cachedInputTokens": 3000,
+                        "inputTokens": 4000,
+                        "outputTokens": 200,
+                        "totalTokens": 4200
+                    }
+                },
+                "turnId": "turn-1"
+            }
+        }))
+        .expect("expected usage from nested total");
+
+        assert_eq!(usage.input_tokens, 4000);
+        assert_eq!(usage.output_tokens, 200);
+        assert_eq!(usage.total_tokens, 4200);
     }
 
     #[test]
