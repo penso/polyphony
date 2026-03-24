@@ -155,6 +155,15 @@ completion_sentinel = "POLYPHONY_AGENT_DONE"
         );
     }
 
+    /// Update a beads issue priority.
+    pub fn update_beads_issue_priority(&self, id: &str, priority: i32) {
+        run_ok(
+            Command::new("bd")
+                .args(["update", id, &format!("--priority={priority}")])
+                .current_dir(self.root()),
+        );
+    }
+
     /// Show a beads issue and return the JSON.
     pub fn show_beads_issue(&self, id: &str) -> serde_json::Value {
         let output = Command::new("bd")
