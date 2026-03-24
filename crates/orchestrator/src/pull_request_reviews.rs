@@ -1446,7 +1446,18 @@ impl RuntimeService {
             .review_comment_marker
             .clone()
             .unwrap_or_else(|| pull_request_review_comment_marker(review_target));
-        let body = format!("{trimmed}\n\n{marker}");
+        let verdict_badge = match verdict {
+            polyphony_core::ReviewVerdict::Approve => {
+                "![Approved](https://img.shields.io/badge/Approved-success?style=flat-square)  "
+            },
+            polyphony_core::ReviewVerdict::RequestChanges => {
+                "![Changes Requested](https://img.shields.io/badge/Changes%20Requested-critical?style=flat-square)  "
+            },
+            polyphony_core::ReviewVerdict::Comment => {
+                "![Review](https://img.shields.io/badge/Review-blue?style=flat-square)  "
+            },
+        };
+        let body = format!("{verdict_badge}\n\n{trimmed}\n\n{marker}");
         let pull_request = PullRequestRef {
             repository: review_target.repository.clone(),
             number: review_target.number,
