@@ -16,6 +16,52 @@ fn is_noise_event_message(message: &str) -> bool {
     lower == "usage updated" || lower.starts_with("turn ") && lower.ends_with(" usage updated")
 }
 
+fn movement_total_tokens(snapshot: &polyphony_core::RuntimeSnapshot, movement_id: &str) -> u64 {
+    let task_tokens: u64 = snapshot
+        .tasks
+        .iter()
+        .filter(|t| t.movement_id == movement_id)
+        .map(|t| t.total_tokens)
+        .sum();
+    // Also include tokens from currently running agents for this movement's issue
+    let issue_id = snapshot
+        .movements
+        .iter()
+        .find(|m| m.id == movement_id)
+        .and_then(|m| {
+            m.issue_identifier
+                .as_ref()
+                .and_then(|ident| {
+                    snapshot
+                        .visible_issues
+                        .iter()
+                        .find(|i| i.issue_identifier == *ident)
+                })
+                .map(|i| i.issue_id.as_str())
+        });
+    let running_tokens: u64 = issue_id
+        .map(|id| {
+            snapshot
+                .running
+                .iter()
+                .filter(|r| r.issue_id == id)
+                .map(|r| r.tokens.total_tokens)
+                .sum()
+        })
+        .unwrap_or(0);
+    task_tokens + running_tokens
+}
+
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
 fn child_row(title: Line<'_>) -> Row<'_> {
     Row::new(vec![Cell::from(Span::raw("")), Cell::from(title)])
 }
@@ -312,6 +358,9 @@ fn draw_movements_table(
                 let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
                 let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
 
+                // Aggregate total tokens across all tasks and running agents for this movement
+                let movement_tokens = movement_total_tokens(snapshot, &m.id);
+
                 let collapse_icon = if has_tasks.contains(m.id.as_str()) {
                     if app.collapsed_movements.contains(&m.id) {
                         "▶ "
@@ -348,6 +397,12 @@ fn draw_movements_table(
                     format!("  {task_info}"),
                     Style::default().fg(theme.muted),
                 ));
+                if movement_tokens > 0 {
+                    title_spans.push(Span::styled(
+                        format!(" {}", format_token_count(movement_tokens)),
+                        Style::default().fg(theme.muted),
+                    ));
+                }
                 // Show cancel reason inline for cancelled movements
                 if m.status == polyphony_core::MovementStatus::Cancelled
                     && let Some(reason) = &m.cancel_reason
