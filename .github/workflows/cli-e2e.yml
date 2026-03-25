@@ -41,6 +41,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install $NIGHTLY_TOOLCHAIN --profile minimal
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install dolt
+        run: |
+          curl -sSfL https://github.com/dolthub/dolt/releases/latest/download/install.sh | sudo bash
+          dolt version
       - name: Install beads (bd)
         run: |
           curl -sSfL "https://github.com/steveyegge/beads/releases/download/v${BEADS_VERSION}/beads_${BEADS_VERSION}_linux_amd64.tar.gz" \
