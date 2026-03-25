@@ -1,13 +1,23 @@
-# polyphony
+<div align="center">
+
+# Polyphony
+
+Repo-native AI orchestration engine. Issue trackers to coding agents, live in your terminal.
 
 [![CI](https://github.com/penso/polyphony/actions/workflows/ci.yml/badge.svg)](https://github.com/penso/polyphony/actions/workflows/ci.yml)
 [![Rust nightly-2025-11-30](https://img.shields.io/badge/rust-nightly--2025--11--30-orange?logo=rust)](justfile)
 [![Edition 2024](https://img.shields.io/badge/edition-2024-blue)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
-Polyphony is a repo-native AI orchestration engine. It connects your issue trackers to AI coding agents, runs them in isolated workspaces, and shows everything live in a terminal dashboard.
+[Install](#install) - [Triggers](#triggers) - [Agents](#agents) - [Documentation](#documentation) - [Development](#development)
 
 ![Polyphony TUI](.github/media/screenshot.jpeg)
+
+</div>
+
+---
+
+Polyphony connects your issue trackers to AI coding agents, runs them in isolated workspaces, and shows everything live in a terminal dashboard.
 
 Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony brings the same workflow-contract orchestration model to local repositories — but with multiple trigger sources and multiple agent backends.
 
@@ -73,3 +83,7 @@ just format   # format code
 just lint     # clippy + checks
 just test     # run tests
 ```
+
+## License
+
+MIT
