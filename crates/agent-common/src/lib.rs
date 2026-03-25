@@ -1,5 +1,9 @@
 pub mod asciicast;
 mod budget;
+pub mod pty;
+pub mod pty_mock;
+#[cfg(feature = "portable-pty-backend")]
+pub mod pty_portable;
 
 use std::{
     collections::{BTreeMap, HashSet},

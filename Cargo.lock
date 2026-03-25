@@ -2923,7 +2923,6 @@ dependencies = [
  "async-trait",
  "polyphony-agent-common",
  "polyphony-core",
- "portable-pty",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2977,6 +2976,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "polyphony-core",
+ "portable-pty",
  "reqwest",
  "serde_json",
  "tempfile",
@@ -3006,7 +3006,6 @@ dependencies = [
  "chrono",
  "polyphony-agent-common",
  "polyphony-core",
- "portable-pty",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",

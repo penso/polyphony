@@ -12,15 +12,15 @@ use agent_client_protocol::{self as acp, Agent as _};
 use async_trait::async_trait;
 use polyphony_agent_common::{
     discover_models_from_command, emit_with_metadata, extract_text_rate_limit_signal,
-    fetch_budget_for_agent, prepare_context_file, prepare_prompt_file, selected_model_hint,
-    shell_command,
+    fetch_budget_for_agent, prepare_context_file, prepare_prompt_file,
+    pty::{PtyChild, PtyCommand, PtySpawnConfig},
+    selected_model_hint, shell_command,
 };
 use polyphony_core::{
     AgentDefinition, AgentEvent, AgentEventKind, AgentModelCatalog, AgentProviderRuntime,
     AgentRunResult, AgentRunSpec, AgentSession, AgentTransport, AttemptStatus, BudgetSnapshot,
     Error as CoreError,
 };
-use portable_pty::{ChildKiller, CommandBuilder, native_pty_system};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -244,8 +244,7 @@ impl AcpClient {
 
 struct AcpTerminal {
     capture_state: Arc<Mutex<AcpTerminalCaptureState>>,
-    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    child: Arc<Mutex<Box<dyn PtyChild>>>,
 }
 
 struct AcpTerminalCaptureState {
@@ -510,13 +509,11 @@ impl AcpTerminal {
             let mut guard = child
                 .lock()
                 .map_err(|_| CoreError::Adapter("ACP terminal child lock poisoned".into()))?;
-            guard
-                .wait()
-                .map_err(|error| CoreError::Adapter(error.to_string()))
+            guard.wait()
         })
         .await
         .map_err(join_error)??;
-        let exit_status = terminal_exit_status_from_portable(&status);
+        let exit_status = pty_exit_status_to_acp(&status);
         self.set_exit_status(exit_status.clone())?;
         Ok(exit_status)
     }
@@ -525,22 +522,12 @@ impl AcpTerminal {
         if self.cached_exit_status()?.is_some() {
             return Ok(());
         }
-        let killer = self.killer.clone();
+        let child = self.child.clone();
         tokio::task::spawn_blocking(move || {
-            let mut guard = killer
+            let mut guard = child
                 .lock()
-                .map_err(|_| CoreError::Adapter("ACP terminal killer lock poisoned".into()))?;
-            match guard.kill() {
-                Ok(()) => Ok(()),
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::InvalidInput
-                        || error.kind() == std::io::ErrorKind::NotFound
-                        || error.raw_os_error() == Some(3) =>
-                {
-                    Ok(())
-                },
-                Err(error) => Err(CoreError::Adapter(error.to_string())),
-            }
+                .map_err(|_| CoreError::Adapter("ACP terminal child lock poisoned".into()))?;
+            guard.kill()
         })
         .await
         .map_err(join_error)?
@@ -561,16 +548,14 @@ impl AcpTerminal {
             let mut guard = child
                 .lock()
                 .map_err(|_| CoreError::Adapter("ACP terminal child lock poisoned".into()))?;
-            guard
-                .try_wait()
-                .map_err(|error| CoreError::Adapter(error.to_string()))
+            guard.try_wait()
         })
         .await
         .map_err(join_error)??;
         let Some(status) = status else {
             return Ok(None);
         };
-        let exit_status = terminal_exit_status_from_portable(&status);
+        let exit_status = pty_exit_status_to_acp(&status);
         self.set_exit_status(exit_status.clone())?;
         Ok(Some(exit_status))
     }
@@ -1020,7 +1005,7 @@ async fn spawn_acp_terminal(args: &acp::CreateTerminalRequest) -> Result<AcpTerm
         ));
     }
 
-    let command_builder = build_terminal_command(args);
+    let pty_command = build_terminal_command(args);
     let capture_state = Arc::new(Mutex::new(AcpTerminalCaptureState {
         transcript: String::new(),
         truncated: false,
@@ -1029,56 +1014,37 @@ async fn spawn_acp_terminal(args: &acp::CreateTerminalRequest) -> Result<AcpTerm
             .and_then(|limit| usize::try_from(limit).ok()),
         exit_status: None,
     }));
-    let pty_system = native_pty_system();
-    let pair = tokio::task::spawn_blocking(move || {
-        pty_system
-            .openpty(portable_pty::PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| CoreError::Adapter(error.to_string()))
-    })
-    .await
-    .map_err(join_error)??;
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    let child = tokio::task::spawn_blocking(move || {
-        pair.slave
-            .spawn_command(command_builder)
-            .map_err(|error| CoreError::Adapter(error.to_string()))
-    })
-    .await
-    .map_err(join_error)??;
-    let child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>> = Arc::new(Mutex::new(child));
-    let killer = {
-        let guard = child
-            .lock()
-            .map_err(|_| CoreError::Adapter("ACP terminal child lock poisoned".into()))?;
-        Arc::new(Mutex::new(guard.clone_killer()))
+    let pty_config = PtySpawnConfig {
+        rows: 24,
+        cols: 80,
+        command: pty_command,
     };
-    spawn_terminal_reader(reader, capture_state.clone())?;
+    let spawned_pty = tokio::task::spawn_blocking(move || {
+        polyphony_agent_common::pty::default_pty_backend().spawn(&pty_config)
+    })
+    .await
+    .map_err(join_error)??;
+    let child: Arc<Mutex<Box<dyn PtyChild>>> = Arc::new(Mutex::new(spawned_pty.child));
+    spawn_terminal_reader(spawned_pty.reader, capture_state.clone())?;
 
     Ok(AcpTerminal {
         capture_state,
         child,
-        killer,
     })
 }
 
-fn build_terminal_command(args: &acp::CreateTerminalRequest) -> CommandBuilder {
-    let mut builder = CommandBuilder::new(&args.command);
-    builder.args(&args.args);
-    if let Some(cwd) = &args.cwd {
-        builder.cwd(cwd);
+fn build_terminal_command(args: &acp::CreateTerminalRequest) -> PtyCommand {
+    PtyCommand {
+        program: args.command.clone(),
+        args: args.args.clone(),
+        cwd: args.cwd.clone(),
+        env: args
+            .env
+            .iter()
+            .map(|var| (var.name.clone(), var.value.clone()))
+            .collect(),
+        env_remove: Vec::new(),
     }
-    for env_var in &args.env {
-        builder.env(&env_var.name, &env_var.value);
-    }
-    builder
 }
 
 fn spawn_terminal_reader(
@@ -1133,14 +1099,12 @@ fn apply_output_byte_limit_to_state(state: &mut AcpTerminalCaptureState) {
     );
 }
 
-fn terminal_exit_status_from_portable(
-    status: &portable_pty::ExitStatus,
+fn pty_exit_status_to_acp(
+    status: &polyphony_agent_common::pty::PtyExitStatus,
 ) -> acp::TerminalExitStatus {
-    let exit_code = Some(status.exit_code());
-    let signal = status.signal().map(ToOwned::to_owned);
     acp::TerminalExitStatus::new()
-        .exit_code(exit_code)
-        .signal(signal)
+        .exit_code(Some(status.exit_code))
+        .signal(status.signal.clone())
 }
 
 fn join_error(error: tokio::task::JoinError) -> CoreError {

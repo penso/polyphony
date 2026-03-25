@@ -9,14 +9,14 @@ use std::{
 use async_trait::async_trait;
 use polyphony_agent_common::{
     asciicast, base_agent_env, discover_models_from_command, emit, extract_text_rate_limit_signal,
-    fetch_budget_for_agent, prepare_context_file, prepare_prompt_file, sanitize_session_fragment,
-    selected_model_hint, shell_escape, status_to_result,
+    fetch_budget_for_agent, prepare_context_file, prepare_prompt_file,
+    pty::{PtyChild, PtyCommand, PtyResizer, PtySpawnConfig},
+    sanitize_session_fragment, selected_model_hint, shell_escape, status_to_result,
 };
 use polyphony_core::{
     AgentEventKind, AgentInteractionMode, AgentPromptMode, AgentProviderRuntime, AgentRunResult,
     AgentRunSpec, BudgetSnapshot, Error as CoreError, RateLimitSignal,
 };
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::{fs, process::Command, sync::mpsc, time::Instant};
 use tracing::{debug, info, warn};
 
@@ -61,11 +61,10 @@ struct TmuxSession {
 
 struct PtySession {
     capture_state: Arc<Mutex<PtyCaptureState>>,
-    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    child: Arc<Mutex<Box<dyn PtyChild>>>,
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     #[allow(dead_code)]
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    resizer: Arc<Mutex<Box<dyn PtyResizer>>>,
 }
 
 struct PtyCaptureState {
@@ -451,7 +450,7 @@ async fn spawn_pty_session(
     let model = selected_model_hint(&spec.agent);
     let prompt_delivery = pty_prompt_delivery(&spec.agent);
     let launch_command = tmux_launch_command(command, prompt_file, prompt_delivery);
-    let command_builder = build_pty_command(
+    let pty_command = build_pty_command(
         &launch_command,
         workspace_path,
         &spec.agent.env,
@@ -464,42 +463,20 @@ async fn spawn_pty_session(
         parser: vt100::Parser::new(24, 80, 2_000),
         transcript: String::new(),
     }));
-    let pty_system = native_pty_system();
-    let pair = tokio::task::spawn_blocking(move || {
-        pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| CoreError::Adapter(error.to_string()))
-    })
-    .await
-    .map_err(join_error)??;
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| CoreError::Adapter(error.to_string()))?;
-    let slave = pair.slave;
-    let child = tokio::task::spawn_blocking(move || {
-        slave
-            .spawn_command(command_builder)
-            .map_err(|error| CoreError::Adapter(error.to_string()))
-    })
-    .await
-    .map_err(join_error)??;
-    let child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>> = Arc::new(Mutex::new(child));
-    let killer = {
-        let guard = child
-            .lock()
-            .map_err(|_| CoreError::Adapter("pty child lock poisoned".into()))?;
-        Arc::new(Mutex::new(guard.clone_killer()))
+    let pty_config = PtySpawnConfig {
+        rows: 24,
+        cols: 80,
+        command: pty_command,
     };
+    let spawned_pty = tokio::task::spawn_blocking(move || {
+        polyphony_agent_common::pty::default_pty_backend().spawn(&pty_config)
+    })
+    .await
+    .map_err(join_error)??;
+    let reader = spawned_pty.reader;
+    let writer = spawned_pty.writer;
+    let child: Arc<Mutex<Box<dyn PtyChild>>> = Arc::new(Mutex::new(spawned_pty.child));
+    let resizer: Arc<Mutex<Box<dyn PtyResizer>>> = Arc::new(Mutex::new(spawned_pty.resizer));
     let cast_title = format!(
         "{} on {} (attempt {})",
         spec.agent.name,
@@ -533,9 +510,8 @@ async fn spawn_pty_session(
         session: Box::new(PtySession {
             capture_state,
             child,
-            killer,
             writer: Arc::new(Mutex::new(writer)),
-            master: Arc::new(Mutex::new(pair.master)),
+            resizer,
         }),
         prompt_delivery,
         startup_message: "pty session started",
@@ -633,19 +609,12 @@ impl TerminalSession for PtySession {
     }
 
     async fn resize(&mut self, rows: u16, cols: u16) -> Result<(), CoreError> {
-        let master = self.master.clone();
+        let resizer = self.resizer.clone();
         tokio::task::spawn_blocking(move || {
-            let guard = master
+            let guard = resizer
                 .lock()
-                .map_err(|_| CoreError::Adapter("pty master lock poisoned".into()))?;
-            guard
-                .resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|error| CoreError::Adapter(error.to_string()))
+                .map_err(|_| CoreError::Adapter("pty resizer lock poisoned".into()))?;
+            guard.resize(rows, cols)
         })
         .await
         .map_err(join_error)?
@@ -673,32 +642,20 @@ impl TerminalSession for PtySession {
             let mut guard = child
                 .lock()
                 .map_err(|_| CoreError::Adapter("pty child lock poisoned".into()))?;
-            let status = guard
-                .try_wait()
-                .map_err(|error| CoreError::Adapter(error.to_string()))?;
-            Ok(status.map(|status| portable_exit_code(&status)))
+            let status = guard.try_wait()?;
+            Ok(status.map(|s| i32::try_from(s.exit_code).ok()))
         })
         .await
         .map_err(join_error)?
     }
 
     async fn terminate(&mut self) -> Result<(), CoreError> {
-        let killer = self.killer.clone();
+        let child = self.child.clone();
         tokio::task::spawn_blocking(move || {
-            let mut guard = killer
+            let mut guard = child
                 .lock()
-                .map_err(|_| CoreError::Adapter("pty killer lock poisoned".into()))?;
-            match guard.kill() {
-                Ok(()) => Ok(()),
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::InvalidInput
-                        || error.kind() == std::io::ErrorKind::NotFound
-                        || error.raw_os_error() == Some(3) =>
-                {
-                    Ok(())
-                },
-                Err(error) => Err(CoreError::Adapter(error.to_string())),
-            }
+                .map_err(|_| CoreError::Adapter("pty child lock poisoned".into()))?;
+            guard.kill()
         })
         .await
         .map_err(join_error)?
@@ -846,19 +803,16 @@ fn build_pty_command(
     prompt_file: &Path,
     context_file: Option<&Path>,
     model: Option<&str>,
-) -> CommandBuilder {
-    let mut builder = CommandBuilder::new("bash");
-    builder.arg("-lc");
-    builder.arg(command);
-    builder.cwd(cwd.as_os_str());
-    builder.env_remove("CLAUDECODE");
-    for (key, value) in base_agent_env(spec, prompt_file, context_file, model) {
-        builder.env(key, value);
+) -> PtyCommand {
+    let mut env = base_agent_env(spec, prompt_file, context_file, model);
+    env.extend(extra_env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    PtyCommand {
+        program: "bash".into(),
+        args: vec!["-lc".into(), command.into()],
+        cwd: Some(cwd.to_path_buf()),
+        env,
+        env_remove: vec!["CLAUDECODE".into()],
     }
-    for (key, value) in extra_env {
-        builder.env(key, value);
-    }
-    builder
 }
 
 fn spawn_pty_reader(
@@ -902,10 +856,6 @@ fn spawn_pty_reader(
         })
         .map(|_| ())
         .map_err(|error| CoreError::Adapter(error.to_string()))
-}
-
-fn portable_exit_code(status: &portable_pty::ExitStatus) -> Option<i32> {
-    i32::try_from(status.exit_code()).ok()
 }
 
 fn pick_rate_limit_source<'a>(snapshot: &'a str, transcript: &'a str) -> &'a str {
