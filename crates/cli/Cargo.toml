@@ -15,6 +15,7 @@ default = [
   "tui",
   "linear",
   "github",
+  "gitlab",
   "beads",
   "acp",
   "acpx",
@@ -28,6 +29,7 @@ default = [
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
 github = ["dep:polyphony-github"]
+gitlab = ["dep:polyphony-gitlab"]
 beads = ["dep:polyphony-beads"]
 sqlite = ["dep:polyphony-sqlite"]
 tui = ["dep:polyphony-tui"]
@@ -74,6 +76,7 @@ polyphony-core = { path = "../core" }
 polyphony-agents = { path = "../agents", default-features = false }
 polyphony-git = { path = "../git" }
 polyphony-github = { path = "../github", optional = true }
+polyphony-gitlab = { path = "../gitlab", optional = true }
 polyphony-feedback = { path = "../feedback" }
 polyphony-issue-mock = { path = "../issue-mock", optional = true, default-features = false }
 polyphony-beads = { path = "../beads", optional = true }

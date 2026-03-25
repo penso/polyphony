@@ -397,7 +397,8 @@ impl RuntimeService {
             dispatch_mode: self.state.dispatch_mode,
             tracker_kind,
             tracker_connection: self.state.tracker_connection.clone().or_else(|| {
-                (tracker_kind == TrackerKind::Github).then(TrackerConnectionStatus::unknown)
+                (tracker_kind == TrackerKind::Github || tracker_kind == TrackerKind::Gitlab)
+                    .then(TrackerConnectionStatus::unknown)
             }),
             from_cache: self.state.from_cache,
             cached_at: self.state.cached_at,

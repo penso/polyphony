@@ -7,6 +7,7 @@ pub enum TrackerKind {
     None,
     Linear,
     Github,
+    Gitlab,
     Beads,
     Mock,
 }

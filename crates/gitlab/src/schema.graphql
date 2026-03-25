@@ -1,0 +1,81 @@
+scalar Time
+
+schema {
+  query: Query
+}
+
+type Query {
+  project(fullPath: ID!): Project
+  currentUser: UserCore
+}
+
+type Project {
+  issues(
+    state: IssuableSearchableField
+    first: Int
+    after: String
+  ): IssueConnection
+  issue(iid: String!): Issue
+}
+
+enum IssuableSearchableField {
+  opened
+  closed
+}
+
+type IssueConnection {
+  nodes: [Issue!]
+  pageInfo: PageInfo!
+}
+
+type PageInfo {
+  endCursor: String
+  hasNextPage: Boolean!
+}
+
+type Issue {
+  iid: String!
+  title: String!
+  description: String
+  state: IssueState!
+  webUrl: String!
+  createdAt: Time!
+  updatedAt: Time!
+  author: UserCore
+  labels: LabelConnection
+  notes(first: Int, after: String): NoteConnection
+}
+
+enum IssueState {
+  opened
+  closed
+}
+
+type NoteConnection {
+  nodes: [Note!]
+  pageInfo: PageInfo!
+}
+
+type Note {
+  id: ID!
+  body: String!
+  system: Boolean!
+  author: UserCore!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type UserCore {
+  username: String!
+  name: String!
+  webUrl: String!
+  bot: Boolean!
+}
+
+type LabelConnection {
+  nodes: [Label!]
+}
+
+type Label {
+  title: String!
+}

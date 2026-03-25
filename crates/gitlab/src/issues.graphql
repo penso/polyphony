@@ -1,0 +1,79 @@
+query FetchProjectIssues($fullPath: ID!, $state: IssuableSearchableField, $after: String) {
+  project(fullPath: $fullPath) {
+    issues(state: $state, first: 100, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        iid
+        title
+        description
+        state
+        webUrl
+        createdAt
+        updatedAt
+        author {
+          username
+          name
+          webUrl
+          bot
+        }
+        labels {
+          nodes {
+            title
+          }
+        }
+      }
+    }
+  }
+}
+
+query FetchIssueByIid($fullPath: ID!, $iid: String!) {
+  project(fullPath: $fullPath) {
+    issue(iid: $iid) {
+      iid
+      title
+      description
+      state
+      webUrl
+      createdAt
+      updatedAt
+      author {
+        username
+        name
+        webUrl
+        bot
+      }
+      labels {
+        nodes {
+          title
+        }
+      }
+      notes(first: 100) {
+        nodes {
+          id
+          body
+          system
+          author {
+            username
+            name
+            webUrl
+            bot
+          }
+          createdAt
+          updatedAt
+        }
+      }
+    }
+  }
+}
+
+query FetchCurrentUser {
+  currentUser {
+    username
+    name
+    webUrl
+    bot
+  }
+}

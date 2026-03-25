@@ -33,6 +33,22 @@ fn build_tracker(
             workflow.config.tracker.project_number,
             workflow.config.tracker.project_status_field.clone(),
         )?),
+        #[cfg(feature = "gitlab")]
+        TrackerKind::Gitlab => Arc::new(polyphony_gitlab::GitlabIssueTracker::new(
+            workflow.config.tracker.endpoint.clone(),
+            workflow.config.tracker.api_key.clone(),
+            workflow
+                .config
+                .tracker
+                .project_slug
+                .clone()
+                .or_else(|| workflow.config.tracker.repository.clone())
+                .ok_or_else(|| {
+                    Error::Config(
+                        "tracker.project_slug or tracker.repository is required for gitlab".into(),
+                    )
+                })?,
+        )?),
         #[cfg(feature = "beads")]
         TrackerKind::Beads => {
             let workflow_root = workflow_root_dir(&workflow.path)?;

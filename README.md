@@ -26,6 +26,7 @@ Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony bri
 Polyphony watches for work from multiple sources:
 
 - **GitHub** — issues and pull requests
+- **GitLab** — issues via GraphQL
 - **Linear** — issues via GraphQL
 - **Beads** — local Dolt-backed issue tracking
 - **None** — manual dispatch, no tracker needed

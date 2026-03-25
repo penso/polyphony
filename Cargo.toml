@@ -19,6 +19,7 @@ members = [
   "crates/linear",
   "crates/git",
   "crates/github",
+  "crates/gitlab",
   "crates/feedback",
   "crates/tools",
   "crates/sqlite",

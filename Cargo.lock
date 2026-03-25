@@ -3100,6 +3100,7 @@ dependencies = [
  "polyphony-feedback",
  "polyphony-git",
  "polyphony-github",
+ "polyphony-gitlab",
  "polyphony-issue-mock",
  "polyphony-linear",
  "polyphony-orchestrator",
@@ -3173,6 +3174,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "polyphony-gitlab"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "graphql_client",
+ "polyphony-core",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
