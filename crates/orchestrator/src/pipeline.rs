@@ -117,6 +117,11 @@ impl RuntimeService {
                 } else {
                     Some(PipelineStage::Executing)
                 };
+                let initial_steps = if has_planner {
+                    polyphony_core::build_planner_steps()
+                } else {
+                    Vec::new()
+                };
                 let movement = Movement {
                     id: movement_id.clone(),
                     kind: MovementKind::IssueDelivery,
@@ -133,7 +138,7 @@ impl RuntimeService {
                     created_at: now,
                     updated_at: now,
                     cancel_reason: None,
-                    steps: Vec::new(),
+                    steps: initial_steps,
                     activity_log: Vec::new(),
                 };
                 if let Some(store) = &self.store {
@@ -249,6 +254,19 @@ impl RuntimeService {
                 stage_tasks = tasks.len(),
                 "pipeline stages expanded without planner"
             );
+            // Populate delivery steps from the created tasks.
+            let task_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+            if let Some(movement) = self.state.movements.get_mut(&movement_id) {
+                movement.steps = polyphony_core::build_delivery_steps(
+                    &task_ids,
+                    workflow.config.automation.enabled,
+                    workflow.config.pr_review_agent().ok().flatten().is_some(),
+                );
+                movement.updated_at = Utc::now();
+                if let Some(store) = &self.store {
+                    store.save_movement(movement).await?;
+                }
+            }
             self.state.tasks.insert(movement_id.clone(), tasks);
             self.dispatch_next_task(
                 workflow,
@@ -364,6 +382,16 @@ impl RuntimeService {
             prompt,
             self.manual_dispatch_directives(movement_id),
         );
+
+        // Mark the PlannerRun step as running.
+        if let Some(movement) = self.state.movements.get_mut(movement_id)
+            && let Some(step) = movement
+                .steps
+                .iter_mut()
+                .find(|s| s.kind == polyphony_core::StepKind::PlannerRun && !s.is_complete())
+        {
+            step.mark_running();
+        }
 
         self.spawn_pipeline_worker(
             workflow.clone(),
@@ -489,6 +517,17 @@ impl RuntimeService {
         } else {
             None
         };
+
+        // Mark the AgentRun step as running.
+        if let Some(movement) = self.state.movements.get_mut(movement_id)
+            && let Some(step) = movement.steps.iter_mut().find(|s| {
+                s.kind == polyphony_core::StepKind::AgentRun
+                    && s.task_id.as_deref() == Some(&task.id)
+                    && !s.is_complete()
+            })
+        {
+            step.mark_running();
+        }
 
         self.spawn_pipeline_worker(
             workflow,
@@ -819,9 +858,31 @@ impl RuntimeService {
                 "planner task registered"
             );
         }
+        // Build delivery steps from the tasks the planner created.
+        let task_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
         self.state.tasks.insert(movement_id.to_string(), tasks);
 
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            // Mark the PlannerRun step as succeeded.
+            if let Some(planner_step) = movement
+                .steps
+                .iter_mut()
+                .find(|s| s.kind == polyphony_core::StepKind::PlannerRun)
+            {
+                planner_step.mark_succeeded();
+            }
+            // Append the delivery steps (AgentRun per task + handoff steps).
+            let next_ordinal = movement.steps.last().map(|s| s.ordinal + 1).unwrap_or(0);
+            let mut delivery_steps = polyphony_core::build_delivery_steps(
+                &task_ids,
+                workflow.config.automation.enabled,
+                workflow.config.pr_review_agent().ok().flatten().is_some(),
+            );
+            for (i, step) in delivery_steps.iter_mut().enumerate() {
+                step.ordinal = next_ordinal + i as u32;
+            }
+            movement.steps.extend(delivery_steps);
+
             movement.status = MovementStatus::InProgress;
             movement.pipeline_stage = Some(PipelineStage::Executing);
             movement.push_log(
@@ -907,6 +968,24 @@ impl RuntimeService {
             task.updated_at = now;
             if let Some(store) = &self.store {
                 store.save_task(task).await?;
+            }
+        }
+
+        // Mark the corresponding AgentRun step.
+        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+            if let Some(step) = movement.steps.iter_mut().find(|s| {
+                s.kind == polyphony_core::StepKind::AgentRun
+                    && s.task_id.as_deref() == Some(task_id)
+            }) {
+                if matches!(outcome.status, AttemptStatus::Succeeded) {
+                    step.mark_succeeded();
+                } else {
+                    step.mark_failed(outcome.error.as_deref().unwrap_or("task failed"));
+                }
+            }
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                store.save_movement(movement).await?;
             }
         }
 
