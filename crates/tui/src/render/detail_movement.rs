@@ -319,6 +319,63 @@ pub(crate) fn draw_movement_detail(
         }
     }
 
+    // Pipeline steps
+    if !movement.steps.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Pipeline Steps",
+            Style::default()
+                .fg(theme.highlight)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for step in &movement.steps {
+            let (icon, color) = match step.status {
+                polyphony_core::StepStatus::Succeeded => ("✓", theme.success),
+                polyphony_core::StepStatus::Failed => ("✕", theme.danger),
+                polyphony_core::StepStatus::Running => ("◐", theme.warning),
+                polyphony_core::StepStatus::Skipped => ("⊘", theme.muted),
+                polyphony_core::StepStatus::Pending => ("◷", theme.muted),
+            };
+            let mut spans = vec![
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
+                Span::styled(step.kind.to_string(), Style::default().fg(theme.foreground)),
+            ];
+            // Show task title for AgentRun steps
+            if step.kind == polyphony_core::StepKind::AgentRun
+                && let Some(task_id) = &step.task_id
+                && let Some(task) = snapshot.tasks.iter().find(|t| t.id == *task_id)
+            {
+                spans.push(Span::styled(
+                    format!(" ({})", task.title),
+                    Style::default().fg(theme.muted),
+                ));
+            }
+            // Duration
+            if let (Some(start), Some(end)) = (step.started_at, step.finished_at) {
+                spans.push(Span::styled(
+                    format!(
+                        " {}",
+                        super::agents::format_duration(end.signed_duration_since(start))
+                    ),
+                    Style::default().fg(theme.muted),
+                ));
+            }
+            lines.push(Line::from(spans));
+            // Error detail
+            if let Some(error) = &step.error {
+                let excerpt = if error.len() > 80 {
+                    format!("{}…", &error[..77])
+                } else {
+                    error.clone()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(excerpt, Style::default().fg(theme.danger)),
+                ]));
+            }
+        }
+    }
+
     // Recent events (compact: 3 most recent)
     let movement_identifier = super::orchestrator::movement_target_label(movement);
     lines.extend(super::orchestrator::compact_recent_event_lines(

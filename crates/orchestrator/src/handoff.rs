@@ -1,6 +1,114 @@
+use polyphony_core::StepKind;
+
 use crate::{prelude::*, *};
 
 impl RuntimeService {
+    // -----------------------------------------------------------------------
+    // Step tracking helpers
+    // -----------------------------------------------------------------------
+
+    async fn mark_step_running(&mut self, movement_id: &Option<String>, kind: StepKind) {
+        let Some(id) = movement_id.as_deref() else {
+            return;
+        };
+        if let Some(movement) = self.state.movements.get_mut(id)
+            && let Some(step) = movement
+                .steps
+                .iter_mut()
+                .find(|s| s.kind == kind && !s.is_complete())
+        {
+            step.mark_running();
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+    }
+
+    async fn complete_step(&mut self, movement_id: &Option<String>, kind: StepKind) {
+        let Some(id) = movement_id.as_deref() else {
+            return;
+        };
+        if let Some(movement) = self.state.movements.get_mut(id)
+            && let Some(step) = movement
+                .steps
+                .iter_mut()
+                .find(|s| s.kind == kind && s.status == polyphony_core::StepStatus::Running)
+        {
+            step.mark_succeeded();
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+    }
+
+    async fn fail_step(&mut self, movement_id: &Option<String>, kind: StepKind, error: &str) {
+        let Some(id) = movement_id.as_deref() else {
+            return;
+        };
+        if let Some(movement) = self.state.movements.get_mut(id)
+            && let Some(step) = movement
+                .steps
+                .iter_mut()
+                .find(|s| s.kind == kind && s.status == polyphony_core::StepStatus::Running)
+        {
+            step.mark_failed(error);
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+    }
+
+    async fn skip_step(&mut self, movement_id: &Option<String>, kind: StepKind) {
+        let Some(id) = movement_id.as_deref() else {
+            return;
+        };
+        if let Some(movement) = self.state.movements.get_mut(id)
+            && let Some(step) = movement
+                .steps
+                .iter_mut()
+                .find(|s| s.kind == kind && !s.is_complete())
+        {
+            step.mark_skipped();
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+    }
+
+    /// Skip all remaining handoff steps (Commit, Push, CreatePR, etc.)
+    /// when the workspace is clean.
+    async fn skip_handoff_steps(&mut self, movement_id: &Option<String>) {
+        let Some(id) = movement_id.as_deref() else {
+            return;
+        };
+        let handoff_kinds = [
+            StepKind::Commit,
+            StepKind::Push,
+            StepKind::CreatePullRequest,
+            StepKind::ReviewPass,
+            StepKind::PostReviewComment,
+            StepKind::SendFeedback,
+            StepKind::AfterOutcomeHooks,
+        ];
+        if let Some(movement) = self.state.movements.get_mut(id) {
+            for step in &mut movement.steps {
+                if handoff_kinds.contains(&step.kind) && !step.is_complete() {
+                    step.mark_skipped();
+                }
+            }
+            movement.updated_at = Utc::now();
+            if let Some(store) = &self.store {
+                let _ = store.save_movement(movement).await;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+
     pub(crate) fn update_saved_context_from_event(
         &mut self,
         event: &AgentEvent,
@@ -157,6 +265,10 @@ impl RuntimeService {
                 ("head_branch", branch_name.clone()),
             ],
         )?;
+        // --- Commit + Push step ---
+        let movement_id = running.movement_id.clone();
+        self.mark_step_running(&movement_id, polyphony_core::StepKind::Commit)
+            .await;
         let commit_result = committer
             .commit_and_push(&WorkspaceCommitRequest {
                 workspace_path: running.workspace_path.clone(),
@@ -168,8 +280,22 @@ impl RuntimeService {
                 author_name: workflow.config.automation.git.author.name.clone(),
                 author_email: workflow.config.automation.git.author.email.clone(),
             })
-            .await?;
+            .await;
+        let commit_result = match commit_result {
+            Ok(result) => result,
+            Err(error) => {
+                self.fail_step(
+                    &movement_id,
+                    polyphony_core::StepKind::Commit,
+                    &error.to_string(),
+                )
+                .await;
+                return Err(Error::Core(error));
+            },
+        };
         let Some(commit_result) = commit_result else {
+            // Workspace is clean — skip commit/push/PR steps.
+            self.skip_handoff_steps(&movement_id).await;
             self.push_event(
                 EventScope::Handoff,
                 format!(
@@ -179,6 +305,13 @@ impl RuntimeService {
             );
             return Ok(());
         };
+        self.complete_step(&movement_id, polyphony_core::StepKind::Commit)
+            .await;
+        // Push is bundled with commit_and_push — auto-complete the Push step.
+        self.mark_step_running(&movement_id, polyphony_core::StepKind::Push)
+            .await;
+        self.complete_step(&movement_id, polyphony_core::StepKind::Push)
+            .await;
         info!(
             issue_identifier = %running.issue.identifier,
             branch_name = %commit_result.branch_name,
@@ -224,9 +357,12 @@ impl RuntimeService {
                 ("commit_sha", commit_result.head_sha.clone()),
             ],
         )?;
+        // --- CreatePullRequest step ---
+        self.mark_step_running(&movement_id, polyphony_core::StepKind::CreatePullRequest)
+            .await;
         let pr_title_copy = pr_title.clone();
         let pr_body_copy = pr_body.clone();
-        let pull_request = pull_request_manager
+        let pull_request = match pull_request_manager
             .ensure_pull_request(&PullRequestRequest {
                 repository,
                 head_branch: branch_name.clone(),
@@ -235,7 +371,21 @@ impl RuntimeService {
                 body: pr_body,
                 draft: workflow.config.automation.draft_pull_requests,
             })
-            .await?;
+            .await
+        {
+            Ok(pr) => pr,
+            Err(error) => {
+                self.fail_step(
+                    &movement_id,
+                    polyphony_core::StepKind::CreatePullRequest,
+                    &error.to_string(),
+                )
+                .await;
+                return Err(Error::Core(error));
+            },
+        };
+        self.complete_step(&movement_id, polyphony_core::StepKind::CreatePullRequest)
+            .await;
         info!(
             issue_identifier = %running.issue.identifier,
             pull_request_number = pull_request.number,
@@ -282,17 +432,39 @@ impl RuntimeService {
             }
         }
 
-        if let Some(review_body) = self
+        // --- ReviewPass + PostReviewComment steps (best-effort) ---
+        self.mark_step_running(&movement_id, polyphony_core::StepKind::ReviewPass)
+            .await;
+        let review_body = self
             .run_review_pass(workflow, running, &pull_request)
-            .await?
-            && let Some(commenter) = &self.pull_request_commenter
-        {
-            commenter
-                .comment_on_pull_request(&pull_request, &review_body)
-                .await?;
+            .await?;
+        if let Some(review_body) = review_body {
+            self.complete_step(&movement_id, polyphony_core::StepKind::ReviewPass)
+                .await;
+            self.mark_step_running(&movement_id, polyphony_core::StepKind::PostReviewComment)
+                .await;
+            if let Some(commenter) = &self.pull_request_commenter.clone() {
+                let _ = commenter
+                    .comment_on_pull_request(&pull_request, &review_body)
+                    .await;
+            }
+            self.complete_step(&movement_id, polyphony_core::StepKind::PostReviewComment)
+                .await;
+        } else {
+            self.skip_step(&movement_id, polyphony_core::StepKind::ReviewPass)
+                .await;
+            self.skip_step(&movement_id, polyphony_core::StepKind::PostReviewComment)
+                .await;
         }
+
+        // --- SendFeedback step (best-effort) ---
+        self.mark_step_running(&movement_id, polyphony_core::StepKind::SendFeedback)
+            .await;
         self.send_handoff_feedback(workflow, running, &pull_request, &commit_result)
             .await;
+        self.complete_step(&movement_id, polyphony_core::StepKind::SendFeedback)
+            .await;
+
         self.push_event(
             EventScope::Handoff,
             format!(
@@ -300,9 +472,15 @@ impl RuntimeService {
                 running.issue.identifier, pull_request.number, commit_result.branch_name
             ),
         );
+
+        // --- AfterOutcomeHooks step ---
+        self.mark_step_running(&movement_id, polyphony_core::StepKind::AfterOutcomeHooks)
+            .await;
         let manager = self.build_workspace_manager(workflow);
         manager
             .run_after_outcome_best_effort(&workflow.config.hooks, &running.workspace_path)
+            .await;
+        self.complete_step(&movement_id, polyphony_core::StepKind::AfterOutcomeHooks)
             .await;
         Ok(())
     }
