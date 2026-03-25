@@ -28,6 +28,7 @@ struct TestTracker {
     workflow_updates: Arc<Mutex<Vec<String>>>,
     fetch_by_ids_calls: Arc<Mutex<u32>>,
     issue_updates: Arc<Mutex<Vec<UpdateIssueRequest>>>,
+    acknowledged_issues: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Clone)]
@@ -100,6 +101,7 @@ impl TestTracker {
             workflow_updates: Arc::new(Mutex::new(Vec::new())),
             fetch_by_ids_calls: Arc::new(Mutex::new(0)),
             issue_updates: Arc::new(Mutex::new(Vec::new())),
+            acknowledged_issues: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -113,6 +115,10 @@ impl TestTracker {
 
     fn recorded_issue_updates(&self) -> Vec<UpdateIssueRequest> {
         self.issue_updates.lock().unwrap().clone()
+    }
+
+    fn acknowledged_issues(&self) -> Vec<String> {
+        self.acknowledged_issues.lock().unwrap().clone()
     }
 }
 
@@ -213,6 +219,14 @@ impl IssueTracker for TestTracker {
         }
         issue.updated_at = Some(Utc::now());
         Ok(issue.clone())
+    }
+
+    async fn acknowledge_issue(&self, issue: &Issue) -> Result<(), polyphony_core::Error> {
+        self.acknowledged_issues
+            .lock()
+            .unwrap()
+            .push(issue.id.clone());
+        Ok(())
     }
 }
 
@@ -4446,6 +4460,53 @@ async fn dispatch_reuses_active_movement_for_same_issue() {
     assert_eq!(
         movement_count_after_retry, 1,
         "retry dispatch should reuse the existing movement, not create a duplicate"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_acknowledges_issue_on_first_attempt() {
+    let workspace_root = unique_workspace_root("ack-dispatch");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker.clone(), provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
+
+    service.tick().await;
+    assert!(service.state.running.contains_key("issue-1"));
+
+    let acked = tracker.acknowledged_issues();
+    assert_eq!(
+        acked,
+        vec!["issue-1"],
+        "issue should be acknowledged on first dispatch"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_does_not_acknowledge_on_retry() {
+    let workspace_root = unique_workspace_root("ack-retry");
+    let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker.clone(), provisioner, &workspace_root);
+    service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
+
+    // First dispatch — should acknowledge.
+    service.tick().await;
+    assert_eq!(tracker.acknowledged_issues().len(), 1);
+
+    // Simulate worker finishing with success so it queues a retry.
+    handle_next_worker_message(&mut service).await;
+    assert!(service.state.retrying.contains_key("issue-1"));
+
+    // Trigger retry — should NOT acknowledge again.
+    service.state.retrying.get_mut("issue-1").unwrap().due_at =
+        Instant::now() - Duration::from_secs(1);
+    service.process_due_retries().await;
+
+    assert_eq!(
+        tracker.acknowledged_issues().len(),
+        1,
+        "retry dispatch must not re-acknowledge the issue"
     );
 }
 

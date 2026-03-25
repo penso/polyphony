@@ -740,6 +740,46 @@ impl IssueTracker for GithubIssueTracker {
         Ok(github_comment(comment))
     }
 
+    async fn acknowledge_issue(&self, issue: &Issue) -> Result<(), CoreError> {
+        let number = issue
+            .id
+            .parse::<u64>()
+            .map_err(|error| CoreError::Adapter(format!("invalid issue number: {error}")))?;
+        let Some(token) = &self.token else {
+            return Ok(());
+        };
+        self.track_request();
+        let response = self
+            .http
+            .post(format!(
+                "https://api.github.com/repos/{}/{}/issues/{number}/reactions",
+                self.owner, self.repo,
+            ))
+            .bearer_auth(token)
+            .header("User-Agent", "polyphony")
+            .header("Accept", "application/vnd.github+json")
+            .json(&serde_json::json!({ "content": "eyes" }))
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:reactions", &response)
+        {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        // 200 = reaction already existed, 201 = newly created — both are fine.
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github add reaction failed with status {status}"
+            )));
+        }
+        info!(
+            issue_identifier = %issue.identifier,
+            "added eyes reaction to acknowledge issue"
+        );
+        Ok(())
+    }
+
     async fn fetch_pull_request_state(
         &self,
         _repository: &str,

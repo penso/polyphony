@@ -124,6 +124,17 @@ impl RuntimeService {
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .map(ToOwned::to_owned);
+        // Acknowledge the issue on first dispatch so the reporter knows
+        // Polyphony is looking at it (e.g. adds an eyes reaction on GitHub).
+        if attempt.unwrap_or(0) == 0
+            && let Err(error) = self.tracker.acknowledge_issue(&issue).await
+        {
+            warn!(
+                %error,
+                issue_identifier = %issue.identifier,
+                "issue acknowledgment failed"
+            );
+        }
         if workflow.config.pipeline_active() {
             info!(
                 issue_identifier = %issue.identifier,

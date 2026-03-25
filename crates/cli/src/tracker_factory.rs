@@ -386,6 +386,23 @@ impl IssueTracker for CompositeTracker {
         }
         self.primary.comment_on_issue(request).await
     }
+
+    async fn acknowledge_issue(
+        &self,
+        issue: &polyphony_core::Issue,
+    ) -> Result<(), polyphony_core::Error> {
+        if let Some(supplemental) = self
+            .supplements
+            .iter()
+            .find(|supplemental| supplemental.matches_issue_id(&issue.id))
+        {
+            return supplemental
+                .tracker
+                .acknowledge_issue(&supplemental.denamespace_issue(issue))
+                .await;
+        }
+        self.primary.acknowledge_issue(issue).await
+    }
 }
 
 fn namespace_issue_identifier(prefix: Option<&str>, identifier: &str) -> String {

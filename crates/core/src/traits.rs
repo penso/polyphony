@@ -44,6 +44,12 @@ pub trait IssueTracker: Send + Sync {
     ) -> Result<IssueComment, Error> {
         Err(Error::Adapter("comment_on_issue not supported".into()))
     }
+    /// Signal to the tracker that work has started on this issue.
+    /// Implementations may add a reaction, comment, or label.
+    /// Default is a no-op.
+    async fn acknowledge_issue(&self, _issue: &Issue) -> Result<(), Error> {
+        Ok(())
+    }
     /// Fetch the state of a pull request ("open", "closed", or "merged").
     /// Default implementation returns `Ok(None)` (not supported by this tracker).
     async fn fetch_pull_request_state(
