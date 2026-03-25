@@ -81,19 +81,28 @@ impl RuntimeService {
                         format!("stopped: issue reached terminal state: {}", issue.state),
                     );
                 }
-            } else if workflow.config.is_active_state(&issue.state) {
+            } else {
+                // Non-terminal state: always refresh the issue snapshot. We
+                // intentionally do NOT cancel sessions for unrecognized states
+                // — only an explicit terminal state should stop work. Better to
+                // have a false negative (keep running against a weird state)
+                // than a false positive (cancel work the user just dispatched).
                 if let Some(running) = self.state.running.get_mut(&issue.id) {
                     running.issue = issue;
                 }
-            } else {
-                self.stop_running(&issue.id, false, None).await;
             }
         }
         for missing_issue_id in running_ids
             .into_iter()
             .filter(|issue_id| !refreshed_ids.contains(issue_id))
         {
-            self.stop_running(&missing_issue_id, false, None).await;
+            let reason = "issue no longer found in tracker";
+            warn!(
+                issue_id = %missing_issue_id,
+                "reconciliation stopping session: {reason}"
+            );
+            self.stop_running(&missing_issue_id, false, Some(reason))
+                .await;
             self.push_event(
                 EventScope::Reconcile,
                 format!("released missing issue {}", missing_issue_id),

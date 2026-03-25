@@ -343,6 +343,17 @@ fn draw_movements_table(
                     format!("  {task_info}"),
                     Style::default().fg(theme.muted),
                 ));
+                // Show cancel reason inline for cancelled movements
+                if m.status == polyphony_core::MovementStatus::Cancelled
+                    && let Some(reason) = &m.cancel_reason
+                {
+                    let excerpt = if reason.len() > 60 {
+                        format!(" — {}…", &reason[..57])
+                    } else {
+                        format!(" — {reason}")
+                    };
+                    title_spans.push(Span::styled(excerpt, Style::default().fg(theme.warning)));
+                }
                 Row::new(vec![
                     Cell::from(Span::styled(
                         format!("{collapse_icon}{time_label}"),
@@ -501,6 +512,17 @@ fn draw_movements_table(
                         format!(" — {error}")
                     };
                     title_spans.push(Span::styled(excerpt, Style::default().fg(theme.danger)));
+                }
+                // Show reason for cancelled sessions
+                if session.status == polyphony_core::AttemptStatus::CancelledByReconciliation
+                    && let Some(error) = &session.error
+                {
+                    let excerpt = if error.len() > 50 {
+                        format!(" — {}…", &error[..47])
+                    } else {
+                        format!(" — {error}")
+                    };
+                    title_spans.push(Span::styled(excerpt, Style::default().fg(theme.warning)));
                 }
                 // Show last message for successful sessions
                 if session.status == polyphony_core::AttemptStatus::Succeeded

@@ -1093,6 +1093,167 @@ async fn reconcile_running_preserves_synthetic_pr_comment_issue() {
 }
 
 #[tokio::test]
+async fn reconcile_running_preserves_session_for_non_terminal_state() {
+    let workspace_root = unique_workspace_root("non-terminal-state");
+    let provisioner = RecordingProvisioner::default();
+    // Tracker returns the issue with state "Open" — not in active_states ("Todo",
+    // "In Progress") or terminal_states ("Done", "Closed", "Cancelled").
+    // Reconciliation must NOT cancel it: only explicit terminal states stop work.
+    let tracker_issue = sample_issue("issue-5", "FAC-5", "Open", "GitHub-style issue");
+    let mut service = test_service(
+        TestTracker::new(vec![tracker_issue.clone()]),
+        provisioner,
+        &workspace_root,
+    );
+    let running_issue = sample_issue("issue-5", "FAC-5", "Open", "GitHub-style issue");
+    let workspace_path = workspace_root.join("FAC-5");
+    service.state.running.insert(
+        running_issue.id.clone(),
+        make_running_task(running_issue.clone(), workspace_path),
+    );
+    service.claim_issue(running_issue.id.clone(), IssueClaimState::Running);
+
+    service.state.movements.insert("mov-5".into(), Movement {
+        id: "mov-5".into(),
+        kind: MovementKind::IssueDelivery,
+        issue_id: Some("issue-5".into()),
+        issue_identifier: Some("FAC-5".into()),
+        title: "GitHub-style issue".into(),
+        status: MovementStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: None,
+        workspace_path: None,
+        review_target: None,
+        deliverable: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        activity_log: Vec::new(),
+        cancel_reason: None,
+    });
+
+    service.reconcile_running().await;
+
+    // Session must survive — "Open" is not terminal.
+    assert!(
+        service.state.running.contains_key(&running_issue.id),
+        "session with non-terminal state 'Open' must NOT be cancelled by reconciliation"
+    );
+    assert!(service.is_claimed(&running_issue.id));
+    // Movement must remain in progress.
+    let movement = service.state.movements.get("mov-5").unwrap();
+    assert_eq!(movement.status, MovementStatus::InProgress);
+    assert!(
+        movement.cancel_reason.is_none(),
+        "cancel_reason must be None for non-terminal state"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_running_sets_cancel_reason_for_missing_issue() {
+    let workspace_root = unique_workspace_root("missing-reason");
+    let provisioner = RecordingProvisioner::default();
+    // Empty tracker — issue will not be found.
+    let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
+    let issue = sample_issue("issue-6", "FAC-6", "Todo", "Vanished issue");
+    let workspace_path = workspace_root.join("FAC-6");
+    service.state.running.insert(
+        issue.id.clone(),
+        make_running_task(issue.clone(), workspace_path),
+    );
+    service.claim_issue(issue.id.clone(), IssueClaimState::Running);
+
+    // Add a movement so stop_running can set cancel_reason on it.
+    service.state.movements.insert("mov-6".into(), Movement {
+        id: "mov-6".into(),
+        kind: MovementKind::IssueDelivery,
+        issue_id: Some("issue-6".into()),
+        issue_identifier: Some("FAC-6".into()),
+        title: "Vanished issue".into(),
+        status: MovementStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: None,
+        workspace_path: None,
+        review_target: None,
+        deliverable: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        activity_log: Vec::new(),
+        cancel_reason: None,
+    });
+
+    service.reconcile_running().await;
+
+    assert!(!service.state.running.contains_key(&issue.id));
+    let movement = service.state.movements.get("mov-6").unwrap();
+    assert_eq!(movement.status, MovementStatus::Cancelled);
+    assert!(
+        movement.cancel_reason.is_some(),
+        "cancel_reason must be set for missing issues"
+    );
+    let reason = movement.cancel_reason.as_deref().unwrap();
+    assert!(
+        reason.contains("no longer found"),
+        "cancel_reason should explain the issue is missing, got: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_running_sets_cancel_reason_for_terminal_state() {
+    let workspace_root = unique_workspace_root("terminal-reason");
+    let provisioner = RecordingProvisioner::default();
+    let tracker_issue = sample_issue("issue-7", "FAC-7", "Done", "Finished issue");
+    let mut service = test_service(
+        TestTracker::new(vec![tracker_issue.clone()]),
+        provisioner,
+        &workspace_root,
+    );
+    let running_issue = sample_issue("issue-7", "FAC-7", "Todo", "Finished issue");
+    let workspace_path = workspace_root.join("FAC-7");
+    fs::create_dir_all(&workspace_path).unwrap();
+    service.state.running.insert(
+        running_issue.id.clone(),
+        make_running_task(running_issue.clone(), workspace_path),
+    );
+    service.claim_issue(running_issue.id.clone(), IssueClaimState::Running);
+
+    service.state.movements.insert("mov-7".into(), Movement {
+        id: "mov-7".into(),
+        kind: MovementKind::IssueDelivery,
+        issue_id: Some("issue-7".into()),
+        issue_identifier: Some("FAC-7".into()),
+        title: "Finished issue".into(),
+        status: MovementStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: None,
+        workspace_path: None,
+        review_target: None,
+        deliverable: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        activity_log: Vec::new(),
+        cancel_reason: None,
+    });
+
+    service.reconcile_running().await;
+
+    assert!(!service.state.running.contains_key(&running_issue.id));
+    let movement = service.state.movements.get("mov-7").unwrap();
+    assert_eq!(movement.status, MovementStatus::Cancelled);
+    assert!(
+        movement.cancel_reason.is_some(),
+        "cancel_reason must be set for terminal state"
+    );
+    let reason = movement.cancel_reason.as_deref().unwrap();
+    assert!(
+        reason.contains("terminal"),
+        "cancel_reason should mention terminal state, got: {reason}"
+    );
+}
+
+#[tokio::test]
 async fn tick_tracks_visible_issues_when_no_agents_are_configured() {
     let workspace_root = unique_workspace_root("visible-issues");
     let workflow = test_workflow_with_front_matter(
