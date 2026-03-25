@@ -364,6 +364,7 @@ impl RuntimeService {
                         workspace_path: m.workspace_path.clone(),
                         created_at: m.created_at,
                         cancel_reason: m.cancel_reason.clone(),
+                        steps: m.steps.clone(),
                         activity_log: m.activity_log.clone(),
                     }
                 })

@@ -230,6 +230,7 @@ impl RuntimeService {
                 created_at: now,
                 updated_at: now,
                 cancel_reason: None,
+                steps: Vec::new(),
                 activity_log: Vec::new(),
             };
             if let Some(store) = &self.store {

@@ -613,11 +613,42 @@ pub struct Movement {
     /// Explanation of why a movement was cancelled by reconciliation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_reason: Option<String>,
+    /// Ordered execution steps for this movement. Empty for legacy movements
+    /// created before step tracking was introduced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::StepRecord>,
 }
 
 const MAX_MOVEMENT_LOG_ENTRIES: usize = 64;
 
 impl Movement {
+    /// Returns the first step that is not Succeeded or Skipped.
+    pub fn first_resumable_step(&self) -> Option<&crate::StepRecord> {
+        self.steps.iter().find(|s| !s.is_complete())
+    }
+
+    /// Returns the index of the first resumable step.
+    pub fn first_resumable_step_index(&self) -> Option<usize> {
+        self.steps.iter().position(|s| !s.is_complete())
+    }
+
+    /// True if all steps are Succeeded or Skipped (or if there are no steps).
+    pub fn all_steps_complete(&self) -> bool {
+        self.steps.iter().all(|s| s.is_complete())
+    }
+
+    /// Reset all Failed steps back to Pending for retry.
+    pub fn reset_failed_steps(&mut self) {
+        for step in &mut self.steps {
+            if step.status == crate::StepStatus::Failed {
+                step.status = crate::StepStatus::Pending;
+                step.error = None;
+                step.started_at = None;
+                step.finished_at = None;
+            }
+        }
+    }
+
     pub fn push_log(&mut self, scope: MovementLogScope, message: impl Into<String>) {
         self.activity_log.push(MovementLogEntry {
             at: Utc::now(),
@@ -735,6 +766,8 @@ pub struct MovementRow {
     pub activity_log: Vec<MovementLogEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::StepRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -816,6 +849,7 @@ mod tests {
             updated_at: Utc::now(),
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
         };
         m.push_log(MovementLogScope::Trigger, "state changed");
         assert_eq!(m.activity_log.len(), 1);
@@ -842,6 +876,7 @@ mod tests {
             updated_at: Utc::now(),
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
         };
         for i in 0..100 {
             m.push_log(MovementLogScope::Pipeline, format!("entry {i}"));

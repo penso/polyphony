@@ -956,6 +956,7 @@ fn render_outputs_shows_flow_output_and_decision() {
         created_at: Utc::now(),
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
     }];
     let mut app = AppState::new(default_theme(), LogBuffer::default());
     app.on_snapshot(&snapshot);

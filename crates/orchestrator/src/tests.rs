@@ -1144,6 +1144,7 @@ async fn reconcile_running_preserves_session_for_non_terminal_state() {
         updated_at: Utc::now(),
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
     });
 
     service.reconcile_running().await;
@@ -1195,6 +1196,7 @@ async fn reconcile_running_sets_cancel_reason_for_missing_issue() {
         updated_at: Utc::now(),
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
     });
 
     service.reconcile_running().await;
@@ -1249,6 +1251,7 @@ async fn reconcile_running_sets_cancel_reason_for_terminal_state() {
         updated_at: Utc::now(),
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
     });
 
     service.reconcile_running().await;
@@ -1492,6 +1495,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
             created_at: Utc::now(),
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: Utc::now(),
         });
     let running = RunningTask {
@@ -2177,6 +2181,7 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
         created_at: now,
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
         updated_at: now,
     };
     let task = Task {
@@ -3311,6 +3316,7 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
         created_at: now,
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
         updated_at: now,
     });
 
@@ -3372,6 +3378,7 @@ async fn resolving_already_accepted_deliverable_is_ignored() {
         created_at: now,
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
         updated_at: now,
     });
 
@@ -3437,6 +3444,7 @@ async fn startup_cleanup_finalizes_merged_accepted_movements() {
         created_at: now,
         activity_log: Vec::new(),
         cancel_reason: None,
+        steps: Vec::new(),
         updated_at: now,
     });
     service.state.worktree_keys.insert("_7".into());
@@ -3662,6 +3670,7 @@ async fn workspace_progress_updates_are_appended_to_worktree_task() {
             created_at: now,
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![Task {
@@ -3770,6 +3779,7 @@ async fn task_retry_ignores_non_failed_tasks() {
             created_at: now,
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![Task {
@@ -3884,6 +3894,7 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
             created_at: now,
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![
@@ -4035,6 +4046,7 @@ async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
             created_at: now,
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![
@@ -4539,6 +4551,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             created_at: now,
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: now,
         });
 
@@ -4570,6 +4583,7 @@ fn find_existing_movement_prefers_active_over_terminal() {
             created_at: now,
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
             updated_at: now,
         });
 
@@ -4688,6 +4702,7 @@ async fn normalize_restored_in_progress_movements_marks_stale_running_task_faile
                 created_at: now,
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
                 updated_at: now,
             },
         )]),
@@ -4774,6 +4789,7 @@ async fn normalize_restored_in_progress_movements_marks_first_pending_task_faile
                 created_at: now,
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
                 updated_at: now,
             },
         )]),

@@ -3271,6 +3271,7 @@ mod tests {
                 created_at: Utc::now(),
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
             }],
             tasks: vec![],
             loading: Default::default(),
@@ -3320,6 +3321,7 @@ mod tests {
                 created_at: now,
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
             }],
             tasks: vec![polyphony_core::TaskRow {
                 id: "task-1".into(),
@@ -3389,6 +3391,7 @@ mod tests {
                 created_at: now,
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
             }],
             tasks: vec![polyphony_core::TaskRow {
                 id: "task-review-1".into(),
@@ -3572,6 +3575,7 @@ mod tests {
                 created_at: now,
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
             }],
             tasks: vec![
                 polyphony_core::TaskRow {

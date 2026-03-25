@@ -3235,6 +3235,7 @@ dependencies = [
  "notify",
  "polyphony-core",
  "polyphony-feedback",
+ "polyphony-git",
  "polyphony-workflow",
  "polyphony-workspace",
  "reqwest",

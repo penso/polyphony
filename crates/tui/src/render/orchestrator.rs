@@ -1335,6 +1335,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
         };
 
         assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
@@ -1358,6 +1359,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             activity_log: Vec::new(),
             cancel_reason: None,
+            steps: Vec::new(),
         };
 
         let (icon, _) = movement_output_emoji(&movement, default_theme());

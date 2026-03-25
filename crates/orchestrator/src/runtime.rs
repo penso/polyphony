@@ -2131,6 +2131,7 @@ mod tests {
                 created_at: now,
                 activity_log: Vec::new(),
                 cancel_reason: None,
+                steps: Vec::new(),
             }],
             tasks: vec![TaskRow {
                 id: "task-1".into(),
