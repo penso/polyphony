@@ -29,7 +29,6 @@ Polyphony watches for work from multiple sources:
 - **GitLab** — issues via GraphQL
 - **Linear** — issues via GraphQL
 - **Beads** — local Dolt-backed issue tracking
-- **None** — manual dispatch, no tracker needed
 
 ## Agents
 
