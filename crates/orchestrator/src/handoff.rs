@@ -1089,7 +1089,9 @@ pub fn spawn_workflow_watcher(
         loop {
             // Wait for the first event.
             let event = notify_rx.recv().await;
-            let Some(event) = event else { break };
+            let Some(event) = event else {
+                break;
+            };
             match event {
                 Ok(_) => {},
                 Err(error) => {
