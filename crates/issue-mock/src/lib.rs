@@ -10,6 +10,10 @@ use polyphony_core::{
 use thiserror::Error;
 use tokio::sync::{RwLock, mpsc};
 
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("mock issue adapter error: {0}")]
@@ -288,7 +292,7 @@ impl AgentRuntime for MockAgentRuntime {
 }
 
 #[cfg(feature = "mock")]
-fn demo_issue(identifier: &str, title: &str, priority: Option<i32>, state: &str) -> Issue {
+pub fn demo_issue(identifier: &str, title: &str, priority: Option<i32>, state: &str) -> Issue {
     Issue {
         id: identifier.to_string(),
         identifier: identifier.to_string(),
