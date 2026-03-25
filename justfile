@@ -18,6 +18,16 @@ lint: lockfile-check
 test:
     bash ./scripts/ci/with-sanitized-env.sh cargo +{{nightly_toolchain}} test --workspace --exclude polyphony-cli
 
+test-e2e suite="":
+    @if [ -z "{{suite}}" ]; then \
+        for s in e2e_daemon_control e2e_dispatch e2e_headless e2e_retry_and_data e2e_scheduling; do \
+            echo "==> Running $s"; \
+            bash ./scripts/ci/with-sanitized-env.sh cargo +{{nightly_toolchain}} test --locked -p polyphony-cli --test "$s" -- --nocapture || exit 1; \
+        done; \
+    else \
+        bash ./scripts/ci/with-sanitized-env.sh cargo +{{nightly_toolchain}} test --locked -p polyphony-cli --test {{suite}} -- --nocapture; \
+    fi
+
 test-raw:
     cargo +{{nightly_toolchain}} test --workspace
 

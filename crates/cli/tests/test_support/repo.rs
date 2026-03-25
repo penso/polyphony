@@ -1,16 +1,94 @@
 use std::{
+    net::TcpListener,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
 };
 
 use tempfile::TempDir;
 
 use super::fixtures::write_agent_fixture_scripts;
 
+static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A shared Dolt server for all e2e tests in this process.
+/// Started once on a random port; torn down when the process exits.
+struct SharedDoltServer {
+    port: u16,
+    _child: Child,
+    _data_dir: TempDir,
+}
+
+impl SharedDoltServer {
+    fn start() -> Self {
+        let data_dir = TempDir::new().expect("create dolt data dir");
+
+        // Initialize a dolt data directory.
+        let init_out = Command::new("dolt")
+            .args(["init"])
+            .current_dir(data_dir.path())
+            .output()
+            .expect("dolt init");
+        assert!(
+            init_out.status.success(),
+            "dolt init failed: {}",
+            String::from_utf8_lossy(&init_out.stderr)
+        );
+
+        // Find a free port.
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+            listener.local_addr().expect("get local addr").port()
+        };
+
+        // Start dolt sql-server.
+        let child = Command::new("dolt")
+            .args([
+                "sql-server",
+                "-H",
+                "127.0.0.1",
+                "-P",
+                &port.to_string(),
+                "--no-auto-commit",
+            ])
+            .current_dir(data_dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("start dolt sql-server");
+
+        // Wait for the server to accept connections.
+        for i in 0..50 {
+            if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+                break;
+            }
+            if i == 49 {
+                panic!("dolt sql-server did not start within 5s on port {port}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        Self {
+            port,
+            _child: child,
+            _data_dir: data_dir,
+        }
+    }
+}
+
+fn shared_dolt_port() -> u16 {
+    static SERVER: OnceLock<SharedDoltServer> = OnceLock::new();
+    SERVER.get_or_init(SharedDoltServer::start).port
+}
+
 /// An isolated temporary git repository with Beads tracker initialized.
 ///
 /// Drops the temp directory on drop. All polyphony and beads commands run
 /// against this repo root so tests are fully isolated from developer state.
+/// All repos share a single Dolt server started once per test process.
 pub struct TestRepo {
     pub dir: TempDir,
     pub home_dir: TempDir,
@@ -24,6 +102,7 @@ impl TestRepo {
         let dir = TempDir::new().expect("create temp repo dir");
         let home_dir = TempDir::new().expect("create temp home dir");
         let root = dir.path();
+        let port = shared_dolt_port();
 
         // Git init with test identity.
         run_ok(Command::new("git").args(["init"]).current_dir(root));
@@ -47,11 +126,19 @@ impl TestRepo {
                 .current_dir(root),
         );
 
-        // Initialize beads.
-        let prefix = format!("test-{}", std::process::id());
+        // Initialize beads against the shared Dolt server.
+        let seq = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let prefix = format!("t{}-{}", std::process::id(), seq);
         run_ok(
             Command::new("bd")
-                .args(["init", "--quiet", "--prefix", &prefix])
+                .args([
+                    "init",
+                    "--quiet",
+                    "--prefix",
+                    &prefix,
+                    "--server-port",
+                    &port.to_string(),
+                ])
                 .current_dir(root),
         );
 
