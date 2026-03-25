@@ -4,7 +4,7 @@ pub mod pty;
 pub mod pty_mock;
 #[cfg(feature = "portable-pty-backend")]
 pub mod pty_portable;
-#[cfg(feature = "pty-process-backend")]
+#[cfg(all(unix, feature = "pty-process-backend"))]
 pub mod pty_process_backend;
 
 use std::{

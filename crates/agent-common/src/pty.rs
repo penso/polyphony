@@ -75,7 +75,7 @@ pub fn backend_by_kind(
         polyphony_core::PtyBackendKind::PortablePty => {
             Ok(Box::new(super::pty_portable::PortablePtyBackend))
         },
-        #[cfg(feature = "pty-process-backend")]
+        #[cfg(all(unix, feature = "pty-process-backend"))]
         polyphony_core::PtyBackendKind::PtyProcess => {
             Ok(Box::new(super::pty_process_backend::PtyProcessBackend))
         },

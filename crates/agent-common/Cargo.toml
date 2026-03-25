@@ -12,15 +12,17 @@ pty-process-backend = ["dep:pty-process", "dep:rustix"]
 [dependencies]
 chrono.workspace = true
 portable-pty = { workspace = true, optional = true }
-pty-process = { workspace = true, optional = true }
 reqwest.workspace = true
-rustix = { workspace = true, optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 polyphony-core = { path = "../core" }
+
+[target.'cfg(unix)'.dependencies]
+pty-process = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
