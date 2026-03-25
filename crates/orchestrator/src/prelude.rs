@@ -1,5 +1,5 @@
 pub(crate) use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     env, fs,
     path::{Path, PathBuf},
     sync::Arc,

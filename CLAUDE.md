@@ -57,6 +57,7 @@ For general repository rules, Rust workflow, testing expectations, and release h
 
 Conventional commits: `feat|fix|docs|style|refactor|test|chore(scope): description`
 **No `Co-Authored-By` trailers.** Update `README.md` features list with `feat` commits.
+**Before committing**, always run `just format` and `just lint` to catch formatting and clippy issues locally. This avoids a wasted CI round trip for trivial failures.
 
 ## Changelog
 

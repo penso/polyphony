@@ -528,12 +528,60 @@ pub fn is_synthetic_issue_id(issue_id: &str) -> bool {
         .any(|prefix| issue_id.starts_with(prefix))
 }
 
+/// Extracts (repository, pr_number) from a synthetic issue ID.
+///
+/// Synthetic IDs follow the format `prefix:provider:repository:number:extra`.
+/// Returns `None` if the ID is not a recognised synthetic format.
+pub fn parse_synthetic_pr_info(issue_id: &str) -> Option<(String, u64)> {
+    for prefix in SYNTHETIC_ISSUE_ID_PREFIXES {
+        if let Some(rest) = issue_id.strip_prefix(prefix) {
+            // rest = "provider:owner/repo:number:extra..."
+            let parts: Vec<&str> = rest.splitn(4, ':').collect();
+            if parts.len() >= 3 {
+                let repository = parts[1].to_string();
+                if let Ok(number) = parts[2].parse::<u64>() {
+                    return Some((repository, number));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewedPullRequestHead {
     pub key: String,
     pub target: ReviewTarget,
     pub reviewed_at: DateTime<Utc>,
     pub movement_id: Option<MovementId>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MovementLogScope {
+    Trigger,
+    Agent,
+    Reconciliation,
+    Pipeline,
+}
+
+impl fmt::Display for MovementLogScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Trigger => "trigger",
+            Self::Agent => "agent",
+            Self::Reconciliation => "reconciliation",
+            Self::Pipeline => "pipeline",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovementLogEntry {
+    pub at: DateTime<Utc>,
+    pub scope: MovementLogScope,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -557,6 +605,27 @@ pub struct Movement {
     pub deliverable: Option<Deliverable>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity_log: Vec<MovementLogEntry>,
+    /// Explanation of why a movement was cancelled by reconciliation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_reason: Option<String>,
+}
+
+const MAX_MOVEMENT_LOG_ENTRIES: usize = 64;
+
+impl Movement {
+    pub fn push_log(&mut self, scope: MovementLogScope, message: impl Into<String>) {
+        self.activity_log.push(MovementLogEntry {
+            at: Utc::now(),
+            scope,
+            message: message.into(),
+        });
+        if self.activity_log.len() > MAX_MOVEMENT_LOG_ENTRIES {
+            let drain_count = self.activity_log.len() - MAX_MOVEMENT_LOG_ENTRIES;
+            self.activity_log.drain(..drain_count);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -659,6 +728,10 @@ pub struct MovementRow {
     #[serde(default)]
     pub workspace_path: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity_log: Vec<MovementLogEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -684,4 +757,94 @@ pub struct TaskRow {
     pub error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_synthetic_pr_info_review() {
+        let (repo, number) =
+            parse_synthetic_pr_info("pr_review:github:penso/arbor:89:abc123").unwrap();
+        assert_eq!(repo, "penso/arbor");
+        assert_eq!(number, 89);
+    }
+
+    #[test]
+    fn parse_synthetic_pr_info_comment() {
+        let (repo, number) =
+            parse_synthetic_pr_info("pr_comment:github:moltis-org/moltis:42:thread-1").unwrap();
+        assert_eq!(repo, "moltis-org/moltis");
+        assert_eq!(number, 42);
+    }
+
+    #[test]
+    fn parse_synthetic_pr_info_conflict() {
+        let (repo, number) =
+            parse_synthetic_pr_info("pr_conflict:github:owner/repo:7:deadbeef").unwrap();
+        assert_eq!(repo, "owner/repo");
+        assert_eq!(number, 7);
+    }
+
+    #[test]
+    fn parse_synthetic_pr_info_regular_issue() {
+        assert!(parse_synthetic_pr_info("github:12345").is_none());
+        assert!(parse_synthetic_pr_info("issue-1").is_none());
+    }
+
+    #[test]
+    fn movement_push_log_appends() {
+        let mut m = Movement {
+            id: "mov-1".into(),
+            kind: MovementKind::IssueDelivery,
+            issue_id: None,
+            issue_identifier: None,
+            title: "test".into(),
+            status: MovementStatus::Pending,
+            pipeline_stage: None,
+            manual_dispatch_directives: None,
+            workspace_key: None,
+            workspace_path: None,
+            review_target: None,
+            deliverable: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            activity_log: Vec::new(),
+            cancel_reason: None,
+        };
+        m.push_log(MovementLogScope::Trigger, "state changed");
+        assert_eq!(m.activity_log.len(), 1);
+        assert_eq!(m.activity_log[0].scope, MovementLogScope::Trigger);
+        assert_eq!(m.activity_log[0].message, "state changed");
+    }
+
+    #[test]
+    fn movement_push_log_truncates_at_capacity() {
+        let mut m = Movement {
+            id: "mov-2".into(),
+            kind: MovementKind::IssueDelivery,
+            issue_id: None,
+            issue_identifier: None,
+            title: "test".into(),
+            status: MovementStatus::Pending,
+            pipeline_stage: None,
+            manual_dispatch_directives: None,
+            workspace_key: None,
+            workspace_path: None,
+            review_target: None,
+            deliverable: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            activity_log: Vec::new(),
+            cancel_reason: None,
+        };
+        for i in 0..100 {
+            m.push_log(MovementLogScope::Pipeline, format!("entry {i}"));
+        }
+        assert_eq!(m.activity_log.len(), 64);
+        assert_eq!(m.activity_log[0].message, "entry 36");
+        assert_eq!(m.activity_log[63].message, "entry 99");
+    }
 }

@@ -61,20 +61,39 @@ impl RuntimeService {
             .collect::<HashSet<_>>();
         for issue in issues {
             if workflow.config.is_terminal_state(&issue.state) {
-                self.stop_running(&issue.id, true).await;
+                let reason = format!("issue state changed to terminal: {}", issue.state);
+                self.stop_running(&issue.id, true, Some(&reason)).await;
+                self.push_event(
+                    EventScope::Reconcile,
+                    format!(
+                        "stopped {} (terminal state: {})",
+                        issue.identifier, issue.state
+                    ),
+                );
+                if let Some(movement) = self
+                    .state
+                    .movements
+                    .values_mut()
+                    .find(|m| m.issue_id.as_deref() == Some(&issue.id))
+                {
+                    movement.push_log(
+                        polyphony_core::MovementLogScope::Reconciliation,
+                        format!("stopped: issue reached terminal state: {}", issue.state),
+                    );
+                }
             } else if workflow.config.is_active_state(&issue.state) {
                 if let Some(running) = self.state.running.get_mut(&issue.id) {
                     running.issue = issue;
                 }
             } else {
-                self.stop_running(&issue.id, false).await;
+                self.stop_running(&issue.id, false, None).await;
             }
         }
         for missing_issue_id in running_ids
             .into_iter()
             .filter(|issue_id| !refreshed_ids.contains(issue_id))
         {
-            self.stop_running(&missing_issue_id, false).await;
+            self.stop_running(&missing_issue_id, false, None).await;
             self.push_event(
                 EventScope::Reconcile,
                 format!("released missing issue {}", missing_issue_id),
@@ -190,6 +209,8 @@ impl RuntimeService {
                 deliverable: None,
                 created_at: now,
                 updated_at: now,
+                cancel_reason: None,
+                activity_log: Vec::new(),
             };
             if let Some(store) = &self.store {
                 store.save_movement(&movement).await?;
@@ -351,6 +372,7 @@ impl RuntimeService {
             movement_id: None,
             review_target: None,
             review_comment_marker: None,
+            recent_log: VecDeque::new(),
         });
         self.push_event(
             EventScope::Dispatch,

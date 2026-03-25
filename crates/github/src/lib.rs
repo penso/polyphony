@@ -739,4 +739,49 @@ impl IssueTracker for GithubIssueTracker {
             .map_err(map_github_error)?;
         Ok(github_comment(comment))
     }
+
+    async fn fetch_pull_request_state(
+        &self,
+        _repository: &str,
+        number: u64,
+    ) -> Result<Option<String>, CoreError> {
+        self.track_request();
+        let response = self
+            .http
+            .get(format!(
+                "https://api.github.com/repos/{}/{}/pulls/{number}",
+                self.owner, self.repo,
+            ))
+            .bearer_auth(self.token.as_deref().unwrap_or(""))
+            .header("User-Agent", "polyphony")
+            .send()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if let Some(signal) = github_rate_limit_signal_from_response("github:pulls", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        if status == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(CoreError::Adapter(format!(
+                "github fetch PR state failed with status {status}"
+            )));
+        }
+        #[derive(Deserialize)]
+        struct PrState {
+            state: String,
+            merged: bool,
+        }
+        let pr = response
+            .json::<PrState>()
+            .await
+            .map_err(|error| CoreError::Adapter(error.to_string()))?;
+        if pr.merged {
+            Ok(Some("merged".into()))
+        } else {
+            Ok(Some(pr.state))
+        }
+    }
 }

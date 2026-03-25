@@ -212,6 +212,9 @@ pub(crate) fn draw_movement_detail(
             theme,
         ));
     }
+    if let Some(reason) = &movement.cancel_reason {
+        lines.push(kv_line("Stopped", reason, theme));
+    }
 
     if let Some(target) = &movement.review_target {
         lines.push(Line::default());

@@ -132,6 +132,8 @@ impl RuntimeService {
                     deliverable: None,
                     created_at: now,
                     updated_at: now,
+                    cancel_reason: None,
+                    activity_log: Vec::new(),
                 };
                 if let Some(store) = &self.store {
                     store.save_movement(&movement).await?;
@@ -699,6 +701,7 @@ impl RuntimeService {
             movement_id,
             review_target: None,
             review_comment_marker: None,
+            recent_log: VecDeque::new(),
         });
         self.push_event(
             EventScope::Dispatch,
@@ -815,6 +818,17 @@ impl RuntimeService {
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
             movement.status = MovementStatus::InProgress;
             movement.pipeline_stage = Some(PipelineStage::Executing);
+            movement.push_log(
+                polyphony_core::MovementLogScope::Pipeline,
+                format!(
+                    "planning → executing: {} tasks created",
+                    self.state
+                        .tasks
+                        .get(movement_id)
+                        .map(|t| t.len())
+                        .unwrap_or(0)
+                ),
+            );
             movement.updated_at = Utc::now();
             if let Some(store) = &self.store {
                 store.save_movement(movement).await?;
@@ -974,6 +988,10 @@ impl RuntimeService {
         if let Some(movement) = self.state.movements.get_mut(movement_id) {
             movement.status = status;
             movement.pipeline_stage = Some(PipelineStage::Completing);
+            movement.push_log(
+                polyphony_core::MovementLogScope::Pipeline,
+                format!("executing → completing ({status})"),
+            );
             movement.updated_at = Utc::now();
             if let Some(store) = &self.store {
                 store.save_movement(movement).await?;

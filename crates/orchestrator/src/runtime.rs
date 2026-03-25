@@ -2093,6 +2093,8 @@ mod tests {
                 workspace_key: Some("penso_arbor_89".into()),
                 workspace_path: None,
                 created_at: now,
+                activity_log: Vec::new(),
+                cancel_reason: None,
             }],
             tasks: vec![TaskRow {
                 id: "task-1".into(),

@@ -165,6 +165,12 @@ impl RuntimeService {
                         .or_else(|| running.codex_app_server_pid.clone());
                     running.last_event = Some(format!("{:?}", event.kind));
                     running.last_message = event.message.clone();
+                    if let Some(msg) = &event.message {
+                        running.recent_log.push_back(msg.clone());
+                        while running.recent_log.len() > MAX_RUNNING_RECENT_LOG {
+                            running.recent_log.pop_front();
+                        }
+                    }
                     running.last_event_at = Some(event.at);
                     if matches!(event.kind, AgentEventKind::TurnStarted) {
                         running.turn_count += 1;

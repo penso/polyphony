@@ -3,6 +3,8 @@ use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
 use crate::{prelude::*, *};
 
+/// How many recent agent log lines to keep on each `RunningTask`.
+pub(crate) const MAX_RUNNING_RECENT_LOG: usize = 3;
 pub(crate) const MAX_RECENT_EVENTS: usize = 256;
 pub(crate) const MAX_RECENT_EVENT_MESSAGE_CHARS: usize = 120;
 pub(crate) const MAX_RUN_HISTORY: usize = 256;

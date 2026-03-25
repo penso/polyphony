@@ -993,6 +993,7 @@ fn make_running_task(issue: Issue, workspace_path: PathBuf) -> RunningTask {
         movement_id: None,
         review_target: None,
         review_comment_marker: None,
+        recent_log: VecDeque::new(),
         handle: tokio::spawn(async {
             let _: () = std::future::pending().await;
         }),
@@ -1314,6 +1315,8 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
             review_target: Some(trigger.review_target()),
             deliverable: None,
             created_at: Utc::now(),
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: Utc::now(),
         });
     let running = RunningTask {
@@ -1340,6 +1343,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         movement_id: Some("mov-review".into()),
         review_target: Some(trigger.review_target()),
         review_comment_marker: Some(pull_request_review_comment_marker(&trigger.review_target())),
+        recent_log: VecDeque::new(),
         handle: tokio::spawn(async {
             let _: () = std::future::pending().await;
         }),
@@ -1426,6 +1430,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
                 review_comment_marker: Some(pull_request_review_comment_marker(
                     &trigger.review_target(),
                 )),
+                recent_log: VecDeque::new(),
                 handle: tokio::spawn(async {
                     let _: () = std::future::pending().await;
                 }),
@@ -1882,6 +1887,7 @@ async fn inline_pull_request_review_comments_are_submitted_when_requested() {
                 review_comment_marker: Some(pull_request_review_comment_marker(
                     &trigger.review_target(),
                 )),
+                recent_log: VecDeque::new(),
                 handle: tokio::spawn(async {
                     let _: () = std::future::pending().await;
                 }),
@@ -1994,6 +2000,8 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
         review_target: None,
         deliverable: None,
         created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
         updated_at: now,
     };
     let task = Task {
@@ -3126,6 +3134,8 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
             metadata: Default::default(),
         }),
         created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
         updated_at: now,
     });
 
@@ -3185,6 +3195,8 @@ async fn resolving_already_accepted_deliverable_is_ignored() {
             metadata: Default::default(),
         }),
         created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
         updated_at: now,
     });
 
@@ -3248,6 +3260,8 @@ async fn startup_cleanup_finalizes_merged_accepted_movements() {
             )]),
         }),
         created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
         updated_at: now,
     });
     service.state.worktree_keys.insert("_7".into());
@@ -3471,6 +3485,8 @@ async fn workspace_progress_updates_are_appended_to_worktree_task() {
             review_target: None,
             deliverable: None,
             created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![Task {
@@ -3577,6 +3593,8 @@ async fn task_retry_ignores_non_failed_tasks() {
             review_target: None,
             deliverable: None,
             created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![Task {
@@ -3689,6 +3707,8 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
             review_target: Some(trigger.review_target()),
             deliverable: None,
             created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![
@@ -3838,6 +3858,8 @@ async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
             review_target: Some(trigger.review_target()),
             deliverable: None,
             created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: now,
         });
     service.state.tasks.insert(movement_id.clone(), vec![
@@ -4293,6 +4315,8 @@ fn find_existing_movement_prefers_active_over_terminal() {
             review_target: None,
             deliverable: None,
             created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: now,
         });
 
@@ -4322,6 +4346,8 @@ fn find_existing_movement_prefers_active_over_terminal() {
             review_target: None,
             deliverable: None,
             created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
             updated_at: now,
         });
 
@@ -4438,6 +4464,8 @@ async fn normalize_restored_in_progress_movements_marks_stale_running_task_faile
                 review_target: None,
                 deliverable: None,
                 created_at: now,
+                activity_log: Vec::new(),
+                cancel_reason: None,
                 updated_at: now,
             },
         )]),
@@ -4522,6 +4550,8 @@ async fn normalize_restored_in_progress_movements_marks_first_pending_task_faile
                 review_target: None,
                 deliverable: None,
                 created_at: now,
+                activity_log: Vec::new(),
+                cancel_reason: None,
                 updated_at: now,
             },
         )]),

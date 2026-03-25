@@ -268,7 +268,8 @@ fn draw_movements_table(
                 },
                 OrchestratorTreeRow::Trigger { .. }
                 | OrchestratorTreeRow::AgentSession { .. }
-                | OrchestratorTreeRow::RunningAgent { .. } => {
+                | OrchestratorTreeRow::RunningAgent { .. }
+                | OrchestratorTreeRow::AgentLogLine { .. } => {
                     // Child rows follow their movement; include if parent matches
                     true
                 },
@@ -279,7 +280,11 @@ fn draw_movements_table(
                             && snapshot.movements[mi].id == task.movement_id
                     })
                 },
-                OrchestratorTreeRow::Outcome {
+                OrchestratorTreeRow::LogEntry {
+                    movement_snapshot_index,
+                    ..
+                }
+                | OrchestratorTreeRow::Outcome {
                     movement_snapshot_index,
                 } => matching_movements.contains(movement_snapshot_index),
             })
@@ -544,11 +549,22 @@ fn draw_movements_table(
                     Style::default().fg(theme.muted),
                 ));
                 if running.tokens.total_tokens > 0 {
+                    let token_label = super::agents::format_tokens_pub(running.tokens.total_tokens);
+                    let direction = app
+                        .prev_running_tokens
+                        .get(&running.issue_id)
+                        .map(|prev| {
+                            if running.tokens.output_tokens > prev.output_tokens {
+                                "\u{2193}" // ↓ receiving from LLM
+                            } else if running.tokens.input_tokens > prev.input_tokens {
+                                "\u{2191}" // ↑ sending to LLM
+                            } else {
+                                ""
+                            }
+                        })
+                        .unwrap_or("");
                     title_spans.push(Span::styled(
-                        format!(
-                            " {}tok",
-                            super::agents::format_tokens_pub(running.tokens.total_tokens)
-                        ),
+                        format!(" {direction}{token_label}"),
                         Style::default().fg(theme.muted),
                     ));
                 }
@@ -565,8 +581,71 @@ fn draw_movements_table(
                     };
                     title_spans.push(Span::styled(excerpt, Style::default().fg(theme.muted)));
                 }
+                title_spans.push(Span::styled(
+                    " (enter for detail)",
+                    Style::default().fg(theme.muted),
+                ));
 
                 child_row(Line::from(title_spans))
+            },
+            OrchestratorTreeRow::AgentLogLine {
+                running_index,
+                line_index,
+                is_last_child,
+            } => {
+                let running = &snapshot.running[*running_index];
+                let line = &running.recent_log[*line_index];
+                let connector = if *is_last_child {
+                    " └─ "
+                } else {
+                    " ├─ "
+                };
+                let excerpt = if line.len() > 60 {
+                    format!("{}…", &line[..57])
+                } else {
+                    line.clone()
+                };
+                child_row(Line::from(vec![
+                    Span::styled(
+                        format!("    {connector}"),
+                        Style::default().fg(theme.border),
+                    ),
+                    Span::styled(excerpt, Style::default().fg(theme.muted)),
+                ]))
+            },
+            OrchestratorTreeRow::LogEntry {
+                log_index,
+                movement_snapshot_index,
+                is_last_child,
+            } => {
+                let m = &snapshot.movements[*movement_snapshot_index];
+                let entry = &m.activity_log[*log_index];
+                let connector = if *is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                };
+                let time_label = entry
+                    .at
+                    .with_timezone(&chrono::Local)
+                    .format("%H:%M")
+                    .to_string();
+                let scope_color = match entry.scope {
+                    polyphony_core::MovementLogScope::Trigger => theme.info,
+                    polyphony_core::MovementLogScope::Agent => theme.success,
+                    polyphony_core::MovementLogScope::Reconciliation => theme.warning,
+                    polyphony_core::MovementLogScope::Pipeline => theme.muted,
+                };
+                let excerpt = if entry.message.len() > 60 {
+                    format!("{}…", &entry.message[..57])
+                } else {
+                    entry.message.clone()
+                };
+                child_row(Line::from(vec![
+                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
+                    Span::styled(format!("[{time_label}] "), Style::default().fg(theme.muted)),
+                    Span::styled(excerpt, Style::default().fg(scope_color)),
+                ]))
             },
             OrchestratorTreeRow::Outcome {
                 movement_snapshot_index,
@@ -1171,6 +1250,8 @@ mod tests {
             workspace_key: None,
             workspace_path: None,
             created_at: chrono::Utc::now(),
+            activity_log: Vec::new(),
+            cancel_reason: None,
         };
 
         assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
@@ -1192,6 +1273,8 @@ mod tests {
             workspace_key: None,
             workspace_path: None,
             created_at: chrono::Utc::now(),
+            activity_log: Vec::new(),
+            cancel_reason: None,
         };
 
         let (icon, _) = movement_output_emoji(&movement, default_theme());

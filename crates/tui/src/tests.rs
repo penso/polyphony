@@ -954,6 +954,8 @@ fn render_outputs_shows_flow_output_and_decision() {
         workspace_key: Some("_7".into()),
         workspace_path: Some(std::path::PathBuf::from(".polyphony/workspaces/_7")),
         created_at: Utc::now(),
+        activity_log: Vec::new(),
+        cancel_reason: None,
     }];
     let mut app = AppState::new(default_theme(), LogBuffer::default());
     app.on_snapshot(&snapshot);
@@ -1018,6 +1020,7 @@ fn agent_detail_scroll_resets_when_agent_selection_changes() {
             tokens: Default::default(),
             workspace_path: std::path::PathBuf::from("."),
             attempt: Some(0),
+            recent_log: Vec::new(),
         },
         polyphony_core::RunningRow {
             issue_id: "issue-2".into(),
@@ -1038,6 +1041,7 @@ fn agent_detail_scroll_resets_when_agent_selection_changes() {
             tokens: Default::default(),
             workspace_path: std::path::PathBuf::from("."),
             attempt: Some(0),
+            recent_log: Vec::new(),
         },
     ];
     snapshot.counts.running = snapshot.running.len();

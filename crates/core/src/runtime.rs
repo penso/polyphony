@@ -28,6 +28,8 @@ pub struct RunningRow {
     pub tokens: TokenUsage,
     pub workspace_path: PathBuf,
     pub attempt: Option<u32>,
+    #[serde(default)]
+    pub recent_log: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

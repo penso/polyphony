@@ -299,6 +299,7 @@ impl RuntimeService {
                     tokens: running.tokens.clone(),
                     workspace_path: running.workspace_path.clone(),
                     attempt: running.attempt,
+                    recent_log: running.recent_log.iter().cloned().collect(),
                 })
                 .collect(),
             agent_history: self
@@ -362,6 +363,8 @@ impl RuntimeService {
                         workspace_key: m.workspace_key.clone(),
                         workspace_path: m.workspace_path.clone(),
                         created_at: m.created_at,
+                        cancel_reason: m.cancel_reason.clone(),
+                        activity_log: m.activity_log.clone(),
                     }
                 })
                 .collect(),

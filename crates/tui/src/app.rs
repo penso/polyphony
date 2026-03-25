@@ -11,6 +11,8 @@ use polyphony_core::{
 use ratatui::{layout::Rect, widgets::TableState};
 
 const RPS_HISTORY_CAP: usize = 120;
+/// How many live agent log lines to show under each running agent in the tree.
+const MAX_VISIBLE_AGENT_LOG_LINES: usize = 1;
 pub(crate) const TAB_DIVIDER: &str = "  ";
 pub(crate) const TAB_PADDING_LEFT: &str = "";
 pub(crate) const TAB_PADDING_RIGHT: &str = "";
@@ -348,8 +350,20 @@ pub(crate) enum OrchestratorTreeRow {
         running_index: usize,
         is_last_child: bool,
     },
+    /// Live log line from a running agent session.
+    AgentLogLine {
+        running_index: usize,
+        line_index: usize,
+        is_last_child: bool,
+    },
     Task {
         snapshot_index: usize,
+        is_last_child: bool,
+    },
+    /// Persisted movement log entry (reconciliation, pipeline events).
+    LogEntry {
+        log_index: usize,
+        movement_snapshot_index: usize,
         is_last_child: bool,
     },
     Outcome {
@@ -492,6 +506,9 @@ pub struct AppState {
     /// Trigger IDs that have been dispatched but not yet running.
     /// Cleared when the trigger appears in `snapshot.running`.
     pub dispatching_triggers: HashSet<String>,
+    /// Previous snapshot's running token counts, keyed by issue_id.
+    /// Used to detect token direction (↑ sending / ↓ receiving).
+    pub prev_running_tokens: HashMap<String, polyphony_core::TokenUsage>,
 }
 
 impl AppState {
@@ -558,6 +575,7 @@ impl AppState {
             toast: None,
             sticky_toast: None,
             dispatching_triggers: HashSet::new(),
+            prev_running_tokens: HashMap::new(),
         }
     }
 
@@ -749,6 +767,13 @@ impl AppState {
                 self.detail_stack.pop();
             }
         }
+
+        // Save running token counts for direction detection on next snapshot
+        self.prev_running_tokens = snapshot
+            .running
+            .iter()
+            .map(|r| (r.issue_id.clone(), r.tokens.clone()))
+            .collect();
     }
 
     fn sync_sticky_toast(&mut self, snapshot: &RuntimeSnapshot) {
@@ -968,16 +993,52 @@ impl AppState {
                     }
                 }
 
-                // Running agent rows (after tasks, before outcome)
+                // Collect movement activity log entries (last 5)
+                let log_entries: Vec<usize> = {
+                    let total = movement.activity_log.len();
+                    let start = total.saturating_sub(5);
+                    (start..total).collect()
+                };
+                let has_log_entries = !log_entries.is_empty();
+
+                // Running agent rows (after tasks, before outcome/log entries)
                 if let Some(running_indices) = running_indices {
                     let count = running_indices.len();
                     for (ci, &run_idx) in running_indices.iter().enumerate() {
-                        let is_last = ci == count - 1 && !has_outcome;
+                        let log_lines = &snapshot.running[run_idx].recent_log;
+                        let after_this_running = (ci + 1 < count) || has_outcome || has_log_entries;
+                        let is_last_running = ci == count - 1
+                            && !has_outcome
+                            && !has_log_entries
+                            && log_lines.is_empty();
                         rows.push(OrchestratorTreeRow::RunningAgent {
                             running_index: run_idx,
-                            is_last_child: is_last,
+                            is_last_child: is_last_running,
                         });
+                        // Emit live log lines under this running agent (last N only)
+                        let visible_start =
+                            log_lines.len().saturating_sub(MAX_VISIBLE_AGENT_LOG_LINES);
+                        let visible_lines: Vec<usize> = (visible_start..log_lines.len()).collect();
+                        let visible_count = visible_lines.len();
+                        for (vi, &li) in visible_lines.iter().enumerate() {
+                            let is_last_line = vi == visible_count - 1 && !after_this_running;
+                            rows.push(OrchestratorTreeRow::AgentLogLine {
+                                running_index: run_idx,
+                                line_index: li,
+                                is_last_child: is_last_line,
+                            });
+                        }
                     }
+                }
+                // Movement activity log entries (before outcome)
+                let log_count = log_entries.len();
+                for (li, &log_idx) in log_entries.iter().enumerate() {
+                    let is_last = li == log_count - 1 && !has_outcome;
+                    rows.push(OrchestratorTreeRow::LogEntry {
+                        log_index: log_idx,
+                        movement_snapshot_index: mov_idx,
+                        is_last_child: is_last,
+                    });
                 }
                 if has_outcome {
                     rows.push(OrchestratorTreeRow::Outcome {
@@ -1188,7 +1249,9 @@ impl AppState {
                 OrchestratorTreeRow::Trigger { .. }
                 | OrchestratorTreeRow::AgentSession { .. }
                 | OrchestratorTreeRow::RunningAgent { .. }
+                | OrchestratorTreeRow::AgentLogLine { .. }
                 | OrchestratorTreeRow::Task { .. }
+                | OrchestratorTreeRow::LogEntry { .. }
                 | OrchestratorTreeRow::Outcome { .. } => None,
             })
     }

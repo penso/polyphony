@@ -480,6 +480,7 @@ impl RuntimeService {
             movement_id: Some(movement_id.to_string()),
             review_target: Some(review_target),
             review_comment_marker: Some(review_comment_marker),
+            recent_log: VecDeque::new(),
         });
         self.push_event(EventScope::Dispatch, dispatch_event);
         Ok(())
@@ -549,6 +550,8 @@ impl RuntimeService {
                     deliverable: None,
                     created_at: now,
                     updated_at: now,
+                    cancel_reason: None,
+                    activity_log: Vec::new(),
                 };
                 if let Some(store) = &self.store {
                     store.save_movement(&movement).await?;

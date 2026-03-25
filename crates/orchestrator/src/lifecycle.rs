@@ -131,7 +131,12 @@ impl RuntimeService {
         }
     }
 
-    pub(crate) async fn stop_running(&mut self, issue_id: &str, cleanup_workspace: bool) {
+    pub(crate) async fn stop_running(
+        &mut self,
+        issue_id: &str,
+        cleanup_workspace: bool,
+        reason: Option<&str>,
+    ) {
         let workflow = self.workflow();
         if let Some(running) = self.state.running.remove(issue_id) {
             running.handle.abort();
@@ -160,6 +165,13 @@ impl RuntimeService {
                 .find(|m| m.issue_id.as_deref() == Some(issue_id))
             {
                 movement.status = MovementStatus::Cancelled;
+                movement.cancel_reason = reason.map(ToOwned::to_owned);
+                if let Some(reason_str) = reason {
+                    movement.push_log(
+                        polyphony_core::MovementLogScope::Reconciliation,
+                        format!("stopped: {reason_str}"),
+                    );
+                }
                 movement.updated_at = Utc::now();
                 if let Some(store) = &self.store {
                     let _ = store.save_movement(movement).await;
@@ -169,7 +181,11 @@ impl RuntimeService {
             let outcome = AgentRunResult {
                 status: AttemptStatus::CancelledByReconciliation,
                 turns_completed: running.turn_count,
-                error: Some("stopped by orchestrator reconciliation".into()),
+                error: Some(
+                    reason
+                        .unwrap_or("stopped by orchestrator reconciliation")
+                        .to_string(),
+                ),
                 final_issue_state: None,
             };
             self.finalize_saved_context(issue_id, &running.issue.identifier, &running, &outcome);
@@ -294,7 +310,8 @@ impl RuntimeService {
     pub(crate) async fn abort_all(&mut self) {
         let running_ids = self.state.running.keys().cloned().collect::<Vec<_>>();
         for issue_id in running_ids {
-            self.stop_running(&issue_id, false).await;
+            self.stop_running(&issue_id, false, Some("aborted by orchestrator"))
+                .await;
         }
         // Drain pending retries so nothing restarts when the mode changes back.
         let retrying_ids = self.state.retrying.keys().cloned().collect::<Vec<_>>();

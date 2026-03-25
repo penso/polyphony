@@ -729,6 +729,30 @@ fn handle_key(
                             scroll: 0,
                         });
                     },
+                    Some(app::OrchestratorTreeRow::LogEntry {
+                        movement_snapshot_index,
+                        ..
+                    }) => {
+                        let movement = &snapshot.movements[movement_snapshot_index];
+                        app.push_detail(crate::app::DetailView::Movement {
+                            movement_id: movement.id.clone(),
+                            scroll: 0,
+                        });
+                    },
+                    Some(app::OrchestratorTreeRow::AgentLogLine { running_index, .. }) => {
+                        // Open the running agent detail
+                        let display_index = app
+                            .sorted_agent_indices
+                            .iter()
+                            .position(|&(is_running, idx)| is_running && idx == running_index);
+                        if let Some(display_idx) = display_index {
+                            app.push_detail(crate::app::DetailView::Agent {
+                                agent_index: display_idx,
+                                scroll: u16::MAX,
+                                artifact_cache: Box::new(None),
+                            });
+                        }
+                    },
                     None => {},
                 }
             } else if app.active_tab == app::ActiveTab::Deliverables
@@ -1714,6 +1738,26 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     scroll: 0,
                 }
             }),
+            Some(app::OrchestratorTreeRow::LogEntry {
+                movement_snapshot_index,
+                ..
+            }) => snapshot.movements.get(movement_snapshot_index).map(|m| {
+                crate::app::DetailView::Movement {
+                    movement_id: m.id.clone(),
+                    scroll: 0,
+                }
+            }),
+            Some(app::OrchestratorTreeRow::AgentLogLine { running_index, .. }) => {
+                let display_index = app
+                    .sorted_agent_indices
+                    .iter()
+                    .position(|&(is_running, idx)| is_running && idx == running_index);
+                display_index.map(|display_idx| crate::app::DetailView::Agent {
+                    agent_index: display_idx,
+                    scroll: u16::MAX,
+                    artifact_cache: Box::new(None),
+                })
+            },
             None => None,
         },
         app::ActiveTab::Tasks => {
@@ -3225,6 +3269,8 @@ mod tests {
                 workspace_key: None,
                 workspace_path: None,
                 created_at: Utc::now(),
+                activity_log: Vec::new(),
+                cancel_reason: None,
             }],
             tasks: vec![],
             loading: Default::default(),
@@ -3272,6 +3318,8 @@ mod tests {
                 workspace_key: Some("penso_arbor_89".into()),
                 workspace_path: None,
                 created_at: now,
+                activity_log: Vec::new(),
+                cancel_reason: None,
             }],
             tasks: vec![polyphony_core::TaskRow {
                 id: "task-1".into(),
@@ -3339,6 +3387,8 @@ mod tests {
                 workspace_key: Some("penso_arbor_89".into()),
                 workspace_path: Some(workspace_path),
                 created_at: now,
+                activity_log: Vec::new(),
+                cancel_reason: None,
             }],
             tasks: vec![polyphony_core::TaskRow {
                 id: "task-review-1".into(),
@@ -3520,6 +3570,8 @@ mod tests {
                 workspace_key: Some("penso_arbor_89".into()),
                 workspace_path: None,
                 created_at: now,
+                activity_log: Vec::new(),
+                cancel_reason: None,
             }],
             tasks: vec![
                 polyphony_core::TaskRow {

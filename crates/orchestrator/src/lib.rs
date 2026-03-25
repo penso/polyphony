@@ -210,6 +210,7 @@ struct RunningTask {
     movement_id: Option<MovementId>,
     review_target: Option<ReviewTarget>,
     review_comment_marker: Option<String>,
+    recent_log: VecDeque<String>,
 }
 
 #[derive(Debug, Clone)]
