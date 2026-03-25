@@ -3,7 +3,9 @@ use std::{path::PathBuf, time::Duration};
 use chrono::{DateTime, Utc};
 use polyphony_core::{AgentDefinition, BudgetSnapshot, Error as CoreError};
 use serde_json::{Value, json};
-use tokio::{fs, process::Command};
+use tokio::fs;
+#[cfg(target_os = "macos")]
+use tokio::process::Command;
 
 use crate::{BudgetField, apply_budget_probe, run_shell_capture};
 
@@ -34,6 +36,7 @@ struct ClaudeCredentials {
 #[derive(Clone)]
 enum ClaudeCredentialSource {
     File(PathBuf),
+    #[cfg(target_os = "macos")]
     Keychain,
     Environment,
 }

@@ -16,6 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   NIGHTLY_TOOLCHAIN: nightly-2025-11-30
   RUST_BACKTRACE: "1"
+  BEADS_VERSION: "0.62.0"
 
 jobs:
   cli-e2e:
@@ -38,10 +39,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        run: rustup toolchain install ${{ env.NIGHTLY_TOOLCHAIN }} --profile minimal
+        run: rustup toolchain install $NIGHTLY_TOOLCHAIN --profile minimal
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install beads (bd)
+        run: |
+          curl -sSfL "https://github.com/steveyegge/beads/releases/download/v${BEADS_VERSION}/beads_${BEADS_VERSION}_linux_amd64.tar.gz" \
+            | tar xz -C /usr/local/bin bd
+          bd --version
       - name: Run ${{ matrix.suite }}
         run: >
           bash ./scripts/ci/with-sanitized-env.sh
-          cargo +${{ env.NIGHTLY_TOOLCHAIN }} test --locked
+          cargo +$NIGHTLY_TOOLCHAIN test --locked
           -p polyphony-cli --test ${{ matrix.suite }} -- --nocapture

@@ -16,7 +16,8 @@ lint: lockfile-check
     cargo +{{nightly_toolchain}} clippy --workspace --all-features --all-targets -- -D warnings
 
 test:
-    bash ./scripts/ci/with-sanitized-env.sh cargo +{{nightly_toolchain}} test --workspace
+    bash ./scripts/ci/with-sanitized-env.sh cargo +{{nightly_toolchain}} test --workspace --exclude polyphony-cli
+    bash ./scripts/ci/with-sanitized-env.sh cargo +{{nightly_toolchain}} test -p polyphony-cli --lib
 
 test-raw:
     cargo +{{nightly_toolchain}} test --workspace
