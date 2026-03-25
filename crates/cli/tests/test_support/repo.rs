@@ -26,9 +26,35 @@ impl SharedDoltServer {
     fn start() -> Self {
         let data_dir = TempDir::new().expect("create dolt data dir");
 
-        // Initialize a dolt data directory.
+        // Configure dolt identity and initialize data directory.
+        // Use DOLT_ROOT_PATH to isolate global config from the real home.
+        let dolt_home = data_dir.path().join(".dolt-home");
+        std::fs::create_dir_all(&dolt_home).expect("create dolt home");
+
+        let dolt_env = [("DOLT_ROOT_PATH", dolt_home.display().to_string())];
+
+        run_ok(
+            Command::new("dolt")
+                .args([
+                    "config",
+                    "--global",
+                    "--add",
+                    "user.email",
+                    "test@polyphony.dev",
+                ])
+                .envs(dolt_env.iter().cloned())
+                .current_dir(data_dir.path()),
+        );
+        run_ok(
+            Command::new("dolt")
+                .args(["config", "--global", "--add", "user.name", "Polyphony Test"])
+                .envs(dolt_env.iter().cloned())
+                .current_dir(data_dir.path()),
+        );
+
         let init_out = Command::new("dolt")
             .args(["init"])
+            .envs(dolt_env.iter().cloned())
             .current_dir(data_dir.path())
             .output()
             .expect("dolt init");
@@ -54,6 +80,7 @@ impl SharedDoltServer {
                 &port.to_string(),
                 "--no-auto-commit",
             ])
+            .envs(dolt_env.iter().cloned())
             .current_dir(data_dir.path())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
