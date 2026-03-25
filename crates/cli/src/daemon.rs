@@ -18,9 +18,11 @@ use axum::{
 use polyphony_core::RuntimeSnapshot;
 use polyphony_orchestrator::RuntimeCommand;
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, UnixListener, UnixStream},
+    net::TcpListener,
     sync::{mpsc, watch},
     task::JoinHandle,
 };
@@ -77,10 +79,12 @@ pub(crate) struct DaemonStatus {
     pub snapshot: Option<serde_json::Value>,
 }
 
+#[cfg(unix)]
 struct PathCleanup {
     path: PathBuf,
 }
 
+#[cfg(unix)]
 impl Drop for PathCleanup {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
@@ -119,6 +123,7 @@ pub(crate) fn latest_log_path(workflow_path: &Path) -> Result<Option<PathBuf>, E
     Ok(entries.pop())
 }
 
+#[cfg(unix)]
 pub(crate) fn spawn_control_server(
     workflow_path: &Path,
     snapshot_rx: watch::Receiver<RuntimeSnapshot>,
@@ -132,6 +137,7 @@ pub(crate) fn spawn_control_server(
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    #[cfg(unix)]
     if socket_path.exists() {
         match std::os::unix::net::UnixStream::connect(&socket_path) {
             Ok(_) => {
@@ -207,6 +213,7 @@ pub(crate) struct ControlState {
     auth_token: Option<String>,
 }
 
+#[cfg(unix)]
 async fn handle_unix_request(
     stream: &mut UnixStream,
     state: &ControlState,
@@ -510,6 +517,7 @@ pub(crate) async fn request_snapshot(workflow_path: &Path) -> Result<RuntimeSnap
     }
 }
 
+#[cfg(unix)]
 pub(crate) async fn send_control_request(
     workflow_path: &Path,
     request: DaemonRequest,
@@ -517,6 +525,17 @@ pub(crate) async fn send_control_request(
     send_request(workflow_path, request).await
 }
 
+#[cfg(not(unix))]
+pub(crate) async fn send_control_request(
+    _workflow_path: &Path,
+    _request: DaemonRequest,
+) -> Result<DaemonResponse, Error> {
+    Err(Error::Config(
+        "daemon control socket is not supported on this platform".into(),
+    ))
+}
+
+#[cfg(unix)]
 async fn send_request(
     workflow_path: &Path,
     request: DaemonRequest,
@@ -533,6 +552,7 @@ async fn send_request(
     serde_json::from_slice(&response).map_err(|error| Error::Config(error.to_string()))
 }
 
+#[cfg(unix)]
 fn map_connect_error(error: io::Error) -> Error {
     if matches!(
         error.kind(),
@@ -696,7 +716,7 @@ pub(crate) async fn print_daemon_logs(
     }
 }
 
-#[cfg(all(test, feature = "mock"))]
+#[cfg(all(unix, test, feature = "mock"))]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::{

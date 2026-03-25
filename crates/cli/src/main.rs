@@ -489,17 +489,23 @@ async fn run_daemon(cli: &Cli, workflow_path: &Path) -> Result<(), Error> {
         .and_then(|l| l.local_addr().ok())
         .map(|a| a.to_string());
 
-    let (control_server, _control_state) = daemon::spawn_control_server(
-        workflow_path,
-        runtime.handle.snapshot_rx.clone(),
-        runtime.handle.command_tx.clone(),
-        auth_token.clone(),
-        http_address.clone(),
-    )?;
-    tracing::info!(
-        socket_path = %daemon::control_socket_path(workflow_path)?.display(),
-        "daemon control server ready"
-    );
+    #[cfg(unix)]
+    let control_server = {
+        let (server, _control_state) = daemon::spawn_control_server(
+            workflow_path,
+            runtime.handle.snapshot_rx.clone(),
+            runtime.handle.command_tx.clone(),
+            auth_token.clone(),
+            http_address.clone(),
+        )?;
+        tracing::info!(
+            socket_path = %daemon::control_socket_path(workflow_path)?.display(),
+            "daemon control server ready"
+        );
+        server
+    };
+    #[cfg(not(unix))]
+    let control_server = tokio::spawn(std::future::pending::<Result<(), Error>>());
 
     let http_server = if let Some(listener) = http_listener {
         let bound_addr = listener
