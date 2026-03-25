@@ -226,6 +226,15 @@ fn cleanup_workspace_sync(request: WorkspaceRequest) -> Result<(), CoreError> {
         checkout_kind = ?request.checkout_kind,
         "removing workspace"
     );
+    if has_unpushed_commits(&request.workspace_path) {
+        warn!(
+            workspace_path = %request.workspace_path.display(),
+            "refusing to remove workspace with unpushed commits"
+        );
+        return Err(CoreError::Adapter(
+            "workspace has unpushed commits — refusing to delete".into(),
+        ));
+    }
     match request.checkout_kind {
         CheckoutKind::LinkedWorktree => remove_linked_worktree(&request)?,
         CheckoutKind::DiscreteClone | CheckoutKind::Directory => {
@@ -235,6 +244,44 @@ fn cleanup_workspace_sync(request: WorkspaceRequest) -> Result<(), CoreError> {
         },
     }
     Ok(())
+}
+
+/// Returns `true` if the workspace has local commits not pushed to the remote.
+///
+/// Only returns `true` when the repo has an `origin` remote and the local
+/// branch is ahead of or diverged from its remote counterpart. Returns
+/// `false` when there is no remote (e.g. test repos) or no commits.
+pub fn has_unpushed_commits(workspace_path: &Path) -> bool {
+    let Ok(repo) = git2::Repository::open(workspace_path) else {
+        return false;
+    };
+    // If the repo has no "origin" remote, there's nowhere to push — don't block cleanup.
+    if repo.find_remote("origin").is_err() {
+        return false;
+    }
+    let Ok(head) = repo.head() else {
+        return false;
+    };
+    let Some(branch_name) = head.shorthand() else {
+        return false;
+    };
+    let Some(local_oid) = head.target() else {
+        return false;
+    };
+    // Default branches (main/master) are never considered "unpushed work".
+    if matches!(branch_name, "main" | "master") {
+        return false;
+    }
+    let upstream_ref = format!("refs/remotes/origin/{branch_name}");
+    let Ok(remote_ref) = repo.find_reference(&upstream_ref) else {
+        // Remote exists but no tracking branch for this branch name.
+        // The branch was never pushed — treat as unpushed.
+        return true;
+    };
+    let Some(remote_oid) = remote_ref.target() else {
+        return false;
+    };
+    local_oid != remote_oid
 }
 
 fn commit_and_push_sync(
@@ -1536,9 +1583,9 @@ mod tests {
 
     use super::{
         GitOperationKind, GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch,
-        detect_github_remote, detect_gitlab_remote, fetch_with_system_git, local_checkout_ref_name,
-        parse_github_owner_repo, parse_gitlab_remote_url, push_with_system_git,
-        should_fallback_to_system_git, should_prefer_system_git_for_ssh,
+        detect_github_remote, detect_gitlab_remote, fetch_with_system_git, has_unpushed_commits,
+        local_checkout_ref_name, parse_github_owner_repo, parse_gitlab_remote_url,
+        push_with_system_git, should_fallback_to_system_git, should_prefer_system_git_for_ssh,
     };
 
     #[derive(Default)]
@@ -2072,6 +2119,19 @@ mod tests {
             parse_gitlab_remote_url("git@github.com:owner/repo.git"),
             None
         );
+    }
+
+    #[test]
+    fn has_unpushed_commits_returns_false_for_repo_without_remote() {
+        let temp = tempdir().unwrap();
+        let repo_path = temp.path().join("no-remote");
+        init_repo(&repo_path);
+        assert!(!has_unpushed_commits(&repo_path));
+    }
+
+    #[test]
+    fn has_unpushed_commits_returns_false_for_nonexistent_path() {
+        assert!(!has_unpushed_commits(Path::new("/nonexistent/path")));
     }
 
     #[test]

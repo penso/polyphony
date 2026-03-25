@@ -1024,6 +1024,42 @@ impl RuntimeService {
             );
             return Ok(());
         };
+        // If movement is Delivered but the workspace has unpushed commits, re-run
+        // the handoff (push + PR) instead of re-dispatching the agent.
+        if movement.status == MovementStatus::Delivered {
+            let needs_push = movement
+                .workspace_path
+                .as_ref()
+                .is_some_and(|path| polyphony_git::has_unpushed_commits(path));
+            if needs_push {
+                info!(
+                    %movement_id,
+                    "retrying delivered movement with unpushed commits"
+                );
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("retrying push for delivered movement {movement_id}"),
+                );
+                // Mark as Failed so the normal dispatch path re-enters the
+                // completing stage and re-runs commit_and_push + ensure_pull_request.
+                if let Some(movement) = self.state.movements.get_mut(movement_id) {
+                    movement.status = MovementStatus::Failed;
+                    movement.pipeline_stage = Some(polyphony_core::PipelineStage::Completing);
+                    movement.updated_at = Utc::now();
+                    if let Some(store) = &self.store {
+                        let _ = store.save_movement(movement).await;
+                    }
+                }
+                // Fall through to the normal retry logic below
+            } else {
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!("movement retry ignored: movement {movement_id} is delivered with no pending changes"),
+                );
+                return Ok(());
+            }
+        }
+
         let movement_has_running_worker = self
             .state
             .running
