@@ -1082,14 +1082,39 @@ pub fn spawn_workflow_watcher(
                 }
             }
         }
-        while let Some(event) = notify_rx.recv().await {
+
+        // Debounce: coalesce rapid filesystem events (Linux inotify can fire
+        // multiple events for a single write) into one Refresh command.
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
+        loop {
+            // Wait for the first event.
+            let event = notify_rx.recv().await;
+            let Some(event) = event else { break };
             match event {
-                Ok(_) => {
-                    let _ = runtime_command_tx.send(RuntimeCommand::Refresh);
-                    info!(path = %workflow_path.display(), "workflow change detected");
+                Ok(_) => {},
+                Err(error) => {
+                    warn!(%error, "workflow watch event failed");
+                    continue;
                 },
-                Err(error) => warn!(%error, "workflow watch event failed"),
             }
+            // Drain any additional events that arrive within the debounce window.
+            let deadline = tokio::time::sleep(DEBOUNCE);
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    biased;
+                    next = notify_rx.recv() => {
+                        match next {
+                            Some(Ok(_)) => {},      // absorb, keep waiting
+                            Some(Err(error)) => warn!(%error, "workflow watch event failed"),
+                            None => return Ok(()),  // channel closed
+                        }
+                    }
+                    _ = &mut deadline => break,
+                }
+            }
+            info!(path = %workflow_path.display(), "workflow change detected");
+            let _ = runtime_command_tx.send(RuntimeCommand::Refresh);
         }
         Ok(())
     }))
