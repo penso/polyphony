@@ -1447,6 +1447,65 @@ fn parse_github_owner_repo(url: &str) -> Option<String> {
     None
 }
 
+/// Detect a GitLab remote from the `origin` remote of a repository.
+///
+/// Returns `Some(("https://gitlab.com", "namespace/project"))` when `origin`
+/// points to a GitLab instance. Returns `None` otherwise.
+pub fn detect_gitlab_remote(repo_root: &Path) -> Option<(String, String)> {
+    let repo = git2::Repository::open(repo_root).ok()?;
+    let remote = repo.find_remote("origin").ok()?;
+    let url = remote.url()?;
+    parse_gitlab_remote_url(url)
+}
+
+fn parse_gitlab_remote_url(url: &str) -> Option<(String, String)> {
+    // SSH: git@gitlab.com:namespace/project.git
+    if let Some(rest) = url.strip_prefix("git@gitlab.com:") {
+        let slug = rest.trim_end_matches(".git");
+        if slug.contains('/') && !slug.is_empty() {
+            return Some(("https://gitlab.com".into(), slug.to_string()));
+        }
+    }
+    // HTTPS: https://gitlab.com/namespace/project.git
+    if let Some(rest) = url
+        .strip_prefix("https://gitlab.com/")
+        .or_else(|| url.strip_prefix("http://gitlab.com/"))
+    {
+        let slug = rest.trim_end_matches(".git").trim_end_matches('/');
+        if slug.contains('/') && !slug.is_empty() {
+            return Some(("https://gitlab.com".into(), slug.to_string()));
+        }
+    }
+    // Self-hosted: git@gitlab.example.com:namespace/project.git
+    if let Some(rest) = url.strip_prefix("git@")
+        && let Some((host, path)) = rest.split_once(':')
+        && host.contains("gitlab")
+    {
+        let slug = path.trim_end_matches(".git");
+        if slug.contains('/') && !slug.is_empty() {
+            return Some((format!("https://{host}"), slug.to_string()));
+        }
+    }
+    // Self-hosted HTTPS: https://gitlab.example.com/namespace/project.git
+    if url.contains("gitlab")
+        && let Some(rest) = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+        && let Some((host, path)) = rest.split_once('/')
+    {
+        let slug = path.trim_end_matches(".git").trim_end_matches('/');
+        if slug.contains('/') && !slug.is_empty() {
+            let scheme = if url.starts_with("https") {
+                "https"
+            } else {
+                "http"
+            };
+            return Some((format!("{scheme}://{host}"), slug.to_string()));
+        }
+    }
+    None
+}
+
 fn map_io(error: std::io::Error) -> CoreError {
     CoreError::Adapter(error.to_string())
 }
@@ -1477,9 +1536,9 @@ mod tests {
 
     use super::{
         GitOperationKind, GitWorkspaceCommitter, GitWorkspaceProvisioner, checkout_branch,
-        detect_github_remote, fetch_with_system_git, local_checkout_ref_name,
-        parse_github_owner_repo, push_with_system_git, should_fallback_to_system_git,
-        should_prefer_system_git_for_ssh,
+        detect_github_remote, detect_gitlab_remote, fetch_with_system_git, local_checkout_ref_name,
+        parse_github_owner_repo, parse_gitlab_remote_url, push_with_system_git,
+        should_fallback_to_system_git, should_prefer_system_git_for_ssh,
     };
 
     #[derive(Default)]
@@ -1969,6 +2028,65 @@ mod tests {
         init_repo(&repo_path);
 
         assert_eq!(detect_github_remote(&repo_path), None);
+    }
+
+    #[test]
+    fn parse_gitlab_ssh_url() {
+        let result = parse_gitlab_remote_url("git@gitlab.com:namespace/project.git");
+        assert_eq!(
+            result,
+            Some(("https://gitlab.com".into(), "namespace/project".into()))
+        );
+    }
+
+    #[test]
+    fn parse_gitlab_https_url() {
+        let result = parse_gitlab_remote_url("https://gitlab.com/namespace/project.git");
+        assert_eq!(
+            result,
+            Some(("https://gitlab.com".into(), "namespace/project".into()))
+        );
+    }
+
+    #[test]
+    fn parse_gitlab_self_hosted_ssh() {
+        let result = parse_gitlab_remote_url("git@gitlab.example.com:team/repo.git");
+        assert_eq!(
+            result,
+            Some(("https://gitlab.example.com".into(), "team/repo".into()))
+        );
+    }
+
+    #[test]
+    fn parse_gitlab_self_hosted_https() {
+        let result = parse_gitlab_remote_url("https://gitlab.corp.io/group/project.git");
+        assert_eq!(
+            result,
+            Some(("https://gitlab.corp.io".into(), "group/project".into()))
+        );
+    }
+
+    #[test]
+    fn parse_non_gitlab_url_returns_none() {
+        assert_eq!(
+            parse_gitlab_remote_url("git@github.com:owner/repo.git"),
+            None
+        );
+    }
+
+    #[test]
+    fn detect_gitlab_remote_from_repo_with_gitlab_origin() {
+        let temp = tempdir().unwrap();
+        let repo_path = temp.path().join("gl-detect-repo");
+        let repo = init_repo(&repo_path);
+        repo.remote("origin", "git@gitlab.com:namespace/project.git")
+            .unwrap();
+
+        let result = detect_gitlab_remote(&repo_path);
+        assert_eq!(
+            result,
+            Some(("https://gitlab.com".into(), "namespace/project".into()))
+        );
     }
 
     #[test]

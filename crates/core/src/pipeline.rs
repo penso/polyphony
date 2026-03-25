@@ -247,12 +247,14 @@ pub struct MergeResult {
 #[serde(rename_all = "snake_case")]
 pub enum ReviewProviderKind {
     Github,
+    Gitlab,
 }
 
 impl fmt::Display for ReviewProviderKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::Github => "github",
+            Self::Gitlab => "gitlab",
         };
         f.write_str(s)
     }

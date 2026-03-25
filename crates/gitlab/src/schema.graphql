@@ -2,11 +2,26 @@ scalar Time
 
 schema {
   query: Query
+  mutation: Mutation
 }
 
 type Query {
   project(fullPath: ID!): Project
   currentUser: UserCore
+}
+
+type Mutation {
+  createNote(input: CreateNoteInput!): CreateNotePayload
+}
+
+input CreateNoteInput {
+  noteableId: ID!
+  body: String!
+}
+
+type CreateNotePayload {
+  note: Note
+  errors: [String!]
 }
 
 type Project {
@@ -16,11 +31,24 @@ type Project {
     after: String
   ): IssueConnection
   issue(iid: String!): Issue
+  mergeRequest(iid: String!): MergeRequest
+  mergeRequests(
+    state: MergeRequestState
+    first: Int
+    after: String
+  ): MergeRequestConnection
 }
 
 enum IssuableSearchableField {
   opened
   closed
+}
+
+enum MergeRequestState {
+  opened
+  closed
+  merged
+  all
 }
 
 type IssueConnection {
@@ -34,6 +62,7 @@ type PageInfo {
 }
 
 type Issue {
+  id: ID!
   iid: String!
   title: String!
   description: String
@@ -78,4 +107,27 @@ type LabelConnection {
 
 type Label {
   title: String!
+}
+
+type MergeRequestConnection {
+  nodes: [MergeRequest!]
+  pageInfo: PageInfo!
+}
+
+type MergeRequest {
+  iid: String!
+  title: String!
+  description: String
+  state: String!
+  webUrl: String!
+  sourceBranch: String!
+  targetBranch: String!
+  diffHeadSha: String
+  draft: Boolean!
+  mergeableDiscussionsState: Boolean
+  author: UserCore
+  labels: LabelConnection
+  createdAt: Time!
+  updatedAt: Time!
+  notes(first: Int, after: String): NoteConnection
 }

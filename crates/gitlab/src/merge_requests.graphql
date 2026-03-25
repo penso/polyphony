@@ -1,6 +1,6 @@
-query FetchProjectIssues($fullPath: ID!, $state: IssuableSearchableField, $after: String) {
+query FetchOpenMergeRequests($fullPath: ID!, $after: String) {
   project(fullPath: $fullPath) {
-    issues(state: $state, first: 100, after: $after) {
+    mergeRequests(state: opened, first: 100, after: $after) {
       pageInfo {
         hasNextPage
         endCursor
@@ -11,8 +11,10 @@ query FetchProjectIssues($fullPath: ID!, $state: IssuableSearchableField, $after
         description
         state
         webUrl
-        createdAt
-        updatedAt
+        sourceBranch
+        targetBranch
+        diffHeadSha
+        draft
         author {
           username
           name
@@ -24,33 +26,26 @@ query FetchProjectIssues($fullPath: ID!, $state: IssuableSearchableField, $after
             title
           }
         }
+        createdAt
+        updatedAt
       }
     }
   }
 }
 
-query FetchIssueByIid($fullPath: ID!, $iid: String!) {
+query FetchMergeRequestByIid($fullPath: ID!, $iid: String!) {
   project(fullPath: $fullPath) {
-    issue(iid: $iid) {
-      id
+    mergeRequest(iid: $iid) {
       iid
       title
-      description
       state
       webUrl
+      sourceBranch
+      targetBranch
+      diffHeadSha
+      draft
       createdAt
       updatedAt
-      author {
-        username
-        name
-        webUrl
-        bot
-      }
-      labels {
-        nodes {
-          title
-        }
-      }
       notes(first: 100) {
         nodes {
           id
@@ -70,11 +65,21 @@ query FetchIssueByIid($fullPath: ID!, $iid: String!) {
   }
 }
 
-query FetchCurrentUser {
-  currentUser {
-    username
-    name
-    webUrl
-    bot
+mutation CreateMergeRequestNote($noteableId: ID!, $body: String!) {
+  createNote(input: { noteableId: $noteableId, body: $body }) {
+    note {
+      id
+      body
+      system
+      author {
+        username
+        name
+        webUrl
+        bot
+      }
+      createdAt
+      updatedAt
+    }
+    errors
   }
 }

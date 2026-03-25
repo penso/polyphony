@@ -7,14 +7,16 @@ use async_trait::async_trait;
 use chrono::Utc;
 use graphql_client::GraphQLQuery;
 use polyphony_core::{
-    BudgetSnapshot, Error as CoreError, Issue, IssueStateUpdate, IssueTracker,
-    TrackerConnectionState, TrackerConnectionStatus, TrackerQuery,
+    AddIssueCommentRequest, BudgetSnapshot, CreateIssueRequest, Error as CoreError, Issue,
+    IssueComment, IssueStateUpdate, IssueTracker, TrackerConnectionState, TrackerConnectionStatus,
+    TrackerQuery, UpdateIssueRequest,
 };
 use reqwest::header::HeaderMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 mod convert;
+pub mod merge_requests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -53,12 +55,41 @@ pub struct FetchIssueByIid;
 )]
 pub struct FetchCurrentUser;
 
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/schema.graphql",
+    query_path = "src/merge_requests.graphql",
+    custom_scalars_module = "crate::gitlab_graphql_scalars",
+    response_derives = "Debug, Serialize, Deserialize, Clone"
+)]
+pub struct FetchOpenMergeRequests;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/schema.graphql",
+    query_path = "src/merge_requests.graphql",
+    custom_scalars_module = "crate::gitlab_graphql_scalars",
+    response_derives = "Debug, Serialize, Deserialize, Clone"
+)]
+pub struct FetchMergeRequestByIid;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/schema.graphql",
+    query_path = "src/merge_requests.graphql",
+    custom_scalars_module = "crate::gitlab_graphql_scalars",
+    response_derives = "Debug, Serialize, Deserialize, Clone"
+)]
+pub struct CreateMergeRequestNote;
+
 #[derive(Debug)]
 pub struct GitlabIssueTracker {
     http: reqwest::Client,
     graphql_url: String,
+    rest_base_url: String,
     token: Option<String>,
     project_path: String,
+    encoded_project_path: String,
     request_count: AtomicU64,
     last_rate_limit: Mutex<Option<convert::CapturedRateLimit>>,
     viewer_cache: Mutex<ViewerCache>,
@@ -89,11 +120,15 @@ impl GitlabIssueTracker {
             endpoint.trim_end_matches('/')
         };
         let graphql_url = format!("{base}/api/graphql");
+        let encoded = urlencoding::encode(&project_path).into_owned();
+        let rest_base_url = format!("{base}/api/v4");
 
         Ok(Self {
             http: reqwest::Client::new(),
             graphql_url,
+            rest_base_url,
             token,
+            encoded_project_path: encoded,
             project_path,
             request_count: AtomicU64::new(0),
             last_rate_limit: Mutex::new(None),
@@ -225,6 +260,61 @@ impl GitlabIssueTracker {
     fn track_request(&self) {
         self.request_count.fetch_add(1, Ordering::Relaxed);
     }
+
+    fn rest_url(&self, path: &str) -> String {
+        format!(
+            "{}/projects/{}/{}",
+            self.rest_base_url, self.encoded_project_path, path
+        )
+    }
+
+    async fn rest_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, CoreError> {
+        self.track_request();
+        let mut req = self.http.request(method, self.rest_url(path));
+        if let Some(token) = &self.token {
+            req = req.bearer_auth(token);
+        }
+        Ok(req)
+    }
+
+    async fn rest_json<T: serde::de::DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&impl Serialize>,
+    ) -> Result<T, CoreError> {
+        let mut req = self.rest_request(method, path).await?;
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|e| CoreError::Adapter(e.to_string()))?;
+        if let Some(signal) = gitlab_rate_limit_signal_from_response("tracker:gitlab", &response) {
+            return Err(CoreError::RateLimited(Box::new(signal)));
+        }
+        let status = response.status();
+        if !status.is_success() {
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(CoreError::Adapter(format!(
+                "gitlab rest {status}: {body_text}"
+            )));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| CoreError::Adapter(e.to_string()))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn project_path(&self) -> &str {
+        &self.project_path
+    }
 }
 
 #[async_trait]
@@ -289,6 +379,131 @@ impl IssueTracker for GitlabIssueTracker {
     ) -> Result<Vec<IssueStateUpdate>, CoreError> {
         let issues = self.fetch_issues_by_ids(issue_ids).await?;
         Ok(issues.iter().map(issue_to_state_update).collect())
+    }
+
+    async fn create_issue(&self, request: &CreateIssueRequest) -> Result<Issue, CoreError> {
+        #[derive(Serialize)]
+        struct Body {
+            title: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            description: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            labels: Option<String>,
+        }
+        let labels = if request.labels.is_empty() {
+            None
+        } else {
+            Some(request.labels.join(","))
+        };
+        let body = Body {
+            title: request.title.clone(),
+            description: request.description.clone(),
+            labels,
+        };
+        let created: serde_json::Value = self
+            .rest_json(reqwest::Method::POST, "issues", Some(&body))
+            .await?;
+        let iid = created["iid"]
+            .as_u64()
+            .ok_or_else(|| CoreError::Adapter("missing iid in response".into()))?
+            .to_string();
+        self.fetch_issue_with_notes(&iid).await
+    }
+
+    async fn update_issue(&self, request: &UpdateIssueRequest) -> Result<Issue, CoreError> {
+        #[derive(Serialize)]
+        struct Body {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            title: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            description: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            state_event: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            labels: Option<String>,
+        }
+        let state_event = request.state.as_ref().map(|s| {
+            if is_terminalish_state(s) {
+                "close".to_string()
+            } else {
+                "reopen".to_string()
+            }
+        });
+        let labels = request.labels.as_ref().map(|l| l.join(","));
+        let body = Body {
+            title: request.title.clone(),
+            description: request.description.clone(),
+            state_event,
+            labels,
+        };
+        let path = format!("issues/{}", request.id);
+        let _: serde_json::Value = self
+            .rest_json(reqwest::Method::PUT, &path, Some(&body))
+            .await?;
+        self.fetch_issue_with_notes(&request.id).await
+    }
+
+    async fn comment_on_issue(
+        &self,
+        request: &AddIssueCommentRequest,
+    ) -> Result<IssueComment, CoreError> {
+        #[derive(Serialize)]
+        struct Body {
+            body: String,
+        }
+        #[derive(Deserialize)]
+        struct NoteResponse {
+            id: u64,
+            body: String,
+            created_at: String,
+            updated_at: String,
+        }
+        let path = format!("issues/{}/notes", request.id);
+        let note: NoteResponse = self
+            .rest_json(
+                reqwest::Method::POST,
+                &path,
+                Some(&Body {
+                    body: request.body.clone(),
+                }),
+            )
+            .await?;
+        Ok(IssueComment {
+            id: note.id.to_string(),
+            body: note.body,
+            author: None,
+            url: None,
+            created_at: parse_gitlab_time(&note.created_at),
+            updated_at: parse_gitlab_time(&note.updated_at),
+        })
+    }
+
+    async fn fetch_pull_request_state(
+        &self,
+        _repository: &str,
+        number: u64,
+    ) -> Result<Option<String>, CoreError> {
+        let variables = fetch_merge_request_by_iid::Variables {
+            full_path: self.project_path.clone(),
+            iid: number.to_string(),
+        };
+        let body = FetchMergeRequestByIid::build_query(variables);
+        let result = self
+            .graphql::<fetch_merge_request_by_iid::ResponseData>(&body)
+            .await;
+        match result {
+            Ok((data, _)) => {
+                let state = data
+                    .project
+                    .and_then(|p| p.merge_request)
+                    .map(|mr| mr.state);
+                Ok(state)
+            },
+            Err(e) => {
+                debug!(number, error = %e, "failed to fetch gitlab MR state");
+                Ok(None)
+            },
+        }
     }
 
     async fn fetch_budget(&self) -> Result<Option<BudgetSnapshot>, CoreError> {

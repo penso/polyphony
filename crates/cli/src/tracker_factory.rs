@@ -434,21 +434,15 @@ pub(crate) fn build_runtime_components(
             workflow.config.tracker.project_status_field.clone(),
         )?),
         #[cfg(feature = "gitlab")]
-        TrackerKind::Gitlab => Arc::new(polyphony_gitlab::GitlabIssueTracker::new(
-            workflow.config.tracker.endpoint.clone(),
-            workflow.config.tracker.api_key.clone(),
-            workflow
-                .config
-                .tracker
-                .project_slug
-                .clone()
-                .or_else(|| workflow.config.tracker.repository.clone())
-                .ok_or_else(|| {
-                    Error::Config(
-                        "tracker.project_slug or tracker.repository is required for gitlab".into(),
-                    )
-                })?,
-        )?),
+        TrackerKind::Gitlab => {
+            let (endpoint, project_path, token) =
+                resolve_gitlab_integration(workflow, &workflow_root)?;
+            Arc::new(polyphony_gitlab::GitlabIssueTracker::new(
+                endpoint,
+                token,
+                project_path,
+            )?)
+        },
         #[cfg(feature = "beads")]
         TrackerKind::Beads => Arc::new(polyphony_beads::BeadsTracker::new(workflow_root.clone())?),
         other => {
@@ -463,15 +457,8 @@ pub(crate) fn build_runtime_components(
         let registry = polyphony_feedback::FeedbackRegistry::from_config(&workflow.config.feedback);
         (!registry.is_empty()).then_some(Arc::new(registry))
     };
-    #[cfg(feature = "github")]
     let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
-        build_github_pull_request_components(workflow, &workflow_root, github_token_from_env())?;
-    #[cfg(not(feature = "github"))]
-    let pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>> = None;
-    #[cfg(not(feature = "github"))]
-    let pull_request_manager: Option<Arc<dyn PullRequestManager>> = None;
-    #[cfg(not(feature = "github"))]
-    let pull_request_commenter: Option<Arc<dyn PullRequestCommenter>> = None;
+        build_pull_request_components(workflow, &workflow_root)?;
     let committer: Option<Arc<dyn WorkspaceCommitter>> = workflow
         .config
         .automation
@@ -546,6 +533,125 @@ pub(crate) fn build_runtime_tracker(
             supplements,
         }))
     }
+}
+
+#[allow(unused_variables)]
+fn build_pull_request_components(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_root: &Path,
+) -> Result<
+    (
+        Option<Arc<dyn PullRequestTriggerSource>>,
+        Option<Arc<dyn PullRequestManager>>,
+        Option<Arc<dyn PullRequestCommenter>>,
+    ),
+    Error,
+> {
+    #[cfg(feature = "github")]
+    if workflow.config.tracker.kind == TrackerKind::Github
+        || polyphony_git::detect_github_remote(workflow_root).is_some()
+    {
+        return build_github_pull_request_components(
+            workflow,
+            workflow_root,
+            github_token_from_env(),
+        );
+    }
+
+    #[cfg(feature = "gitlab")]
+    if workflow.config.tracker.kind == TrackerKind::Gitlab
+        || polyphony_git::detect_gitlab_remote(workflow_root).is_some()
+    {
+        return build_gitlab_pull_request_components(workflow, workflow_root);
+    }
+
+    Ok((None, None, None))
+}
+
+#[cfg(feature = "gitlab")]
+fn build_gitlab_pull_request_components(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_root: &Path,
+) -> Result<
+    (
+        Option<Arc<dyn PullRequestTriggerSource>>,
+        Option<Arc<dyn PullRequestManager>>,
+        Option<Arc<dyn PullRequestCommenter>>,
+    ),
+    Error,
+> {
+    let (endpoint, project_path, token) = resolve_gitlab_integration(workflow, workflow_root)?;
+    let Some(token) = token else {
+        return Ok((None, None, None));
+    };
+
+    let trigger_source = if workflow.config.review_triggers.pr_reviews.enabled {
+        Some(Arc::new(
+            polyphony_gitlab::merge_requests::GitlabMergeRequestTriggerSource::new(
+                endpoint.clone(),
+                token.clone(),
+                project_path.clone(),
+            )?,
+        ) as Arc<dyn PullRequestTriggerSource>)
+    } else {
+        None
+    };
+
+    let commenter = Some(Arc::new(
+        polyphony_gitlab::merge_requests::GitlabPullRequestCommenter::new(
+            endpoint.clone(),
+            token.clone(),
+            project_path.clone(),
+        )?,
+    ) as Arc<dyn PullRequestCommenter>);
+
+    let manager = workflow
+        .config
+        .automation
+        .enabled
+        .then(|| {
+            polyphony_gitlab::merge_requests::GitlabPullRequestManager::new(
+                endpoint,
+                token,
+                project_path,
+            )
+            .map(|m| Arc::new(m) as Arc<dyn PullRequestManager>)
+        })
+        .transpose()?;
+
+    Ok((trigger_source, manager, commenter))
+}
+
+#[cfg(feature = "gitlab")]
+fn resolve_gitlab_integration(
+    workflow: &polyphony_workflow::LoadedWorkflow,
+    workflow_root: &Path,
+) -> Result<(String, String, Option<String>), Error> {
+    let gitlab_token = env::var("GITLAB_TOKEN").ok();
+
+    if workflow.config.tracker.kind == TrackerKind::Gitlab {
+        let project_path = workflow
+            .config
+            .tracker
+            .project_slug
+            .clone()
+            .or_else(|| workflow.config.tracker.repository.clone())
+            .ok_or_else(|| {
+                Error::Config(
+                    "tracker.project_slug or tracker.repository is required for gitlab".into(),
+                )
+            })?;
+        let endpoint = workflow.config.tracker.endpoint.clone();
+        let token = workflow.config.tracker.api_key.clone().or(gitlab_token);
+        return Ok((endpoint, project_path, token));
+    }
+
+    // Auto-detect from git remote
+    if let Some((endpoint, project_path)) = polyphony_git::detect_gitlab_remote(workflow_root) {
+        return Ok((endpoint, project_path, gitlab_token));
+    }
+
+    Ok((String::new(), String::new(), None))
 }
 
 #[cfg(feature = "github")]
