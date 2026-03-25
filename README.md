@@ -7,6 +7,8 @@
 
 Polyphony is a repo-native AI orchestration engine. It connects your issue trackers to AI coding agents, runs them in isolated workspaces, and shows everything live in a terminal dashboard.
 
+![Polyphony TUI](.github/media/screenshot.jpeg)
+
 Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony brings the same workflow-contract orchestration model to local repositories — but with multiple trigger sources and multiple agent backends.
 
 ## Triggers
