@@ -468,8 +468,9 @@ async fn spawn_pty_session(
         cols: 80,
         command: pty_command,
     };
+    let pty_backend = spec.agent.pty_backend;
     let spawned_pty = tokio::task::spawn_blocking(move || {
-        polyphony_agent_common::pty::default_pty_backend().spawn(&pty_config)
+        polyphony_agent_common::pty::backend_by_kind(pty_backend)?.spawn(&pty_config)
     })
     .await
     .map_err(join_error)??;

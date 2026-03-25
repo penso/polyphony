@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command},
     sync::{
-        atomic::{AtomicU64, Ordering},
         OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
 };
 

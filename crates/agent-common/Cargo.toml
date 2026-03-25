@@ -5,13 +5,16 @@ version.workspace = true
 license.workspace = true
 
 [features]
-default = ["portable-pty-backend"]
+default = ["portable-pty-backend", "pty-process-backend"]
 portable-pty-backend = ["dep:portable-pty"]
+pty-process-backend = ["dep:pty-process", "dep:rustix"]
 
 [dependencies]
 chrono.workspace = true
 portable-pty = { workspace = true, optional = true }
+pty-process = { workspace = true, optional = true }
 reqwest.workspace = true
+rustix = { workspace = true, optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

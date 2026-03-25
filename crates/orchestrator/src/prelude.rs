@@ -27,9 +27,9 @@ pub(crate) use polyphony_core::{
 };
 pub(crate) use polyphony_feedback::FeedbackRegistry;
 pub(crate) use polyphony_workflow::{
-    HooksConfig, LoadedWorkflow, agent_definition, agent_prompt_dirs, apply_agent_prompt_template,
-    load_workflow_with_user_config, render_issue_template_with_strings, render_turn_prompt,
-    render_turn_template, repo_config_path,
+    HooksConfig, LoadedWorkflow, agent_definition_with_pty, agent_prompt_dirs,
+    apply_agent_prompt_template, load_workflow_with_user_config,
+    render_issue_template_with_strings, render_turn_prompt, render_turn_template, repo_config_path,
 };
 pub(crate) use polyphony_workspace::WorkspaceManager;
 pub(crate) use reqwest::StatusCode;

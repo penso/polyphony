@@ -328,7 +328,11 @@ impl RuntimeService {
                     "unknown planner agent `{planner_agent_name}`"
                 )))
             })?;
-        let selected_agent = agent_definition(planner_agent_name, profile);
+        let selected_agent = agent_definition_with_pty(
+            planner_agent_name,
+            profile,
+            workflow.config.agent.pty_backend,
+        );
         info!(
             issue_identifier = %issue.identifier,
             movement_id,
@@ -427,7 +431,8 @@ impl RuntimeService {
                     "unknown agent `{agent_name}` for pipeline task"
                 )))
             })?;
-        let selected_agent = agent_definition(&agent_name, profile);
+        let selected_agent =
+            agent_definition_with_pty(&agent_name, profile, workflow.config.agent.pty_backend);
         info!(
             issue_identifier = %issue.identifier,
             movement_id,

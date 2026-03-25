@@ -134,6 +134,23 @@ pub enum AgentPromptMode {
     TmuxPaste,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PtyBackendKind {
+    #[default]
+    PortablePty,
+    PtyProcess,
+}
+
+impl PtyBackendKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PortablePty => "portable-pty",
+            Self::PtyProcess => "pty-process",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentDefinition {
     pub name: String,
@@ -163,6 +180,7 @@ pub struct AgentDefinition {
     pub idle_timeout_ms: u64,
     pub completion_sentinel: Option<String>,
     pub env: BTreeMap<String, String>,
+    pub pty_backend: PtyBackendKind,
 }
 
 #[derive(Debug, Clone)]

@@ -428,6 +428,14 @@ pub(crate) fn infer_agent_transport(profile: &AgentProfileConfig) -> AgentTransp
 }
 
 pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefinition {
+    agent_definition_with_pty(name, profile, PtyBackendKind::default())
+}
+
+pub fn agent_definition_with_pty(
+    name: &str,
+    profile: &AgentProfileConfig,
+    pty_backend: PtyBackendKind,
+) -> AgentDefinition {
     let transport = infer_agent_transport(profile);
     AgentDefinition {
         name: name.to_string(),
@@ -466,6 +474,7 @@ pub fn agent_definition(name: &str, profile: &AgentProfileConfig) -> AgentDefini
         idle_timeout_ms: profile.idle_timeout_ms,
         completion_sentinel: profile.completion_sentinel.clone(),
         env: profile.env.clone(),
+        pty_backend,
     }
 }
 

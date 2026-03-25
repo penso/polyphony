@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use polyphony_core::{CheckoutKind, TrackerKind};
+use polyphony_core::{CheckoutKind, PtyBackendKind, TrackerKind};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 use thiserror::Error;
@@ -118,6 +118,9 @@ pub struct AgentConfig {
     pub max_retry_backoff_ms: u64,
     pub max_turns: u32,
     pub continuation_prompt: Option<String>,
+    /// PTY backend to use for local CLI agents: `"portable-pty"` (default) or `"pty-process"`.
+    #[serde(default)]
+    pub pty_backend: PtyBackendKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -446,9 +449,9 @@ pub use crate::{
         user_config_path,
     },
     render::{
-        agent_definition, apply_agent_prompt_template, render_agent_prompt, render_issue_template,
-        render_issue_template_with_strings, render_prompt, render_turn_prompt,
-        render_turn_template,
+        agent_definition, agent_definition_with_pty, apply_agent_prompt_template,
+        render_agent_prompt, render_issue_template, render_issue_template_with_strings,
+        render_prompt, render_turn_prompt, render_turn_template,
     },
     service::parse_workflow,
 };

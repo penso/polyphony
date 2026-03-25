@@ -164,6 +164,8 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("agent.max_retry_backoff_ms", 300_000)
             .map_err(config_error)?
+            .set_default("agent.pty_backend", "portable-pty")
+            .map_err(config_error)?
             .set_default("agent.max_turns", 20)
             .map_err(config_error)?
             .set_default("orchestration", HashMap::<String, i64>::new())
@@ -818,10 +820,11 @@ impl ServiceConfig {
     }
 
     pub fn all_agents(&self) -> Vec<AgentDefinition> {
+        let pty = self.agent.pty_backend;
         self.agents
             .profiles
             .iter()
-            .map(|(name, profile)| agent_definition(name, profile))
+            .map(|(name, profile)| render::agent_definition_with_pty(name, profile, pty))
             .collect()
     }
 
@@ -889,7 +892,11 @@ impl ServiceConfig {
             self.agents.profiles.get(agent_name).ok_or_else(|| {
                 Error::InvalidConfig(format!("unknown review agent `{agent_name}`"))
             })?;
-        Ok(Some(agent_definition(agent_name, profile)))
+        Ok(Some(render::agent_definition_with_pty(
+            agent_name,
+            profile,
+            self.agent.pty_backend,
+        )))
     }
 
     pub fn pr_review_agent(&self) -> Result<Option<AgentDefinition>, Error> {
@@ -912,7 +919,11 @@ impl ServiceConfig {
         let profile = self.agents.profiles.get(agent_name).ok_or_else(|| {
             Error::InvalidConfig(format!("unknown PR review agent `{agent_name}`"))
         })?;
-        Ok(Some(agent_definition(agent_name, profile)))
+        Ok(Some(render::agent_definition_with_pty(
+            agent_name,
+            profile,
+            self.agent.pty_backend,
+        )))
     }
 
     pub fn expand_agent_candidates(
@@ -930,7 +941,11 @@ impl ServiceConfig {
                 Error::InvalidConfig(format!("unknown selected agent `{agent_name}`"))
             })?;
             stack.extend(profile.fallbacks.iter().rev().cloned());
-            candidates.push(agent_definition(&agent_name, profile));
+            candidates.push(render::agent_definition_with_pty(
+                &agent_name,
+                profile,
+                self.agent.pty_backend,
+            ));
         }
         Ok(candidates)
     }

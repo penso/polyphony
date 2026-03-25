@@ -12,6 +12,6 @@ pub(crate) use liquid::{
 };
 pub(crate) use polyphony_core::{
     AgentDefinition, AgentInteractionMode, AgentPromptMode, AgentTransport, CheckoutKind, Issue,
-    TrackerKind, TrackerQuery,
+    PtyBackendKind, TrackerKind, TrackerQuery,
 };
 pub(crate) use serde_yaml::{Mapping, Value as YamlValue};

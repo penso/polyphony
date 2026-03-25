@@ -66,6 +66,27 @@ pub trait PtyBackend: Send + Sync {
     fn spawn(&self, config: &PtySpawnConfig) -> Result<SpawnedPty, CoreError>;
 }
 
+/// Resolve a PTY backend by kind enum.
+pub fn backend_by_kind(
+    kind: polyphony_core::PtyBackendKind,
+) -> Result<Box<dyn PtyBackend>, CoreError> {
+    match kind {
+        #[cfg(feature = "portable-pty-backend")]
+        polyphony_core::PtyBackendKind::PortablePty => {
+            Ok(Box::new(super::pty_portable::PortablePtyBackend))
+        },
+        #[cfg(feature = "pty-process-backend")]
+        polyphony_core::PtyBackendKind::PtyProcess => {
+            Ok(Box::new(super::pty_process_backend::PtyProcessBackend))
+        },
+        #[allow(unreachable_patterns)]
+        other => Err(CoreError::Adapter(format!(
+            "pty backend {:?} not enabled via feature flag",
+            other
+        ))),
+    }
+}
+
 #[cfg(feature = "portable-pty-backend")]
 pub fn default_pty_backend() -> Box<dyn PtyBackend> {
     Box::new(super::pty_portable::PortablePtyBackend)
