@@ -496,7 +496,7 @@ async fn http_command(
 
 pub(crate) async fn request_status(workflow_path: &Path) -> Result<DaemonStatus, Error> {
     let log_path = latest_log_path(workflow_path)?;
-    match send_request(workflow_path, DaemonRequest::Status).await {
+    match send_control_request(workflow_path, DaemonRequest::Status).await {
         Ok(DaemonResponse::Status { status }) => Ok(status),
         Ok(other) => Err(Error::Config(format!(
             "unexpected daemon response: {}",
@@ -508,7 +508,7 @@ pub(crate) async fn request_status(workflow_path: &Path) -> Result<DaemonStatus,
 }
 
 pub(crate) async fn request_snapshot(workflow_path: &Path) -> Result<RuntimeSnapshot, Error> {
-    match send_request(workflow_path, DaemonRequest::Snapshot).await? {
+    match send_control_request(workflow_path, DaemonRequest::Snapshot).await? {
         DaemonResponse::Snapshot { snapshot } => Ok(*snapshot),
         other => Err(Error::Config(format!(
             "unexpected daemon response: {}",
