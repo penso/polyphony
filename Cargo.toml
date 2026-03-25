@@ -74,4 +74,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 vt100 = "0.15.2"
 
 [patch.crates-io]
-portable-pty = { path = "third_party/portable-pty" }
+portable-pty = { git = "https://github.com/penso/portable-pty", rev = "7057367" }
