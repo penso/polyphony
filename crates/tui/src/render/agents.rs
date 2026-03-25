@@ -277,16 +277,16 @@ fn build_agent_status_line(
         .unwrap_or_else(|| now.signed_duration_since(agent.started_at));
     let since_str = format_duration(since_last);
 
-    // Infer what's happening from the last event
+    // Infer what's happening from the last event kind (Debug format of AgentEventKind)
     let (status_text, status_color) = match last_event {
-        "session started" | "pty session started" | "tmux session started" => {
-            ("starting up", theme.info)
-        },
-        "turn started" => ("thinking", theme.warning),
-        "usage updated" => ("thinking", theme.warning),
-        "tool call" | "tool call started" => ("running tool", theme.info),
-        "tool done" | "tool call completed" => ("thinking", theme.warning),
-        "tool failed" | "tool call failed" => ("thinking (tool failed)", theme.danger),
+        "SessionStarted" => ("starting up", theme.info),
+        "TurnStarted" | "UsageUpdated" => ("thinking", theme.warning),
+        "ToolCallStarted" => ("running tool", theme.info),
+        "ToolCallCompleted" => ("thinking", theme.warning),
+        "ToolCallFailed" => ("thinking (tool failed)", theme.danger),
+        "TurnCompleted" => ("turn done", theme.success),
+        "TurnFailed" => ("turn failed", theme.danger),
+        "Notification" => ("working", theme.info),
         _ => (last_event, theme.muted),
     };
 

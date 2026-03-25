@@ -11,6 +11,11 @@ use ratatui::{
 };
 
 /// Build a child tree row with 2 cells: empty time + full-width title.
+fn is_noise_event_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower == "usage updated" || lower.starts_with("turn ") && lower.ends_with(" usage updated")
+}
+
 fn child_row(title: Line<'_>) -> Row<'_> {
     Row::new(vec![Cell::from(Span::raw("")), Cell::from(title)])
 }
@@ -590,10 +595,11 @@ fn draw_movements_table(
                         Style::default().fg(theme.muted),
                     ));
                 }
-                // Show last event or message as status hint
+                // Show last event or message as status hint (skip noise like "usage updated")
                 if let Some(msg) = running
                     .last_message
                     .as_deref()
+                    .filter(|m| !is_noise_event_message(m))
                     .or(running.last_event.as_deref())
                 {
                     let excerpt = if msg.len() > 50 {
@@ -665,7 +671,7 @@ fn draw_movements_table(
                 };
                 child_row(Line::from(vec![
                     Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
-                    Span::styled(format!("[{time_label}] "), Style::default().fg(theme.muted)),
+                    Span::styled(format!("{time_label} "), Style::default().fg(theme.muted)),
                     Span::styled(excerpt, Style::default().fg(scope_color)),
                 ]))
             },

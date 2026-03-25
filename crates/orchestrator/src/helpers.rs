@@ -12,6 +12,12 @@ pub(crate) const MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES: usize = 24;
 pub(crate) const MAX_PERSISTED_RUN_CONTEXT_TRANSCRIPT_ENTRIES: usize = 12;
 pub(crate) const MAX_SAVED_CONTEXT_MESSAGE_CHARS: usize = 2_048;
 
+/// Messages that are too noisy to show in the agent log lines.
+pub(crate) fn is_noise_agent_event(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower == "usage updated" || lower.starts_with("turn ") && lower.ends_with(" usage updated")
+}
+
 fn path_fingerprint(path: &Path) -> Result<WorkflowFileFingerprint, std::io::Error> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(WorkflowFileFingerprint::Present {
