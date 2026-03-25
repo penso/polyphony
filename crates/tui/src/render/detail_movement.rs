@@ -319,16 +319,23 @@ pub(crate) fn draw_movement_detail(
         }
     }
 
-    // Pipeline steps
+    // Pipeline steps (indented under a tree)
     if !movement.steps.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
-            "Pipeline Steps",
+            "Pipeline",
             Style::default()
                 .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
         )));
-        for step in &movement.steps {
+        let step_count = movement.steps.len();
+        for (i, step) in movement.steps.iter().enumerate() {
+            let is_last = i == step_count - 1;
+            let connector = if is_last {
+                "└─ "
+            } else {
+                "├─ "
+            };
             let (icon, color) = match step.status {
                 polyphony_core::StepStatus::Succeeded => ("✓", theme.success),
                 polyphony_core::StepStatus::Failed => ("✕", theme.danger),
@@ -337,6 +344,7 @@ pub(crate) fn draw_movement_detail(
                 polyphony_core::StepStatus::Pending => ("◷", theme.muted),
             };
             let mut spans = vec![
+                Span::styled(format!("  {connector}"), Style::default().fg(theme.border)),
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
                 Span::styled(step.kind.to_string(), Style::default().fg(theme.foreground)),
             ];
@@ -361,15 +369,20 @@ pub(crate) fn draw_movement_detail(
                 ));
             }
             lines.push(Line::from(spans));
-            // Error detail
+            // Error detail indented further
             if let Some(error) = &step.error {
-                let excerpt = if error.len() > 80 {
-                    format!("{}…", &error[..77])
+                let indent = if is_last {
+                    "     "
+                } else {
+                    "  │  "
+                };
+                let excerpt = if error.len() > 72 {
+                    format!("{}…", &error[..69])
                 } else {
                     error.clone()
                 };
                 lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
+                    Span::styled(indent.to_string(), Style::default().fg(theme.border)),
                     Span::styled(excerpt, Style::default().fg(theme.danger)),
                 ]));
             }
