@@ -82,10 +82,10 @@
       </a>
       <!-- Desktop nav -->
       <div class="hidden md:flex items-center gap-8 text-sm text-[var(--text-secondary)]">
-        <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
         <a href="#how-it-works" class="hover:text-[var(--text-primary)] transition-colors">How It Works</a>
-        <a href="#agents" class="hover:text-[var(--text-primary)] transition-colors">Agents</a>
+        <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
         <a href="#dashboard" class="hover:text-[var(--text-primary)] transition-colors">Dashboard</a>
+        <a href="#agents" class="hover:text-[var(--text-primary)] transition-colors">Agents</a>
         <!-- Theme toggle -->
         <button id="theme-toggle" title="Theme: System" class="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)] transition-colors">
           <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -108,10 +108,10 @@
     <!-- Mobile menu -->
     <div id="mobile-menu" class="hidden md:hidden border-t border-[var(--border-subtle)] bg-[var(--bg)]">
       <div class="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-4 text-sm text-[var(--text-secondary)]">
-        <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
         <a href="#how-it-works" class="hover:text-[var(--text-primary)] transition-colors">How It Works</a>
-        <a href="#agents" class="hover:text-[var(--text-primary)] transition-colors">Agents</a>
+        <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
         <a href="#dashboard" class="hover:text-[var(--text-primary)] transition-colors">Dashboard</a>
+        <a href="#agents" class="hover:text-[var(--text-primary)] transition-colors">Agents</a>
         <div class="flex items-center gap-4 pt-2 border-t border-[var(--border-subtle)]">
           <button id="theme-toggle-mobile" title="Theme: System" class="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)] transition-colors">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -129,10 +129,12 @@
   <!-- ========== 2. HERO ========== -->
   <section class="hero-bg relative min-h-screen flex items-center pt-20">
     <div class="max-w-6xl mx-auto px-6 w-full">
-      <div class="max-w-3xl" data-animate>
-        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-amber-400/30 bg-amber-500/10 text-xs font-medium mb-6">
+      <div class="max-w-3xl mx-auto" data-animate>
+        <div class="flex justify-center mb-6">
+        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-amber-400/30 bg-amber-500/10 text-xs font-medium">
           <span class="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold uppercase tracking-wide">Alpha</span>
           <span class="text-amber-600 dark:text-amber-400">Experimental &mdash; actively developed, expect breaking changes</span>
+        </div>
         </div>
         <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-tight tracking-tight mb-6">
           Git-Native
@@ -150,7 +152,7 @@
             View on GitHub
           </a>
         </div>
-        <p class="text-xs text-[var(--text-muted)]">Works with GitHub, GitLab, Linear &middot; Supports Claude, Codex, Copilot, and more</p>
+        <p class="text-xs text-[var(--text-muted)]">Works with GitHub, GitLab, Linear &middot; Supports Claude, Codex, Copilot, OpenAI, OpenRouter, Kimi, Pi, and more</p>
       </div>
 
       <!-- Product screenshot placeholder -->
