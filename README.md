@@ -11,7 +11,7 @@ Repo-native AI orchestration engine. Issue trackers to coding agents, live in yo
 [![Edition 2024](https://img.shields.io/badge/edition-2024-blue)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
-[Install](#install) - [Triggers](#triggers) - [Agents](#agents) - [Documentation](#documentation) - [Development](#development)
+[Install](#install) - [Triggers](#triggers) - [Agents](#agents) - [Web UI](#web-ui) - [Documentation](#documentation) - [Development](#development)
 
 ![Polyphony TUI](.github/media/screenshot.jpeg)
 
@@ -22,6 +22,26 @@ Repo-native AI orchestration engine. Issue trackers to coding agents, live in yo
 Polyphony connects your issue trackers to AI coding agents, runs them in isolated workspaces, and shows everything live in a terminal dashboard.
 
 Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony brings the same workflow-contract orchestration model to local repositories — but with multiple trigger sources and multiple agent backends.
+
+## Install
+
+```bash
+brew install penso/polyphony/polyphony
+```
+
+Or build from source:
+
+```bash
+cargo install --path crates/cli
+```
+
+Then run it inside any git repository:
+
+```bash
+polyphony
+```
+
+On first start, Polyphony creates a default config at `~/.config/polyphony/config.toml` and seeds repo-local agent prompts in `.polyphony/agents/`.
 
 ## Triggers
 
@@ -61,26 +81,6 @@ just httpd-only     # web UI only (no TUI), port 8080
 ```
 
 Or configure `daemon.listen_port` in your workflow config to always enable the web UI.
-
-## Install
-
-```bash
-brew install penso/polyphony/polyphony
-```
-
-Or build from source:
-
-```bash
-cargo install --path crates/cli
-```
-
-Then run it inside any git repository:
-
-```bash
-polyphony
-```
-
-On first start, Polyphony creates a default config at `~/.config/polyphony/config.toml` and seeds repo-local agent prompts in `.polyphony/agents/`.
 
 ## Documentation
 
