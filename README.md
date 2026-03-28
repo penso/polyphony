@@ -1,5 +1,7 @@
 <div align="center">
 
+<a href="https://polyphony.to"><img src="https://polyphony.to/assets/logo.svg" alt="Polyphony" width="64"></a>
+
 # Polyphony
 
 Repo-native AI orchestration engine. Issue trackers to coding agents, live in your terminal.
