@@ -381,6 +381,12 @@ pub(crate) fn serve_http(
     log_path: Option<PathBuf>,
 ) -> JoinHandle<Result<(), Error>> {
     let bound_addr = listener.local_addr().ok();
+
+    #[cfg(feature = "httpd")]
+    let httpd_snapshot_rx = snapshot_rx.clone();
+    #[cfg(feature = "httpd")]
+    let httpd_command_tx = command_tx.clone();
+
     let state = Arc::new(ControlState {
         socket_path,
         pid_path,
@@ -391,11 +397,24 @@ pub(crate) fn serve_http(
         auth_token,
     });
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/api/status", get(http_status))
         .route("/api/snapshot", get(http_snapshot))
         .route("/api/command", post(http_command))
         .with_state(state);
+
+    #[cfg(feature = "httpd")]
+    {
+        let template_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../httpd/templates")
+            .canonicalize()
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../httpd/templates")
+            });
+        let httpd_router =
+            polyphony_httpd::build_router(httpd_snapshot_rx, httpd_command_tx, template_dir);
+        app = app.merge(httpd_router);
+    }
 
     tracing::debug!(
         http_address = ?bound_addr,

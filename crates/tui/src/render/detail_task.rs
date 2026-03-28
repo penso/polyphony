@@ -275,6 +275,7 @@ fn task_category_label(category: TaskCategory) -> &'static str {
         TaskCategory::Testing => "testing",
         TaskCategory::Documentation => "docs",
         TaskCategory::Review => "review",
+        TaskCategory::Feedback => "feedback",
     }
 }
 

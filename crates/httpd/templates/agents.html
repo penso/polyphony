@@ -1,0 +1,78 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Agents{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Agents</h1>
+
+{% if running %}
+<div class="card">
+  <h2>Running ({{ running | length }})</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Issue</th>
+        <th>Agent</th>
+        <th>Model</th>
+        <th>Turns</th>
+        <th>State</th>
+        <th>Last Event</th>
+        <th>Started</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in running %}
+    <tr>
+      <td>{{ a.issue_identifier }}</td>
+      <td>{{ a.agent_name }}</td>
+      <td style="color: var(--muted);">{{ a.model }}</td>
+      <td style="color: var(--muted);">{{ a.turn_count }}/{{ a.max_turns }}</td>
+      <td><span class="badge badge-running">{{ a.state }}</span></td>
+      <td style="color: var(--muted);">{{ a.last_event }}</td>
+      <td style="color: var(--muted);">{{ a.started_at }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if agent_history %}
+<div class="card">
+  <h2>History ({{ agent_history | length }})</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Issue</th>
+        <th>Agent</th>
+        <th>Model</th>
+        <th>Status</th>
+        <th>Attempt</th>
+        <th>Turns</th>
+        <th>Started</th>
+        <th>Finished</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for a in agent_history %}
+    <tr>
+      <td>{{ a.issue_identifier }}</td>
+      <td>{{ a.agent_name }}</td>
+      <td style="color: var(--muted);">{{ a.model }}</td>
+      <td>
+        {% if a.status == "Succeeded" %}<span class="badge badge-success">{{ a.status }}</span>
+        {% elif a.status == "Failed" %}<span class="badge badge-failed">{{ a.status }}</span>
+        {% else %}<span class="badge badge-warning">{{ a.status }}</span>{% endif %}
+      </td>
+      <td style="color: var(--muted);">{{ a.attempt }}</td>
+      <td style="color: var(--muted);">{{ a.turn_count }}/{{ a.max_turns }}</td>
+      <td style="color: var(--muted);">{{ a.started_at }}</td>
+      <td style="color: var(--muted);">{{ a.finished_at }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">No agent history yet.</div>
+{% endif %}
+{% endblock %}

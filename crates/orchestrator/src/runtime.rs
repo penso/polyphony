@@ -222,6 +222,8 @@ impl RuntimeService {
                 pending_task_resolutions: Vec::new(),
                 pending_task_retries: Vec::new(),
                 pending_agent_stops: Vec::new(),
+                pending_create_issues: Vec::new(),
+                pending_feedback_injections: Vec::new(),
                 reload_support: None,
                 state,
                 user_interactions,
@@ -410,6 +412,29 @@ impl RuntimeService {
                             self.stop_running_by_user(&issue_id).await;
                             let _ = self.emit_snapshot().await;
                         }
+                        RuntimeCommand::CreateIssue { title, description } => {
+                            info!(%title, "create issue requested");
+                            self.pending_create_issues.push(CreateIssueCommandRequest {
+                                title,
+                                description,
+                            });
+                            self.process_pending_create_issues().await;
+                            let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::InjectMovementFeedback {
+                            movement_id,
+                            prompt,
+                            agent_name,
+                        } => {
+                            info!(%movement_id, "feedback injection requested");
+                            self.pending_feedback_injections.push(FeedbackInjectionRequest {
+                                movement_id,
+                                prompt,
+                                agent_name,
+                            });
+                            self.process_pending_feedback_injections().await;
+                            let _ = self.emit_snapshot().await;
+                        }
                     }
                 }
                 Some(message) = self.command_rx.recv() => {
@@ -584,6 +609,24 @@ impl RuntimeService {
                 Ok(RuntimeCommand::StopAgent { issue_id }) => {
                     info!(%issue_id, "user-initiated agent stop queued");
                     self.pending_agent_stops.push(issue_id);
+                },
+                Ok(RuntimeCommand::CreateIssue { title, description }) => {
+                    info!(%title, "create issue queued");
+                    self.pending_create_issues
+                        .push(CreateIssueCommandRequest { title, description });
+                },
+                Ok(RuntimeCommand::InjectMovementFeedback {
+                    movement_id,
+                    prompt,
+                    agent_name,
+                }) => {
+                    info!(%movement_id, "feedback injection queued");
+                    self.pending_feedback_injections
+                        .push(FeedbackInjectionRequest {
+                            movement_id,
+                            prompt,
+                            agent_name,
+                        });
                 },
                 Err(_) => return false,
             }
@@ -1008,6 +1051,57 @@ impl RuntimeService {
                 .await
             {
                 warn!(%error, movement_id, "failed to dispatch movement retry");
+            }
+        }
+    }
+
+    pub(crate) async fn process_pending_create_issues(&mut self) {
+        let requests = std::mem::take(&mut self.pending_create_issues);
+        if requests.is_empty() {
+            return;
+        }
+
+        for request in requests {
+            let create_req = polyphony_core::CreateIssueRequest {
+                title: request.title.clone(),
+                description: Some(request.description.clone()),
+                ..Default::default()
+            };
+            match self.tracker.create_issue(&create_req).await {
+                Ok(issue) => {
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("created issue {}: {}", issue.identifier, issue.title),
+                    );
+                    self.pending_refresh = true;
+                },
+                Err(error) => {
+                    warn!(%error, title = %request.title, "failed to create issue");
+                    self.push_event(
+                        EventScope::Dispatch,
+                        format!("failed to create issue: {error}"),
+                    );
+                },
+            }
+        }
+    }
+
+    pub(crate) async fn process_pending_feedback_injections(&mut self) {
+        let requests = std::mem::take(&mut self.pending_feedback_injections);
+        if requests.is_empty() {
+            return;
+        }
+
+        for request in requests {
+            if let Err(error) = self.inject_feedback_task(&request).await {
+                warn!(%error, movement_id = %request.movement_id, "failed to inject feedback");
+                self.push_event(
+                    EventScope::Dispatch,
+                    format!(
+                        "failed to inject feedback into {}: {error}",
+                        request.movement_id
+                    ),
+                );
             }
         }
     }

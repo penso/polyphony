@@ -401,7 +401,9 @@ pub fn draw_triggers_tab(
                 }))
                 .title_bottom(
                     Line::from(vec![
-                        Span::styled("─s:", Style::default().fg(theme.muted)),
+                        Span::styled("─n:", Style::default().fg(theme.muted)),
+                        Span::styled("new", Style::default().fg(theme.highlight)),
+                        Span::styled(" s:", Style::default().fg(theme.muted)),
                         Span::styled(sort_label, Style::default().fg(theme.highlight)),
                         Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
                     ])

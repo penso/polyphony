@@ -1088,4 +1088,151 @@ impl RuntimeService {
         );
         Ok(())
     }
+
+    pub(crate) async fn inject_feedback_task(
+        &mut self,
+        request: &FeedbackInjectionRequest,
+    ) -> Result<(), Error> {
+        let movement_id = &request.movement_id;
+        let Some(movement) = self.state.movements.get(movement_id).cloned() else {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "movement {movement_id} not found"
+            ))));
+        };
+        let Some(issue_id) = &movement.issue_id else {
+            return Err(Error::Core(CoreError::Adapter(format!(
+                "movement {movement_id} has no associated issue"
+            ))));
+        };
+
+        // Resolve the issue from visible_issues
+        let issue = self
+            .state
+            .visible_issues
+            .iter()
+            .find(|row| row.issue_id == *issue_id)
+            .map(|row| Issue {
+                id: row.issue_id.clone(),
+                identifier: row.issue_identifier.clone(),
+                title: row.title.clone(),
+                description: row.description.clone(),
+                priority: row.priority,
+                state: row.state.clone(),
+                labels: row.labels.clone(),
+                branch_name: None,
+                url: row.url.clone(),
+                author: None,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                parent_id: row.parent_id.clone(),
+                comments: vec![],
+                blocked_by: vec![],
+                approval_state: row.approval_state,
+            })
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(format!(
+                    "issue {issue_id} not found for movement {movement_id}"
+                )))
+            })?;
+
+        // Compute next ordinal
+        let next_ordinal = self
+            .state
+            .tasks
+            .get(movement_id)
+            .map(|tasks| tasks.iter().map(|t| t.ordinal).max().unwrap_or(0) + 1)
+            .unwrap_or(1);
+
+        // Create the feedback task
+        let now = Utc::now();
+        let feedback_title = request
+            .prompt
+            .lines()
+            .next()
+            .unwrap_or("User feedback")
+            .chars()
+            .take(80)
+            .collect::<String>();
+        let task = Task {
+            id: format!("task-{}", uuid::Uuid::new_v4()),
+            movement_id: movement_id.clone(),
+            title: feedback_title.clone(),
+            description: Some(request.prompt.clone()),
+            activity_log: Vec::new(),
+            category: TaskCategory::Feedback,
+            status: TaskStatus::Pending,
+            ordinal: next_ordinal,
+            parent_id: None,
+            agent_name: request.agent_name.clone(),
+            session_id: None,
+            thread_id: None,
+            turns_completed: 0,
+            tokens: TokenUsage::default(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        // Persist the task
+        if let Some(store) = &self.store {
+            store.save_task(&task).await?;
+        }
+        self.state
+            .tasks
+            .entry(movement_id.clone())
+            .or_default()
+            .push(task.clone());
+
+        // Add an AgentRun step for this task
+        let step_ordinal = movement.steps.last().map(|s| s.ordinal + 1).unwrap_or(0);
+        let step =
+            polyphony_core::StepRecord::new(polyphony_core::StepKind::AgentRun, step_ordinal)
+                .with_task_id(task.id.clone());
+
+        if let Some(m) = self.state.movements.get_mut(movement_id) {
+            m.steps.push(step);
+            // Reset movement status if delivered/failed so the pipeline resumes
+            if matches!(m.status, MovementStatus::Delivered | MovementStatus::Failed) {
+                m.status = MovementStatus::InProgress;
+                m.pipeline_stage = Some(PipelineStage::Executing);
+            }
+            // Store user feedback as manual_dispatch_directives for prompt injection
+            m.manual_dispatch_directives = Some(request.prompt.clone());
+            m.updated_at = now;
+            m.push_log(
+                polyphony_core::MovementLogScope::Pipeline,
+                format!("feedback injected: {feedback_title}"),
+            );
+            if let Some(store) = &self.store {
+                store.save_movement(m).await?;
+            }
+        }
+
+        self.push_event(
+            EventScope::Dispatch,
+            format!(
+                "{} feedback task injected: {feedback_title}",
+                issue.identifier
+            ),
+        );
+
+        // Dispatch the next pending task (which will be this feedback task)
+        let workflow = self.workflow();
+        let workspace_path = movement
+            .workspace_path
+            .as_deref()
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(format!(
+                    "movement {movement_id} has no workspace"
+                )))
+            })?
+            .to_path_buf();
+
+        self.dispatch_next_task(workflow, issue, None, false, movement_id, &workspace_path)
+            .await?;
+
+        Ok(())
+    }
 }

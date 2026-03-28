@@ -43,6 +43,23 @@ Plug in any combination of AI coding agents:
 
 Each agent gets its own workspace (worktree, directory, or clone), a shared workflow policy, retries with fallback chains, and budget-aware throttling.
 
+## Web UI
+
+Polyphony includes a web interface that runs alongside the terminal dashboard. When `daemon.listen_port` is set, both the TUI and the web UI are available simultaneously:
+
+- **SSR dashboard** — server-rendered pages for triggers, movements, agents, tasks, and logs
+- **GraphQL API** — query and mutate runtime state, with an interactive playground at `/graphql`
+- **WebSocket subscriptions** — real-time state updates via GraphQL subscriptions at `/graphql/ws`
+- **Jinja templates** — HTML templates in `crates/httpd/templates/`, easy to customize
+
+```bash
+just httpd          # TUI + web UI on port 8080
+just httpd 3000     # TUI + web UI on custom port
+just httpd-only     # web UI only (no TUI), port 8080
+```
+
+Or configure `daemon.listen_port` in your workflow config to always enable the web UI.
+
 ## Install
 
 ```bash
@@ -80,6 +97,7 @@ Full reference material lives in [`docs/`](docs/src):
 just format   # format code
 just lint     # clippy + checks
 just test     # run tests
+just httpd    # run web UI on port 8080
 ```
 
 ## License

@@ -88,6 +88,14 @@ pub async fn run(
                         if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
                             app.dispatch_modal = None;
                         }
+                    } else if app.create_issue_modal.is_some() {
+                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                            app.create_issue_modal = None;
+                        }
+                    } else if app.feedback_modal.is_some() {
+                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                            app.feedback_modal = None;
+                        }
                     } else if app.has_detail() {
                         // Click outside modal closes it
                         if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
@@ -284,6 +292,16 @@ fn handle_key_event(
             tracing::info!(?command, "TUI sending command");
             let _ = command_tx.send(command);
         }
+    } else if app.create_issue_modal.is_some() {
+        if let Some(command) = handle_create_issue_modal_key(app, key) {
+            tracing::info!(?command, "TUI sending command");
+            let _ = command_tx.send(command);
+        }
+    } else if app.feedback_modal.is_some() {
+        if let Some(command) = handle_feedback_modal_key(app, key, snapshot) {
+            tracing::info!(?command, "TUI sending command");
+            let _ = command_tx.send(command);
+        }
     } else if app.confirm_quit {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
@@ -345,6 +363,7 @@ fn handle_key_event(
             KeyCode::Char('e')
             | KeyCode::Char('E')
             | KeyCode::Char('c')
+            | KeyCode::Char('f')
             | KeyCode::Char('w')
             | KeyCode::Char('O') => {
                 if let Some(cmd) = handle_detail_key(app, key.code, snapshot, command_tx) {
@@ -753,6 +772,16 @@ fn handle_key(
                             });
                         }
                     },
+                    Some(app::OrchestratorTreeRow::Progress {
+                        movement_snapshot_index,
+                        ..
+                    }) => {
+                        let movement = &snapshot.movements[movement_snapshot_index];
+                        app.push_detail(crate::app::DetailView::Movement {
+                            movement_id: movement.id.clone(),
+                            scroll: 0,
+                        });
+                    },
                     None => {},
                 }
             } else if app.active_tab == app::ActiveTab::Deliverables
@@ -824,6 +853,12 @@ fn handle_key(
         },
 
         // Dispatch selected trigger
+        KeyCode::Char('n') => {
+            if app.active_tab == app::ActiveTab::Triggers {
+                app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
+                return None;
+            }
+        },
         KeyCode::Char('d') => {
             if app.active_tab == app::ActiveTab::Triggers
                 && let Some(trigger) = app.selected_trigger(snapshot)
@@ -965,6 +1000,59 @@ fn handle_key(
                     .unwrap_or(&issue_id);
                 app.show_toast(format!("Stopping agent on {identifier}"), None);
                 return Some(RuntimeCommand::StopAgent { issue_id });
+            }
+        },
+
+        // Inject feedback into a movement from the Orchestration tab
+        KeyCode::Char('f') => {
+            if app.active_tab == app::ActiveTab::Orchestrator
+                && let Some(row) = app.selected_orchestrator_row().cloned()
+            {
+                let movement = match row {
+                    app::OrchestratorTreeRow::Movement { snapshot_index, .. }
+                    | app::OrchestratorTreeRow::Trigger {
+                        movement_snapshot_index: snapshot_index,
+                        ..
+                    }
+                    | app::OrchestratorTreeRow::Progress {
+                        movement_snapshot_index: snapshot_index,
+                        ..
+                    }
+                    | app::OrchestratorTreeRow::Outcome {
+                        movement_snapshot_index: snapshot_index,
+                        ..
+                    }
+                    | app::OrchestratorTreeRow::LogEntry {
+                        movement_snapshot_index: snapshot_index,
+                        ..
+                    } => snapshot.movements.get(snapshot_index),
+                    app::OrchestratorTreeRow::Task { snapshot_index, .. } => {
+                        let task = &snapshot.tasks[snapshot_index];
+                        snapshot.movements.iter().find(|m| m.id == task.movement_id)
+                    },
+                    app::OrchestratorTreeRow::AgentSession { history_index, .. } => {
+                        let session = &snapshot.agent_history[history_index];
+                        snapshot.movements.iter().find(|m| {
+                            m.issue_identifier.as_deref() == Some(&session.issue_identifier)
+                        })
+                    },
+                    app::OrchestratorTreeRow::RunningAgent { running_index, .. }
+                    | app::OrchestratorTreeRow::AgentLogLine { running_index, .. } => {
+                        let running = &snapshot.running[running_index];
+                        snapshot.movements.iter().find(|m| {
+                            m.issue_identifier.as_deref() == Some(running.issue_identifier.as_str())
+                        })
+                    },
+                };
+                if let Some(movement) = movement
+                    && movement.workspace_path.is_some()
+                {
+                    app.feedback_modal = Some(crate::app::FeedbackModalState::new(
+                        movement.id.clone(),
+                        movement.title.clone(),
+                    ));
+                    return None;
+                }
             }
         },
 
@@ -1220,6 +1308,16 @@ fn handle_detail_key(
                         movement_id: movement.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
                     });
+                }
+            },
+            KeyCode::Char('f') => {
+                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
+                    && movement.workspace_path.is_some()
+                {
+                    app.feedback_modal = Some(crate::app::FeedbackModalState::new(
+                        movement.id.clone(),
+                        movement.title.clone(),
+                    ));
                 }
             },
             KeyCode::Char('e') | KeyCode::Char('E') => {
@@ -1758,6 +1856,15 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     artifact_cache: Box::new(None),
                 })
             },
+            Some(app::OrchestratorTreeRow::Progress {
+                movement_snapshot_index,
+                ..
+            }) => snapshot.movements.get(movement_snapshot_index).map(|m| {
+                crate::app::DetailView::Movement {
+                    movement_id: m.id.clone(),
+                    scroll: 0,
+                }
+            }),
             None => None,
         },
         app::ActiveTab::Tasks => {
@@ -2568,6 +2675,138 @@ fn submit_dispatch_modal(app: &mut AppState) -> Option<RuntimeCommand> {
             })
         },
     }
+}
+
+pub(crate) fn handle_create_issue_modal_key(
+    app: &mut AppState,
+    key: event::KeyEvent,
+) -> Option<RuntimeCommand> {
+    let control_held = key.modifiers.contains(event::KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => {
+            app.create_issue_modal = None;
+            None
+        },
+        KeyCode::Char('d') | KeyCode::Char('D') if control_held => submit_create_issue_modal(app),
+        KeyCode::Tab => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.toggle_field();
+            }
+            None
+        },
+        _ => {
+            let modal = app.create_issue_modal.as_mut()?;
+            match key.code {
+                KeyCode::Enter => modal.insert_newline(),
+                KeyCode::Backspace => modal.backspace(),
+                KeyCode::Left => modal.move_left(),
+                KeyCode::Right => modal.move_right(),
+                KeyCode::Up => modal.move_up(),
+                KeyCode::Down => modal.move_down(),
+                KeyCode::Home => modal.move_home(),
+                KeyCode::End => modal.move_end(),
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty() || key.modifiers == event::KeyModifiers::SHIFT =>
+                {
+                    modal.insert_char(c);
+                },
+                _ => {},
+            }
+            None
+        },
+    }
+}
+
+fn submit_create_issue_modal(app: &mut AppState) -> Option<RuntimeCommand> {
+    let modal = app.create_issue_modal.take()?;
+    if !modal.is_valid() {
+        app.create_issue_modal = Some(modal);
+        app.show_toast("Title is required", None);
+        return None;
+    }
+    let title = modal.title.trim().to_string();
+    app.show_toast(format!("Creating issue: {title}"), None);
+    Some(RuntimeCommand::CreateIssue {
+        title,
+        description: modal.description.trim().to_string(),
+    })
+}
+
+pub(crate) fn handle_feedback_modal_key(
+    app: &mut AppState,
+    key: event::KeyEvent,
+    snapshot: &RuntimeSnapshot,
+) -> Option<RuntimeCommand> {
+    let control_held = key.modifiers.contains(event::KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => {
+            app.feedback_modal = None;
+            None
+        },
+        KeyCode::Char('d') | KeyCode::Char('D') if control_held => submit_feedback_modal(app),
+        KeyCode::Tab => {
+            // Cycle through agent profiles
+            if !snapshot.agent_profiles.is_empty() {
+                let modal = app.feedback_modal.as_mut()?;
+                let current_idx = modal
+                    .agent_name
+                    .as_ref()
+                    .and_then(|name| snapshot.agent_profiles.iter().position(|p| p.name == *name));
+                let next_idx = match current_idx {
+                    Some(idx) if idx + 1 < snapshot.agent_profiles.len() => idx + 1,
+                    _ => 0,
+                };
+                modal.agent_name = Some(snapshot.agent_profiles[next_idx].name.clone());
+            }
+            None
+        },
+        KeyCode::BackTab => {
+            // Clear agent selection back to default
+            if let Some(modal) = app.feedback_modal.as_mut() {
+                modal.agent_name = None;
+            }
+            None
+        },
+        _ => {
+            let modal = app.feedback_modal.as_mut()?;
+            match key.code {
+                KeyCode::Enter => modal.insert_newline(),
+                KeyCode::Backspace => modal.backspace(),
+                KeyCode::Left => modal.move_left(),
+                KeyCode::Right => modal.move_right(),
+                KeyCode::Up => modal.move_up(),
+                KeyCode::Down => modal.move_down(),
+                KeyCode::Home => modal.move_home(),
+                KeyCode::End => modal.move_end(),
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty() || key.modifiers == event::KeyModifiers::SHIFT =>
+                {
+                    modal.insert_char(c);
+                },
+                _ => {},
+            }
+            None
+        },
+    }
+}
+
+fn submit_feedback_modal(app: &mut AppState) -> Option<RuntimeCommand> {
+    let modal = app.feedback_modal.take()?;
+    let prompt = modal.normalized_prompt();
+    let Some(prompt) = prompt else {
+        app.feedback_modal = Some(modal);
+        app.show_toast("Feedback prompt is required", None);
+        return None;
+    };
+    app.show_toast(
+        "Injecting feedback",
+        Some(prompt.lines().next().unwrap_or("").to_string()),
+    );
+    Some(RuntimeCommand::InjectMovementFeedback {
+        movement_id: modal.movement_id,
+        prompt,
+        agent_name: modal.agent_name,
+    })
 }
 
 fn sync_selection_after_search(app: &mut AppState, snapshot: &RuntimeSnapshot) {
@@ -3798,5 +4037,264 @@ mod tests {
         assert!(app.pending_cast_playback.is_none());
         fs::remove_dir_all(workspace).unwrap();
         fs::remove_dir_all(old_workspace).unwrap();
+    }
+
+    #[test]
+    fn triggers_tab_opens_create_issue_modal() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Triggers;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('n'), &snapshot);
+
+        assert!(command.is_none());
+        assert!(app.create_issue_modal.is_some());
+    }
+
+    #[test]
+    fn create_issue_modal_submits_with_title() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
+
+        // Type title
+        for ch in "Fix the bug".chars() {
+            let _ = crate::event_loop::handle_create_issue_modal_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+            );
+        }
+
+        // Switch to description
+        let _ = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+        );
+
+        // Type description
+        for ch in "details here".chars() {
+            let _ = crate::event_loop::handle_create_issue_modal_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+            );
+        }
+
+        // Submit with Ctrl+D
+        let command = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::CreateIssue { title, description })
+                if title == "Fix the bug" && description == "details here"
+        ));
+        assert!(app.create_issue_modal.is_none());
+    }
+
+    #[test]
+    fn create_issue_modal_rejects_empty_title() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
+
+        let command = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert!(command.is_none());
+        assert!(app.create_issue_modal.is_some());
+    }
+
+    #[test]
+    fn create_issue_modal_escape_cancels() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
+
+        let command = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+        );
+
+        assert!(command.is_none());
+        assert!(app.create_issue_modal.is_none());
+    }
+
+    #[test]
+    fn movement_detail_opens_feedback_modal() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.movements[0].workspace_path = Some(std::path::PathBuf::from("/tmp/ws"));
+        app.on_snapshot(&snapshot);
+        app.push_detail(crate::app::DetailView::Movement {
+            movement_id: "mov-1".into(),
+            scroll: 0,
+        });
+
+        let (command_tx, _) = mpsc::unbounded_channel();
+        crate::event_loop::handle_key_event(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::empty()),
+            &snapshot,
+            &command_tx,
+        );
+
+        assert!(app.feedback_modal.is_some());
+        let modal = app.feedback_modal.as_ref().unwrap();
+        assert_eq!(modal.movement_id, "mov-1");
+    }
+
+    #[test]
+    fn feedback_modal_submits_prompt() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        app.feedback_modal = Some(crate::app::FeedbackModalState::new(
+            "mov-1".into(),
+            "Ship PR".into(),
+        ));
+
+        for ch in "add tests".chars() {
+            let _ = crate::event_loop::handle_feedback_modal_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+                &snapshot,
+            );
+        }
+
+        let command = crate::event_loop::handle_feedback_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &snapshot,
+        );
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::InjectMovementFeedback {
+                movement_id,
+                prompt,
+                agent_name,
+            }) if movement_id == "mov-1" && prompt == "add tests" && agent_name.is_none()
+        ));
+        assert!(app.feedback_modal.is_none());
+    }
+
+    #[test]
+    fn feedback_modal_rejects_empty_prompt() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        app.feedback_modal = Some(crate::app::FeedbackModalState::new(
+            "mov-1".into(),
+            "Ship PR".into(),
+        ));
+
+        let command = crate::event_loop::handle_feedback_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &snapshot,
+        );
+
+        assert!(command.is_none());
+        assert!(app.feedback_modal.is_some());
+    }
+
+    #[test]
+    fn feedback_modal_escape_cancels() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let snapshot = test_snapshot_with_deliverable();
+        app.feedback_modal = Some(crate::app::FeedbackModalState::new(
+            "mov-1".into(),
+            "Ship PR".into(),
+        ));
+
+        let command = crate::event_loop::handle_feedback_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+            &snapshot,
+        );
+
+        assert!(command.is_none());
+        assert!(app.feedback_modal.is_none());
+    }
+
+    #[test]
+    fn feedback_modal_tab_cycles_agent() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.agent_profiles = vec![
+            polyphony_core::AgentProfileSummary {
+                name: "coder".into(),
+                kind: String::new(),
+                description: None,
+                source: Default::default(),
+            },
+            polyphony_core::AgentProfileSummary {
+                name: "reviewer".into(),
+                kind: String::new(),
+                description: None,
+                source: Default::default(),
+            },
+        ];
+        app.feedback_modal = Some(crate::app::FeedbackModalState::new(
+            "mov-1".into(),
+            "Ship PR".into(),
+        ));
+
+        // First Tab selects the first agent
+        let _ = crate::event_loop::handle_feedback_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+            &snapshot,
+        );
+        assert_eq!(
+            app.feedback_modal.as_ref().unwrap().agent_name.as_deref(),
+            Some("coder")
+        );
+
+        // Second Tab selects next agent
+        let _ = crate::event_loop::handle_feedback_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+            &snapshot,
+        );
+        assert_eq!(
+            app.feedback_modal.as_ref().unwrap().agent_name.as_deref(),
+            Some("reviewer")
+        );
+
+        // Shift+Tab resets to default
+        let _ = crate::event_loop::handle_feedback_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            &snapshot,
+        );
+        assert!(app.feedback_modal.as_ref().unwrap().agent_name.is_none());
+    }
+
+    #[test]
+    fn create_issue_modal_consumes_typed_keys() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
+        app.active_tab = crate::app::ActiveTab::Triggers;
+
+        // Type 'q' which would normally quit — should be consumed by the modal
+        let _ = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()),
+        );
+
+        assert!(app.create_issue_modal.is_some());
+        let modal = app.create_issue_modal.as_ref().unwrap();
+        assert_eq!(modal.title, "q");
     }
 }

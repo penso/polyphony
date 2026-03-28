@@ -318,6 +318,7 @@ fn draw_movements_table(
                     matching_movements.contains(snapshot_index)
                 },
                 OrchestratorTreeRow::Trigger { .. }
+                | OrchestratorTreeRow::Progress { .. }
                 | OrchestratorTreeRow::AgentSession { .. }
                 | OrchestratorTreeRow::RunningAgent { .. }
                 | OrchestratorTreeRow::AgentLogLine { .. } => {
@@ -447,6 +448,38 @@ fn draw_movements_table(
                     Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                     Span::styled("trigger ", Style::default().fg(theme.muted)),
                     Span::styled(display_title, Style::default().fg(theme.highlight)),
+                ]))
+            },
+            OrchestratorTreeRow::Progress {
+                movement_snapshot_index,
+                is_last_child,
+            } => {
+                let m = &snapshot.movements[*movement_snapshot_index];
+                let connector = if *is_last_child {
+                    "└─ "
+                } else {
+                    "├─ "
+                };
+                let completed = m.tasks_completed;
+                let total = m.task_count;
+                let ratio = if total > 0 {
+                    completed as f64 / total as f64
+                } else {
+                    0.0
+                };
+                // Build a text-based progress bar using Unicode blocks
+                let bar_width = 20usize;
+                let filled = (ratio * bar_width as f64).round() as usize;
+                let empty = bar_width.saturating_sub(filled);
+                let bar_filled: String = "█".repeat(filled);
+                let bar_empty: String = "░".repeat(empty);
+                let label = format!("{completed}/{total}");
+                let status_color = movement_status_color_pub(&m.status, theme);
+                child_row(Line::from(vec![
+                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
+                    Span::styled(bar_filled, Style::default().fg(status_color)),
+                    Span::styled(bar_empty, Style::default().fg(theme.border)),
+                    Span::styled(format!(" {label}"), Style::default().fg(theme.muted)),
                 ]))
             },
             OrchestratorTreeRow::Task {
@@ -912,7 +945,9 @@ fn draw_movements_table(
             .title_bottom(legend)
             .title_bottom(
                 Line::from(vec![
-                    Span::styled("─s:", Style::default().fg(theme.muted)),
+                    Span::styled("─f:", Style::default().fg(theme.muted)),
+                    Span::styled("feedback", Style::default().fg(theme.highlight)),
+                    Span::styled(" s:", Style::default().fg(theme.muted)),
                     Span::styled(sort_label, Style::default().fg(theme.highlight)),
                     Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
                 ])

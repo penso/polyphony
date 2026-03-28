@@ -1,0 +1,31 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Logs{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Recent Events</h1>
+
+{% if recent_events %}
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Scope</th>
+        <th>Message</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in recent_events | reverse %}
+    <tr>
+      <td style="color: var(--muted); white-space: nowrap;">{{ e.at }}</td>
+      <td><span class="badge badge-pending">{{ e.scope }}</span></td>
+      <td>{{ e.message }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">No events yet.</div>
+{% endif %}
+{% endblock %}

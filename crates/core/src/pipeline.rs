@@ -116,6 +116,7 @@ pub enum TaskCategory {
     Testing,
     Documentation,
     Review,
+    Feedback,
 }
 
 impl fmt::Display for TaskCategory {
@@ -126,6 +127,7 @@ impl fmt::Display for TaskCategory {
             Self::Testing => "testing",
             Self::Documentation => "documentation",
             Self::Review => "review",
+            Self::Feedback => "feedback",
         };
         f.write_str(s)
     }

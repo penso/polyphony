@@ -10,6 +10,8 @@ pub(crate) mod detail_trigger;
 mod footer;
 mod header;
 pub(crate) mod logs;
+pub(crate) mod modal_create_issue;
+pub(crate) mod modal_feedback;
 mod orchestrator;
 pub(crate) mod popups;
 pub(crate) mod tasks;
@@ -93,6 +95,14 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     if app.dispatch_modal.is_some() {
         popups::draw_dispatch_modal(frame, app);
+    }
+
+    if app.create_issue_modal.is_some() {
+        modal_create_issue::draw_create_issue_modal(frame, app);
+    }
+
+    if app.feedback_modal.is_some() {
+        modal_feedback::draw_feedback_modal(frame, app);
     }
 
     if app.leaving {

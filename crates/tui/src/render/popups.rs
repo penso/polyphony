@@ -427,7 +427,7 @@ pub fn draw_dispatch_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
-fn visual_cursor_position(text: &str, cursor: usize, width: usize) -> (usize, usize) {
+pub(crate) fn visual_cursor_position(text: &str, cursor: usize, width: usize) -> (usize, usize) {
     let width = width.max(1);
     let mut completed_rows = 0usize;
     let mut current_line_len = 0usize;
@@ -451,7 +451,11 @@ fn wrapped_line_rows(line_len: usize, width: usize) -> usize {
     line_len.div_ceil(width).max(1)
 }
 
-fn wrap_text_for_textarea(text: &str, width: usize, style: Option<Style>) -> Vec<Line<'static>> {
+pub(crate) fn wrap_text_for_textarea(
+    text: &str,
+    width: usize,
+    style: Option<Style>,
+) -> Vec<Line<'static>> {
     let width = width.max(1);
     let mut lines = Vec::new();
 
