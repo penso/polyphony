@@ -25,6 +25,7 @@
   - [polyphony-tui](./crates/polyphony-tui.md)
   - [polyphony-httpd](./crates/polyphony-httpd.md)
   - [polyphony-cli](./crates/polyphony-cli.md)
+- [Comparison: Paperclip](./comparison-paperclip.md)
 - [Provider Crates](./providers.md)
   - [polyphony-agent-common](./providers/polyphony-agent-common.md)
   - [polyphony-agent-local](./providers/polyphony-agent-local.md)

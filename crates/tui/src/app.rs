@@ -160,6 +160,224 @@ impl DispatchModalState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CreateIssueModalState {
+    pub title: String,
+    pub description: String,
+    /// Which field has focus: 0 = title, 1 = description
+    pub cursor_field: u8,
+    /// Character cursor position within the focused field
+    pub cursor_pos: usize,
+}
+
+impl CreateIssueModalState {
+    pub(crate) fn new() -> Self {
+        Self {
+            title: String::new(),
+            description: String::new(),
+            cursor_field: 0,
+            cursor_pos: 0,
+        }
+    }
+
+    pub(crate) fn focused_text(&self) -> &str {
+        if self.cursor_field == 0 {
+            &self.title
+        } else {
+            &self.description
+        }
+    }
+
+    fn focused_text_mut(&mut self) -> &mut String {
+        if self.cursor_field == 0 {
+            &mut self.title
+        } else {
+            &mut self.description
+        }
+    }
+
+    pub(crate) fn insert_char(&mut self, ch: char) {
+        let pos = self.cursor_pos;
+        let text = self.focused_text_mut();
+        let index = char_to_byte_index(text, pos);
+        text.insert(index, ch);
+        self.cursor_pos += 1;
+    }
+
+    pub(crate) fn insert_newline(&mut self) {
+        if self.cursor_field == 1 {
+            self.insert_char('\n');
+        }
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let remove_at = self.cursor_pos - 1;
+        let cursor = self.cursor_pos;
+        let text = self.focused_text_mut();
+        let before = text.chars().take(remove_at);
+        let after = text.chars().skip(cursor);
+        *text = before.chain(after).collect();
+        self.cursor_pos = remove_at;
+    }
+
+    pub(crate) fn move_left(&mut self) {
+        self.cursor_pos = self.cursor_pos.saturating_sub(1);
+    }
+
+    pub(crate) fn move_right(&mut self) {
+        let len = self.focused_text().chars().count();
+        self.cursor_pos = (self.cursor_pos + 1).min(len);
+    }
+
+    pub(crate) fn move_home(&mut self) {
+        self.cursor_pos = line_start(self.focused_text(), self.cursor_pos);
+    }
+
+    pub(crate) fn move_end(&mut self) {
+        self.cursor_pos = line_end(self.focused_text(), self.cursor_pos);
+    }
+
+    pub(crate) fn move_up(&mut self) {
+        let text = self.focused_text();
+        let current_start = line_start(text, self.cursor_pos);
+        if current_start == 0 {
+            return;
+        }
+        let column = self.cursor_pos.saturating_sub(current_start);
+        let previous_start = line_start(text, current_start - 1);
+        let previous_end = line_end(text, previous_start);
+        self.cursor_pos = previous_start + column.min(previous_end.saturating_sub(previous_start));
+    }
+
+    pub(crate) fn move_down(&mut self) {
+        let text = self.focused_text();
+        let current_start = line_start(text, self.cursor_pos);
+        let current_end = line_end(text, self.cursor_pos);
+        let total = text.chars().count();
+        let Some(next_start) = (current_end < total).then_some(current_end + 1) else {
+            return;
+        };
+        let column = self.cursor_pos.saturating_sub(current_start);
+        let next_end = line_end(text, next_start);
+        self.cursor_pos = next_start + column.min(next_end.saturating_sub(next_start));
+    }
+
+    pub(crate) fn toggle_field(&mut self) {
+        self.cursor_field = if self.cursor_field == 0 {
+            1
+        } else {
+            0
+        };
+        let len = self.focused_text().chars().count();
+        self.cursor_pos = self.cursor_pos.min(len);
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.title.trim().is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FeedbackModalState {
+    pub movement_id: String,
+    pub movement_title: String,
+    pub prompt: String,
+    pub agent_name: Option<String>,
+    pub cursor: usize,
+}
+
+impl FeedbackModalState {
+    pub(crate) fn new(movement_id: String, movement_title: String) -> Self {
+        Self {
+            movement_id,
+            movement_title,
+            prompt: String::new(),
+            agent_name: None,
+            cursor: 0,
+        }
+    }
+
+    pub(crate) fn insert_char(&mut self, ch: char) {
+        let index = char_to_byte_index(&self.prompt, self.cursor);
+        self.prompt.insert(index, ch);
+        self.cursor += 1;
+    }
+
+    pub(crate) fn insert_newline(&mut self) {
+        self.insert_char('\n');
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let remove_at = self.cursor - 1;
+        let before = self.prompt.chars().take(remove_at);
+        let after = self.prompt.chars().skip(self.cursor);
+        self.prompt = before.chain(after).collect();
+        self.cursor = remove_at;
+    }
+
+    pub(crate) fn move_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub(crate) fn move_right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.prompt.chars().count());
+    }
+
+    pub(crate) fn move_home(&mut self) {
+        self.cursor = line_start(&self.prompt, self.cursor);
+    }
+
+    pub(crate) fn move_end(&mut self) {
+        self.cursor = line_end(&self.prompt, self.cursor);
+    }
+
+    pub(crate) fn move_up(&mut self) {
+        let current_start = line_start(&self.prompt, self.cursor);
+        if current_start == 0 {
+            return;
+        }
+        let column = self.cursor.saturating_sub(current_start);
+        let previous_start = line_start(&self.prompt, current_start - 1);
+        let previous_end = line_end(&self.prompt, previous_start);
+        self.cursor = previous_start + column.min(previous_end.saturating_sub(previous_start));
+    }
+
+    pub(crate) fn move_down(&mut self) {
+        let current_start = line_start(&self.prompt, self.cursor);
+        let current_end = line_end(&self.prompt, self.cursor);
+        let Some(next_start) =
+            (current_end < self.prompt.chars().count()).then_some(current_end + 1)
+        else {
+            return;
+        };
+        let column = self.cursor.saturating_sub(current_start);
+        let next_end = line_end(&self.prompt, next_start);
+        self.cursor = next_start + column.min(next_end.saturating_sub(next_start));
+    }
+
+    pub(crate) fn normalized_prompt(&self) -> Option<String> {
+        let trimmed = self.prompt.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+}
+
+fn char_to_byte_index(text: &str, char_pos: usize) -> usize {
+    text.char_indices()
+        .map(|(index, _)| index)
+        .nth(char_pos)
+        .unwrap_or(text.len())
+}
+
 fn line_start(text: &str, cursor: usize) -> usize {
     let mut start = 0;
     for (index, ch) in text.chars().enumerate().take(cursor) {
@@ -345,6 +563,11 @@ pub(crate) enum OrchestratorTreeRow {
         history_index: usize,
         is_last_child: bool,
     },
+    /// Task progress bar shown under a movement.
+    Progress {
+        movement_snapshot_index: usize,
+        is_last_child: bool,
+    },
     /// A currently running agent shown under a movement.
     RunningAgent {
         running_index: usize,
@@ -477,6 +700,8 @@ pub struct AppState {
     pub agent_picker_selected: usize,
     pub agent_picker_issue_id: Option<String>,
     pub dispatch_modal: Option<DispatchModalState>,
+    pub create_issue_modal: Option<CreateIssueModalState>,
+    pub feedback_modal: Option<FeedbackModalState>,
     /// Last left-click time for double-click detection.
     pub last_click_at: Option<Instant>,
     /// Column/row of last click for double-click detection.
@@ -560,6 +785,8 @@ impl AppState {
             agent_picker_selected: 0,
             agent_picker_issue_id: None,
             dispatch_modal: None,
+            create_issue_modal: None,
+            feedback_modal: None,
             last_click_at: None,
             last_click_pos: (0, 0),
             last_scroll_at: None,
@@ -890,6 +1117,14 @@ impl AppState {
                 {
                     rows.push(OrchestratorTreeRow::Trigger {
                         trigger_index: trigger_idx,
+                        movement_snapshot_index: mov_idx,
+                        is_last_child: !has_children,
+                    });
+                }
+
+                // Progress bar (shown when movement has tasks)
+                if movement.task_count > 0 {
+                    rows.push(OrchestratorTreeRow::Progress {
                         movement_snapshot_index: mov_idx,
                         is_last_child: !has_children,
                     });
@@ -1247,6 +1482,7 @@ impl AppState {
                     snapshot.movements.get(*snapshot_index)
                 },
                 OrchestratorTreeRow::Trigger { .. }
+                | OrchestratorTreeRow::Progress { .. }
                 | OrchestratorTreeRow::AgentSession { .. }
                 | OrchestratorTreeRow::RunningAgent { .. }
                 | OrchestratorTreeRow::AgentLogLine { .. }

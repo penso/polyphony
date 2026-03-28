@@ -99,6 +99,17 @@ pub enum RuntimeCommand {
     StopAgent {
         issue_id: polyphony_core::IssueId,
     },
+    /// Create a new issue in the configured tracker.
+    CreateIssue {
+        title: String,
+        description: String,
+    },
+    /// Inject feedback into a movement as a new task, resuming the pipeline.
+    InjectMovementFeedback {
+        movement_id: polyphony_core::MovementId,
+        prompt: String,
+        agent_name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +161,8 @@ pub struct RuntimeService {
     pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_task_retries: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
     pending_agent_stops: Vec<polyphony_core::IssueId>,
+    pending_create_issues: Vec<CreateIssueCommandRequest>,
+    pending_feedback_injections: Vec<FeedbackInjectionRequest>,
     state: RuntimeState,
     user_interactions: Arc<Mutex<HashMap<String, UserInteractionRequest>>>,
     reload_support: Option<WorkflowReloadSupport>,
@@ -180,6 +193,19 @@ struct ManualDispatchRequest {
 struct ManualPullRequestDispatchRequest {
     trigger_id: String,
     directives: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CreateIssueCommandRequest {
+    title: String,
+    description: String,
+}
+
+#[derive(Debug, Clone)]
+struct FeedbackInjectionRequest {
+    movement_id: polyphony_core::MovementId,
+    prompt: String,
+    agent_name: Option<String>,
 }
 
 #[derive(Debug)]

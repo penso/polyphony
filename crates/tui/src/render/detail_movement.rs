@@ -66,6 +66,13 @@ pub(crate) fn draw_movement_detail(
         hint_spans.push(Span::styled("t", Style::default().fg(theme.highlight)));
         hint_spans.push(Span::styled(":retry  ", Style::default().fg(theme.muted)));
     }
+    if movement.workspace_path.is_some() {
+        hint_spans.push(Span::styled("f", Style::default().fg(theme.highlight)));
+        hint_spans.push(Span::styled(
+            ":feedback  ",
+            Style::default().fg(theme.muted),
+        ));
+    }
     hint_spans.extend([
         Span::styled("a", Style::default().fg(theme.highlight)),
         Span::styled(":accept  ", Style::default().fg(theme.muted)),

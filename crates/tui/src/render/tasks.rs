@@ -184,6 +184,7 @@ fn task_category_label(category: &polyphony_core::TaskCategory) -> &'static str 
         TaskCategory::Research => "research",
         TaskCategory::Documentation => "docs",
         TaskCategory::Review => "review",
+        TaskCategory::Feedback => "feedback",
     }
 }
 
@@ -202,5 +203,6 @@ fn task_category_color(
         TaskCategory::Research => theme.muted,
         TaskCategory::Documentation => theme.muted,
         TaskCategory::Review => theme.muted,
+        TaskCategory::Feedback => theme.warning,
     }
 }
