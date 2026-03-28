@@ -42,6 +42,9 @@ docs-build:
 docs-serve:
     mdbook serve docs --open
 
+website-serve:
+    python3 -m http.server 5002 --directory website
+
 schema-github:
     ./scripts/refresh_github_schema.sh
 
