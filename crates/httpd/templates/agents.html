@@ -36,9 +36,9 @@
 </div>
 {% endif %}
 
-{% if agent_history %}
+{% if agent_run_history %}
 <div class="card">
-  <h2>History ({{ agent_history | length }})</h2>
+  <h2>History ({{ agent_run_history | length }})</h2>
   <table>
     <thead>
       <tr>
@@ -53,7 +53,7 @@
       </tr>
     </thead>
     <tbody>
-    {% for a in agent_history %}
+    {% for a in agent_run_history %}
     <tr>
       <td>{{ a.issue_identifier }}</td>
       <td>{{ a.agent_name }}</td>

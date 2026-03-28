@@ -70,14 +70,14 @@ impl RuntimeService {
                         issue.identifier, issue.state
                     ),
                 );
-                if let Some(movement) = self
+                if let Some(run) = self
                     .state
-                    .movements
+                    .runs
                     .values_mut()
                     .find(|m| m.issue_id.as_deref() == Some(&issue.id))
                 {
-                    movement.push_log(
-                        polyphony_core::MovementLogScope::Reconciliation,
+                    run.push_log(
+                        polyphony_core::RunLogScope::Reconciliation,
                         format!("stopped: issue reached terminal state: {}", issue.state),
                     );
                 }
@@ -199,28 +199,28 @@ impl RuntimeService {
             .worktree_keys
             .insert(workspace.workspace_key.clone());
 
-        // Reuse an existing active movement for this issue if one exists,
-        // otherwise create a new one.  This prevents duplicate movements when
+        // Reuse an existing active run for this issue if one exists,
+        // otherwise create a new one.  This prevents duplicate runs when
         // the same issue is re-dispatched via retry or continuation.
-        if let Some(existing_id) = self.find_existing_movement_for_issue(&issue.id) {
-            if let Some(movement) = self.state.movements.get_mut(&existing_id) {
-                movement.status = MovementStatus::InProgress;
-                movement.manual_dispatch_directives = manual_dispatch_directives.clone();
-                movement.updated_at = Utc::now();
+        if let Some(existing_id) = self.find_existing_run_for_issue(&issue.id) {
+            if let Some(run) = self.state.runs.get_mut(&existing_id) {
+                run.status = RunStatus::InProgress;
+                run.manual_dispatch_directives = manual_dispatch_directives.clone();
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    store.save_movement(movement).await?;
+                    store.save_run(run).await?;
                 }
             }
         } else {
-            let movement_id = new_movement_id();
+            let run_id = new_run_id();
             let now = Utc::now();
-            let movement = Movement {
-                id: movement_id.clone(),
-                kind: MovementKind::IssueDelivery,
+            let run = Run {
+                id: run_id.clone(),
+                kind: RunKind::IssueDelivery,
                 issue_id: Some(issue.id.clone()),
                 issue_identifier: Some(issue.identifier.clone()),
                 title: issue.title.clone(),
-                status: MovementStatus::InProgress,
+                status: RunStatus::InProgress,
                 pipeline_stage: None,
                 manual_dispatch_directives: manual_dispatch_directives.clone(),
                 workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
@@ -234,9 +234,9 @@ impl RuntimeService {
                 activity_log: Vec::new(),
             };
             if let Some(store) = &self.store {
-                store.save_movement(&movement).await?;
+                store.save_run(&run).await?;
             }
-            self.state.movements.insert(movement_id.clone(), movement);
+            self.state.runs.insert(run_id.clone(), run);
         }
 
         let issue_id = issue.id.clone();
@@ -390,7 +390,7 @@ impl RuntimeService {
             rate_limits: None,
             handle,
             active_task_id: None,
-            movement_id: None,
+            run_id: None,
             review_target: None,
             review_comment_marker: None,
             recent_log: VecDeque::new(),

@@ -94,15 +94,15 @@ pub(crate) fn github_trust_level(association: &AuthorAssociation) -> String {
 pub(crate) fn github_issue_approval_state(
     association: Option<&AuthorAssociation>,
     author_login: Option<&str>,
-) -> IssueApprovalState {
+) -> DispatchApprovalState {
     if github_login_is_auto_approved(author_login) {
-        return IssueApprovalState::Approved;
+        return DispatchApprovalState::Approved;
     }
 
     match association {
         Some(
             AuthorAssociation::Owner | AuthorAssociation::Member | AuthorAssociation::Collaborator,
-        ) => IssueApprovalState::Approved,
+        ) => DispatchApprovalState::Approved,
         Some(
             AuthorAssociation::Contributor
             | AuthorAssociation::FirstTimer
@@ -111,8 +111,8 @@ pub(crate) fn github_issue_approval_state(
             | AuthorAssociation::None
             | AuthorAssociation::Other(_),
         )
-        | None => IssueApprovalState::Waiting,
-        Some(_) => IssueApprovalState::Waiting,
+        | None => DispatchApprovalState::Waiting,
+        Some(_) => DispatchApprovalState::Waiting,
     }
 }
 

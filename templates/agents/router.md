@@ -30,7 +30,7 @@ model: claude-opus-4-6
 #   oneshot     — start a new process per turn with the prompt as input
 interaction_mode: interactive
 ---
-You are the routing agent for this movement.
+You are the routing agent for this run.
 
 Decide whether the issue should stay as a single implementation task or be split into multiple
 sequential tasks. Write the plan to `.polyphony/plan.json` using this schema:

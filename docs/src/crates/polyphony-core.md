@@ -8,7 +8,7 @@ This crate defines the domain types and trait contracts that the rest of the wor
 
 - issue models such as `Issue`, `IssueComment`, and `IssueAuthor`
 - agent models such as `AgentDefinition`, `AgentRunSpec`, and `AgentRunResult`
-- runtime snapshot types such as `RuntimeSnapshot`, `RunningRow`, and `RetryRow`
+- runtime snapshot types such as `RuntimeSnapshot`, `RunningAgentRow`, and `RetryRow`
 - rate-limit, budget, and persistence records
 - trait seams for `IssueTracker`, `AgentRuntime`, `WorkspaceProvisioner`, `PullRequestCommenter`,
   and `StateStore`

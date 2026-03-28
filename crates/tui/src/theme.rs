@@ -17,25 +17,28 @@ pub struct Theme {
     pub panel: Color,
 }
 
+/// Terminal-native theme: uses `Color::Reset` for backgrounds so the terminal's
+/// own background shows through (like lazygit). Semantic colors use ANSI indexed
+/// colors that adapt to the terminal's palette.
 pub const fn default_theme() -> Theme {
     Theme {
-        foreground: Color::Rgb(241, 245, 249),
-        muted: Color::Rgb(107, 114, 128),
-        highlight: Color::Rgb(167, 139, 250),
-        info: Color::Rgb(129, 140, 248),
-        success: Color::Rgb(134, 239, 172),
-        warning: Color::Rgb(251, 191, 36),
-        danger: Color::Rgb(248, 113, 113),
-        border: Color::Rgb(42, 42, 62),
-        selection: Color::Rgb(31, 27, 47),
-        panel_alt: Color::Rgb(26, 26, 46),
-        background: Color::Rgb(10, 10, 15),
-        panel: Color::Rgb(18, 18, 26),
+        foreground: Color::Reset,       // terminal default foreground
+        muted: Color::DarkGray,         // ANSI bright black / dim
+        highlight: Color::Magenta,      // stands out in both light/dark
+        info: Color::Blue,              // ANSI blue
+        success: Color::Green,          // ANSI green
+        warning: Color::Yellow,         // ANSI yellow
+        danger: Color::Red,             // ANSI red
+        border: Color::DarkGray,        // subtle borders
+        selection: Color::Indexed(237), // subtle highlight row (#3a3a3a)
+        panel_alt: Color::Reset,        // transparent
+        background: Color::Reset,       // transparent — terminal bg
+        panel: Color::Reset,            // transparent — terminal bg
     }
 }
 
 pub fn detect_terminal_theme() -> Option<Theme> {
-    // Keep the TUI visually stable regardless of the user's terminal profile.
+    // The default theme already adapts to the terminal — no detection needed.
     None
 }
 
@@ -44,9 +47,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_theme_uses_explicit_dark_palette() {
+    fn default_theme_uses_transparent_backgrounds() {
         let theme = default_theme();
-        assert_eq!(theme.background, Color::Rgb(10, 10, 15));
-        assert_eq!(theme.panel, Color::Rgb(18, 18, 26));
+        assert_eq!(theme.background, Color::Reset);
+        assert_eq!(theme.panel, Color::Reset);
+        assert_eq!(theme.panel_alt, Color::Reset);
     }
 }

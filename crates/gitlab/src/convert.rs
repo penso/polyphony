@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use polyphony_core::{
-    Issue, IssueApprovalState, IssueAuthor, IssueComment, IssueStateUpdate, RateLimitSignal,
+    DispatchApprovalState, Issue, IssueAuthor, IssueComment, IssueStateUpdate, RateLimitSignal,
 };
 use reqwest::{Response, StatusCode, header::HeaderMap};
 
@@ -42,7 +42,7 @@ pub(crate) fn to_issue(
             .author
             .as_ref()
             .map(gitlab_approval_state)
-            .unwrap_or(IssueApprovalState::Waiting),
+            .unwrap_or(DispatchApprovalState::Waiting),
         parent_id: None,
         created_at: parse_gitlab_time(&issue.created_at),
         updated_at: parse_gitlab_time(&issue.updated_at),
@@ -74,9 +74,9 @@ pub(crate) fn list_node_to_issue(
         comments: Vec::new(),
         blocked_by: Vec::new(),
         approval_state: if node.author.is_some() {
-            IssueApprovalState::Approved
+            DispatchApprovalState::Approved
         } else {
-            IssueApprovalState::Waiting
+            DispatchApprovalState::Waiting
         },
         parent_id: None,
         created_at: parse_gitlab_time(&node.created_at),
@@ -165,10 +165,10 @@ fn gitlab_note_to_comment(
 
 fn gitlab_approval_state(
     _user: &fetch_issue_by_iid::FetchIssueByIidProjectIssueAuthor,
-) -> IssueApprovalState {
+) -> DispatchApprovalState {
     // GitLab doesn't expose author_association like GitHub.
     // Default to Approved; a future enhancement could use project membership API.
-    IssueApprovalState::Approved
+    DispatchApprovalState::Approved
 }
 
 fn extract_labels(

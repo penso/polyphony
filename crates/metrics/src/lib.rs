@@ -16,10 +16,10 @@ pub const TICKS_TOTAL: &str = "polyphony_ticks_total";
 // Gauges
 pub const RUNNING_TASKS: &str = "polyphony_running_tasks";
 pub const RETRYING_TASKS: &str = "polyphony_retrying_tasks";
-pub const ACTIVE_MOVEMENTS: &str = "polyphony_active_movements";
+pub const ACTIVE_RUNS: &str = "polyphony_active_runs";
 pub const WORKTREES: &str = "polyphony_worktrees";
 pub const THROTTLES_ACTIVE: &str = "polyphony_throttles_active";
-pub const VISIBLE_ISSUES: &str = "polyphony_visible_issues";
+pub const TRACKER_ISSUES: &str = "polyphony_tracker_issues";
 
 // Histograms
 pub const DISPATCH_DURATION_SECONDS: &str = "polyphony_dispatch_duration_seconds";
@@ -70,10 +70,13 @@ fn describe_metrics() {
     // Gauges
     metrics::describe_gauge!(RUNNING_TASKS, "Number of currently running agent tasks");
     metrics::describe_gauge!(RETRYING_TASKS, "Number of tasks currently awaiting retry");
-    metrics::describe_gauge!(ACTIVE_MOVEMENTS, "Number of active pipeline movements");
+    metrics::describe_gauge!(ACTIVE_RUNS, "Number of active pipeline runs");
     metrics::describe_gauge!(WORKTREES, "Number of provisioned worktrees");
     metrics::describe_gauge!(THROTTLES_ACTIVE, "Number of active rate-limit throttles");
-    metrics::describe_gauge!(VISIBLE_ISSUES, "Number of visible issues from the tracker");
+    metrics::describe_gauge!(
+        TRACKER_ISSUES,
+        "Number of tracker issues in the current snapshot"
+    );
 
     // Histograms
     metrics::describe_histogram!(
@@ -97,17 +100,17 @@ pub fn render_metrics(handle: &PrometheusHandle) -> String {
 pub fn record_snapshot_gauges(
     running: usize,
     retrying: usize,
-    movements: usize,
+    runs: usize,
     worktrees: usize,
     throttles: usize,
-    visible_issues: usize,
+    tracker_issues: usize,
 ) {
     metrics::gauge!(RUNNING_TASKS).set(running as f64);
     metrics::gauge!(RETRYING_TASKS).set(retrying as f64);
-    metrics::gauge!(ACTIVE_MOVEMENTS).set(movements as f64);
+    metrics::gauge!(ACTIVE_RUNS).set(runs as f64);
     metrics::gauge!(WORKTREES).set(worktrees as f64);
     metrics::gauge!(THROTTLES_ACTIVE).set(throttles as f64);
-    metrics::gauge!(VISIBLE_ISSUES).set(visible_issues as f64);
+    metrics::gauge!(TRACKER_ISSUES).set(tracker_issues as f64);
 }
 
 /// Increment dispatch counter, optionally with an agent label.

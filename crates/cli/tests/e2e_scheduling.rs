@@ -38,7 +38,7 @@ fn automatic_dispatch_respects_priority_order() {
 
     // Wait for at least one run to appear in history.
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        !agent_history(s).is_empty()
+        !agent_run_history(s).is_empty()
     });
     assert!(
         snap.is_some(),
@@ -48,7 +48,7 @@ fn automatic_dispatch_respects_priority_order() {
 
     // The first history entry should be for the critical-priority issue.
     let snap = snap.unwrap();
-    let history = agent_history(&snap);
+    let history = agent_run_history(&snap);
     assert!(
         !history.is_empty(),
         "history should have at least one entry"
@@ -88,7 +88,7 @@ fn terminal_issue_is_not_dispatched() {
     std::thread::sleep(Duration::from_secs(5));
 
     let snap = daemon_snapshot(&repo).expect("snapshot");
-    let history = agent_history(&snap);
+    let history = agent_run_history(&snap);
     let running = running_agents(&snap);
 
     // Nothing should have been dispatched.

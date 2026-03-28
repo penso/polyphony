@@ -6,9 +6,9 @@ use std::sync::{
 use async_trait::async_trait;
 use graphql_client::GraphQLQuery;
 use polyphony_core::{
-    Error as CoreError, IssueApprovalState, PullRequestCommenter, PullRequestManager,
-    PullRequestRef, PullRequestRequest, PullRequestReviewComment, PullRequestReviewTrigger,
-    PullRequestTrigger, PullRequestTriggerSource, ReviewProviderKind, ReviewVerdict,
+    DispatchApprovalState, Error as CoreError, PullRequestCommenter, PullRequestEvent,
+    PullRequestEventSource, PullRequestManager, PullRequestRef, PullRequestRequest,
+    PullRequestReviewComment, PullRequestReviewEvent, ReviewProviderKind, ReviewVerdict,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
@@ -462,15 +462,15 @@ impl PullRequestManager for GitlabPullRequestManager {
 }
 
 // ---------------------------------------------------------------------------
-// PullRequestTriggerSource
+// PullRequestEventSource
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
-pub struct GitlabMergeRequestTriggerSource {
+pub struct GitlabMergeRequestEventSource {
     client: GitlabMergeRequestClient,
 }
 
-impl GitlabMergeRequestTriggerSource {
+impl GitlabMergeRequestEventSource {
     pub fn new(endpoint: String, token: String, project_path: String) -> Result<Self, CoreError> {
         Ok(Self {
             client: GitlabMergeRequestClient::new(endpoint, token, project_path)?,
@@ -479,13 +479,13 @@ impl GitlabMergeRequestTriggerSource {
 }
 
 #[async_trait]
-impl PullRequestTriggerSource for GitlabMergeRequestTriggerSource {
+impl PullRequestEventSource for GitlabMergeRequestEventSource {
     fn component_key(&self) -> String {
         "pull_requests:gitlab".into()
     }
 
-    async fn fetch_triggers(&self) -> Result<Vec<PullRequestTrigger>, CoreError> {
-        let mut triggers = Vec::new();
+    async fn fetch_events(&self) -> Result<Vec<PullRequestEvent>, CoreError> {
+        let mut events = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
             let body = FetchOpenMergeRequests::build_query(fetch_open_merge_requests::Variables {
@@ -512,7 +512,7 @@ impl PullRequestTriggerSource for GitlabMergeRequestTriggerSource {
                         .map(|nodes| nodes.iter().map(|l| l.title.clone()).collect())
                         .unwrap_or_default();
 
-                    triggers.push(PullRequestTrigger::Review(PullRequestReviewTrigger {
+                    events.push(PullRequestEvent::Review(PullRequestReviewEvent {
                         provider: ReviewProviderKind::Gitlab,
                         repository: self.client.project_path.clone(),
                         number: mr.iid.parse::<u64>().unwrap_or(0),
@@ -523,7 +523,7 @@ impl PullRequestTriggerSource for GitlabMergeRequestTriggerSource {
                         head_sha: head_sha.clone(),
                         checkout_ref: None,
                         author_login: mr.author.as_ref().map(|a| a.username.clone()),
-                        approval_state: IssueApprovalState::Approved,
+                        approval_state: DispatchApprovalState::Approved,
                         labels,
                         created_at: parse_gitlab_time(&mr.created_at),
                         updated_at: parse_gitlab_time(&mr.updated_at),
@@ -538,6 +538,6 @@ impl PullRequestTriggerSource for GitlabMergeRequestTriggerSource {
                 break;
             }
         }
-        Ok(triggers)
+        Ok(events)
     }
 }

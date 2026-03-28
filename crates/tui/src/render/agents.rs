@@ -1,5 +1,5 @@
 use chrono::Utc;
-use polyphony_core::{AgentHistoryRow, RunningRow, RuntimeSnapshot};
+use polyphony_core::{AgentRunHistoryRow, RunningAgentRow, RuntimeSnapshot};
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Modifier, Style},
@@ -54,7 +54,7 @@ pub fn draw_agents_tab(
                     theme,
                 ));
             }
-        } else if let Some(history) = snapshot.agent_history.get(orig_idx) {
+        } else if let Some(history) = snapshot.agent_run_history.get(orig_idx) {
             rows.push(agent_table_row(
                 super::format_listing_time(history.started_at),
                 history.agent_name.clone(),
@@ -73,10 +73,7 @@ pub fn draw_agents_tab(
         }
     }
 
-    let selected_style = Style::default()
-        .bg(theme.selection)
-        .fg(theme.foreground)
-        .add_modifier(Modifier::BOLD);
+    let selected_style = Style::default().add_modifier(Modifier::BOLD);
 
     let count = app.sorted_agent_indices.len();
     let footer_info = if count == 0 {
@@ -107,7 +104,8 @@ pub fn draw_agents_tab(
     ])
     .header(header)
     .row_highlight_style(selected_style)
-    .highlight_spacing(HighlightSpacing::Always)
+    .highlight_symbol("▶ ")
+    .highlight_spacing(HighlightSpacing::WhenSelected)
     .block(
         Block::default()
             .title(Line::from(Span::styled(
@@ -194,7 +192,10 @@ fn agent_table_row(
     ])
 }
 
-pub(crate) fn format_history_span(agent: &AgentHistoryRow, now: chrono::DateTime<Utc>) -> String {
+pub(crate) fn format_history_span(
+    agent: &AgentRunHistoryRow,
+    now: chrono::DateTime<Utc>,
+) -> String {
     let finished_at = agent.finished_at.unwrap_or(now);
     format_duration(finished_at.signed_duration_since(agent.started_at))
 }
@@ -224,7 +225,7 @@ const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 
 fn build_running_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
-    agent: &RunningRow,
+    agent: &RunningAgentRow,
     _artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
     frame_count: u64,
@@ -275,7 +276,7 @@ fn build_running_agent_detail_lines(
 
 /// Build a status line showing what the agent is currently doing.
 fn build_agent_status_line(
-    agent: &RunningRow,
+    agent: &RunningAgentRow,
     now: chrono::DateTime<Utc>,
     spinner: char,
     theme: crate::theme::Theme,
@@ -386,7 +387,7 @@ fn append_live_output(
 
 fn build_history_agent_detail_lines(
     snapshot: &RuntimeSnapshot,
-    agent: &AgentHistoryRow,
+    agent: &AgentRunHistoryRow,
     artifact_saved_context: Option<&polyphony_core::AgentContextSnapshot>,
     theme: crate::theme::Theme,
 ) -> Vec<Line<'static>> {
@@ -570,7 +571,7 @@ fn append_transcript(
 fn append_agent_availability_lines(
     lines: &mut Vec<Line<'static>>,
     snapshot: &RuntimeSnapshot,
-    agent: &RunningRow,
+    agent: &RunningAgentRow,
     theme: crate::theme::Theme,
 ) {
     lines.push(Line::from(Span::styled(

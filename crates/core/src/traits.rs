@@ -62,9 +62,9 @@ pub trait IssueTracker: Send + Sync {
 }
 
 #[async_trait]
-pub trait PullRequestTriggerSource: Send + Sync {
+pub trait PullRequestEventSource: Send + Sync {
     fn component_key(&self) -> String;
-    async fn fetch_triggers(&self) -> Result<Vec<PullRequestTrigger>, Error>;
+    async fn fetch_events(&self) -> Result<Vec<PullRequestEvent>, Error>;
 }
 
 #[async_trait]
@@ -217,8 +217,8 @@ pub trait SnapshotPersistence: Send + Sync {
 }
 
 #[async_trait]
-pub trait RunPersistence: Send + Sync {
-    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
+pub trait AgentRunPersistence: Send + Sync {
+    async fn record_agent_run(&self, run: &PersistedAgentRunRecord) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -228,16 +228,16 @@ pub trait BudgetPersistence: Send + Sync {
 
 #[async_trait]
 pub trait WorkflowPersistence: Send + Sync {
-    async fn save_movement(&self, _movement: &Movement) -> Result<(), Error> {
+    async fn save_run(&self, _run: &Run) -> Result<(), Error> {
         Ok(())
     }
     async fn save_task(&self, _task: &Task) -> Result<(), Error> {
         Ok(())
     }
-    async fn load_movements(&self) -> Result<Vec<Movement>, Error> {
+    async fn load_runs(&self) -> Result<Vec<Run>, Error> {
         Ok(Vec::new())
     }
-    async fn load_tasks_for_movement(&self, _movement_id: &str) -> Result<Vec<Task>, Error> {
+    async fn load_tasks_for_run(&self, _run_id: &str) -> Result<Vec<Task>, Error> {
         Ok(Vec::new())
     }
 }
@@ -261,13 +261,13 @@ pub trait ReviewPersistence: Send + Sync {
 pub trait StateStore: Send + Sync {
     async fn bootstrap(&self) -> Result<StoreBootstrap, Error>;
     async fn save_snapshot(&self, snapshot: &RuntimeSnapshot) -> Result<(), Error>;
-    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error>;
+    async fn record_agent_run(&self, run: &PersistedAgentRunRecord) -> Result<(), Error>;
     async fn record_budget(&self, snapshot: &BudgetSnapshot) -> Result<(), Error>;
 
-    async fn save_movement(&self, movement: &Movement) -> Result<(), Error>;
+    async fn save_run(&self, run: &Run) -> Result<(), Error>;
     async fn save_task(&self, task: &Task) -> Result<(), Error>;
-    async fn load_movements(&self) -> Result<Vec<Movement>, Error>;
-    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, Error>;
+    async fn load_runs(&self) -> Result<Vec<Run>, Error>;
+    async fn load_tasks_for_run(&self, run_id: &str) -> Result<Vec<Task>, Error>;
     async fn save_reviewed_pull_request_head(
         &self,
         head: &ReviewedPullRequestHead,
@@ -297,12 +297,12 @@ where
 }
 
 #[async_trait]
-impl<T> RunPersistence for T
+impl<T> AgentRunPersistence for T
 where
     T: StateStore + ?Sized,
 {
-    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error> {
-        StateStore::record_run(self, run).await
+    async fn record_agent_run(&self, run: &PersistedAgentRunRecord) -> Result<(), Error> {
+        StateStore::record_agent_run(self, run).await
     }
 }
 
@@ -321,20 +321,20 @@ impl<T> WorkflowPersistence for T
 where
     T: StateStore + ?Sized,
 {
-    async fn save_movement(&self, movement: &Movement) -> Result<(), Error> {
-        StateStore::save_movement(self, movement).await
+    async fn save_run(&self, run: &Run) -> Result<(), Error> {
+        StateStore::save_run(self, run).await
     }
 
     async fn save_task(&self, task: &Task) -> Result<(), Error> {
         StateStore::save_task(self, task).await
     }
 
-    async fn load_movements(&self) -> Result<Vec<Movement>, Error> {
-        StateStore::load_movements(self).await
+    async fn load_runs(&self) -> Result<Vec<Run>, Error> {
+        StateStore::load_runs(self).await
     }
 
-    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, Error> {
-        StateStore::load_tasks_for_movement(self, movement_id).await
+    async fn load_tasks_for_run(&self, run_id: &str) -> Result<Vec<Task>, Error> {
+        StateStore::load_tasks_for_run(self, run_id).await
     }
 }
 

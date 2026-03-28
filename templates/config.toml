@@ -237,6 +237,7 @@ enabled = false
 [automation]
 enabled = false
 draft_pull_requests = true
+co_authored_by = true                    # append "Co-Authored-By: Polyphony" trailer to commits
 # review_agent = "codex"
 # commit_message = "fix({{ issue.identifier }}): {{ issue.title }}"
 # pr_title = "fix: {{ issue.title }}"
@@ -250,9 +251,9 @@ remote_name = "origin"
 # name = "Polyphony"
 # email = "polyphony@example.com"
 
-[review_triggers]
+[review_events]
 
-[review_triggers.pr_reviews]
+[review_events.pr_reviews]
 # enabled = true
 # provider = "github"             # phase 1 supports GitHub polling
 # agent = "reviewer"              # optional, falls back to automation.review_agent or agents.default

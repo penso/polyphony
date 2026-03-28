@@ -14,10 +14,10 @@ It consumes `RuntimeSnapshot` values and exposes them through two interfaces:
 | Route | Description |
 |-------|-------------|
 | `/` | Dashboard with counts, status, and summaries |
-| `/triggers` | Pending triggers table |
-| `/movements` | Movements with status and deliverables |
+| `/inbox` | Inbox table (`/triggers` remains as a legacy alias) |
+| `/runs` | Runs with status and deliverables (`/runs` remains as a legacy alias) |
 | `/agents` | Running agents and execution history |
-| `/tasks` | Task breakdown across movements |
+| `/tasks` | Task breakdown across runs |
 | `/logs` | Reverse-chronological runtime events |
 
 Templates live in `crates/httpd/templates/` and extend a shared `layout.html` base. Pages auto-refresh via a WebSocket connection to the GraphQL subscription endpoint.
@@ -32,12 +32,12 @@ Templates live in `crates/httpd/templates/` and extend a shared `layout.html` ba
 
 ### Queries
 
-- `triggers` — pending trigger list
-- `movements` / `movement(id)` — movement list and detail
-- `tasks(movementId?)` — task list, optionally filtered by movement
+- `triggers` — inbox item list
+- `runs` / `run(id)` — run list and detail
+- `tasks(runId?)` — task list, optionally filtered by run
 - `runningAgents` — currently executing agents
 - `recentEvents(limit?)` — recent runtime events
-- `counts` — summary counts (running, retrying, movements, tasks, worktrees)
+- `counts` — summary counts (running, retrying, runs, tasks, worktrees)
 - `dispatchMode` — current dispatch mode
 
 ### Mutations

@@ -9,15 +9,28 @@ async-graphql = { workspace = true, features = ["chrono"] }
 async-graphql-axum.workspace = true
 async-stream.workspace = true
 axum.workspace = true
+axum-login.workspace = true
 chrono.workspace = true
+hex.workspace = true
+hmac.workspace = true
 minijinja = { workspace = true, features = ["loader"] }
 polyphony-core = { path = "../core" }
 polyphony-orchestrator = { path = "../orchestrator" }
+polyphony-workflow = { path = "../workflow" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
+tower-sessions.workspace = true
+tower-sessions-sqlx-store.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+reqwest = { workspace = true, features = ["cookies"] }

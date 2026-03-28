@@ -233,6 +233,16 @@ mod command_parse_tests {
     }
 
     #[test]
+    fn parses_reset_command() {
+        let cli = Cli::try_parse_from(["polyphony", "reset"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Reset) => {},
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_issue_comment_command() {
         let cli = Cli::try_parse_from([
             "polyphony",
@@ -292,9 +302,9 @@ mod command_parse_tests {
 
         match cli.command {
             Some(Commands::Daemon {
-                action: DaemonAction::Approve { issue_id, source },
+                action: DaemonAction::Approve { item_id, source },
             }) => {
-                assert_eq!(issue_id, "#74");
+                assert_eq!(item_id, "#74");
                 assert_eq!(source.as_deref(), Some("gitlab"));
             },
             other => panic!("unexpected command: {other:?}"),

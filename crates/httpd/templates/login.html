@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in &mdash; Polyphony</title>
+  <script>
+    (function(){
+      var t = localStorage.getItem('theme') || 'system';
+      if (t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #f8f9fa; --fg: #1a1a2e; --muted: #6b7280; --surface: #ffffff;
+      --border: rgba(0, 0, 0, 0.1); --accent: #7c3aed; --danger: #dc2626;
+      --badge-failed-bg: rgba(220, 38, 38, 0.1); --hover-bg: rgba(124, 58, 237, 0.04);
+    }
+    .dark {
+      --bg: #0d1117; --fg: #c9d1d9; --muted: #8b949e; --surface: #161b22;
+      --border: rgba(255, 255, 255, 0.1); --accent: #a78bfa; --danger: #f85149;
+      --badge-failed-bg: rgba(248, 81, 73, 0.15); --hover-bg: rgba(167, 139, 250, 0.04);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg); color: var(--fg); line-height: 1.5;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .login-container {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+    }
+    .login-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 2rem; width: 100%; max-width: 400px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .login-brand {
+      font-size: 1.3rem; font-weight: 700; text-align: center; margin-bottom: 1.5rem;
+    }
+    .login-label {
+      display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem;
+    }
+    .login-input {
+      width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border);
+      border-radius: 6px; background: var(--bg); color: var(--fg);
+      font-size: 0.9rem; margin-bottom: 1rem; outline: none;
+      transition: border-color 0.2s;
+    }
+    .login-input:focus { border-color: var(--accent); }
+    .login-button {
+      width: 100%; padding: 0.6rem; border: none; border-radius: 6px;
+      background: var(--accent); color: #fff; font-size: 0.9rem; font-weight: 600;
+      cursor: pointer; transition: opacity 0.2s;
+    }
+    .login-button:hover { opacity: 0.9; }
+    .login-error {
+      color: var(--danger); background: var(--badge-failed-bg); border-radius: 6px;
+      padding: 0.5rem 0.75rem; font-size: 0.85rem; margin-bottom: 1rem;
+    }
+    .login-footer {
+      text-align: center; margin-top: 1.5rem;
+    }
+
+    #theme-toggle {
+      background: none; border: none; cursor: pointer; padding: 6px;
+      border-radius: 6px; color: var(--muted); display: flex; align-items: center;
+      transition: color 0.2s, background 0.2s; margin: 0 auto;
+    }
+    #theme-toggle:hover { color: var(--fg); background: var(--hover-bg); }
+    #theme-toggle .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-brand">Polyphony</div>
+      {% if error %}
+      <div class="login-error">{{ error }}</div>
+      {% endif %}
+      <form method="post" action="/login">
+        <label class="login-label" for="username">Username</label>
+        <input class="login-input" id="username" name="username" type="text" required autofocus>
+        <label class="login-label" for="token">Token</label>
+        <input class="login-input" id="token" name="token" type="password" required>
+        <button class="login-button" type="submit">Sign in</button>
+      </form>
+      <div class="login-footer">
+        <button id="theme-toggle" title="Theme: System">
+          <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="theme-icon-system" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var themeCycle = ['light', 'system', 'dark'];
+      var themeToggle = document.getElementById('theme-toggle');
+      function applyTheme(mode) {
+        if (mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      }
+      function updateThemeIcon(mode) {
+        document.getElementById('theme-icon-light').classList.toggle('hidden', mode !== 'light');
+        document.getElementById('theme-icon-system').classList.toggle('hidden', mode !== 'system');
+        document.getElementById('theme-icon-dark').classList.toggle('hidden', mode !== 'dark');
+        var titles = { light: 'Theme: Light', system: 'Theme: System', dark: 'Theme: Dark' };
+        themeToggle.title = titles[mode] || 'Toggle theme';
+      }
+      var current = localStorage.getItem('theme') || 'system';
+      applyTheme(current);
+      updateThemeIcon(current);
+      themeToggle.addEventListener('click', function() {
+        var cur = localStorage.getItem('theme') || 'system';
+        var idx = themeCycle.indexOf(cur);
+        var next = themeCycle[(idx + 1) % themeCycle.length];
+        localStorage.setItem('theme', next);
+        applyTheme(next);
+        updateThemeIcon(next);
+      });
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+        if ((localStorage.getItem('theme') || 'system') === 'system') applyTheme('system');
+      });
+    })();
+  </script>
+</body>
+</html>

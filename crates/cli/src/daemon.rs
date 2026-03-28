@@ -43,8 +43,8 @@ pub(crate) enum DaemonRequest {
     SetMode {
         mode: String,
     },
-    ApproveIssueTrigger {
-        issue_id: String,
+    ApproveInboxItem {
+        item_id: String,
         source: String,
     },
     DispatchIssue {
@@ -52,8 +52,8 @@ pub(crate) enum DaemonRequest {
         agent_name: Option<String>,
         directives: Option<String>,
     },
-    DispatchPullRequestTrigger {
-        trigger_id: String,
+    DispatchPullRequestInboxItem {
+        item_id: String,
         directives: Option<String>,
     },
     Shutdown,
@@ -252,13 +252,13 @@ fn dispatch_request(request: DaemonRequest, state: &ControlState) -> Result<Daem
                 message: format!("dispatch mode queued: {mode}"),
             })
         },
-        DaemonRequest::ApproveIssueTrigger { issue_id, source } => {
-            send_command(&state.command_tx, RuntimeCommand::ApproveIssueTrigger {
-                issue_id: issue_id.clone(),
+        DaemonRequest::ApproveInboxItem { item_id, source } => {
+            send_command(&state.command_tx, RuntimeCommand::ApproveInboxItem {
+                item_id: item_id.clone(),
                 source: source.clone(),
             })?;
             Ok(DaemonResponse::Accepted {
-                message: format!("approval queued for {source} issue {issue_id}"),
+                message: format!("approval queued for {source} inbox item {item_id}"),
             })
         },
         DaemonRequest::DispatchIssue {
@@ -275,19 +275,19 @@ fn dispatch_request(request: DaemonRequest, state: &ControlState) -> Result<Daem
                 message: format!("dispatch queued for {issue_id}"),
             })
         },
-        DaemonRequest::DispatchPullRequestTrigger {
-            trigger_id,
+        DaemonRequest::DispatchPullRequestInboxItem {
+            item_id,
             directives,
         } => {
             send_command(
                 &state.command_tx,
-                RuntimeCommand::DispatchPullRequestTrigger {
-                    trigger_id: trigger_id.clone(),
+                RuntimeCommand::DispatchPullRequestInboxItem {
+                    item_id: item_id.clone(),
                     directives,
                 },
             )?;
             Ok(DaemonResponse::Accepted {
-                message: format!("pull request trigger queued for {trigger_id}"),
+                message: format!("pull request inbox item queued for {item_id}"),
             })
         },
         DaemonRequest::Shutdown => {
@@ -379,6 +379,7 @@ pub(crate) fn serve_http(
     socket_path: PathBuf,
     pid_path: PathBuf,
     log_path: Option<PathBuf>,
+    #[cfg(feature = "httpd")] daemon_config: &polyphony_workflow::DaemonConfig,
 ) -> JoinHandle<Result<(), Error>> {
     let bound_addr = listener.local_addr().ok();
 
@@ -411,8 +412,59 @@ pub(crate) fn serve_http(
             .unwrap_or_else(|_| {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../httpd/templates")
             });
-        let httpd_router =
-            polyphony_httpd::build_router(httpd_snapshot_rx, httpd_command_tx, template_dir);
+
+        let users = build_httpd_users(daemon_config);
+        let webhooks_config = if daemon_config.webhooks.enabled {
+            Some(daemon_config.webhooks.clone())
+        } else {
+            None
+        };
+
+        let httpd_router = if users.is_empty() {
+            polyphony_httpd::build_router(
+                httpd_snapshot_rx,
+                httpd_command_tx,
+                template_dir,
+                None,
+                None,
+                webhooks_config,
+            )
+        } else {
+            // Build auth layer synchronously within the spawn context
+            let rt = tokio::runtime::Handle::current();
+            let session_db_dir = template_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(&template_dir);
+            let session_db_url = format!(
+                "sqlite:{}?mode=rwc",
+                session_db_dir.join("sessions.db").display()
+            );
+            match rt.block_on(polyphony_httpd::auth::build_auth_layer(
+                users,
+                &session_db_url,
+            )) {
+                Ok((auth_layer, session_layer)) => polyphony_httpd::build_router(
+                    httpd_snapshot_rx,
+                    httpd_command_tx,
+                    template_dir,
+                    Some(auth_layer),
+                    Some(session_layer),
+                    webhooks_config,
+                ),
+                Err(e) => {
+                    tracing::error!("failed to build auth layer: {e}, starting without auth");
+                    polyphony_httpd::build_router(
+                        httpd_snapshot_rx,
+                        httpd_command_tx,
+                        template_dir,
+                        None,
+                        None,
+                        webhooks_config,
+                    )
+                },
+            }
+        };
         app = app.merge(httpd_router);
     }
 
@@ -426,6 +478,30 @@ pub(crate) fn serve_http(
             .await
             .map_err(|e| Error::Config(format!("HTTP server error: {e}")))
     })
+}
+
+#[cfg(feature = "httpd")]
+fn build_httpd_users(
+    config: &polyphony_workflow::DaemonConfig,
+) -> Vec<polyphony_httpd::auth::User> {
+    if !config.users.is_empty() {
+        config
+            .users
+            .iter()
+            .map(|u| polyphony_httpd::auth::User::new(u.username.clone(), u.token.clone()))
+            .collect()
+    } else if let Some(token) = &config.auth_token {
+        if !token.is_empty() {
+            vec![polyphony_httpd::auth::User::new(
+                "admin".into(),
+                token.clone(),
+            )]
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    }
 }
 
 fn check_auth(state: &ControlState, headers: &HeaderMap) -> Result<(), &'static str> {
@@ -852,8 +928,8 @@ mod tests {
         let (server, _state) =
             spawn_control_server(&workflow_path, snapshot_rx(), command_tx, None, None).unwrap();
 
-        let response = send_control_request(&workflow_path, DaemonRequest::ApproveIssueTrigger {
-            issue_id: "7".into(),
+        let response = send_control_request(&workflow_path, DaemonRequest::ApproveInboxItem {
+            item_id: "7".into(),
             source: "github".into(),
         })
         .await
@@ -862,10 +938,10 @@ mod tests {
         assert!(matches!(response, DaemonResponse::Accepted { .. }));
         assert!(matches!(
             command_rx.recv().await,
-            Some(polyphony_orchestrator::RuntimeCommand::ApproveIssueTrigger {
-                issue_id,
+            Some(polyphony_orchestrator::RuntimeCommand::ApproveInboxItem {
+                item_id,
                 source,
-            }) if issue_id == "7" && source == "github"
+            }) if item_id == "7" && source == "github"
         ));
         server.abort();
         let _ = server.await;

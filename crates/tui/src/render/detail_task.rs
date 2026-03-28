@@ -29,22 +29,22 @@ pub(crate) fn draw_task_detail(
         Span::styled("j/k", Style::default().fg(theme.highlight)),
         Span::styled(":scroll  ", Style::default().fg(theme.muted)),
     ];
-    let movement_can_retry = snapshot
-        .movements
+    let run_can_retry = snapshot
+        .runs
         .iter()
-        .find(|movement| movement.id == task.movement_id)
-        .is_some_and(|movement| {
-            if movement.status == polyphony_core::MovementStatus::Failed {
+        .find(|run| run.id == task.run_id)
+        .is_some_and(|run| {
+            if run.status == polyphony_core::RunStatus::Failed {
                 return true;
             }
-            if movement.status != polyphony_core::MovementStatus::InProgress {
+            if run.status != polyphony_core::RunStatus::InProgress {
                 return false;
             }
             let mut has_retryable_task = false;
             for sibling in snapshot
                 .tasks
                 .iter()
-                .filter(|sibling| sibling.movement_id == task.movement_id)
+                .filter(|sibling| sibling.run_id == task.run_id)
             {
                 match sibling.status {
                     TaskStatus::Failed => return true,
@@ -57,10 +57,10 @@ pub(crate) fn draw_task_detail(
             }
             has_retryable_task
         });
-    if task.status != TaskStatus::Completed && movement_can_retry {
+    if task.status != TaskStatus::Completed && run_can_retry {
         hint_spans.push(Span::styled("t", Style::default().fg(theme.highlight)));
         hint_spans.push(Span::styled(
-            ":retry movement  ",
+            ":retry run  ",
             Style::default().fg(theme.muted),
         ));
     }
@@ -150,7 +150,7 @@ pub(crate) fn draw_task_detail(
     let format_time = super::format_detail_time;
     let mut lines = vec![
         kv_line("ID", &task.id, theme),
-        kv_line("Flow", &task.movement_id, theme),
+        kv_line("Run", &task.run_id, theme),
         kv_line("Turns", &task.turns_completed.to_string(), theme),
         kv_line("Tokens", &task.total_tokens.to_string(), theme),
         kv_line("Created", &format_time(task.created_at), theme),

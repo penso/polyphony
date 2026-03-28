@@ -32,7 +32,7 @@ pub enum Error {
 mod convert;
 mod prelude;
 mod pull_requests;
-mod review_triggers;
+mod review_events;
 
 #[cfg(test)]
 mod tests;
@@ -40,7 +40,7 @@ mod tests;
 use crate::convert::*;
 pub use crate::{
     pull_requests::{GithubPullRequestCommenter, GithubPullRequestManager},
-    review_triggers::GithubPullRequestReviewTriggerSource,
+    review_events::GithubPullRequestReviewEventSource,
 };
 
 #[derive(GraphQLQuery)]
@@ -101,11 +101,11 @@ mod github_graphql_scalars {
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "src/schema.graphql",
-    query_path = "src/pull_request_triggers.graphql",
+    query_path = "src/pull_request_events.graphql",
     custom_scalars_module = "crate::github_graphql_scalars",
     response_derives = "Debug, Serialize, Deserialize"
 )]
-pub struct FetchPullRequestTriggers;
+pub struct FetchPullRequestEvents;
 
 #[derive(Debug)]
 pub struct GithubIssueTracker {

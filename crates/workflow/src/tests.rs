@@ -620,7 +620,43 @@ agents:
 }
 
 #[test]
-fn review_triggers_default_to_enabled() {
+fn co_authored_by_defaults_to_true() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+tracker:
+  kind: beads
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    assert!(config.automation.co_authored_by);
+}
+
+#[test]
+fn co_authored_by_can_be_disabled() {
+    let config = serde_yaml::from_str::<YamlValue>(
+        r#"
+tracker:
+  kind: beads
+automation:
+  co_authored_by: false
+"#,
+    )
+    .unwrap();
+    let workflow = WorkflowDefinition {
+        config,
+        prompt_template: String::new(),
+    };
+    let config = ServiceConfig::from_workflow(&workflow).unwrap();
+    assert!(!config.automation.co_authored_by);
+}
+
+#[test]
+fn review_events_default_to_enabled() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:
@@ -634,14 +670,14 @@ tracker:
     };
     let config = ServiceConfig::from_workflow(&workflow).unwrap();
 
-    assert!(config.review_triggers.pr_reviews.enabled);
-    assert_eq!(config.review_triggers.pr_reviews.provider, "github");
-    assert_eq!(config.review_triggers.pr_reviews.comment_mode, "summary");
-    assert_eq!(config.review_triggers.pr_reviews.debounce_seconds, 180);
+    assert!(config.review_events.pr_reviews.enabled);
+    assert_eq!(config.review_events.pr_reviews.provider, "github");
+    assert_eq!(config.review_events.pr_reviews.comment_mode, "summary");
+    assert_eq!(config.review_events.pr_reviews.debounce_seconds, 180);
 }
 
 #[test]
-fn review_triggers_parse_and_reuse_review_agent_defaults() {
+fn review_events_parse_and_reuse_review_agent_defaults() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:
@@ -657,7 +693,7 @@ agents:
       command: codex --dangerously-bypass-approvals-and-sandbox app-server
 automation:
   review_agent: codex
-review_triggers:
+review_events:
   pr_reviews:
     enabled: true
     debounce_seconds: 45
@@ -670,14 +706,14 @@ review_triggers:
     };
     let config = ServiceConfig::from_workflow(&workflow).unwrap();
 
-    assert!(config.review_triggers.pr_reviews.enabled);
-    assert_eq!(config.review_triggers.pr_reviews.provider, "github");
-    assert_eq!(config.review_triggers.pr_reviews.comment_mode, "summary");
-    assert_eq!(config.review_triggers.pr_reviews.debounce_seconds, 45);
-    assert!(config.review_triggers.pr_reviews.only_labels.is_empty());
-    assert!(config.review_triggers.pr_reviews.ignore_labels.is_empty());
-    assert!(config.review_triggers.pr_reviews.ignore_authors.is_empty());
-    assert!(!config.review_triggers.pr_reviews.ignore_bot_authors);
+    assert!(config.review_events.pr_reviews.enabled);
+    assert_eq!(config.review_events.pr_reviews.provider, "github");
+    assert_eq!(config.review_events.pr_reviews.comment_mode, "summary");
+    assert_eq!(config.review_events.pr_reviews.debounce_seconds, 45);
+    assert!(config.review_events.pr_reviews.only_labels.is_empty());
+    assert!(config.review_events.pr_reviews.ignore_labels.is_empty());
+    assert!(config.review_events.pr_reviews.ignore_authors.is_empty());
+    assert!(!config.review_events.pr_reviews.ignore_bot_authors);
     assert_eq!(config.pr_review_agent().unwrap().unwrap().name, "codex");
 }
 
@@ -716,7 +752,7 @@ automation:
 }
 
 #[test]
-fn review_triggers_allow_inline_comment_mode() {
+fn review_events_allow_inline_comment_mode() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:
@@ -730,7 +766,7 @@ agents:
       kind: codex
       transport: app_server
       command: codex --dangerously-bypass-approvals-and-sandbox app-server
-review_triggers:
+review_events:
   pr_reviews:
     enabled: true
     comment_mode: inline
@@ -743,11 +779,11 @@ review_triggers:
     };
     let config = ServiceConfig::from_workflow(&workflow).unwrap();
 
-    assert_eq!(config.review_triggers.pr_reviews.comment_mode, "inline");
+    assert_eq!(config.review_events.pr_reviews.comment_mode, "inline");
 }
 
 #[test]
-fn review_triggers_normalize_suppression_rules() {
+fn review_events_normalize_suppression_rules() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:
@@ -761,7 +797,7 @@ agents:
       kind: codex
       transport: app_server
       command: codex --dangerously-bypass-approvals-and-sandbox app-server
-review_triggers:
+review_events:
   pr_reviews:
     enabled: true
     only_labels: [" Ready ", "Needs-Review"]
@@ -777,20 +813,20 @@ review_triggers:
     };
     let config = ServiceConfig::from_workflow(&workflow).unwrap();
 
-    assert_eq!(config.review_triggers.pr_reviews.only_labels, vec![
+    assert_eq!(config.review_events.pr_reviews.only_labels, vec![
         "ready",
         "needs-review"
     ]);
-    assert_eq!(config.review_triggers.pr_reviews.ignore_labels, vec!["wip"]);
-    assert_eq!(config.review_triggers.pr_reviews.ignore_authors, vec![
+    assert_eq!(config.review_events.pr_reviews.ignore_labels, vec!["wip"]);
+    assert_eq!(config.review_events.pr_reviews.ignore_authors, vec![
         "dependabot[bot]",
         "renovate-bot"
     ]);
-    assert!(config.review_triggers.pr_reviews.ignore_bot_authors);
+    assert!(config.review_events.pr_reviews.ignore_bot_authors);
 }
 
 #[test]
-fn review_triggers_reject_overlapping_only_and_ignore_labels() {
+fn review_events_reject_overlapping_only_and_ignore_labels() {
     let config = serde_yaml::from_str::<YamlValue>(
         r#"
 tracker:
@@ -804,7 +840,7 @@ agents:
       kind: codex
       transport: app_server
       command: codex --dangerously-bypass-approvals-and-sandbox app-server
-review_triggers:
+review_events:
   pr_reviews:
     enabled: true
     only_labels: [ready]

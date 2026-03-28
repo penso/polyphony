@@ -14,19 +14,19 @@ use crate::app::AppState;
 pub(crate) fn draw_deliverable_detail(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    movement_id: &str,
+    run_id: &str,
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
     let theme = app.theme;
 
-    let Some(movement) = snapshot.movements.iter().find(|m| m.id == movement_id) else {
+    let Some(run) = snapshot.runs.iter().find(|m| m.id == run_id) else {
         draw_not_found(frame, area, "Deliverable no longer available", theme);
         return;
     };
 
-    let Some(deliverable) = &movement.deliverable else {
-        draw_not_found(frame, area, "No deliverable on this movement", theme);
+    let Some(deliverable) = &run.deliverable else {
+        draw_not_found(frame, area, "No deliverable on this run", theme);
         return;
     };
 
@@ -86,7 +86,7 @@ pub(crate) fn draw_deliverable_detail(
     // Title
     frame.render_widget(
         Paragraph::new(Span::styled(
-            movement.title.clone(),
+            run.title.clone(),
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
@@ -108,7 +108,7 @@ pub(crate) fn draw_deliverable_detail(
         ),
         Span::styled("  ", Style::default()),
         Span::styled(
-            super::deliverables::flow_label_pub(movement),
+            super::deliverables::flow_label_pub(run),
             Style::default().fg(theme.info),
         ),
     ]);
@@ -129,22 +129,19 @@ pub(crate) fn draw_deliverable_detail(
     ));
     lines.push(kv_line(
         "Status",
-        super::orchestrator::movement_status_label(&movement.status),
+        super::orchestrator::run_status_label(&run.status),
         theme,
     ));
-    if let Some(identifier) = &movement.issue_identifier {
-        lines.push(kv_line("Trigger", identifier, theme));
+    if let Some(identifier) = &run.issue_identifier {
+        lines.push(kv_line("Source", identifier, theme));
     }
-    lines.push(kv_line("Created", &format_time(movement.created_at), theme));
+    lines.push(kv_line("Created", &format_time(run.created_at), theme));
     lines.push(kv_line(
         "Tasks",
-        &format!(
-            "{}/{} completed",
-            movement.tasks_completed, movement.task_count
-        ),
+        &format!("{}/{} completed", run.tasks_completed, run.task_count),
         theme,
     ));
-    if let Some(workspace_path) = &movement.workspace_path {
+    if let Some(workspace_path) = &run.workspace_path {
         lines.push(kv_line(
             "Path",
             &workspace_path.display().to_string(),

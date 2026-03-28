@@ -35,7 +35,7 @@ fn manual_dispatch_runs_agent_and_records_history() {
 
     // Wait for the run to appear in history (agent finishes).
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        !agent_history(s).is_empty()
+        !agent_run_history(s).is_empty()
     });
     assert!(
         snap.is_some(),
@@ -44,7 +44,7 @@ fn manual_dispatch_runs_agent_and_records_history() {
     );
 
     let snap = snap.unwrap();
-    let history = agent_history(&snap);
+    let history = agent_run_history(&snap);
     assert!(
         !history.is_empty(),
         "history should have at least one entry"
@@ -129,7 +129,7 @@ stall_timeout_ms = 5000
 
     // Wait for the run to finish in history.
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        agent_history(s)
+        agent_run_history(s)
             .iter()
             .any(|h| h["status"].as_str() == Some("Failed"))
     });
@@ -140,7 +140,7 @@ stall_timeout_ms = 5000
     );
 
     let snap = snap.unwrap();
-    let failed_entries: Vec<_> = agent_history(&snap)
+    let failed_entries: Vec<_> = agent_run_history(&snap)
         .into_iter()
         .filter(|h| h["status"].as_str() == Some("Failed"))
         .collect();
@@ -175,7 +175,7 @@ fn automatic_dispatch_picks_up_ready_issue() {
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
         // Either currently running or already in history.
         let running = running_agents(s);
-        let history = agent_history(s);
+        let history = agent_run_history(s);
         let issue_running = running
             .iter()
             .any(|r| r["issue_id"].as_str() == Some(&issue_id));
@@ -258,7 +258,7 @@ read_timeout_ms = 2000
     // Wait for a timeout/stall outcome in history. Use a longer wait since
     // the agent needs time to stall and get killed.
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(45), |s| {
-        agent_history(s).iter().any(|h| {
+        agent_run_history(s).iter().any(|h| {
             let status = h["status"].as_str().unwrap_or("");
             status == "TimedOut" || status == "Stalled" || status == "Failed"
         })
@@ -270,7 +270,7 @@ read_timeout_ms = 2000
     );
 
     let snap = snap.unwrap();
-    let entry = agent_history(&snap)
+    let entry = agent_run_history(&snap)
         .into_iter()
         .find(|h| {
             let status = h["status"].as_str().unwrap_or("");
@@ -306,7 +306,7 @@ fn dispatch_creates_workspace() {
 
     // Wait for the run to finish.
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        !agent_history(s).is_empty()
+        !agent_run_history(s).is_empty()
     });
     assert!(
         snap.is_some(),
@@ -328,7 +328,7 @@ fn dispatch_creates_workspace() {
     }
 
     // The history entry should have a workspace_path.
-    let history = agent_history(&snap);
+    let history = agent_run_history(&snap);
     if let Some(entry) = history.first()
         && let Some(ws_path) = entry["workspace_path"].as_str()
     {
@@ -356,7 +356,7 @@ fn dispatch_records_events() {
 
     // Wait for completion.
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        !agent_history(s).is_empty()
+        !agent_run_history(s).is_empty()
     });
     assert!(
         snap.is_some(),

@@ -64,7 +64,7 @@ sessions are not restarted automatically.
 When `pipeline.enabled = true`, `dispatch_issue()` branches into the pipeline path instead
 of the single-agent path. The flow becomes:
 
-1. The orchestrator creates a Movement record for the issue
+1. The orchestrator creates a run record (`Run`) for the issue
 2. If a `planner_agent` is configured:
    - The planner agent is dispatched to the workspace
    - On completion, the orchestrator reads `.polyphony/plan.json`
@@ -77,11 +77,11 @@ of the single-agent path. The flow becomes:
    - On success, the next task is dispatched
    - On failure, the task retries with backoff or re-plans if `replan_on_failure` is set
 5. After all tasks complete:
-   - The Movement status is updated to Review or Delivered
+   - The run status is updated to Review or Delivered
    - The standard `run_success_handoff()` runs (commit, PR, review, feedback)
 
-Movements and tasks are persisted via the state store and restored on startup. The TUI
-Movements and Tasks tabs display pipeline progress from the runtime snapshot.
+Runs and tasks are persisted via the state store and restored on startup. The TUI
+Runs and Tasks views display pipeline progress from the runtime snapshot.
 
 ## Completion and recovery
 

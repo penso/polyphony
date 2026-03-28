@@ -1,10 +1,10 @@
 {% extends "layout.html" %}
-{% block title %}Polyphony &mdash; Movements{% endblock %}
+{% block title %}Polyphony &mdash; Runs{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Movements</h1>
+<h1 style="margin-bottom: 1rem;">Runs</h1>
 
-{% if movements %}
+{% if runs %}
 <div class="card">
   <table>
     <thead>
@@ -19,7 +19,7 @@
       </tr>
     </thead>
     <tbody>
-    {% for m in movements %}
+    {% for m in runs %}
     <tr>
       <td style="color: var(--muted);">{{ m.id }}</td>
       <td>{{ m.issue_identifier }}</td>
@@ -44,6 +44,6 @@
   </table>
 </div>
 {% else %}
-<div class="empty">No movements yet.</div>
+<div class="empty">No runs yet.</div>
 {% endif %}
 {% endblock %}

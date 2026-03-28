@@ -87,7 +87,7 @@
       { text: '$ polyphony', delay: 80 },
       { text: '', delay: 400, isNewline: true },
       {
-        text: '  +- Issues ----------------------------------------+',
+        text: '  +- Inbox -----------------------------------------+',
         delay: 20,
       },
       { text: '  | * #42  Fix auth token refresh         claude    |', delay: 20 },
@@ -228,8 +228,8 @@
 
     // --- TUI Dashboard: detail modals on row click ---
     var details = {
-      'issue-42': {
-        title: 'Issue #42 — Fix auth token refresh',
+      'inbox-42': {
+        title: 'Inbox Item #42 — Fix auth token refresh',
         body: [
           ['Status',    '<span class="text-amber">running</span>'],
           ['Agent',     '<span class="text-accent-light">claude</span>'],
@@ -240,8 +240,8 @@
           ['Body',      'Auth tokens expire after 1h but the refresh logic silently fails, leaving users logged out.'],
         ],
       },
-      'issue-43': {
-        title: 'Issue #43 — Add rate limiting middleware',
+      'inbox-43': {
+        title: 'Inbox Item #43 — Add rate limiting middleware',
         body: [
           ['Status',    '<span class="text-green-400">done</span>'],
           ['Agent',     '<span class="text-accent-light">codex</span>'],
@@ -252,8 +252,8 @@
           ['Steps',     '<span class="text-green-400">✓</span> clone → <span class="text-green-400">✓</span> checkout → <span class="text-green-400">✓</span> agent → <span class="text-green-400">✓</span> commit → <span class="text-green-400">✓</span> push → <span class="text-green-400">✓</span> PR'],
         ],
       },
-      'issue-44': {
-        title: 'Issue #44 — Update API documentation',
+      'inbox-44': {
+        title: 'Inbox Item #44 — Update API documentation',
         body: [
           ['Status',    '<span class="text-gray-500">queued</span>'],
           ['Agent',     '<span class="text-accent-light">pi</span> (pending)'],
@@ -261,8 +261,8 @@
           ['Body',      'The API docs are out of date after the v2 endpoint changes. Regenerate from OpenAPI spec.'],
         ],
       },
-      'issue-45': {
-        title: 'Issue #45 — Refactor database connection pool',
+      'inbox-45': {
+        title: 'Inbox Item #45 — Refactor database connection pool',
         body: [
           ['Status',    '<span class="text-red-400">failed</span> (3 retries exhausted)'],
           ['Agent',     '<span class="text-accent-light">claude</span>'],
@@ -272,8 +272,8 @@
           ['Steps',     '<span class="text-green-400">✓</span> clone → <span class="text-green-400">✓</span> checkout → <span class="text-red-400">✕</span> agent failed (3x)'],
         ],
       },
-      'issue-46': {
-        title: 'Issue #46 — Add WebSocket support',
+      'inbox-46': {
+        title: 'Inbox Item #46 — Add WebSocket support',
         body: [
           ['Status',    '<span class="text-green-400">done</span>'],
           ['Agent',     '<span class="text-accent-light">codex</span> (retry 2 succeeded)'],
@@ -283,8 +283,8 @@
           ['Steps',     '<span class="text-red-400">✕</span> attempt 1 (claude) → <span class="text-green-400">✓</span> attempt 2 (codex) → <span class="text-green-400">✓</span> commit → <span class="text-green-400">✓</span> push → <span class="text-green-400">✓</span> PR'],
         ],
       },
-      'mov-1': {
-        title: 'Movement mv-0017 — #42 Fix auth token refresh',
+      'run-1': {
+        title: 'Run ID run-0017 — #42 Fix auth token refresh',
         body: [
           ['Agent',     '<span class="text-accent-light">claude</span> via cli'],
           ['Attempt',   '1 of 3'],
@@ -295,8 +295,8 @@
           ['Stdout',    '<span class="text-muted">Analyzing auth module... Found refresh_token() in src/auth/token.rs. Implementing fix...</span>'],
         ],
       },
-      'mov-2': {
-        title: 'Movement mv-0016 — #43 Add rate limiting',
+      'run-2': {
+        title: 'Run ID run-0016 — #43 Add rate limiting',
         body: [
           ['Agent',     '<span class="text-accent-light">codex</span> via cli'],
           ['Attempt',   '1 of 3'],
@@ -307,8 +307,8 @@
           ['Files',     '<span class="text-muted">src/middleware/rate_limit.rs (+142), src/main.rs (+3), tests/rate_limit_test.rs (+67)</span>'],
         ],
       },
-      'mov-3': {
-        title: 'Movement mv-0015 — #45 Refactor db pool',
+      'run-3': {
+        title: 'Run ID run-0015 — #45 Refactor db pool',
         body: [
           ['Agent',     '<span class="text-accent-light">claude</span> via cli'],
           ['Attempt',   '3 of 3 — <span class="text-red-400">exhausted</span>'],
@@ -318,8 +318,8 @@
           ['History',   'Attempt 1: budget (150k). Attempt 2: budget (150k). Attempt 3: budget (150k).'],
         ],
       },
-      'mov-4': {
-        title: 'Movement mv-0014 — #46 Add WebSocket',
+      'run-4': {
+        title: 'Run ID run-0014 — #46 Add WebSocket',
         body: [
           ['Agent',     '<span class="text-accent-light">codex</span> via cli (fallback from claude)'],
           ['Attempt',   '2 of 3'],
@@ -330,8 +330,8 @@
           ['Handoff',   'Claude failed with compile error. Codex picked up from clean worktree.'],
         ],
       },
-      'mov-5': {
-        title: 'Movement mv-0013 — #44 Update API docs',
+      'run-5': {
+        title: 'Run ID run-0013 — #44 Update API docs',
         body: [
           ['Agent',     '<span class="text-accent-light">pi</span> via acp'],
           ['Status',    '<span class="text-gray-500">◷ queued</span> — waiting for agent slot'],

@@ -7,7 +7,7 @@ pub(crate) use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-pub(crate) use polyphony_core::{DispatchMode, RuntimeSnapshot, VisibleTriggerKind};
+pub(crate) use polyphony_core::{DispatchMode, InboxItemKind, RuntimeSnapshot};
 pub(crate) use polyphony_orchestrator::RuntimeCommand;
 pub(crate) use ratatui::{
     Terminal,

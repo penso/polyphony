@@ -13,25 +13,27 @@ mod test_support;
 
 use test_support::*;
 
-/// Verify that creating beads issues and running `polyphony data issues`
-/// returns them in the visible issues list.
+/// Verify that creating beads issues and running `polyphony data tracker-issues`
+/// returns them in the tracker issue list.
 #[test]
-fn beads_issues_appear_in_data_issues() {
+fn beads_issues_appear_in_data_tracker_issues() {
     let repo = TestRepo::new();
     let id1 = repo.create_beads_issue("First test issue");
     let id2 = repo.create_beads_issue("Second test issue");
 
-    let issues = run_polyphony_json(&repo, &["data", "issues"]);
-    let arr = issues.as_array().expect("data issues returns array");
+    let issues = run_polyphony_json(&repo, &["data", "tracker-issues"]);
+    let arr = issues
+        .as_array()
+        .expect("data tracker-issues returns array");
 
     // Both issues should appear.
     assert!(
         arr.iter().any(|i| i["issue_id"].as_str() == Some(&id1)),
-        "issue {id1} not found in data issues output: {issues:#}"
+        "issue {id1} not found in data tracker-issues output: {issues:#}"
     );
     assert!(
         arr.iter().any(|i| i["issue_id"].as_str() == Some(&id2)),
-        "issue {id2} not found in data issues output: {issues:#}"
+        "issue {id2} not found in data tracker-issues output: {issues:#}"
     );
 
     // Verify fields are populated.
@@ -57,13 +59,13 @@ fn data_snapshot_returns_complete_structure() {
     assert!(snapshot["counts"].is_object(), "missing counts");
     assert!(snapshot["cadence"].is_object(), "missing cadence");
     assert!(
-        snapshot["visible_issues"].is_array(),
-        "missing visible_issues"
+        snapshot["tracker_issues"].is_array(),
+        "missing tracker_issues"
     );
     assert!(snapshot["running"].is_array(), "missing running");
     assert!(
-        snapshot["agent_history"].is_array(),
-        "missing agent_history"
+        snapshot["agent_run_history"].is_array(),
+        "missing agent_run_history"
     );
     assert!(
         snapshot["recent_events"].is_array(),
@@ -78,7 +80,7 @@ fn data_snapshot_returns_complete_structure() {
 
     // Issue should appear.
     assert!(
-        !visible_issues(&snapshot).is_empty(),
+        !tracker_issues(&snapshot).is_empty(),
         "no visible issues in snapshot"
     );
 }

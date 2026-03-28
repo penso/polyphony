@@ -48,9 +48,9 @@ reviews it, then sends me a Telegram with buttons to review or merge
 - Have automatic merge main -> PR when detecting a conflict
 - Have Issues tab -> Trigger
 
-- Be able to click on one movement to view the movement details. Then show something like the mission dashboard: total tasks, cached token, output token. Active feature, all features (one after another), progress logs.
+- Be able to click on one run to view the run details. Then show something like the mission dashboard: total tasks, cached token, output token. Active feature, all features (one after another), progress logs.
 
-- Be able to choose to write tests first, so I should be able to choose orders for agents for movements/tasks. You should also be able to have multiple reviewers with different models.
+- Be able to choose to write tests first, so I should be able to choose orders for agents for runs/tasks. You should also be able to have multiple reviewers with different models.
 
 # missions
 

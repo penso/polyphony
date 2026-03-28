@@ -3,6 +3,10 @@ use std::{
     path::PathBuf,
 };
 
+const fn default_true() -> bool {
+    true
+}
+
 use polyphony_core::{CheckoutKind, PtyBackendKind, TrackerKind};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
@@ -253,11 +257,33 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DaemonUserConfig {
+    pub username: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WebhookProviderConfig {
+    pub auth: String,
+    pub secret: String,
+    pub header: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct WebhooksConfig {
+    pub enabled: bool,
+    pub providers: HashMap<String, WebhookProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct DaemonConfig {
     pub listen_address: String,
     pub listen_port: u16,
     pub auth_token: Option<String>,
+    pub users: Vec<DaemonUserConfig>,
+    pub webhooks: WebhooksConfig,
 }
 
 impl Default for DaemonConfig {
@@ -266,6 +292,8 @@ impl Default for DaemonConfig {
             listen_address: "127.0.0.1".into(),
             listen_port: 0,
             auth_token: None,
+            users: Vec::new(),
+            webhooks: WebhooksConfig::default(),
         }
     }
 }
@@ -284,17 +312,35 @@ pub struct AutomationGitConfig {
     pub author: AutomationGitAuthorConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AutomationConfig {
     pub enabled: bool,
     pub draft_pull_requests: bool,
+    #[serde(default = "default_true")]
+    pub co_authored_by: bool,
     pub review_agent: Option<String>,
     pub commit_message: Option<String>,
     pub pr_title: Option<String>,
     pub pr_body: Option<String>,
     pub review_prompt: Option<String>,
     pub git: AutomationGitConfig,
+}
+
+impl Default for AutomationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            draft_pull_requests: false,
+            co_authored_by: true,
+            review_agent: None,
+            commit_message: None,
+            pr_title: None,
+            pr_body: None,
+            review_prompt: None,
+            git: AutomationGitConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -333,7 +379,7 @@ impl Default for PullRequestReviewConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
-pub struct ReviewTriggersConfig {
+pub struct ReviewEventsConfig {
     pub pr_reviews: PullRequestReviewConfig,
 }
 
@@ -392,7 +438,8 @@ pub struct ServiceConfig {
     pub agents: AgentsConfig,
     pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
-    pub review_triggers: ReviewTriggersConfig,
+    #[serde(alias = "review_triggers")]
+    pub review_events: ReviewEventsConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
     pub daemon: DaemonConfig,
@@ -416,7 +463,8 @@ struct RawServiceConfig {
     pub provider: Option<CodexConfig>,
     pub pipeline: PipelineConfig,
     pub automation: AutomationConfig,
-    pub review_triggers: ReviewTriggersConfig,
+    #[serde(alias = "review_triggers")]
+    pub review_events: ReviewEventsConfig,
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
     pub daemon: DaemonConfig,

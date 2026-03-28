@@ -1,3 +1,5 @@
+use ratatui::style::Color;
+
 use crate::{prelude::*, *};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,7 +160,7 @@ fn draw_workflow_bootstrap(
     };
     let create_style = if state.choice == BootstrapChoice::Create {
         Style::default()
-            .fg(theme.background)
+            .fg(Color::Black)
             .bg(theme.highlight)
             .add_modifier(Modifier::BOLD)
     } else {

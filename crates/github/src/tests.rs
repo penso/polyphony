@@ -1,6 +1,6 @@
 use chrono::{TimeZone, Utc};
 use octocrab::models::AuthorAssociation;
-use polyphony_core::IssueApprovalState;
+use polyphony_core::DispatchApprovalState;
 use reqwest::{
     StatusCode,
     header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -11,13 +11,13 @@ use crate::{
         find_status_field_option, github_issue_approval_state, github_rate_limit_signal,
         parse_rate_limit_reset, parse_retry_after_ms, project_id_from_context,
     },
-    fetch_pull_request_triggers,
+    fetch_pull_request_events,
     pull_requests::{GithubIssueCommentResponse, find_issue_comment_id_with_marker},
     resolve_project_issue_context, resolve_project_status_field,
-    review_triggers::{
+    review_events::{
         GithubReviewBranchRef, GithubReviewHeadRef, GithubReviewLabel,
         GithubReviewPullRequestResponse, GithubReviewUser,
-        pull_request_review_triggers_from_responses, should_emit_conflict_trigger,
+        pull_request_review_events_from_responses, should_emit_conflict_event,
     },
 };
 
@@ -123,8 +123,8 @@ fn primary_rate_limit_uses_reset_header_instead_of_guessing_retry_after() {
 }
 
 #[test]
-fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
-    let triggers = pull_request_review_triggers_from_responses("penso/polyphony", vec![
+fn pull_request_review_events_keep_fork_heads_and_set_checkout_refs() {
+    let events = pull_request_review_events_from_responses("penso/polyphony", vec![
         GithubReviewPullRequestResponse {
             number: 42,
             title: "Ready".into(),
@@ -169,38 +169,32 @@ fn pull_request_review_triggers_keep_fork_heads_and_set_checkout_refs() {
         },
     ]);
 
-    assert_eq!(triggers.len(), 2);
-    assert_eq!(triggers[0].number, 42);
-    assert_eq!(triggers[0].head_sha, "abc123");
-    assert_eq!(triggers[0].author_login.as_deref(), Some("alice"));
-    assert_eq!(triggers[0].approval_state, IssueApprovalState::Approved);
-    assert_eq!(triggers[0].labels, vec!["needs review"]);
-    assert_eq!(
-        triggers[0].checkout_ref.as_deref(),
-        Some("refs/pull/42/head")
-    );
-    assert_eq!(triggers[1].number, 43);
-    assert_eq!(triggers[1].author_login.as_deref(), Some("dependabot[bot]"));
-    assert_eq!(triggers[1].approval_state, IssueApprovalState::Approved);
-    assert_eq!(
-        triggers[1].checkout_ref.as_deref(),
-        Some("refs/pull/43/head")
-    );
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].number, 42);
+    assert_eq!(events[0].head_sha, "abc123");
+    assert_eq!(events[0].author_login.as_deref(), Some("alice"));
+    assert_eq!(events[0].approval_state, DispatchApprovalState::Approved);
+    assert_eq!(events[0].labels, vec!["needs review"]);
+    assert_eq!(events[0].checkout_ref.as_deref(), Some("refs/pull/42/head"));
+    assert_eq!(events[1].number, 43);
+    assert_eq!(events[1].author_login.as_deref(), Some("dependabot[bot]"));
+    assert_eq!(events[1].approval_state, DispatchApprovalState::Approved);
+    assert_eq!(events[1].checkout_ref.as_deref(), Some("refs/pull/43/head"));
 }
 
 #[test]
-fn conflict_trigger_detection_uses_mergeable_and_merge_state_status() {
-    assert!(should_emit_conflict_trigger(
-        &fetch_pull_request_triggers::MergeableState::CONFLICTING,
-        &fetch_pull_request_triggers::MergeStateStatus::CLEAN,
+fn conflict_event_detection_uses_mergeable_and_merge_state_status() {
+    assert!(should_emit_conflict_event(
+        &fetch_pull_request_events::MergeableState::CONFLICTING,
+        &fetch_pull_request_events::MergeStateStatus::CLEAN,
     ));
-    assert!(should_emit_conflict_trigger(
-        &fetch_pull_request_triggers::MergeableState::MERGEABLE,
-        &fetch_pull_request_triggers::MergeStateStatus::DIRTY,
+    assert!(should_emit_conflict_event(
+        &fetch_pull_request_events::MergeableState::MERGEABLE,
+        &fetch_pull_request_events::MergeStateStatus::DIRTY,
     ));
-    assert!(!should_emit_conflict_trigger(
-        &fetch_pull_request_triggers::MergeableState::MERGEABLE,
-        &fetch_pull_request_triggers::MergeStateStatus::CLEAN,
+    assert!(!should_emit_conflict_event(
+        &fetch_pull_request_events::MergeableState::MERGEABLE,
+        &fetch_pull_request_events::MergeStateStatus::CLEAN,
     ));
 }
 
@@ -233,25 +227,25 @@ fn find_issue_comment_id_with_marker_matches_existing_review_comment() {
 fn github_issue_approval_waits_for_outsiders_and_approves_collaborators() {
     assert_eq!(
         github_issue_approval_state(Some(&AuthorAssociation::Owner), Some("repo-owner")),
-        IssueApprovalState::Approved
+        DispatchApprovalState::Approved
     );
     assert_eq!(
         github_issue_approval_state(Some(&AuthorAssociation::Collaborator), Some("teammate"),),
-        IssueApprovalState::Approved
+        DispatchApprovalState::Approved
     );
     assert_eq!(
         github_issue_approval_state(
             Some(&AuthorAssociation::Contributor),
             Some("dependabot[bot]"),
         ),
-        IssueApprovalState::Approved
+        DispatchApprovalState::Approved
     );
     assert_eq!(
         github_issue_approval_state(Some(&AuthorAssociation::Contributor), Some("outsider")),
-        IssueApprovalState::Waiting
+        DispatchApprovalState::Waiting
     );
     assert_eq!(
         github_issue_approval_state(Some(&AuthorAssociation::FirstTimer), Some("newcomer")),
-        IssueApprovalState::Waiting
+        DispatchApprovalState::Waiting
     );
 }

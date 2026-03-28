@@ -1,16 +1,16 @@
 use serde_json::Value;
 
-/// Extract the "visible_issues" array from a snapshot.
-pub fn visible_issues(snapshot: &Value) -> Vec<&Value> {
-    snapshot["visible_issues"]
+/// Extract the "tracker_issues" array from a snapshot.
+pub fn tracker_issues(snapshot: &Value) -> Vec<&Value> {
+    snapshot["tracker_issues"]
         .as_array()
         .map(|arr| arr.iter().collect())
         .unwrap_or_default()
 }
 
-/// Find an issue in the visible_issues array by substring match on issue_identifier.
+/// Find an issue in the tracker_issues array by substring match on issue_identifier.
 pub fn find_issue_by_id<'a>(snapshot: &'a Value, id_substring: &str) -> Option<&'a Value> {
-    visible_issues(snapshot).into_iter().find(|issue| {
+    tracker_issues(snapshot).into_iter().find(|issue| {
         issue["issue_identifier"]
             .as_str()
             .is_some_and(|id| id.contains(id_substring))
@@ -28,9 +28,9 @@ pub fn running_agents(snapshot: &Value) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
-/// Extract the "agent_history" array from a snapshot.
-pub fn agent_history(snapshot: &Value) -> Vec<&Value> {
-    snapshot["agent_history"]
+/// Extract the "agent_run_history" array from a snapshot.
+pub fn agent_run_history(snapshot: &Value) -> Vec<&Value> {
+    snapshot["agent_run_history"]
         .as_array()
         .map(|arr| arr.iter().collect())
         .unwrap_or_default()
@@ -72,7 +72,7 @@ pub fn dispatch_mode(snapshot: &Value) -> Option<&str> {
 
 /// Count visible issues matching a given state.
 pub fn count_issues_in_state(snapshot: &Value, state: &str) -> usize {
-    visible_issues(snapshot)
+    tracker_issues(snapshot)
         .into_iter()
         .filter(|issue| issue["state"].as_str() == Some(state))
         .count()

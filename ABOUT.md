@@ -42,9 +42,9 @@ Issues are one source of work, but users can also manually queue work. When an i
 
 The TUI should give a clear view of tasks: how many exist, their completion status, which agent is working each one, and how they roll up to the parent issue.
 
-### Movements (issue → workspace → deliverable)
+### Runs (issue → workspace → deliverable)
 
-In music, a symphony's movements are self-contained sections that form a larger whole. In Polyphony, a **movement** is the lifecycle of a single issue: from intake through task decomposition, workspace provisioning, agent execution, to a delivered artifact. That artifact is typically a GitHub pull request or GitLab merge request, but the output target is modular. Movements have their own status lifecycle, independent of any single provider or tracker.
+In music, a symphony's runs are self-contained sections that form a larger whole. In Polyphony, a **run** is the lifecycle of a single issue: from intake through task decomposition, workspace provisioning, agent execution, to a delivered artifact. That artifact is typically a GitHub pull request or GitLab merge request, but the output target is modular. Runs have their own status lifecycle, independent of any single provider or tracker.
 
 ### Automatic dispatch
 

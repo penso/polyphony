@@ -34,8 +34,8 @@
 
     <!-- Tabs row -->
     <rect x="16" y="48" width="60" height="22" rx="4" fill="#7c3aed" opacity="0.25"/>
-    <text x="46" y="63" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#a78bfa" text-anchor="middle">Issues</text>
-    <text x="110" y="63" font-family="JetBrains Mono, monospace" font-size="10" fill="#777" text-anchor="middle">Movements</text>
+    <text x="46" y="63" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#a78bfa" text-anchor="middle">Inbox</text>
+    <text x="110" y="63" font-family="JetBrains Mono, monospace" font-size="10" fill="#777" text-anchor="middle">Runs</text>
     <text x="190" y="63" font-family="JetBrains Mono, monospace" font-size="10" fill="#777" text-anchor="middle">Agents</text>
 
     <!-- Table header -->

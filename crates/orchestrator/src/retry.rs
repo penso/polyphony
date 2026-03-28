@@ -37,12 +37,7 @@ impl RuntimeService {
         if !workflow.config.has_dispatch_agents() {
             return;
         }
-        if let Some(trigger) = self
-            .state
-            .pull_request_retry_triggers
-            .get(&issue_id)
-            .cloned()
-        {
+        if let Some(event) = self.state.pull_request_retry_events.get(&issue_id).cloned() {
             if !self.has_available_slot(&workflow, "review") {
                 self.schedule_retry(
                     issue_id,
@@ -55,12 +50,7 @@ impl RuntimeService {
                 return;
             }
             if let Err(error) = self
-                .dispatch_pull_request_trigger(
-                    workflow.clone(),
-                    trigger,
-                    Some(retry.row.attempt),
-                    None,
-                )
+                .dispatch_pull_request_event(workflow.clone(), event, Some(retry.row.attempt), None)
                 .await
             {
                 self.schedule_retry(
@@ -188,8 +178,8 @@ impl RuntimeService {
 
                     // Propagate session info to the pipeline Task for resume-after-restart.
                     if let Some(task_id) = &running.active_task_id
-                        && let Some(movement_id) = &running.movement_id
-                        && let Some(tasks) = self.state.tasks.get_mut(movement_id)
+                        && let Some(run_id) = &running.run_id
+                        && let Some(tasks) = self.state.tasks.get_mut(run_id)
                         && let Some(task) = tasks.iter_mut().find(|t| t.id == *task_id)
                     {
                         if running.session_id.is_some() {

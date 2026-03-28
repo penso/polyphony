@@ -190,7 +190,7 @@ as a full-file example that wires automation and feedback together.
 ## Pipeline Orchestration
 
 When `pipeline.enabled = true`, Polyphony breaks each issue into a sequence of tasks instead
-of dispatching a single agent. This creates a Movement that tracks overall progress and
+of dispatching a single agent. This creates a run (`Run`) that tracks overall progress and
 individual Task records that execute sequentially.
 
 ### Planner-Driven Pipeline

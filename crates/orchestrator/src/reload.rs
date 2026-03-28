@@ -127,11 +127,11 @@ impl RuntimeService {
         let old_tracker_key = self.tracker.component_key();
         let new_tracker_key = components.tracker.component_key();
         let old_review_source_key = self
-            .pull_request_trigger_source
+            .pull_request_event_source
             .as_ref()
             .map(|source| source.component_key());
         let new_review_source_key = components
-            .pull_request_trigger_source
+            .pull_request_event_source
             .as_ref()
             .map(|source| source.component_key());
         let old_agent_runtime_key = self.agent.component_key();
@@ -158,7 +158,7 @@ impl RuntimeService {
             .collect::<HashSet<_>>();
 
         self.tracker = components.tracker;
-        self.pull_request_trigger_source = components.pull_request_trigger_source;
+        self.pull_request_event_source = components.pull_request_event_source;
         self.agent = components.agent;
         self.committer = components.committer;
         self.pull_request_manager = components.pull_request_manager;

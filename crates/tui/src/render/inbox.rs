@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use polyphony_core::{IssueApprovalState, RuntimeSnapshot, VisibleTriggerKind};
+use polyphony_core::{DispatchApprovalState, InboxItemKind, RuntimeSnapshot};
 use ratatui::{
     layout::{Alignment, Constraint, Rect},
     style::{Modifier, Style},
@@ -17,7 +17,7 @@ const BRAILLE_SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 const APPROVED_ICON: &str = "✓";
 const WAITING_ICON: &str = "◷";
 
-pub fn draw_triggers_tab(
+pub fn draw_inbox_tab(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
@@ -26,29 +26,28 @@ pub fn draw_triggers_tab(
     let theme = app.theme;
     let indices = &app.sorted_issue_indices;
 
-    // Build a map of trigger_id → task_count from movements
+    // Build a map of inbox identifiers -> task counts from runs.
     let mut task_counts: HashMap<&str, usize> = HashMap::new();
-    for movement in &snapshot.movements {
-        if let Some(ref identifier) = movement.issue_identifier {
-            // Match against trigger_id
-            *task_counts.entry(identifier.as_str()).or_default() += movement.task_count;
+    for run in &snapshot.runs {
+        if let Some(ref identifier) = run.issue_identifier {
+            *task_counts.entry(identifier.as_str()).or_default() += run.task_count;
         }
     }
 
-    // Build set of currently running trigger IDs
+    // Build set of currently running inbox item IDs.
     let running_ids: HashSet<&str> = snapshot
         .running
         .iter()
         .map(|r| r.issue_id.as_str())
         .collect();
 
-    let trigger_data: Vec<_> = indices
+    let item_data: Vec<_> = indices
         .iter()
         .enumerate()
         .scan(
             None::<String>,
             |current_parent_identifier, (display_index, &index)| {
-                let trigger = snapshot.visible_triggers.get(index)?;
+                let item = snapshot.inbox_items.get(index)?;
                 let depth = app.tree_depth.get(display_index).copied().unwrap_or(0);
                 let is_last = app
                     .tree_last_child
@@ -56,25 +55,25 @@ pub fn draw_triggers_tab(
                     .copied()
                     .unwrap_or(false);
                 if depth == 0 {
-                    current_parent_identifier.replace(trigger.identifier.clone());
+                    current_parent_identifier.replace(item.identifier.clone());
                 }
-                Some((trigger, depth, is_last))
+                Some((item, depth, is_last))
             },
         )
         .collect();
     let compact = area.width < 80;
-    let mixed_sources = trigger_data
+    let mixed_sources = item_data
         .first()
         .map(|(first, ..)| {
-            trigger_data
+            item_data
                 .iter()
-                .any(|(trigger, ..)| trigger.source != first.source)
+                .any(|(item, ..)| item.source != first.source)
         })
         .unwrap_or(false);
-    // Hide the Kind column when all triggers are the same kind (e.g. all issues).
-    let all_same_kind = trigger_data
+    // Hide the Kind column when all items are the same kind (e.g. all issues).
+    let all_same_kind = item_data
         .first()
-        .map(|(first, ..)| trigger_data.iter().all(|(t, ..)| t.kind == first.kind))
+        .map(|(first, ..)| item_data.iter().all(|(t, ..)| t.kind == first.kind))
         .unwrap_or(true);
     let source_col_width: u16 = if mixed_sources {
         2
@@ -86,9 +85,9 @@ pub fn draw_triggers_tab(
     } else if compact {
         2
     } else {
-        trigger_data
+        item_data
             .iter()
-            .map(|(trigger, ..)| trigger.kind.to_string().len())
+            .map(|(item, ..)| item.kind.to_string().len())
             .max()
             .unwrap_or(4)
             .max(4) as u16
@@ -101,10 +100,10 @@ pub fn draw_triggers_tab(
         16
     }; // "3d" vs "YYYY-MM-DD HH:MM"
 
-    let any_activity_indicator = trigger_data.iter().any(|(trigger, ..)| {
-        trigger.has_workspace
-            || running_ids.contains(trigger.trigger_id.as_str())
-            || app.dispatching_triggers.contains(&trigger.trigger_id)
+    let any_activity_indicator = item_data.iter().any(|(item, ..)| {
+        item.has_workspace
+            || running_ids.contains(item.item_id.as_str())
+            || app.dispatching_inbox_items.contains(&item.item_id)
     });
     let workspace_col_width: u16 = if any_activity_indicator {
         1
@@ -169,9 +168,9 @@ pub fn draw_triggers_tab(
             + 1, // padding
     );
 
-    let rows: Vec<Row> = trigger_data
+    let rows: Vec<Row> = item_data
         .iter()
-        .map(|(trigger, depth, is_last)| {
+        .map(|(item, depth, is_last)| {
             let (tree_prefix, tree_prefix_width) = if *depth > 0 {
                 let connector = if *is_last {
                     "└── "
@@ -184,7 +183,7 @@ pub fn draw_triggers_tab(
             };
 
             // Approval marker takes 1 char when present
-            let approval = approval_marker(trigger, theme);
+            let approval = approval_marker(item, theme);
             let approval_width = if approval.is_some() {
                 2
             } else {
@@ -193,7 +192,7 @@ pub fn draw_triggers_tab(
             let effective_title_width = title_max_width
                 .saturating_sub(tree_prefix_width)
                 .saturating_sub(approval_width);
-            let display_title = truncate_with_ellipsis(&trigger.title, effective_title_width);
+            let display_title = truncate_with_ellipsis(&item.title, effective_title_width);
 
             let mut title_spans: Vec<Span<'_>> = Vec::new();
             if tree_prefix_width > 0 {
@@ -208,38 +207,35 @@ pub fn draw_triggers_tab(
             ));
 
             let time_label = if compact && app.is_split_eligible() {
-                trigger
-                    .created_at
+                item.created_at
                     .map(super::format_short_time)
                     .unwrap_or_else(|| "—".into())
             } else if compact {
-                trigger
-                    .created_at
+                item.created_at
                     .map(|dt| super::detail_common::format_relative_time(dt, chrono::Utc::now()))
                     .unwrap_or_else(|| "—".into())
             } else {
-                trigger
-                    .created_at
+                item.created_at
                     .map(super::format_listing_time)
                     .unwrap_or_else(|| "—".into())
             };
 
             // Workspace indicator: spinner if running or dispatching, dot if workspace, empty otherwise
-            let is_running = running_ids.contains(trigger.trigger_id.as_str());
-            let is_dispatching = app.dispatching_triggers.contains(&trigger.trigger_id);
+            let is_running = running_ids.contains(item.item_id.as_str());
+            let is_dispatching = app.dispatching_inbox_items.contains(&item.item_id);
             let workspace_indicator = if is_running || is_dispatching {
                 let spinner =
                     BRAILLE_SPINNER[(app.frame_count / 4) as usize % BRAILLE_SPINNER.len()];
                 Span::styled(spinner.to_string(), Style::default().fg(theme.info))
-            } else if trigger.has_workspace {
+            } else if item.has_workspace {
                 Span::styled("●", Style::default().fg(theme.highlight))
             } else {
                 Span::styled(" ", Style::default())
             };
 
-            let (status_icon, status_color) = status_emoji(&trigger.status, theme);
+            let (status_icon, status_color) = status_emoji(&item.status, theme);
 
-            let source_label = source_badge(&trigger.source).to_string();
+            let source_label = source_badge(&item.source).to_string();
 
             let mut cells = Vec::new();
             if workspace_col_width > 0 {
@@ -257,11 +253,11 @@ pub fn draw_triggers_tab(
             }
             cells.push(Cell::from(Line::from(title_spans)));
             if !all_same_kind {
-                let kind_color = kind_color(trigger.kind, theme);
+                let kind_color = kind_color(item.kind, theme);
                 let kind_label = if compact {
-                    kind_emoji(trigger.kind).to_string()
+                    kind_emoji(item.kind).to_string()
                 } else {
-                    trigger.kind.to_string()
+                    item.kind.to_string()
                 };
                 cells.push(Cell::from(
                     Line::from(Span::styled(kind_label, Style::default().fg(kind_color)))
@@ -275,7 +271,7 @@ pub fn draw_triggers_tab(
             if !compact {
                 cells.push(Cell::from({
                     let count = task_counts
-                        .get(trigger.identifier.as_str())
+                        .get(item.identifier.as_str())
                         .copied()
                         .unwrap_or(0);
                     let label = if count > 0 {
@@ -297,23 +293,20 @@ pub fn draw_triggers_tab(
         })
         .collect();
 
-    let selected_style = Style::default()
-        .bg(theme.selection)
-        .fg(theme.foreground)
-        .add_modifier(Modifier::BOLD);
+    let selected_style = Style::default().add_modifier(Modifier::BOLD);
 
     let count = indices.len();
     let footer_info = selection_info(app.issues_state.selected(), count);
     let sort_label = app.issue_sort.label();
-    let running_count = trigger_data
+    let running_count = item_data
         .iter()
-        .filter(|(trigger, ..)| running_ids.contains(trigger.trigger_id.as_str()))
+        .filter(|(item, ..)| running_ids.contains(item.item_id.as_str()))
         .count();
 
     let title_spans = if app.search_active {
         vec![
             Span::styled(
-                " Triggers ",
+                " Inbox ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -325,7 +318,7 @@ pub fn draw_triggers_tab(
     } else if !app.search_query.is_empty() {
         vec![
             Span::styled(
-                " Triggers ",
+                " Inbox ",
                 Style::default()
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
@@ -337,7 +330,7 @@ pub fn draw_triggers_tab(
         ]
     } else {
         vec![Span::styled(
-            " Triggers ",
+            " Inbox ",
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
@@ -363,7 +356,8 @@ pub fn draw_triggers_tab(
     let table = Table::new(rows, col_constraints)
         .header(header)
         .row_highlight_style(selected_style)
-        .highlight_spacing(HighlightSpacing::Always)
+        .highlight_symbol("▶ ")
+        .highlight_spacing(HighlightSpacing::WhenSelected)
         .block({
             let mut block = Block::default().title(Line::from(title_spans));
             if app.refresh_requested || snapshot.loading.fetching_issues {
@@ -430,30 +424,30 @@ fn source_badge(source: &str) -> &'static str {
 }
 
 fn approval_marker(
-    trigger: &polyphony_core::VisibleTriggerRow,
+    item: &polyphony_core::InboxItemRow,
     theme: crate::theme::Theme,
 ) -> Option<(&'static str, ratatui::style::Color)> {
-    Some(match trigger.approval_state {
-        IssueApprovalState::Approved => (APPROVED_ICON, theme.success),
-        IssueApprovalState::Waiting => (WAITING_ICON, theme.warning),
+    Some(match item.approval_state {
+        DispatchApprovalState::Approved => (APPROVED_ICON, theme.success),
+        DispatchApprovalState::Waiting => (WAITING_ICON, theme.warning),
     })
 }
 
-fn kind_emoji(kind: VisibleTriggerKind) -> &'static str {
+fn kind_emoji(kind: InboxItemKind) -> &'static str {
     match kind {
-        VisibleTriggerKind::Issue => "◆",
-        VisibleTriggerKind::PullRequestReview => "⟐",
-        VisibleTriggerKind::PullRequestComment => "◇",
-        VisibleTriggerKind::PullRequestConflict => "⊘",
+        InboxItemKind::Issue => "◆",
+        InboxItemKind::PullRequestReview => "⟐",
+        InboxItemKind::PullRequestComment => "◇",
+        InboxItemKind::PullRequestConflict => "⊘",
     }
 }
 
-fn kind_color(kind: VisibleTriggerKind, theme: crate::theme::Theme) -> ratatui::style::Color {
+fn kind_color(kind: InboxItemKind, theme: crate::theme::Theme) -> ratatui::style::Color {
     match kind {
-        VisibleTriggerKind::Issue => theme.success,
-        VisibleTriggerKind::PullRequestReview => theme.highlight,
-        VisibleTriggerKind::PullRequestComment => theme.warning,
-        VisibleTriggerKind::PullRequestConflict => theme.warning,
+        InboxItemKind::Issue => theme.success,
+        InboxItemKind::PullRequestReview => theme.highlight,
+        InboxItemKind::PullRequestComment => theme.warning,
+        InboxItemKind::PullRequestConflict => theme.warning,
     }
 }
 

@@ -474,7 +474,7 @@ pub(crate) fn build_runtime_components(
         let registry = polyphony_feedback::FeedbackRegistry::from_config(&workflow.config.feedback);
         (!registry.is_empty()).then_some(Arc::new(registry))
     };
-    let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
+    let (pull_request_event_source, pull_request_manager, pull_request_commenter) =
         build_pull_request_components(workflow, &workflow_root)?;
     let committer: Option<Arc<dyn WorkspaceCommitter>> = workflow
         .config
@@ -490,7 +490,7 @@ pub(crate) fn build_runtime_components(
 
     Ok(RuntimeComponents {
         tracker,
-        pull_request_trigger_source,
+        pull_request_event_source,
         agent: Arc::new(polyphony_agents::AgentRegistryRuntime::new_with_tools(
             tool_executor,
         )),
@@ -558,7 +558,7 @@ fn build_pull_request_components(
     workflow_root: &Path,
 ) -> Result<
     (
-        Option<Arc<dyn PullRequestTriggerSource>>,
+        Option<Arc<dyn PullRequestEventSource>>,
         Option<Arc<dyn PullRequestManager>>,
         Option<Arc<dyn PullRequestCommenter>>,
     ),
@@ -591,7 +591,7 @@ fn build_gitlab_pull_request_components(
     workflow_root: &Path,
 ) -> Result<
     (
-        Option<Arc<dyn PullRequestTriggerSource>>,
+        Option<Arc<dyn PullRequestEventSource>>,
         Option<Arc<dyn PullRequestManager>>,
         Option<Arc<dyn PullRequestCommenter>>,
     ),
@@ -602,14 +602,14 @@ fn build_gitlab_pull_request_components(
         return Ok((None, None, None));
     };
 
-    let trigger_source = if workflow.config.review_triggers.pr_reviews.enabled {
+    let event_source = if workflow.config.review_events.pr_reviews.enabled {
         Some(Arc::new(
-            polyphony_gitlab::merge_requests::GitlabMergeRequestTriggerSource::new(
+            polyphony_gitlab::merge_requests::GitlabMergeRequestEventSource::new(
                 endpoint.clone(),
                 token.clone(),
                 project_path.clone(),
             )?,
-        ) as Arc<dyn PullRequestTriggerSource>)
+        ) as Arc<dyn PullRequestEventSource>)
     } else {
         None
     };
@@ -636,7 +636,7 @@ fn build_gitlab_pull_request_components(
         })
         .transpose()?;
 
-    Ok((trigger_source, manager, commenter))
+    Ok((event_source, manager, commenter))
 }
 
 #[cfg(feature = "gitlab")]
@@ -678,7 +678,7 @@ fn build_github_pull_request_components(
     github_token: Option<String>,
 ) -> Result<
     (
-        Option<Arc<dyn PullRequestTriggerSource>>,
+        Option<Arc<dyn PullRequestEventSource>>,
         Option<Arc<dyn PullRequestManager>>,
         Option<Arc<dyn PullRequestCommenter>>,
     ),
@@ -687,14 +687,14 @@ fn build_github_pull_request_components(
     let integration =
         resolve_github_pull_request_integration(workflow, workflow_root, github_token)?;
 
-    let pull_request_trigger_source = if workflow.config.review_triggers.pr_reviews.enabled {
+    let pull_request_event_source = if workflow.config.review_events.pr_reviews.enabled {
         match integration.as_ref() {
             Some((repository, token)) => Some(Arc::new(
-                polyphony_github::GithubPullRequestReviewTriggerSource::new(
+                polyphony_github::GithubPullRequestReviewEventSource::new(
                     repository.clone(),
                     token.clone(),
                 )?,
-            ) as Arc<dyn PullRequestTriggerSource>),
+            ) as Arc<dyn PullRequestEventSource>),
             None => None,
         }
     } else {
@@ -719,7 +719,7 @@ fn build_github_pull_request_components(
     };
 
     Ok((
-        pull_request_trigger_source,
+        pull_request_event_source,
         pull_request_manager,
         pull_request_commenter,
     ))
@@ -801,17 +801,17 @@ mod tests {
             r#"---
 tracker:
   kind: beads
-review_triggers:
+review_events:
   pr_reviews:
     enabled: true
 "#,
         );
 
-        let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
+        let (pull_request_event_source, pull_request_manager, pull_request_commenter) =
             build_github_pull_request_components(&workflow, &repo_root, Some("test-token".into()))
                 .unwrap();
 
-        assert!(pull_request_trigger_source.is_some());
+        assert!(pull_request_event_source.is_some());
         assert!(pull_request_commenter.is_some());
         assert!(pull_request_manager.is_none());
     }
@@ -823,16 +823,16 @@ review_triggers:
             r#"---
 tracker:
   kind: beads
-review_triggers:
+review_events:
   pr_reviews:
     enabled: true
 "#,
         );
 
-        let (pull_request_trigger_source, pull_request_manager, pull_request_commenter) =
+        let (pull_request_event_source, pull_request_manager, pull_request_commenter) =
             build_github_pull_request_components(&workflow, &repo_root, None).unwrap();
 
-        assert!(pull_request_trigger_source.is_none());
+        assert!(pull_request_event_source.is_none());
         assert!(pull_request_commenter.is_none());
         assert!(pull_request_manager.is_none());
     }

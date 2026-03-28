@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::TaskId;
 
-/// A discrete unit of work in a movement's lifecycle.
+/// A discrete unit of work in a run's lifecycle.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
@@ -71,9 +71,9 @@ impl fmt::Display for StepStatus {
     }
 }
 
-/// A single recorded step in a movement's execution log.
+/// A single recorded step in a run's execution log.
 ///
-/// Persisted on the Movement so that the orchestrator can resume from the
+/// Persisted on the Run so that the orchestrator can resume from the
 /// first non-succeeded step after a restart or retry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepRecord {
@@ -147,7 +147,7 @@ impl StepRecord {
     }
 }
 
-/// Build the step sequence for a pipeline movement that delivers code.
+/// Build the step sequence for a pipeline run that delivers code.
 pub fn build_delivery_steps(
     task_ids: &[TaskId],
     automation_enabled: bool,

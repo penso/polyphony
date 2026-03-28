@@ -159,7 +159,7 @@ classDiagram
         <<trait>>
         +bootstrap() StoreBootstrap
         +save_snapshot(snapshot)
-        +record_run(run)
+        +record_agent_run(run)
         +record_budget(snapshot)
     }
 

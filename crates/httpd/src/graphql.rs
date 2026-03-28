@@ -9,7 +9,7 @@ use tokio_stream::Stream;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
-pub(crate) enum GqlMovementStatus {
+pub(crate) enum GqlRunStatus {
     Pending,
     Planning,
     InProgress,
@@ -19,16 +19,16 @@ pub(crate) enum GqlMovementStatus {
     Cancelled,
 }
 
-impl From<polyphony_core::MovementStatus> for GqlMovementStatus {
-    fn from(s: polyphony_core::MovementStatus) -> Self {
+impl From<polyphony_core::RunStatus> for GqlRunStatus {
+    fn from(s: polyphony_core::RunStatus) -> Self {
         match s {
-            polyphony_core::MovementStatus::Pending => Self::Pending,
-            polyphony_core::MovementStatus::Planning => Self::Planning,
-            polyphony_core::MovementStatus::InProgress => Self::InProgress,
-            polyphony_core::MovementStatus::Review => Self::Review,
-            polyphony_core::MovementStatus::Delivered => Self::Delivered,
-            polyphony_core::MovementStatus::Failed => Self::Failed,
-            polyphony_core::MovementStatus::Cancelled => Self::Cancelled,
+            polyphony_core::RunStatus::Pending => Self::Pending,
+            polyphony_core::RunStatus::Planning => Self::Planning,
+            polyphony_core::RunStatus::InProgress => Self::InProgress,
+            polyphony_core::RunStatus::Review => Self::Review,
+            polyphony_core::RunStatus::Delivered => Self::Delivered,
+            polyphony_core::RunStatus::Failed => Self::Failed,
+            polyphony_core::RunStatus::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -137,20 +137,20 @@ impl From<polyphony_core::DeliverableDecision> for GqlDeliverableDecision {
 }
 
 #[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
-pub(crate) enum GqlTriggerKind {
+pub(crate) enum GqlInboxItemKind {
     Issue,
     PullRequestReview,
     PullRequestComment,
     PullRequestConflict,
 }
 
-impl From<polyphony_core::VisibleTriggerKind> for GqlTriggerKind {
-    fn from(k: polyphony_core::VisibleTriggerKind) -> Self {
+impl From<polyphony_core::InboxItemKind> for GqlInboxItemKind {
+    fn from(k: polyphony_core::InboxItemKind) -> Self {
         match k {
-            polyphony_core::VisibleTriggerKind::Issue => Self::Issue,
-            polyphony_core::VisibleTriggerKind::PullRequestReview => Self::PullRequestReview,
-            polyphony_core::VisibleTriggerKind::PullRequestComment => Self::PullRequestComment,
-            polyphony_core::VisibleTriggerKind::PullRequestConflict => Self::PullRequestConflict,
+            polyphony_core::InboxItemKind::Issue => Self::Issue,
+            polyphony_core::InboxItemKind::PullRequestReview => Self::PullRequestReview,
+            polyphony_core::InboxItemKind::PullRequestComment => Self::PullRequestComment,
+            polyphony_core::InboxItemKind::PullRequestConflict => Self::PullRequestConflict,
         }
     }
 }
@@ -193,9 +193,9 @@ impl From<polyphony_core::EventScope> for GqlEventScope {
 // ---------------------------------------------------------------------------
 
 #[derive(SimpleObject)]
-struct GqlTrigger {
-    trigger_id: String,
-    kind: GqlTriggerKind,
+struct GqlInboxItem {
+    item_id: String,
+    kind: GqlInboxItemKind,
     source: String,
     identifier: String,
     title: String,
@@ -210,10 +210,10 @@ struct GqlTrigger {
     created_at: Option<DateTime<Utc>>,
 }
 
-impl From<&polyphony_core::VisibleTriggerRow> for GqlTrigger {
-    fn from(r: &polyphony_core::VisibleTriggerRow) -> Self {
+impl From<&polyphony_core::InboxItemRow> for GqlInboxItem {
+    fn from(r: &polyphony_core::InboxItemRow) -> Self {
         Self {
-            trigger_id: r.trigger_id.clone(),
+            item_id: r.item_id.clone(),
             kind: r.kind.into(),
             source: r.source.clone(),
             identifier: r.identifier.clone(),
@@ -255,12 +255,12 @@ impl From<&polyphony_core::Deliverable> for GqlDeliverable {
 }
 
 #[derive(SimpleObject)]
-struct GqlMovement {
+struct GqlRun {
     id: String,
     kind: String,
     issue_identifier: Option<String>,
     title: String,
-    status: GqlMovementStatus,
+    status: GqlRunStatus,
     task_count: i32,
     tasks_completed: i32,
     deliverable: Option<GqlDeliverable>,
@@ -268,8 +268,8 @@ struct GqlMovement {
     created_at: DateTime<Utc>,
 }
 
-impl From<&polyphony_core::MovementRow> for GqlMovement {
-    fn from(r: &polyphony_core::MovementRow) -> Self {
+impl From<&polyphony_core::RunRow> for GqlRun {
+    fn from(r: &polyphony_core::RunRow) -> Self {
         Self {
             id: r.id.clone(),
             kind: r.kind.to_string(),
@@ -288,7 +288,7 @@ impl From<&polyphony_core::MovementRow> for GqlMovement {
 #[derive(SimpleObject)]
 struct GqlTask {
     id: String,
-    movement_id: String,
+    run_id: String,
     title: String,
     description: Option<String>,
     category: GqlTaskCategory,
@@ -307,7 +307,7 @@ impl From<&polyphony_core::TaskRow> for GqlTask {
     fn from(r: &polyphony_core::TaskRow) -> Self {
         Self {
             id: r.id.clone(),
-            movement_id: r.movement_id.clone(),
+            run_id: r.run_id.clone(),
             title: r.title.clone(),
             description: r.description.clone(),
             category: r.category.into(),
@@ -339,8 +339,8 @@ struct GqlRunningAgent {
     last_event_at: Option<DateTime<Utc>>,
 }
 
-impl From<&polyphony_core::RunningRow> for GqlRunningAgent {
-    fn from(r: &polyphony_core::RunningRow) -> Self {
+impl From<&polyphony_core::RunningAgentRow> for GqlRunningAgent {
+    fn from(r: &polyphony_core::RunningAgentRow) -> Self {
         Self {
             issue_id: r.issue_id.clone(),
             issue_identifier: r.issue_identifier.clone(),
@@ -378,7 +378,7 @@ impl From<&polyphony_core::RuntimeEvent> for GqlRuntimeEvent {
 struct GqlCounts {
     running: i32,
     retrying: i32,
-    movements: i32,
+    runs: i32,
     tasks_pending: i32,
     tasks_in_progress: i32,
     tasks_completed: i32,
@@ -390,7 +390,7 @@ impl From<&polyphony_core::SnapshotCounts> for GqlCounts {
         Self {
             running: c.running as i32,
             retrying: c.retrying as i32,
-            movements: c.movements as i32,
+            runs: c.runs as i32,
             tasks_pending: c.tasks_pending as i32,
             tasks_in_progress: c.tasks_in_progress as i32,
             tasks_completed: c.tasks_completed as i32,
@@ -407,40 +407,36 @@ pub(crate) struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
-    async fn triggers(&self, ctx: &Context<'_>) -> Vec<GqlTrigger> {
+    async fn inbox(&self, ctx: &Context<'_>) -> Vec<GqlInboxItem> {
         let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
         snap.borrow()
-            .visible_triggers
+            .inbox_items
             .iter()
-            .map(GqlTrigger::from)
+            .map(GqlInboxItem::from)
             .collect()
     }
 
-    async fn movements(&self, ctx: &Context<'_>) -> Vec<GqlMovement> {
+    async fn runs(&self, ctx: &Context<'_>) -> Vec<GqlRun> {
         let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
-        snap.borrow()
-            .movements
-            .iter()
-            .map(GqlMovement::from)
-            .collect()
+        snap.borrow().runs.iter().map(GqlRun::from).collect()
     }
 
-    async fn movement(&self, ctx: &Context<'_>, id: String) -> Option<GqlMovement> {
+    async fn run(&self, ctx: &Context<'_>, id: String) -> Option<GqlRun> {
         let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
         snap.borrow()
-            .movements
+            .runs
             .iter()
             .find(|m| m.id == id)
-            .map(GqlMovement::from)
+            .map(GqlRun::from)
     }
 
-    async fn tasks(&self, ctx: &Context<'_>, movement_id: Option<String>) -> Vec<GqlTask> {
+    async fn tasks(&self, ctx: &Context<'_>, run_id: Option<String>) -> Vec<GqlTask> {
         let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
         let snapshot = snap.borrow();
         snapshot
             .tasks
             .iter()
-            .filter(|t| movement_id.as_ref().is_none_or(|mid| &t.movement_id == mid))
+            .filter(|t| run_id.as_ref().is_none_or(|mid| &t.run_id == mid))
             .map(GqlTask::from)
             .collect()
     }
@@ -580,8 +576,8 @@ struct GqlSnapshotSummary {
     generated_at: DateTime<Utc>,
     counts: GqlCounts,
     dispatch_mode: GqlDispatchMode,
-    trigger_count: i32,
-    movement_count: i32,
+    inbox_count: i32,
+    run_count: i32,
     running_agent_count: i32,
 }
 
@@ -591,8 +587,8 @@ impl From<&RuntimeSnapshot> for GqlSnapshotSummary {
             generated_at: s.generated_at,
             counts: GqlCounts::from(&s.counts),
             dispatch_mode: s.dispatch_mode.into(),
-            trigger_count: s.visible_triggers.len() as i32,
-            movement_count: s.movements.len() as i32,
+            inbox_count: s.inbox_items.len() as i32,
+            run_count: s.runs.len() as i32,
             running_agent_count: s.running.len() as i32,
         }
     }

@@ -70,10 +70,7 @@ pub fn draw_tasks_tab(
         })
         .collect();
 
-    let selected_style = Style::default()
-        .bg(theme.selection)
-        .fg(theme.foreground)
-        .add_modifier(Modifier::BOLD);
+    let selected_style = Style::default().add_modifier(Modifier::BOLD);
 
     let count = tasks.len();
     let footer_info = if count == 0 {
@@ -93,7 +90,8 @@ pub fn draw_tasks_tab(
     ])
     .header(header)
     .row_highlight_style(selected_style)
-    .highlight_spacing(HighlightSpacing::Always)
+    .highlight_symbol("▶ ")
+    .highlight_spacing(HighlightSpacing::WhenSelected)
     .block(
         Block::default()
             .title(Line::from(Span::styled(

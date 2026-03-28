@@ -327,7 +327,7 @@ pub fn demo_issue(identifier: &str, title: &str, priority: Option<i32>, state: &
             updated_at: Some(Utc::now()),
         }],
         blocked_by: Vec::new(),
-        approval_state: polyphony_core::IssueApprovalState::Approved,
+        approval_state: polyphony_core::DispatchApprovalState::Approved,
         parent_id: None,
         created_at: Some(Utc::now()),
         updated_at: Some(Utc::now()),

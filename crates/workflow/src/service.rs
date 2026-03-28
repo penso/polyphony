@@ -180,7 +180,7 @@ impl ServiceConfig {
             .map_err(config_error)?
             .set_default("automation.git.remote_name", "origin")
             .map_err(config_error)?
-            .set_default("review_triggers", HashMap::<String, i64>::new())
+            .set_default("review_events", HashMap::<String, i64>::new())
             .map_err(config_error)?
             .set_default("pipeline.enabled", false)
             .map_err(config_error)?
@@ -226,7 +226,7 @@ impl ServiceConfig {
             agents: raw.agents,
             pipeline: raw.pipeline,
             automation: raw.automation,
-            review_triggers: raw.review_triggers,
+            review_events: raw.review_events,
             feedback: raw.feedback,
             server: raw.server,
             daemon: raw.daemon,
@@ -324,10 +324,10 @@ impl ServiceConfig {
         self.automation.pr_title = resolve_env_token(self.automation.pr_title.take());
         self.automation.pr_body = resolve_env_token(self.automation.pr_body.take());
         self.automation.review_prompt = resolve_env_token(self.automation.review_prompt.take());
-        self.review_triggers.pr_reviews.agent =
-            resolve_env_token(self.review_triggers.pr_reviews.agent.take());
-        self.review_triggers.pr_reviews.prompt =
-            resolve_env_token(self.review_triggers.pr_reviews.prompt.take());
+        self.review_events.pr_reviews.agent =
+            resolve_env_token(self.review_events.pr_reviews.agent.take());
+        self.review_events.pr_reviews.prompt =
+            resolve_env_token(self.review_events.pr_reviews.prompt.take());
         self.automation.git.author.name = resolve_env_token(self.automation.git.author.name.take());
         self.automation.git.author.email =
             resolve_env_token(self.automation.git.author.email.take());
@@ -426,50 +426,50 @@ impl ServiceConfig {
         if self.automation.git.remote_name.trim().is_empty() {
             self.automation.git.remote_name = "origin".into();
         }
-        self.review_triggers.pr_reviews.provider = self
-            .review_triggers
+        self.review_events.pr_reviews.provider = self
+            .review_events
             .pr_reviews
             .provider
             .trim()
             .to_ascii_lowercase();
-        self.review_triggers.pr_reviews.comment_mode = self
-            .review_triggers
+        self.review_events.pr_reviews.comment_mode = self
+            .review_events
             .pr_reviews
             .comment_mode
             .trim()
             .to_ascii_lowercase();
-        self.review_triggers.pr_reviews.only_labels = self
-            .review_triggers
+        self.review_events.pr_reviews.only_labels = self
+            .review_events
             .pr_reviews
             .only_labels
             .drain(..)
             .map(|label| label.trim().to_ascii_lowercase())
             .filter(|label| !label.is_empty())
             .collect();
-        self.review_triggers.pr_reviews.ignore_labels = self
-            .review_triggers
+        self.review_events.pr_reviews.ignore_labels = self
+            .review_events
             .pr_reviews
             .ignore_labels
             .drain(..)
             .map(|label| label.trim().to_ascii_lowercase())
             .filter(|label| !label.is_empty())
             .collect();
-        self.review_triggers.pr_reviews.ignore_authors = self
-            .review_triggers
+        self.review_events.pr_reviews.ignore_authors = self
+            .review_events
             .pr_reviews
             .ignore_authors
             .drain(..)
             .map(|author| author.trim().to_ascii_lowercase())
             .filter(|author| !author.is_empty())
             .collect();
-        if self.review_triggers.pr_reviews.provider.is_empty() {
-            self.review_triggers.pr_reviews.provider = "github".into();
+        if self.review_events.pr_reviews.provider.is_empty() {
+            self.review_events.pr_reviews.provider = "github".into();
         }
-        if self.review_triggers.pr_reviews.comment_mode.is_empty() {
-            self.review_triggers.pr_reviews.comment_mode = "summary".into();
+        if self.review_events.pr_reviews.comment_mode.is_empty() {
+            self.review_events.pr_reviews.comment_mode = "summary".into();
         }
-        if self.review_triggers.pr_reviews.debounce_seconds == 0 {
-            self.review_triggers.pr_reviews.debounce_seconds = 180;
+        if self.review_events.pr_reviews.debounce_seconds == 0 {
+            self.review_events.pr_reviews.debounce_seconds = 180;
         }
         self.orchestration.mode = self.orchestration.mode.trim().to_ascii_lowercase();
         if self.orchestration.mode.is_empty() {
@@ -668,9 +668,9 @@ impl ServiceConfig {
             ));
         }
         if self.tracker.kind == TrackerKind::Github {
-            if self.review_triggers.pr_reviews.provider != "github" {
+            if self.review_events.pr_reviews.provider != "github" {
                 return Err(Error::InvalidConfig(
-                    "review_triggers.pr_reviews.provider must be `github`".into(),
+                    "review_events.pr_reviews.provider must be `github`".into(),
                 ));
             }
             if self
@@ -682,38 +682,33 @@ impl ServiceConfig {
                 .is_empty()
             {
                 return Err(Error::InvalidConfig(
-                    "review_triggers.pr_reviews requires tracker.repository".into(),
+                    "review_events.pr_reviews requires tracker.repository".into(),
                 ));
             }
             if !matches!(
-                self.review_triggers.pr_reviews.comment_mode.as_str(),
+                self.review_events.pr_reviews.comment_mode.as_str(),
                 "summary" | "inline"
             ) {
                 return Err(Error::InvalidConfig(
-                    "review_triggers.pr_reviews.comment_mode must be `summary` or `inline`".into(),
+                    "review_events.pr_reviews.comment_mode must be `summary` or `inline`".into(),
                 ));
             }
-            if let Some(agent_name) = &self.review_triggers.pr_reviews.agent
+            if let Some(agent_name) = &self.review_events.pr_reviews.agent
                 && !self.agents.profiles.contains_key(agent_name)
             {
                 return Err(Error::InvalidConfig(format!(
-                    "review_triggers.pr_reviews.agent `{agent_name}` is not defined"
+                    "review_events.pr_reviews.agent `{agent_name}` is not defined"
                 )));
             }
             if self
-                .review_triggers
+                .review_events
                 .pr_reviews
                 .only_labels
                 .iter()
-                .any(|label| {
-                    self.review_triggers
-                        .pr_reviews
-                        .ignore_labels
-                        .contains(label)
-                })
+                .any(|label| self.review_events.pr_reviews.ignore_labels.contains(label))
             {
                 return Err(Error::InvalidConfig(
-                    "review_triggers.pr_reviews.only_labels and ignore_labels must not overlap"
+                    "review_events.pr_reviews.only_labels and ignore_labels must not overlap"
                         .into(),
                 ));
             }
@@ -910,7 +905,7 @@ impl ServiceConfig {
                     .get_key_value("reviewer")
                     .map(|(name, _)| name)
             })
-            .or(self.review_triggers.pr_reviews.agent.as_ref())
+            .or(self.review_events.pr_reviews.agent.as_ref())
             .or(self.automation.review_agent.as_ref())
             .or(self.agents.default.as_ref());
         let Some(agent_name) = selected_name else {

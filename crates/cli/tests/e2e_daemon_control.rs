@@ -25,7 +25,7 @@ fn daemon_lifecycle_start_snapshot_stop() {
 
     // Snapshot should be available.
     let snap = daemon_snapshot(&repo).expect("daemon should return snapshot");
-    assert!(snap["visible_issues"].is_array());
+    assert!(snap["tracker_issues"].is_array());
 
     // Stop and verify clean exit.
     daemon.stop_and_kill(&repo);
@@ -54,9 +54,9 @@ fn daemon_snapshot_returns_valid_json() {
     assert!(snapshot.is_some(), "daemon snapshot never became ready");
 
     let snapshot = snapshot.unwrap();
-    assert!(snapshot["visible_issues"].is_array());
+    assert!(snapshot["tracker_issues"].is_array());
     assert!(
-        !visible_issues(&snapshot).is_empty(),
+        !tracker_issues(&snapshot).is_empty(),
         "no issues in daemon snapshot"
     );
 
@@ -100,14 +100,14 @@ fn daemon_refresh_triggers_new_poll() {
     // The refresh triggers an immediate poll, but we may need a second refresh
     // if the first poll raced with the issue creation.
     let new_snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(10), |s| {
-        visible_issues(s).len() >= 2
+        tracker_issues(s).len() >= 2
     });
 
     // If the issue didn't appear yet, send another refresh and try again.
     let new_snap = new_snap.or_else(|| {
         let _ = daemon_command(&repo, &["refresh"]);
         wait_for_daemon_snapshot(&repo, Duration::from_secs(10), |s| {
-            visible_issues(s).len() >= 2
+            tracker_issues(s).len() >= 2
         })
     });
 

@@ -23,15 +23,14 @@ pub fn draw_deliverables_tab(
 
     // Collect and sort oldest first (newest at bottom)
     let mut deliverables: Vec<_> = snapshot
-        .movements
+        .runs
         .iter()
-        .filter(|movement| movement.deliverable.is_some())
+        .filter(|run| run.deliverable.is_some())
         .collect();
     deliverables.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
     let header = Row::new(vec![
         Cell::from(Span::styled("", Style::default().fg(theme.muted))),
-        Cell::from(Span::styled("Flow", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Title", Style::default().fg(theme.muted))),
         Cell::from(Span::styled("Output", Style::default().fg(theme.muted))),
         Cell::from(
@@ -48,21 +47,17 @@ pub fn draw_deliverables_tab(
 
     let rows: Vec<Row> = deliverables
         .iter()
-        .map(|movement| {
-            let deliverable = movement.deliverable.as_ref().expect("filtered");
+        .map(|run| {
+            let deliverable = run.deliverable.as_ref().expect("filtered");
             let (status_icon, status_color) = status_indicator(deliverable.status, theme);
             let (decision_icon, decision_color) = decision_indicator(deliverable.decision, theme);
             Row::new(vec![
                 Cell::from(Span::styled(
-                    super::format_listing_time(movement.created_at),
+                    super::format_listing_time(run.created_at),
                     Style::default().fg(theme.muted),
                 )),
                 Cell::from(Span::styled(
-                    flow_label(movement),
-                    Style::default().fg(theme.info),
-                )),
-                Cell::from(Span::styled(
-                    movement.title.clone(),
+                    run.title.clone(),
                     Style::default().fg(theme.foreground),
                 )),
                 Cell::from(Span::styled(
@@ -84,10 +79,7 @@ pub fn draw_deliverables_tab(
         })
         .collect();
 
-    let selected_style = Style::default()
-        .bg(theme.selection)
-        .fg(theme.foreground)
-        .add_modifier(Modifier::BOLD);
+    let selected_style = Style::default().add_modifier(Modifier::BOLD);
 
     let count = deliverables.len();
     let footer_info = if count == 0 {
@@ -101,15 +93,15 @@ pub fn draw_deliverables_tab(
 
     let table = Table::new(rows, [
         Constraint::Length(16),
-        Constraint::Length(18),
         Constraint::Fill(1),
-        Constraint::Length(10),
+        Constraint::Length(16),
         Constraint::Length(4),
         Constraint::Length(4),
     ])
     .header(header)
     .row_highlight_style(selected_style)
-    .highlight_spacing(HighlightSpacing::Always)
+    .highlight_symbol("▶ ")
+    .highlight_spacing(HighlightSpacing::WhenSelected)
     .block(
         Block::default()
             .title(Line::from(Span::styled(
@@ -159,17 +151,16 @@ pub fn draw_deliverables_tab(
     }
 }
 
-fn flow_label(movement: &polyphony_core::MovementRow) -> String {
-    movement
-        .review_target
+fn flow_label(run: &polyphony_core::RunRow) -> String {
+    run.review_target
         .as_ref()
         .map(|target| format!("{}#{}", target.repository, target.number))
-        .or_else(|| movement.issue_identifier.clone())
-        .unwrap_or_else(|| movement.id.clone())
+        .or_else(|| run.issue_identifier.clone())
+        .unwrap_or_else(|| run.id.clone())
 }
 
-pub(crate) fn flow_label_pub(movement: &polyphony_core::MovementRow) -> String {
-    flow_label(movement)
+pub(crate) fn flow_label_pub(run: &polyphony_core::RunRow) -> String {
+    flow_label(run)
 }
 
 fn output_label(deliverable: &Deliverable) -> String {

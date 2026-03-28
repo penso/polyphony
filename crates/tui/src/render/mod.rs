@@ -3,12 +3,13 @@ mod deliverables;
 pub(crate) mod detail_agent;
 pub(crate) mod detail_common;
 pub(crate) mod detail_deliverable;
+pub(crate) mod detail_inbox;
 pub(crate) mod detail_live_log;
-pub(crate) mod detail_movement;
+pub(crate) mod detail_run;
 pub(crate) mod detail_task;
-pub(crate) mod detail_trigger;
 mod footer;
 mod header;
+mod inbox;
 pub(crate) mod logs;
 pub(crate) mod modal_create_issue;
 pub(crate) mod modal_feedback;
@@ -16,7 +17,6 @@ mod orchestrator;
 pub(crate) mod popups;
 pub(crate) mod tasks;
 mod time;
-mod triggers;
 
 use polyphony_core::RuntimeSnapshot;
 pub(crate) use time::*;
@@ -40,7 +40,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
     let areas = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(4), // Header chrome + tabs
+            ratatui::layout::Constraint::Length(3), // Header tabs
             ratatui::layout::Constraint::Min(6),    // Main content
             ratatui::layout::Constraint::Length(1), // Footer version bar
         ])
@@ -193,7 +193,7 @@ fn render_tab_table(
     _focused: bool,
 ) {
     match app.active_tab {
-        ActiveTab::Triggers => triggers::draw_triggers_tab(frame, area, snapshot, app),
+        ActiveTab::Inbox => inbox::draw_inbox_tab(frame, area, snapshot, app),
         ActiveTab::Agents => agents::draw_agents_tab(frame, area, snapshot, app),
         ActiveTab::Orchestrator => orchestrator::draw_orchestrator_tab(frame, area, snapshot, app),
         ActiveTab::Tasks => tasks::draw_tasks_tab(frame, area, snapshot, app),
@@ -210,11 +210,11 @@ fn render_detail_view(
     app: &mut AppState,
 ) {
     match detail {
-        crate::app::DetailView::Trigger { trigger_id, .. } => {
-            detail_trigger::draw_trigger_detail(frame, area, trigger_id, snapshot, app);
+        crate::app::DetailView::InboxItem { item_id, .. } => {
+            detail_inbox::draw_inbox_detail(frame, area, item_id, snapshot, app);
         },
-        crate::app::DetailView::Movement { movement_id, .. } => {
-            detail_movement::draw_movement_detail(frame, area, movement_id, snapshot, app);
+        crate::app::DetailView::Run { run_id, .. } => {
+            detail_run::draw_run_detail(frame, area, run_id, snapshot, app);
         },
         crate::app::DetailView::Task { task_id, .. } => {
             detail_task::draw_task_detail(frame, area, task_id, snapshot, app);
@@ -222,8 +222,8 @@ fn render_detail_view(
         crate::app::DetailView::Agent { agent_index, .. } => {
             detail_agent::draw_agent_detail(frame, area, *agent_index, snapshot, app);
         },
-        crate::app::DetailView::Deliverable { movement_id, .. } => {
-            detail_deliverable::draw_deliverable_detail(frame, area, movement_id, snapshot, app);
+        crate::app::DetailView::Deliverable { run_id, .. } => {
+            detail_deliverable::draw_deliverable_detail(frame, area, run_id, snapshot, app);
         },
         crate::app::DetailView::Events { filter, .. } => {
             orchestrator::draw_filtered_events(frame, area, filter, snapshot, app);

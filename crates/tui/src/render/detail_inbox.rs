@@ -1,4 +1,4 @@
-use polyphony_core::{IssueApprovalState, RuntimeSnapshot, VisibleTriggerRow};
+use polyphony_core::{DispatchApprovalState, InboxItemRow, RuntimeSnapshot};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
@@ -13,21 +13,17 @@ use super::detail_common::{
 };
 use crate::app::{AppState, DetailSection, DetailView};
 
-pub(crate) fn draw_trigger_detail(
+pub(crate) fn draw_inbox_detail(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    trigger_id: &str,
+    item_id: &str,
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
     let theme = app.theme;
 
-    let Some(issue) = snapshot
-        .visible_triggers
-        .iter()
-        .find(|t| t.trigger_id == trigger_id)
-    else {
-        draw_not_found(frame, area, "Trigger no longer available", theme);
+    let Some(issue) = snapshot.inbox_items.iter().find(|t| t.item_id == item_id) else {
+        draw_not_found(frame, area, "Inbox item no longer available", theme);
         return;
     };
 
@@ -41,7 +37,7 @@ pub(crate) fn draw_trigger_detail(
                 Style::default().fg(theme.info),
             ),
             Span::styled(
-                format!("{} ", issue.trigger_id),
+                format!("{} ", issue.item_id),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -82,7 +78,7 @@ pub(crate) fn draw_trigger_detail(
         .clamp(1, 4);
 
     // Row 1: Status | Priority | Labels | Author | Updated
-    let state_color = super::triggers::state_color(&issue.status, theme);
+    let state_color = super::inbox::state_color(&issue.status, theme);
     let priority_str = issue
         .priority
         .map(|p| format!("P{p}"))
@@ -95,12 +91,12 @@ pub(crate) fn draw_trigger_detail(
     };
 
     let approval_icon = match issue.approval_state {
-        IssueApprovalState::Approved => "✓",
-        IssueApprovalState::Waiting => "◷",
+        DispatchApprovalState::Approved => "✓",
+        DispatchApprovalState::Waiting => "◷",
     };
     let approval_color = match issue.approval_state {
-        IssueApprovalState::Approved => theme.success,
-        IssueApprovalState::Waiting => theme.warning,
+        DispatchApprovalState::Approved => theme.success,
+        DispatchApprovalState::Waiting => theme.warning,
     };
 
     let sep = Span::styled("  ", Style::default());
@@ -217,10 +213,7 @@ pub(crate) fn draw_trigger_detail(
     );
 
     // Row 2: Indicator legend
-    let is_running = snapshot
-        .running
-        .iter()
-        .any(|r| r.issue_id == issue.trigger_id);
+    let is_running = snapshot.running.iter().any(|r| r.issue_id == issue.item_id);
     let mut legend_spans: Vec<Span<'_>> = Vec::new();
     if is_running {
         legend_spans.push(Span::styled("⠋ ", Style::default().fg(theme.highlight)));
@@ -250,31 +243,31 @@ pub(crate) fn draw_trigger_detail(
     let mut body_lines: Vec<Line<'_>> = desc_widget.lines;
 
     // Read focus state from the detail stack
-    let (focus, movements_selected, agents_selected) = match app.current_detail() {
-        Some(DetailView::Trigger {
+    let (focus, runs_selected, agents_selected) = match app.current_detail() {
+        Some(DetailView::InboxItem {
             focus,
-            movements_selected,
+            runs_selected,
             agents_selected,
             ..
-        }) => (*focus, *movements_selected, *agents_selected),
+        }) => (*focus, *runs_selected, *agents_selected),
         _ => (DetailSection::Body, 0, 0),
     };
-    let movements_focused = focus == DetailSection::Section(0);
+    let runs_focused = focus == DetailSection::Section(0);
     let agents_focused = focus == DetailSection::Section(1);
 
-    // Related movements — sorted by creation time (oldest first, newest at bottom)
-    let mut related_movements: Vec<_> = snapshot
-        .movements
+    // Related runs — sorted by creation time (oldest first, newest at bottom)
+    let mut related_runs: Vec<_> = snapshot
+        .runs
         .iter()
         .filter(|m| m.issue_identifier.as_deref() == Some(&*issue.identifier))
         .collect();
-    related_movements.sort_by_key(|m| m.created_at);
-    if !related_movements.is_empty() {
+    related_runs.sort_by_key(|m| m.created_at);
+    if !related_runs.is_empty() {
         body_lines.push(Line::default());
         body_lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                "Related Movements",
+                "Related Runs",
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -282,37 +275,37 @@ pub(crate) fn draw_trigger_detail(
         ]));
 
         // Pre-compute max column widths for alignment
-        let max_kind_len = related_movements
+        let max_kind_len = related_runs
             .iter()
-            .map(|m| super::orchestrator::movement_kind_label(m.kind).len())
+            .map(|m| super::orchestrator::run_kind_label(m.kind).len())
             .max()
             .unwrap_or(0);
-        let max_target_len = related_movements
+        let max_target_len = related_runs
             .iter()
-            .map(|m| super::orchestrator::movement_target_label(m).len())
+            .map(|m| super::orchestrator::run_target_label(m).len())
             .max()
             .unwrap_or(0);
-        let max_status_len = related_movements
+        let max_status_len = related_runs
             .iter()
             .map(|m| m.status.to_string().len())
             .max()
             .unwrap_or(0);
-        let max_completed_len = related_movements
+        let max_completed_len = related_runs
             .iter()
             .map(|m| format!("{}", m.tasks_completed).len())
             .max()
             .unwrap_or(1);
-        let max_total_len = related_movements
+        let max_total_len = related_runs
             .iter()
             .map(|m| format!("{}", m.task_count).len())
             .max()
             .unwrap_or(1);
 
-        for (i, m) in related_movements.iter().enumerate() {
+        for (i, m) in related_runs.iter().enumerate() {
             let (status_emoji, emoji_color) =
-                super::orchestrator::movement_status_emoji_pub(&m.status, theme);
-            let status_color = super::orchestrator::movement_status_color_pub(&m.status, theme);
-            let is_selected = movements_focused && i == movements_selected;
+                super::orchestrator::run_status_emoji_pub(&m.status, theme);
+            let status_color = super::orchestrator::run_status_color_pub(&m.status, theme);
+            let is_selected = runs_focused && i == runs_selected;
             let name_style = if is_selected {
                 Style::default()
                     .fg(theme.foreground)
@@ -320,8 +313,8 @@ pub(crate) fn draw_trigger_detail(
             } else {
                 Style::default().fg(theme.foreground)
             };
-            let kind_label = super::orchestrator::movement_kind_label(m.kind);
-            let target = super::orchestrator::movement_target_label(m);
+            let kind_label = super::orchestrator::run_kind_label(m.kind);
+            let target = super::orchestrator::run_target_label(m);
             let status_str = m.status.to_string();
             let ts = m
                 .created_at
@@ -356,11 +349,11 @@ pub(crate) fn draw_trigger_detail(
         }
     }
 
-    // Running agents for this trigger
+    // Running agents for this item
     let running_agents: Vec<_> = snapshot
         .running
         .iter()
-        .filter(|r| r.issue_id == issue.trigger_id)
+        .filter(|r| r.issue_id == issue.item_id)
         .collect();
     if !running_agents.is_empty() {
         body_lines.push(Line::default());
@@ -401,7 +394,7 @@ pub(crate) fn draw_trigger_detail(
         }
     }
 
-    // Recent events for this trigger (compact: 3 most recent)
+    // Recent events for this item (compact: 3 most recent)
     body_lines.extend(super::orchestrator::compact_recent_event_lines(
         snapshot,
         &issue.identifier,
@@ -445,7 +438,7 @@ pub(crate) fn draw_trigger_detail(
     );
 }
 
-fn detail_hint_spans(issue: &VisibleTriggerRow, theme: crate::theme::Theme) -> Vec<Span<'static>> {
+fn detail_hint_spans(issue: &InboxItemRow, theme: crate::theme::Theme) -> Vec<Span<'static>> {
     let mut spans = vec![
         Span::styled(" Tab", Style::default().fg(theme.highlight)),
         Span::styled(":focus  ", Style::default().fg(theme.muted)),
@@ -459,11 +452,11 @@ fn detail_hint_spans(issue: &VisibleTriggerRow, theme: crate::theme::Theme) -> V
         ":dispatch  ",
         Style::default().fg(theme.muted),
     ));
-    if issue.kind == polyphony_core::VisibleTriggerKind::Issue {
+    if issue.kind == polyphony_core::InboxItemKind::Issue {
         spans.push(Span::styled("x", Style::default().fg(theme.highlight)));
         spans.push(Span::styled(":close  ", Style::default().fg(theme.muted)));
     }
-    if issue.approval_state == IssueApprovalState::Waiting {
+    if issue.approval_state == DispatchApprovalState::Waiting {
         spans.push(Span::styled("a", Style::default().fg(theme.highlight)));
         spans.push(Span::styled(":approve  ", Style::default().fg(theme.muted)));
     }

@@ -1507,7 +1507,7 @@ prompt
                 labels: Vec::new(),
                 comments: Vec::new(),
                 blocked_by: Vec::new(),
-                approval_state: polyphony_core::IssueApprovalState::Approved,
+                approval_state: polyphony_core::DispatchApprovalState::Approved,
                 parent_id: None,
                 created_at: None,
                 updated_at: None,

@@ -11,7 +11,7 @@ pub(crate) use std::{
 
 pub(crate) use async_trait::async_trait;
 pub(crate) use polyphony_core::{
-    CheckoutKind, IssueTracker, PullRequestCommenter, PullRequestManager, PullRequestTriggerSource,
+    CheckoutKind, IssueTracker, PullRequestCommenter, PullRequestEventSource, PullRequestManager,
     RuntimeSnapshot, TrackerKind, WorkspaceCommitter,
 };
 pub(crate) use polyphony_orchestrator::{RuntimeCommand, RuntimeComponents};

@@ -13,7 +13,7 @@ It owns:
 - budget and model refresh intervals
 - throttle registration from provider rate limits
 - snapshot publication for the TUI and persistence
-- pipeline dispatch, task sequencing, and movement tracking
+- pipeline dispatch, task sequencing, and run tracking
 
 ## Main entrypoints
 
@@ -32,14 +32,14 @@ those pieces through the traits defined in `polyphony-core`.
 
 ## Pipeline orchestration
 
-When `pipeline.enabled = true`, the orchestrator decomposes each issue into a Movement with
+When `pipeline.enabled = true`, the orchestrator decomposes each issue into a run (`Run`) with
 sequential Tasks instead of running a single agent. The pipeline path adds:
 
-- `dispatch_pipeline()` — creates a Movement and routes to planner or static stages
+- `dispatch_pipeline()` — creates a run and routes to planner or static stages
 - `handle_planner_finished()` — reads `.polyphony/plan.json` and creates Tasks
 - `dispatch_next_task()` — finds the next pending task and dispatches its agent
 - `handle_task_finished()` — updates task status, dispatches next or re-plans on failure
-- `complete_pipeline()` — marks the Movement as delivered and runs automation handoff
+- `complete_pipeline()` — marks the run as delivered and runs automation handoff
 
-Movements and tasks are stored via `StateStore` and restored on startup. The standard
+Runs and tasks are stored via `StateStore` and restored on startup. The standard
 `finish_running()` path detects pipeline workers and routes to the appropriate handler.

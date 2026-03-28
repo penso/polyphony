@@ -3,15 +3,15 @@ use crate::{prelude::*, *};
 const SLOW_STARTUP_CLEANUP_WARN_THRESHOLD: Duration = Duration::from_millis(750);
 
 impl RuntimeService {
-    pub(crate) async fn record_run_history(
+    pub(crate) async fn record_agent_run_history(
         &mut self,
-        run: PersistedRunRecord,
+        run: PersistedAgentRunRecord,
     ) -> Result<(), Error> {
         if let Some(store) = &self.store {
-            store.record_run(&run).await?;
+            store.record_agent_run(&run).await?;
         }
         if let Some(workspace_path) = run.workspace_path.as_deref()
-            && let Err(error) = append_workspace_run_record_artifact(workspace_path, &run).await
+            && let Err(error) = append_workspace_agent_run_artifact(workspace_path, &run).await
         {
             warn!(
                 %error,
@@ -20,9 +20,9 @@ impl RuntimeService {
                 "persisting workspace run artifact failed"
             );
         }
-        self.state.run_history.push_front(run);
-        while self.state.run_history.len() > MAX_RUN_HISTORY {
-            self.state.run_history.pop_back();
+        self.state.agent_run_history.push_front(run);
+        while self.state.agent_run_history.len() > MAX_RUN_HISTORY {
+            self.state.agent_run_history.pop_back();
         }
         Ok(())
     }
@@ -72,24 +72,24 @@ impl RuntimeService {
                 warn!(%error, issue_identifier = %issue.identifier, "terminal cleanup failed");
             }
         }
-        let stale_accepted_movements = self
+        let stale_accepted_runs = self
             .state
-            .movements
+            .runs
             .values()
-            .filter(|movement| {
-                movement.issue_id.as_ref().is_some_and(|issue_id| {
+            .filter(|run| {
+                run.issue_id.as_ref().is_some_and(|issue_id| {
                     !terminal_issue_ids.contains(issue_id)
-                        && movement.deliverable.as_ref().is_some_and(|deliverable| {
+                        && run.deliverable.as_ref().is_some_and(|deliverable| {
                             deliverable.status == polyphony_core::DeliverableStatus::Merged
                                 && deliverable.decision
                                     == polyphony_core::DeliverableDecision::Accepted
                         })
                 })
             })
-            .map(|movement| movement.id.clone())
+            .map(|run| run.id.clone())
             .collect::<Vec<_>>();
-        for movement_id in stale_accepted_movements {
-            self.finalize_accepted_movement(&movement_id).await;
+        for run_id in stale_accepted_runs {
+            self.finalize_accepted_run(&run_id).await;
         }
 
         // Scan remaining workspaces on disk and cache the keys.
@@ -157,24 +157,24 @@ impl RuntimeService {
                     self.state.worktree_keys.remove(&workspace_key);
                 }
             }
-            // Mark the associated movement as cancelled.
-            if let Some(movement) = self
+            // Mark the associated run as cancelled.
+            if let Some(run) = self
                 .state
-                .movements
+                .runs
                 .values_mut()
                 .find(|m| m.issue_id.as_deref() == Some(issue_id))
             {
-                movement.status = MovementStatus::Cancelled;
-                movement.cancel_reason = reason.map(ToOwned::to_owned);
+                run.status = RunStatus::Cancelled;
+                run.cancel_reason = reason.map(ToOwned::to_owned);
                 if let Some(reason_str) = reason {
-                    movement.push_log(
-                        polyphony_core::MovementLogScope::Reconciliation,
+                    run.push_log(
+                        polyphony_core::RunLogScope::Reconciliation,
                         format!("stopped: {reason_str}"),
                     );
                 }
-                movement.updated_at = Utc::now();
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    let _ = store.save_movement(movement).await;
+                    let _ = store.save_run(run).await;
                 }
             }
             let finished_at = Utc::now();
@@ -200,14 +200,14 @@ impl RuntimeService {
                     "persisting workspace saved context failed"
                 );
             }
-            let run = build_persisted_run_record(
+            let run = build_persisted_agent_run_record(
                 &running,
                 outcome.status,
                 finished_at,
                 outcome.error.clone(),
                 self.state.saved_contexts.get(issue_id).cloned(),
             );
-            if let Err(error) = self.record_run_history(run).await {
+            if let Err(error) = self.record_agent_run_history(run).await {
                 warn!(%error, issue_identifier = %running.issue.identifier, "persisting cancelled run failed");
             }
             self.push_event(
@@ -258,17 +258,17 @@ impl RuntimeService {
         if let Some(running) = self.state.running.remove(issue_id) {
             running.handle.abort();
             self.release_issue(issue_id);
-            // Mark the associated movement as cancelled.
-            if let Some(movement) = self
+            // Mark the associated run as cancelled.
+            if let Some(run) = self
                 .state
-                .movements
+                .runs
                 .values_mut()
                 .find(|m| m.issue_id.as_deref() == Some(issue_id))
             {
-                movement.status = MovementStatus::Cancelled;
-                movement.updated_at = Utc::now();
+                run.status = RunStatus::Cancelled;
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    let _ = store.save_movement(movement).await;
+                    let _ = store.save_run(run).await;
                 }
             }
             let finished_at = Utc::now();
@@ -290,14 +290,14 @@ impl RuntimeService {
                     "persisting workspace saved context failed"
                 );
             }
-            let run = build_persisted_run_record(
+            let run = build_persisted_agent_run_record(
                 &running,
                 outcome.status,
                 finished_at,
                 outcome.error.clone(),
                 self.state.saved_contexts.get(issue_id).cloned(),
             );
-            if let Err(error) = self.record_run_history(run).await {
+            if let Err(error) = self.record_agent_run_history(run).await {
                 warn!(%error, issue_identifier = %running.issue.identifier, "persisting stopped run failed");
             }
             self.push_event(

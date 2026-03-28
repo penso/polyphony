@@ -1,7 +1,7 @@
 use polyphony_core::RuntimeSnapshot;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType, LineGauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -12,17 +12,17 @@ use ratatui::{
 use super::detail_common::{kv_line, render_scroll_indicator, render_separator};
 use crate::app::AppState;
 
-pub(crate) fn draw_movement_detail(
+pub(crate) fn draw_run_detail(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    movement_id: &str,
+    run_id: &str,
     snapshot: &RuntimeSnapshot,
     app: &mut AppState,
 ) {
     let theme = app.theme;
 
-    let Some(movement) = snapshot.movements.iter().find(|m| m.id == movement_id) else {
-        draw_not_found(frame, area, "Movement no longer available", theme);
+    let Some(run) = snapshot.runs.iter().find(|m| m.id == run_id) else {
+        draw_not_found(frame, area, "Run no longer available", theme);
         return;
     };
 
@@ -34,15 +34,11 @@ pub(crate) fn draw_movement_detail(
         Span::styled("Shift+O", Style::default().fg(theme.highlight)),
         Span::styled(":open  ", Style::default().fg(theme.muted)),
     ];
-    let movement_can_retry = if movement.status == polyphony_core::MovementStatus::Failed {
+    let run_can_retry = if run.status == polyphony_core::RunStatus::Failed {
         true
-    } else if movement.status == polyphony_core::MovementStatus::InProgress {
+    } else if run.status == polyphony_core::RunStatus::InProgress {
         let mut has_retryable_task = false;
-        for task in snapshot
-            .tasks
-            .iter()
-            .filter(|task| task.movement_id == movement.id)
-        {
+        for task in snapshot.tasks.iter().filter(|task| task.run_id == run.id) {
             match task.status {
                 polyphony_core::TaskStatus::Failed => {
                     has_retryable_task = true;
@@ -62,11 +58,11 @@ pub(crate) fn draw_movement_detail(
     } else {
         false
     };
-    if movement_can_retry {
+    if run_can_retry {
         hint_spans.push(Span::styled("t", Style::default().fg(theme.highlight)));
         hint_spans.push(Span::styled(":retry  ", Style::default().fg(theme.muted)));
     }
-    if movement.workspace_path.is_some() {
+    if run.workspace_path.is_some() {
         hint_spans.push(Span::styled("f", Style::default().fg(theme.highlight)));
         hint_spans.push(Span::styled(
             ":feedback  ",
@@ -86,12 +82,9 @@ pub(crate) fn draw_movement_detail(
 
     let block = Block::default()
         .title(Line::from(vec![
-            Span::styled(" Movement ", Style::default().fg(theme.info)),
+            Span::styled(" Run ", Style::default().fg(theme.info)),
             Span::styled(
-                format!(
-                    "{} ",
-                    super::orchestrator::movement_kind_label(movement.kind)
-                ),
+                format!("{} ", super::orchestrator::run_kind_label(run.kind)),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -127,7 +120,7 @@ pub(crate) fn draw_movement_detail(
     // Title
     frame.render_widget(
         Paragraph::new(Span::styled(
-            movement.title.clone(),
+            run.title.clone(),
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
@@ -137,16 +130,13 @@ pub(crate) fn draw_movement_detail(
     );
 
     // Status + target
-    let status_color = super::orchestrator::movement_status_color_pub(&movement.status, theme);
+    let status_color = super::orchestrator::run_status_color_pub(&run.status, theme);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                movement.status.to_string(),
-                Style::default().fg(status_color),
-            ),
+            Span::styled(run.status.to_string(), Style::default().fg(status_color)),
             Span::styled("  ", Style::default()),
             Span::styled(
-                super::orchestrator::movement_target_label(movement),
+                super::orchestrator::run_target_label(run),
                 Style::default().fg(theme.info),
             ),
         ])),
@@ -154,21 +144,21 @@ pub(crate) fn draw_movement_detail(
     );
 
     // Task progress gauge
-    let ratio = if movement.task_count > 0 {
-        movement.tasks_completed as f64 / movement.task_count as f64
+    let ratio = if run.task_count > 0 {
+        run.tasks_completed as f64 / run.task_count as f64
     } else {
         0.0
     };
-    let gauge_label = format!("{}/{} tasks", movement.tasks_completed, movement.task_count);
+    let gauge_label = format!("{}/{} tasks", run.tasks_completed, run.task_count);
     frame.render_widget(
         LineGauge::default()
             .filled_style(
                 Style::default()
-                    .fg(theme.background)
+                    .fg(Color::Black)
                     .bg(status_color)
                     .add_modifier(Modifier::BOLD),
             )
-            .unfilled_style(Style::default().fg(theme.border).bg(theme.background))
+            .unfilled_style(Style::default().fg(theme.border))
             .filled_symbol(ratatui::symbols::line::THICK_HORIZONTAL)
             .unfilled_symbol(ratatui::symbols::line::THICK_HORIZONTAL)
             .label(Line::from(Span::styled(
@@ -185,21 +175,13 @@ pub(crate) fn draw_movement_detail(
     let format_time = super::format_detail_time;
 
     let mut lines = vec![
-        kv_line("ID", &movement.id, theme),
-        kv_line(
-            "Kind",
-            super::orchestrator::movement_kind_label(movement.kind),
-            theme,
-        ),
-        kv_line(
-            "Target",
-            &super::orchestrator::movement_target_label(movement),
-            theme,
-        ),
-        kv_line("Created", &format_time(movement.created_at), theme),
+        kv_line("ID", &run.id, theme),
+        kv_line("Kind", super::orchestrator::run_kind_label(run.kind), theme),
+        kv_line("Target", &super::orchestrator::run_target_label(run), theme),
+        kv_line("Created", &format_time(run.created_at), theme),
     ];
 
-    if let Some(deliverable) = &movement.deliverable {
+    if let Some(deliverable) = &run.deliverable {
         lines.push(kv_line(
             "Decision",
             &deliverable.decision.to_string(),
@@ -209,21 +191,21 @@ pub(crate) fn draw_movement_detail(
             lines.push(kv_line("URL", url, theme));
         }
     }
-    if let Some(workspace_key) = &movement.workspace_key {
+    if let Some(workspace_key) = &run.workspace_key {
         lines.push(kv_line("Wkspace", workspace_key, theme));
     }
-    if let Some(workspace_path) = &movement.workspace_path {
+    if let Some(workspace_path) = &run.workspace_path {
         lines.push(kv_line(
             "Path",
             &workspace_path.display().to_string(),
             theme,
         ));
     }
-    if let Some(reason) = &movement.cancel_reason {
+    if let Some(reason) = &run.cancel_reason {
         lines.push(kv_line("Stopped", reason, theme));
     }
 
-    if let Some(target) = &movement.review_target {
+    if let Some(target) = &run.review_target {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Review Target",
@@ -250,7 +232,7 @@ pub(crate) fn draw_movement_detail(
             .tasks
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.movement_id == movement.id)
+            .filter(|(_, t)| t.run_id == run.id)
             .map(|(i, _)| i)
             .collect();
         task_indices.sort_by_key(|&i| snapshot.tasks[i].ordinal);
@@ -327,7 +309,7 @@ pub(crate) fn draw_movement_detail(
     }
 
     // Pipeline steps (indented under a tree)
-    if !movement.steps.is_empty() {
+    if !run.steps.is_empty() {
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Pipeline",
@@ -335,8 +317,8 @@ pub(crate) fn draw_movement_detail(
                 .fg(theme.highlight)
                 .add_modifier(Modifier::BOLD),
         )));
-        let step_count = movement.steps.len();
-        for (i, step) in movement.steps.iter().enumerate() {
+        let step_count = run.steps.len();
+        for (i, step) in run.steps.iter().enumerate() {
             let is_last = i == step_count - 1;
             let connector = if is_last {
                 "└─ "
@@ -384,7 +366,7 @@ pub(crate) fn draw_movement_detail(
                     "  │  "
                 };
                 let excerpt = if error.len() > 72 {
-                    format!("{}…", &error[..69])
+                    format!("{}…", &error[..error.floor_char_boundary(69)])
                 } else {
                     error.clone()
                 };
@@ -397,10 +379,10 @@ pub(crate) fn draw_movement_detail(
     }
 
     // Recent events (compact: 3 most recent)
-    let movement_identifier = super::orchestrator::movement_target_label(movement);
+    let run_identifier = super::orchestrator::run_target_label(run);
     lines.extend(super::orchestrator::compact_recent_event_lines(
         snapshot,
-        &movement_identifier,
+        &run_identifier,
         theme,
     ));
 

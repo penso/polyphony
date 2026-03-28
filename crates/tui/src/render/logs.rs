@@ -158,10 +158,7 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
         .collect();
 
     let title = build_logs_title(&app.logs_search_query, app.logs_search_active, theme);
-    let selected_style = Style::default()
-        .bg(theme.selection)
-        .fg(theme.foreground)
-        .add_modifier(Modifier::BOLD);
+    let selected_style = Style::default().add_modifier(Modifier::BOLD);
     let footer_text = if count == 0 {
         "empty".to_string()
     } else {
@@ -181,7 +178,8 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
     ])
     .header(header)
     .row_highlight_style(selected_style)
-    .highlight_spacing(HighlightSpacing::Always)
+    .highlight_symbol("▶ ")
+    .highlight_spacing(HighlightSpacing::WhenSelected)
     .block(
         Block::default()
             .title(title)

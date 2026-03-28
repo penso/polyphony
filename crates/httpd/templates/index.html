@@ -14,8 +14,8 @@
     <div class="label">Retrying</div>
   </div>
   <div class="count-box">
-    <div class="number">{{ counts.movements }}</div>
-    <div class="label">Movements</div>
+    <div class="number">{{ counts.runs }}</div>
+    <div class="label">Runs</div>
   </div>
   <div class="count-box">
     <div class="number">{{ counts.tasks_in_progress }}</div>
@@ -43,25 +43,25 @@
   </table>
 </div>
 
-{% if visible_triggers %}
+{% if inbox_items %}
 <div class="card">
-  <h2>Pending Triggers ({{ visible_triggers | length }})</h2>
+  <h2>Inbox ({{ inbox_items | length }})</h2>
   <table>
     <thead><tr><th>ID</th><th>Kind</th><th>Title</th><th>Priority</th></tr></thead>
     <tbody>
-    {% for t in visible_triggers[:5] %}
+    {% for t in inbox_items[:5] %}
     <tr>
       <td style="color: var(--muted);">{{ t.identifier }}</td>
       <td>{{ t.kind }}</td>
-      <td><a href="/triggers">{{ t.title }}</a></td>
+      <td><a href="/inbox">{{ t.title }}</a></td>
       <td>{{ t.priority }}</td>
     </tr>
     {% endfor %}
     </tbody>
   </table>
-  {% if visible_triggers | length > 5 %}
+  {% if inbox_items | length > 5 %}
   <div style="padding: 0.5rem; color: var(--muted); font-size: 0.8rem;">
-    &hellip; and {{ visible_triggers | length - 5 }} more. <a href="/triggers">View all</a>
+    &hellip; and {{ inbox_items | length - 5 }} more. <a href="/inbox">View all</a>
   </div>
   {% endif %}
 </div>

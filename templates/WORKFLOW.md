@@ -181,7 +181,7 @@ agents:
   # Default agent for issues that don't match any by_state/by_label rule.
   default: implementer
 
-  # Agent used for PR reviews (review_triggers and automation reviews).
+  # Agent used for PR reviews (review_events config and automation reviews).
   reviewer: reviewer
 
   # Route issues to agents based on their tracker state.
@@ -203,6 +203,9 @@ agents:
 #   # Create PRs as drafts instead of ready-for-review.
 #   draft_pull_requests: true
 #
+#   # Append "Co-Authored-By: Polyphony <noreply@polyphony.to>" to commits.
+#   co_authored_by: true
+#
 #   # Agent that reviews the automated PR before marking it ready.
 #   review_agent: reviewer
 #
@@ -219,9 +222,9 @@ agents:
 #       name: Polyphony Bot
 #       email: bot@polyphony.dev
 
-# ─── Review Triggers ────────────────────────────────────────────────
+# ─── Review Events ──────────────────────────────────────────────────
 # Automatic PR review when new pull requests are opened or updated.
-# review_triggers:
+# review_events:
 #   pr_reviews:
 #     # Enable automatic PR reviews.
 #     enabled: true

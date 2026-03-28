@@ -349,9 +349,9 @@ pub fn draw_dispatch_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     let agent_label = modal.agent_name.as_deref().unwrap_or("default");
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("trigger:", Style::default().fg(theme.muted)),
+            Span::styled("item:", Style::default().fg(theme.muted)),
             Span::styled(
-                format!(" {}  ", modal.trigger_identifier),
+                format!(" {}  ", modal.item_identifier),
                 Style::default()
                     .fg(theme.highlight)
                     .add_modifier(Modifier::BOLD),
@@ -368,7 +368,7 @@ pub fn draw_dispatch_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
-                modal.trigger_title.clone(),
+                modal.item_title.clone(),
                 Style::default().fg(theme.foreground),
             )),
             Line::from(Span::styled(
@@ -513,7 +513,7 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         (
             "1-6",
             "tabs",
-            "Switch between Triggers, Orchestration, Tasks, Outcomes, Agents, Logs",
+            "Switch between Inbox, Orchestration, Tasks, Outcomes, Agents, Logs",
         ),
         ("j / k", "navigate", "Move selection up/down in lists"),
         (
@@ -554,24 +554,24 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         (
             "d",
             "dispatch",
-            "Open dispatch modal for a trigger, with optional operator directives",
+            "Open dispatch modal for the selected inbox item, with optional operator directives",
         ),
         ("", "", ""),
         ("Workflow", "", ""),
         (
             "a",
             "approve",
-            "Approve a waiting trigger or accept a deliverable",
+            "Approve a waiting inbox item or accept a deliverable",
         ),
         (
             "x",
             "close/reject",
-            "Close an existing trigger issue or reject a deliverable",
+            "Close an existing inbox issue or reject a deliverable",
         ),
         (
             "t",
-            "retry movement",
-            "Retry a failed movement from its first failed task",
+            "retry run",
+            "Retry a failed run from its first failed task",
         ),
         ("R", "resolve task", "Mark a task as completed manually"),
         (

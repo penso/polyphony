@@ -82,6 +82,15 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+axum-login = "0.18"
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
+time = "0.3"
+tower = { version = "0.5", features = ["util"] }
+tower-sessions = { version = "0.14", default-features = false }
+tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
 vt100 = "0.15.2"
 
 [patch.crates-io]

@@ -162,7 +162,7 @@ research = "researcher"
 ```
 
 Resolution order: `by_label` → `by_state` → `default`. The TUI also allows manual
-dispatch to any profile via the agent picker (`D` key on a trigger).
+dispatch to any profile via the agent picker (`D` key on an inbox item).
 
 When `agents.profiles` is empty, Polyphony stays in **tracker-only mode**: it polls and
 displays issues but does not dispatch work.
@@ -378,7 +378,7 @@ api_key = "$OPENAI_API_KEY"
 
 The TUI provides two modals for agent control:
 
-- **Agent picker** (`D` on a trigger) — choose which profile to dispatch an issue to.
+- **Agent picker** (`D` on an inbox item) — choose which profile to dispatch an issue to.
   Lists all configured profiles with their kind, description, and source indicator:
   - `⌂` — defined in `~/.config/polyphony/agents/` (user-global)
   - `⊙` — defined in `.polyphony/agents/` (repository)

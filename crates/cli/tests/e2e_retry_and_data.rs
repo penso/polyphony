@@ -176,7 +176,7 @@ fn data_history_returns_completed_runs() {
     // Dispatch and wait for completion.
     let _ = daemon_command(&repo, &["dispatch", &issue_id, "--agent", "test-agent"]);
     let snap = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        !agent_history(s).is_empty()
+        !agent_run_history(s).is_empty()
     });
     assert!(
         snap.is_some(),
@@ -185,7 +185,7 @@ fn data_history_returns_completed_runs() {
     );
 
     let snap = snap.unwrap();
-    let history = agent_history(&snap);
+    let history = agent_run_history(&snap);
     assert!(!history.is_empty(), "history should have entries");
 
     let entry = &history[0];
@@ -214,7 +214,7 @@ fn daemon_snapshot_contains_runtime_events() {
     // Dispatch to generate events.
     let _ = daemon_command(&repo, &["dispatch", &issue_id, "--agent", "test-agent"]);
     let _ = wait_for_daemon_snapshot(&repo, Duration::from_secs(30), |s| {
-        !agent_history(s).is_empty()
+        !agent_run_history(s).is_empty()
     });
 
     let snap = daemon_snapshot(&repo).expect("daemon snapshot");

@@ -4,14 +4,14 @@
 
 # Polyphony
 
-Git-native AI orchestration engine. Trigger coding agents from issues, PRs, webhooks, or schedules.
+Git-native AI orchestration engine. Turn repository events into orchestrated agent work, from issues, PRs, webhooks, or schedules.
 
 [![CI](https://github.com/penso/polyphony/actions/workflows/ci.yml/badge.svg)](https://github.com/penso/polyphony/actions/workflows/ci.yml)
 [![Rust nightly-2025-11-30](https://img.shields.io/badge/rust-nightly--2025--11--30-orange?logo=rust)](justfile)
 [![Edition 2024](https://img.shields.io/badge/edition-2024-blue)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
-[Install](#install) - [Triggers](#triggers) - [Agents](#agents) - [Web UI](#web-ui) - [Documentation](#documentation) - [Development](#development)
+[Install](#install) - [Events](#events) - [Agents](#agents) - [Web UI](#web-ui) - [Documentation](#documentation) - [Development](#development)
 
 ![Polyphony TUI](.github/media/screenshot.jpeg)
 
@@ -21,7 +21,7 @@ Git-native AI orchestration engine. Trigger coding agents from issues, PRs, webh
 
 Polyphony connects your issue trackers to AI coding agents, runs them in isolated workspaces, and shows everything live in a terminal dashboard.
 
-Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony brings the same workflow-contract orchestration model to local repositories — but with multiple trigger sources and multiple agent backends.
+Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony brings the same workflow-contract orchestration model to local repositories, but with multiple event sources and multiple agent backends.
 
 ## Install
 
@@ -43,9 +43,9 @@ polyphony
 
 On first start, Polyphony creates a default config at `~/.config/polyphony/config.toml` and seeds repo-local agent prompts in `.polyphony/agents/`.
 
-## Triggers
+## Events
 
-Polyphony watches for work from multiple sources:
+Polyphony listens for work events from multiple sources:
 
 - **GitHub** — issues and pull requests
 - **GitLab** — issues via GraphQL
@@ -69,7 +69,7 @@ Each agent gets its own workspace (worktree, directory, or clone), a shared work
 
 Polyphony includes a web interface that runs alongside the terminal dashboard. When `daemon.listen_port` is set, both the TUI and the web UI are available simultaneously:
 
-- **SSR dashboard** — server-rendered pages for triggers, movements, agents, tasks, and logs
+- **SSR dashboard** — server-rendered pages for inbox, runs, agents, tasks, and logs
 - **GraphQL API** — query and mutate runtime state, with an interactive playground at `/graphql`
 - **WebSocket subscriptions** — real-time state updates via GraphQL subscriptions at `/graphql/ws`
 - **Jinja templates** — HTML templates in `crates/httpd/templates/`, easy to customize

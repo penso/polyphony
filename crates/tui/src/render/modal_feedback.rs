@@ -49,26 +49,26 @@ pub(crate) fn draw_feedback_modal(frame: &mut ratatui::Frame<'_>, app: &AppState
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // Movement info
+            Constraint::Length(2), // Run info
             Constraint::Length(1), // Agent label
             Constraint::Min(6),    // Textarea
         ])
         .split(inner);
 
-    // Movement info
+    // Run info
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("movement: ", Style::default().fg(theme.muted)),
+                Span::styled("run: ", Style::default().fg(theme.muted)),
                 Span::styled(
-                    modal.movement_title.clone(),
+                    modal.run_title.clone(),
                     Style::default()
                         .fg(theme.foreground)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(Span::styled(
-                "Instructions for continuing this movement. The agent will work in the same workspace.",
+                "Instructions for continuing this run. The agent will work in the same workspace.",
                 Style::default().fg(theme.muted),
             )),
         ])

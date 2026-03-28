@@ -96,13 +96,13 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
             spans.push(Span::styled(" › ", Style::default().fg(theme.muted)));
         }
         match view {
-            DetailView::Trigger { trigger_id, .. } => {
+            DetailView::InboxItem { item_id, .. } => {
                 let title = snapshot
-                    .visible_triggers
+                    .inbox_items
                     .iter()
-                    .find(|t| t.trigger_id == *trigger_id)
+                    .find(|t| t.item_id == *item_id)
                     .map(|t| truncate_str(&t.title, max_title))
-                    .unwrap_or_else(|| trigger_id.clone());
+                    .unwrap_or_else(|| item_id.clone());
                 spans.push(Span::styled(
                     title,
                     Style::default()
@@ -110,13 +110,13 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                         .add_modifier(Modifier::BOLD),
                 ));
             },
-            DetailView::Movement { movement_id, .. } => {
+            DetailView::Run { run_id, .. } => {
                 let title = snapshot
-                    .movements
+                    .runs
                     .iter()
-                    .find(|m| m.id == *movement_id)
+                    .find(|m| m.id == *run_id)
                     .map(|m| truncate_str(&m.title, max_title))
-                    .unwrap_or_else(|| movement_id.clone());
+                    .unwrap_or_else(|| run_id.clone());
                 spans.push(Span::styled(
                     title,
                     Style::default()
@@ -142,7 +142,7 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                 let label = if let Some(running) = snapshot.running.get(*agent_index) {
                     format!("{} ({})", running.agent_name, running.issue_identifier)
                 } else if let Some(history) = snapshot
-                    .agent_history
+                    .agent_run_history
                     .get(agent_index.saturating_sub(snapshot.running.len()))
                 {
                     format!("{} ({})", history.agent_name, history.issue_identifier)
@@ -156,13 +156,13 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                         .add_modifier(Modifier::BOLD),
                 ));
             },
-            DetailView::Deliverable { movement_id, .. } => {
+            DetailView::Deliverable { run_id, .. } => {
                 let title = snapshot
-                    .movements
+                    .runs
                     .iter()
-                    .find(|m| m.id == *movement_id)
+                    .find(|m| m.id == *run_id)
                     .map(|m| truncate_str(&m.title, max_title))
-                    .unwrap_or_else(|| movement_id.clone());
+                    .unwrap_or_else(|| run_id.clone());
                 spans.push(Span::styled(
                     title,
                     Style::default()

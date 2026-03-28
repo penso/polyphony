@@ -24,7 +24,7 @@ Both projects orchestrate AI coding agents around issue-driven workflows, but th
 | Task decomposition | Agent breaks down goals manually | Router agent auto-decomposes issues into parallel tasks |
 | Agent routing/fallback | Single assignee per task | Workflow-defined agent chains with retry + fallback |
 | Retry with backoff | Not built-in | Configurable per-agent retry backoff |
-| PR review workflows | Not a focus | First-class movement type (PR review, PR comment review) |
+| PR review workflows | Not a focus | First-class run type (PR review, PR comment review) |
 | Dispatch modes | Heartbeat + event triggers | Manual, Automatic, Nightshift, Idle |
 | Hot-reload config | No (DB-driven) | Yes (WORKFLOW.md file watcher) |
 
@@ -104,7 +104,7 @@ Both projects orchestrate AI coding agents around issue-driven workflows, but th
 | Dimension | **Paperclip** | **Polyphony** |
 |---|---|---|
 | Narrative | "You're running an autonomous company" | "Your repo drives the workflow" |
-| Metaphor | Corporate: CEO, board, hires, org chart, budgets | Orchestra: orchestrator, movements, pipelines |
+| Metaphor | Corporate: CEO, board, hires, org chart, budgets | Orchestra: orchestrator, runs, pipelines |
 | Emotional hook | Aspiration — "build a company, not use a tool" | Competence — "your workflow, codified and reliable" |
 | Fear addressed | "You'll lose control" → "You're the board" | "Agents are unreliable" → "Retry, fallback, budget-aware" |
 | Tone | Confident, aspirational, startup-energy | Engineering-focused, precision-oriented |

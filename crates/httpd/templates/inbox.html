@@ -1,10 +1,10 @@
 {% extends "layout.html" %}
-{% block title %}Polyphony &mdash; Triggers{% endblock %}
+{% block title %}Polyphony &mdash; Inbox{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Triggers</h1>
+<h1 style="margin-bottom: 1rem;">Inbox</h1>
 
-{% if visible_triggers %}
+{% if inbox_items %}
 <div class="card">
   <table>
     <thead>
@@ -20,7 +20,7 @@
       </tr>
     </thead>
     <tbody>
-    {% for t in visible_triggers %}
+    {% for t in inbox_items %}
     <tr>
       <td style="color: var(--muted);">{{ t.identifier }}</td>
       <td>{{ t.kind }}</td>
@@ -39,6 +39,6 @@
   </table>
 </div>
 {% else %}
-<div class="empty">No pending triggers.</div>
+<div class="empty">Inbox is empty.</div>
 {% endif %}
 {% endblock %}
