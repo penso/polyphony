@@ -6,13 +6,16 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use polyphony_core::{NetworkCache, StateStore, WorkspaceProvisioner};
-use polyphony_orchestrator::{RuntimeComponentFactory, RuntimeService, spawn_workflow_watcher};
+use polyphony_core::{NetworkCache, RuntimeSnapshot, StateStore, WorkspaceProvisioner};
+use polyphony_orchestrator::{
+    RuntimeCommand, RuntimeComponentFactory, RuntimeService, spawn_workflow_watcher,
+};
 use polyphony_workflow::{
     ensure_repo_agent_prompt_files, ensure_user_config_file, load_workflow_with_user_config,
     user_config_path,
 };
 use thiserror::Error;
+use tokio::sync::{mpsc, watch};
 
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<(), std::io::Error>> + Send>>;
 #[cfg(feature = "beads")]
@@ -344,6 +347,15 @@ async fn try_main() -> Result<(), Error> {
         return Ok(());
     };
 
+    // Start the HTTP server (with httpd web UI when the feature is enabled)
+    // alongside the TUI so both interfaces are available simultaneously.
+    let _http_server = start_http_alongside_tui(
+        &workflow_path,
+        runtime.handle.snapshot_rx.clone(),
+        runtime.handle.command_tx.clone(),
+    )
+    .await;
+
     run_operator_surface(
         !tui_mode,
         runtime.handle.snapshot_rx.clone(),
@@ -551,6 +563,71 @@ async fn run_daemon(cli: &Cli, workflow_path: &Path) -> Result<(), Error> {
             Ok(())
         }
     }
+}
+
+/// Start the HTTP server alongside the TUI when `daemon.listen_port > 0`.
+///
+/// Returns the join handle so the caller keeps it alive for the session.
+async fn start_http_alongside_tui(
+    workflow_path: &Path,
+    snapshot_rx: watch::Receiver<RuntimeSnapshot>,
+    command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+) -> Option<tokio::task::JoinHandle<Result<(), Error>>> {
+    let mut daemon_config = load_daemon_config(workflow_path);
+    // The config crate env overlay runs during initial workflow load. When the
+    // httpd helper is called later, the env var may not have reached the config
+    // layer, so check the raw env as a fallback.
+    if daemon_config.listen_port == 0
+        && let Ok(port_str) = std::env::var("POLYPHONY_DAEMON__LISTEN_PORT")
+        && let Ok(port) = port_str.parse::<u16>()
+    {
+        daemon_config.listen_port = port;
+    }
+    if daemon_config.listen_port == 0 {
+        return None;
+    }
+
+    let listen_addr: std::net::SocketAddr = match format!(
+        "{}:{}",
+        daemon_config.listen_address, daemon_config.listen_port
+    )
+    .parse()
+    {
+        Ok(addr) => addr,
+        Err(e) => {
+            tracing::warn!("invalid httpd listen address: {e}");
+            return None;
+        },
+    };
+
+    let listener = match daemon::bind_http_listener(listen_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("failed to bind httpd listener: {e}");
+            return None;
+        },
+    };
+
+    let bound_addr = listener.local_addr().ok().unwrap_or(listen_addr);
+    let auth_token = resolve_daemon_auth_token(&daemon_config);
+    let socket_path = daemon::control_socket_path(workflow_path).unwrap_or_default();
+    let pid_path = daemon::daemon_pid_path(workflow_path).unwrap_or_default();
+    let log_path = daemon::latest_log_path(workflow_path).ok().flatten();
+
+    let handle = daemon::serve_http(
+        listener,
+        snapshot_rx,
+        command_tx,
+        auth_token,
+        Some(bound_addr.to_string()),
+        socket_path,
+        pid_path,
+        log_path,
+    );
+
+    tracing::info!(url = %format_args!("http://{bound_addr}"), "httpd server ready");
+
+    Some(handle)
 }
 
 fn load_daemon_config(workflow_path: &Path) -> polyphony_workflow::DaemonConfig {

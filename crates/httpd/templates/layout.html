@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Polyphony{% endblock %}</title>
+  <script>
+    // Prevent flash of wrong theme — runs before DOM renders
+    (function(){
+      var t = localStorage.getItem('theme') || 'system';
+      if (t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #f8f9fa;
+      --fg: #1a1a2e;
+      --muted: #6b7280;
+      --secondary: #4a4a6a;
+      --surface: #ffffff;
+      --border: rgba(0, 0, 0, 0.1);
+      --accent: #7c3aed;
+      --accent-light: #a78bfa;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --warning: #ca8a04;
+      --hover-bg: rgba(124, 58, 237, 0.04);
+      --badge-pending-bg: rgba(0, 0, 0, 0.06);
+      --badge-running-bg: rgba(124, 58, 237, 0.1);
+      --badge-success-bg: rgba(22, 163, 74, 0.1);
+      --badge-failed-bg: rgba(220, 38, 38, 0.1);
+      --badge-warning-bg: rgba(202, 138, 4, 0.1);
+      --nav-bg: rgba(248, 249, 250, 0.9);
+    }
+    .dark {
+      --bg: #0d1117;
+      --fg: #c9d1d9;
+      --muted: #8b949e;
+      --secondary: #9ca3af;
+      --surface: #161b22;
+      --border: rgba(255, 255, 255, 0.1);
+      --accent: #a78bfa;
+      --accent-light: #7c3aed;
+      --success: #3fb950;
+      --danger: #f85149;
+      --warning: #d29922;
+      --hover-bg: rgba(167, 139, 250, 0.04);
+      --badge-pending-bg: rgba(255, 255, 255, 0.08);
+      --badge-running-bg: rgba(167, 139, 250, 0.15);
+      --badge-success-bg: rgba(63, 185, 80, 0.15);
+      --badge-failed-bg: rgba(248, 81, 73, 0.15);
+      --badge-warning-bg: rgba(210, 153, 34, 0.15);
+      --nav-bg: rgba(13, 17, 23, 0.9);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+           background: var(--bg); color: var(--fg); line-height: 1.5; transition: background 0.2s, color 0.2s; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    nav { background: var(--nav-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+          border-bottom: 1px solid var(--border); padding: 0.75rem 1.5rem;
+          display: flex; gap: 1.5rem; align-items: center; position: sticky; top: 0; z-index: 10; }
+    nav .brand { font-weight: 700; font-size: 1.1rem; color: var(--fg); }
+    nav a { color: var(--muted); font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: var(--fg); }
+    nav .spacer { flex: 1; }
+
+    #theme-toggle { background: none; border: none; cursor: pointer; padding: 6px;
+                    border-radius: 6px; color: var(--muted); display: flex; align-items: center;
+                    transition: color 0.2s, background 0.2s; }
+    #theme-toggle:hover { color: var(--fg); background: var(--hover-bg); }
+    #theme-toggle .hidden { display: none; }
+
+    main { max-width: 1200px; margin: 1.5rem auto; padding: 0 1.5rem; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+            padding: 1rem; margin-bottom: 1rem; transition: background 0.2s, border-color 0.2s; }
+    .card h2 { font-size: 1rem; margin-bottom: 0.75rem; color: var(--fg); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 0.5rem; color: var(--muted); border-bottom: 1px solid var(--border);
+         font-weight: 600; }
+    td { padding: 0.5rem; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover { background: var(--hover-bg); }
+
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 12px;
+             font-size: 0.75rem; font-weight: 600; }
+    .badge-pending   { background: var(--badge-pending-bg); color: var(--muted); }
+    .badge-running   { background: var(--badge-running-bg); color: var(--accent); }
+    .badge-success   { background: var(--badge-success-bg); color: var(--success); }
+    .badge-failed    { background: var(--badge-failed-bg); color: var(--danger); }
+    .badge-warning   { background: var(--badge-warning-bg); color: var(--warning); }
+
+    .counts { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .count-box { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+                 padding: 0.75rem 1rem; text-align: center; min-width: 120px;
+                 transition: background 0.2s, border-color 0.2s; }
+    .count-box .number { font-size: 1.5rem; font-weight: 700; }
+    .count-box .label { font-size: 0.75rem; color: var(--muted); }
+
+    .empty { color: var(--muted); font-style: italic; padding: 2rem; text-align: center; }
+
+    footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 2rem 0; }
+
+    @media (max-width: 640px) {
+      nav { flex-wrap: wrap; gap: 0.75rem; }
+      .counts { flex-direction: column; }
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <nav>
+    <span class="brand">Polyphony</span>
+    <a href="/">Dashboard</a>
+    <a href="/triggers">Triggers</a>
+    <a href="/movements">Movements</a>
+    <a href="/agents">Agents</a>
+    <a href="/tasks">Tasks</a>
+    <a href="/logs">Logs</a>
+    <a href="/graphql">GraphQL</a>
+    <span class="spacer"></span>
+    <button id="theme-toggle" title="Theme: System">
+      <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      <svg id="theme-icon-system" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Polyphony &mdash; generated {{ generated_at }}</footer>
+
+  <script>
+    // Theme toggle — cycles light → system → dark
+    (function() {
+      var themeCycle = ['light', 'system', 'dark'];
+      var themeToggle = document.getElementById('theme-toggle');
+
+      function applyTheme(mode) {
+        if (mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      }
+
+      function updateThemeIcon(mode) {
+        document.getElementById('theme-icon-light').classList.toggle('hidden', mode !== 'light');
+        document.getElementById('theme-icon-system').classList.toggle('hidden', mode !== 'system');
+        document.getElementById('theme-icon-dark').classList.toggle('hidden', mode !== 'dark');
+        var titles = { light: 'Theme: Light', system: 'Theme: System', dark: 'Theme: Dark' };
+        themeToggle.title = titles[mode] || 'Toggle theme';
+      }
+
+      var current = localStorage.getItem('theme') || 'system';
+      applyTheme(current);
+      updateThemeIcon(current);
+
+      themeToggle.addEventListener('click', function() {
+        var cur = localStorage.getItem('theme') || 'system';
+        var idx = themeCycle.indexOf(cur);
+        var next = themeCycle[(idx + 1) % themeCycle.length];
+        localStorage.setItem('theme', next);
+        applyTheme(next);
+        updateThemeIcon(next);
+      });
+
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+        if ((localStorage.getItem('theme') || 'system') === 'system') applyTheme('system');
+      });
+    })();
+
+    // Auto-refresh via WebSocket when available
+    (function() {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var ws = new WebSocket(proto + '//' + location.host + '/graphql/ws', 'graphql-ws');
+      ws.onopen = function() {
+        ws.send(JSON.stringify({ type: 'connection_init' }));
+        ws.send(JSON.stringify({
+          id: '1', type: 'subscribe',
+          payload: { query: 'subscription { snapshotUpdated { generatedAt } }' }
+        }));
+      };
+      ws.onmessage = function(evt) {
+        var data = JSON.parse(evt.data);
+        if (data.type === 'next') { location.reload(); }
+      };
+      ws.onerror = function() { setTimeout(function() { location.reload(); }, 30000); };
+    })();
+  </script>
+</body>
+</html>

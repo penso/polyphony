@@ -36,6 +36,12 @@ install:
     cargo +{{nightly_toolchain}} build --release -p polyphony-cli
     install -m 755 target/release/polyphony "$HOME/.local/bin/polyphony"
 
+httpd port="8080":
+    POLYPHONY_DAEMON__LISTEN_PORT={{port}} cargo +{{nightly_toolchain}} run -p polyphony-cli
+
+httpd-only port="8080":
+    POLYPHONY_DAEMON__LISTEN_PORT={{port}} cargo +{{nightly_toolchain}} run -p polyphony-cli -- --no-tui
+
 docs-build:
     mdbook build docs
 

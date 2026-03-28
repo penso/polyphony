@@ -1,0 +1,88 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Dashboard{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Dashboard</h1>
+
+<div class="counts">
+  <div class="count-box">
+    <div class="number">{{ counts.running }}</div>
+    <div class="label">Running</div>
+  </div>
+  <div class="count-box">
+    <div class="number">{{ counts.retrying }}</div>
+    <div class="label">Retrying</div>
+  </div>
+  <div class="count-box">
+    <div class="number">{{ counts.movements }}</div>
+    <div class="label">Movements</div>
+  </div>
+  <div class="count-box">
+    <div class="number">{{ counts.tasks_in_progress }}</div>
+    <div class="label">Tasks Active</div>
+  </div>
+  <div class="count-box">
+    <div class="number">{{ counts.tasks_completed }}</div>
+    <div class="label">Tasks Done</div>
+  </div>
+  <div class="count-box">
+    <div class="number">{{ counts.worktrees }}</div>
+    <div class="label">Worktrees</div>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 1rem;">
+  <h2>Status</h2>
+  <table>
+    <tr><td style="color: var(--muted);">Dispatch Mode</td><td>{{ dispatch_mode }}</td></tr>
+    <tr><td style="color: var(--muted);">Tracker</td><td>{{ tracker_kind }}</td></tr>
+    {% if tracker_connection %}
+    <tr><td style="color: var(--muted);">Connection</td>
+        <td>{{ tracker_connection.state }}{% if tracker_connection.label %} &mdash; {{ tracker_connection.label }}{% endif %}</td></tr>
+    {% endif %}
+  </table>
+</div>
+
+{% if visible_triggers %}
+<div class="card">
+  <h2>Pending Triggers ({{ visible_triggers | length }})</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Kind</th><th>Title</th><th>Priority</th></tr></thead>
+    <tbody>
+    {% for t in visible_triggers[:5] %}
+    <tr>
+      <td style="color: var(--muted);">{{ t.identifier }}</td>
+      <td>{{ t.kind }}</td>
+      <td><a href="/triggers">{{ t.title }}</a></td>
+      <td>{{ t.priority }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if visible_triggers | length > 5 %}
+  <div style="padding: 0.5rem; color: var(--muted); font-size: 0.8rem;">
+    &hellip; and {{ visible_triggers | length - 5 }} more. <a href="/triggers">View all</a>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if running %}
+<div class="card">
+  <h2>Running Agents ({{ running | length }})</h2>
+  <table>
+    <thead><tr><th>Issue</th><th>Agent</th><th>Turns</th><th>State</th></tr></thead>
+    <tbody>
+    {% for a in running %}
+    <tr>
+      <td>{{ a.issue_identifier }}</td>
+      <td>{{ a.agent_name }}</td>
+      <td style="color: var(--muted);">{{ a.turn_count }}/{{ a.max_turns }}</td>
+      <td><span class="badge badge-running">{{ a.state }}</span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

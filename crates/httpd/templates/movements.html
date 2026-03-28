@@ -1,0 +1,49 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Movements{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Movements</h1>
+
+{% if movements %}
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Issue</th>
+        <th>Title</th>
+        <th>Status</th>
+        <th>Tasks</th>
+        <th>Deliverable</th>
+        <th>Created</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for m in movements %}
+    <tr>
+      <td style="color: var(--muted);">{{ m.id }}</td>
+      <td>{{ m.issue_identifier }}</td>
+      <td>{{ m.title }}</td>
+      <td>
+        {% if m.status == "delivered" %}<span class="badge badge-success">{{ m.status }}</span>
+        {% elif m.status == "failed" or m.status == "cancelled" %}<span class="badge badge-failed">{{ m.status }}</span>
+        {% elif m.status == "in_progress" or m.status == "planning" %}<span class="badge badge-running">{{ m.status }}</span>
+        {% else %}<span class="badge badge-pending">{{ m.status }}</span>{% endif %}
+      </td>
+      <td style="color: var(--muted);">{{ m.tasks_completed }}/{{ m.task_count }}</td>
+      <td>
+        {% if m.deliverable %}
+          {% if m.deliverable.url %}<a href="{{ m.deliverable.url }}" target="_blank">{{ m.deliverable.status }}</a>
+          {% else %}{{ m.deliverable.status }}{% endif %}
+        {% else %}&mdash;{% endif %}
+      </td>
+      <td style="color: var(--muted);">{{ m.created_at }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">No movements yet.</div>
+{% endif %}
+{% endblock %}

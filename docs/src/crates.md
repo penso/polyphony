@@ -14,6 +14,7 @@ boundaries.
 - `polyphony-git`: git-backed workspace provisioner
 - `polyphony-feedback`: outbound human-feedback registry and sink implementations
 - `polyphony-tui`: terminal dashboard for runtime snapshots
+- `polyphony-httpd`: web UI with SSR templates, GraphQL API, and WebSocket subscriptions
 - `polyphony-cli`: executable entrypoint that assembles the runtime
 - `polyphony-tools`: built-in LLM tool registry and workflow policy filtering
 
