@@ -90,7 +90,7 @@ pub fn draw_agents_tab(
 
     let has_retrying = !snapshot.retrying.is_empty();
     let retrying_suffix = if has_retrying {
-        format!(" | {} retrying", snapshot.retrying.len())
+        format!("{} retrying", snapshot.retrying.len())
     } else {
         String::new()
     };
@@ -117,10 +117,19 @@ pub fn draw_agents_tab(
                     .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(
-                Line::from(Span::styled(
-                    format!("─{footer_info}{retrying_suffix}─"),
-                    Style::default().fg(theme.muted),
-                ))
+                Line::from(vec![
+                    Span::styled(footer_info, Style::default().fg(theme.muted)),
+                    if has_retrying {
+                        Span::styled(" • ", Style::default().fg(theme.border))
+                    } else {
+                        Span::raw("")
+                    },
+                    if has_retrying {
+                        Span::styled(retrying_suffix, Style::default().fg(theme.warning))
+                    } else {
+                        Span::raw("")
+                    },
+                ])
                 .right_aligned(),
             )
             .borders(ratatui::widgets::Borders::ALL)
@@ -129,7 +138,8 @@ pub fn draw_agents_tab(
                 theme.highlight
             } else {
                 theme.border
-            })),
+            }))
+            .style(Style::default().bg(theme.panel)),
     );
 
     frame.render_stateful_widget(table, area, &mut app.agents_state);
@@ -170,7 +180,7 @@ fn agent_table_row(
         Cell::from(Span::styled(time, Style::default().fg(theme.muted))),
         Cell::from(Span::styled(
             agent_name,
-            Style::default().fg(theme.foreground),
+            Style::default().fg(theme.highlight),
         )),
         Cell::from(Span::styled(
             model.unwrap_or_else(|| "-".into()),

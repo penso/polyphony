@@ -19,23 +19,23 @@ pub struct Theme {
 
 pub const fn default_theme() -> Theme {
     Theme {
-        foreground: Color::White,
-        muted: Color::DarkGray,
-        highlight: Color::Yellow,
-        info: Color::Cyan,
-        success: Color::Green,
-        warning: Color::Yellow,
-        danger: Color::Red,
-        border: Color::DarkGray,
-        selection: Color::DarkGray,
-        panel_alt: Color::Reset,
-        background: Color::Reset,
-        panel: Color::Reset,
+        foreground: Color::Rgb(241, 245, 249),
+        muted: Color::Rgb(107, 114, 128),
+        highlight: Color::Rgb(167, 139, 250),
+        info: Color::Rgb(129, 140, 248),
+        success: Color::Rgb(134, 239, 172),
+        warning: Color::Rgb(251, 191, 36),
+        danger: Color::Rgb(248, 113, 113),
+        border: Color::Rgb(42, 42, 62),
+        selection: Color::Rgb(31, 27, 47),
+        panel_alt: Color::Rgb(26, 26, 46),
+        background: Color::Rgb(10, 10, 15),
+        panel: Color::Rgb(18, 18, 26),
     }
 }
 
 pub fn detect_terminal_theme() -> Option<Theme> {
-    // No theme detection needed — we use terminal defaults + highlight colors.
+    // Keep the TUI visually stable regardless of the user's terminal profile.
     None
 }
 
@@ -44,8 +44,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_theme_uses_reset_background() {
+    fn default_theme_uses_explicit_dark_palette() {
         let theme = default_theme();
-        assert_eq!(theme.background, Color::Reset);
+        assert_eq!(theme.background, Color::Rgb(10, 10, 15));
+        assert_eq!(theme.panel, Color::Rgb(18, 18, 26));
     }
 }

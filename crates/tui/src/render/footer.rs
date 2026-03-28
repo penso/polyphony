@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Paragraph},
 };
 
 use crate::app::AppState;
@@ -40,14 +40,14 @@ pub fn draw_footer(
         ]
     };
 
-    let mut spans = vec![
-        Span::styled(format!(" v{version} "), Style::default().fg(theme.muted)),
-        Span::styled("│ ", Style::default().fg(theme.border)),
-    ];
+    let mut spans = vec![Span::styled(
+        format!(" v{version} "),
+        Style::default().fg(theme.muted),
+    )];
 
     for (i, (key, label)) in shortcuts.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled("  ", Style::default().fg(theme.border)));
+            spans.push(Span::styled(" • ", Style::default().fg(theme.border)));
         }
         spans.push(Span::styled(
             (*key).to_string(),
@@ -59,5 +59,9 @@ pub fn draw_footer(
         ));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans))
+            .block(Block::default().style(Style::default().bg(theme.background))),
+        area,
+    );
 }

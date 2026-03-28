@@ -145,7 +145,7 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
                     )),
                     Cell::from(Span::styled(
                         truncate_target(&entry.target, max_target_len as usize),
-                        Style::default().fg(Color::Blue),
+                        Style::default().fg(theme.highlight),
                     )),
                     msg_cell,
                 ])
@@ -162,6 +162,16 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
         .bg(theme.selection)
         .fg(theme.foreground)
         .add_modifier(Modifier::BOLD);
+    let footer_text = if count == 0 {
+        "empty".to_string()
+    } else {
+        let selected_label = app.logs_state.selected().unwrap_or_default() + 1;
+        if app.logs_auto_scroll {
+            format!("{selected_label} of {count} • auto-scroll")
+        } else {
+            format!("{selected_label} of {count}")
+        }
+    };
 
     let table = Table::new(rows, [
         Constraint::Length(9),
@@ -172,10 +182,13 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
     .block(
         Block::default()
             .title(title)
+            .title_bottom(
+                Line::from(Span::styled(footer_text, Style::default().fg(theme.muted)))
+                    .right_aligned(),
+            )
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(if app.list_border_focused {
@@ -183,7 +196,8 @@ fn draw_logs_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &mut AppStat
             } else {
                 theme.border
             }))
-            .padding(Padding::new(1, 1, 0, 0)),
+            .padding(Padding::new(1, 1, 0, 0))
+            .style(Style::default().bg(theme.panel)),
     );
 
     frame.render_stateful_widget(table, area, &mut app.logs_state);

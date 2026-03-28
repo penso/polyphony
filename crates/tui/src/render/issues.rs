@@ -115,10 +115,9 @@ pub fn draw_issues_tab(
     .style(Style::default().add_modifier(Modifier::BOLD));
 
     // Available width for the title column
-    // area.width - borders(2) - right_padding(1) - highlight_symbol(2) - id - type - status - age - column_gaps(4)
+    // area.width - borders(2) - right_padding(1) - id - type - status - age - column_gaps(4)
     let title_max_width = (area.width as usize).saturating_sub(
         2 + 1
-            + 2
             + max_id_len as usize
             + max_type_len as usize
             + max_status_len as usize
@@ -257,7 +256,6 @@ pub fn draw_issues_tab(
     .header(header)
     .row_highlight_style(selected_style)
     .highlight_spacing(HighlightSpacing::Always)
-    .highlight_symbol("▸ ")
     .block({
         let mut block = Block::default().title(Line::from(title_spans));
         if app.refresh_requested || snapshot.loading.fetching_issues {
@@ -273,15 +271,20 @@ pub fn draw_issues_tab(
         block
             .title_bottom(
                 Line::from(vec![
-                    Span::styled("─s:", Style::default().fg(theme.muted)),
+                    Span::styled(footer_info, Style::default().fg(theme.muted)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("sorted by ", Style::default().fg(theme.muted)),
                     Span::styled(sort_label, Style::default().fg(theme.highlight)),
-                    Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
                 ])
                 .right_aligned(),
             )
             .borders(ratatui::widgets::Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border))
+            .border_style(Style::default().fg(if app.list_border_focused {
+                theme.highlight
+            } else {
+                theme.border
+            }))
             .padding(Padding::right(1))
             .style(Style::default().bg(theme.panel))
     });

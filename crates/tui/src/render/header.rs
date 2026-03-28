@@ -8,9 +8,6 @@ use ratatui::{
 
 use crate::app::{ActiveTab, AppState, TAB_DIVIDER, TAB_PADDING_LEFT, TAB_PADDING_RIGHT};
 
-const GITHUB_MARK: &str = "";
-const MIN_TAB_SECTION_WIDTH: u16 = 56;
-
 pub fn draw_header(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -19,48 +16,62 @@ pub fn draw_header(
 ) {
     let theme = app.theme;
     let status_summary = header_summary_line(snapshot, theme);
-    let status_title = header_status_title(snapshot, theme);
-    let status_width = header_status_width(area.width, &status_summary, &status_title);
+    let titlebar_badges = titlebar_badges(snapshot, theme);
+    let titlebar_width = u16::try_from(titlebar_badges.width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(1)
+        .min(area.width.saturating_sub(6));
+    let summary_width = u16::try_from(status_summary.width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(1)
+        .min(area.width.saturating_sub(12));
 
-    let sections = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Length(status_width)])
-        .split(area);
-
-    // Tab bar
-    let mut tab_block = Block::default()
-        .title(Line::from(Span::styled(
-            " Polyphony ",
-            Style::default()
-                .fg(theme.foreground)
-                .add_modifier(Modifier::BOLD),
-        )))
+    let mut shell = Block::default()
         .borders(ratatui::widgets::Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border));
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.panel));
 
-    if let Some((github_label, github_color)) = github_connection_label(snapshot, theme.success) {
-        tab_block = tab_block.title(
-            Line::from(Span::styled(
-                format!(" {github_label} "),
-                Style::default()
-                    .fg(github_color)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .alignment(Alignment::Right),
-        );
-    }
-
-    // When a detail view is active, show breadcrumb in the bottom title
     if app.has_detail() {
         let breadcrumb = super::detail_common::build_breadcrumb(app, snapshot);
         if !breadcrumb.spans.is_empty() {
             let mut bc_spans = vec![Span::styled(" ", Style::default())];
             bc_spans.extend(breadcrumb.spans);
             bc_spans.push(Span::styled(" ", Style::default()));
-            tab_block = tab_block.title_bottom(Line::from(bc_spans));
+            shell = shell.title_bottom(Line::from(bc_spans));
+        }
+    } else {
+        let budget_footer = compact_budget_footer(snapshot, theme, area.width.saturating_sub(8));
+        if !budget_footer.spans.is_empty() {
+            shell = shell.title_bottom(budget_footer);
         }
     }
+
+    let inner = shell.inner(area);
+    frame.render_widget(shell, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner);
+
+    let titlebar_sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Fill(1), Constraint::Length(titlebar_width)])
+        .split(rows[0]);
+    frame.render_widget(
+        Paragraph::new(titlebar_line(theme)).alignment(Alignment::Left),
+        titlebar_sections[0],
+    );
+    frame.render_widget(
+        Paragraph::new(titlebar_badges).alignment(Alignment::Right),
+        titlebar_sections[1],
+    );
+
+    let tab_sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Fill(1), Constraint::Length(summary_width)])
+        .split(rows[1]);
 
     let tabs = Tabs::new(
         ActiveTab::ALL
@@ -71,34 +82,18 @@ pub fn draw_header(
     .select(app.active_tab.index())
     .divider(Span::raw(TAB_DIVIDER))
     .padding(TAB_PADDING_LEFT, TAB_PADDING_RIGHT)
+    .style(Style::default().bg(theme.panel))
     .highlight_style(
         Style::default()
-            .fg(theme.highlight)
+            .fg(theme.foreground)
+            .bg(theme.selection)
             .add_modifier(Modifier::BOLD),
-    )
-    .block(tab_block);
-    // Store the inner area of the tab block for mouse click hit-testing.
-    app.tab_inner_area = sections[0].inner(ratatui::layout::Margin {
-        vertical: 1,
-        horizontal: 1,
-    });
-    frame.render_widget(tabs, sections[0]);
-
-    // Status summary
-    let mut status_block = Block::default()
-        .title(status_title)
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.border));
-
-    let budget_footer = compact_budget_footer(snapshot, theme, sections[1].width.saturating_sub(2));
-    if !budget_footer.spans.is_empty() {
-        status_block = status_block.title_bottom(budget_footer);
-    }
-
+    );
+    app.tab_inner_area = tab_sections[0];
+    frame.render_widget(tabs, tab_sections[0]);
     frame.render_widget(
-        Paragraph::new(vec![status_summary]).block(status_block),
-        sections[1],
+        Paragraph::new(status_summary).alignment(Alignment::Right),
+        tab_sections[1],
     );
 }
 
@@ -112,17 +107,15 @@ fn github_connection_label(
             .label
             .as_deref()
             .filter(|label| !label.is_empty())
-            .map(|label| (format!("{GITHUB_MARK} {label}"), success_color)),
+            .map(|label| (format!("github:{label}"), success_color)),
         TrackerConnectionState::Disconnected => Some((
             format!(
-                "{GITHUB_MARK} {}",
+                "github:{}",
                 status.detail.as_deref().unwrap_or("disconnected")
             ),
             Color::Yellow,
         )),
-        TrackerConnectionState::Unknown => {
-            Some((format!("{GITHUB_MARK} checking"), Color::DarkGray))
-        },
+        TrackerConnectionState::Unknown => Some(("github:checking".into(), Color::DarkGray)),
     }
 }
 
@@ -173,7 +166,16 @@ fn header_summary_line(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
     ])
 }
 
-fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Line<'static> {
+fn titlebar_line(theme: crate::theme::Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("● ", Style::default().fg(Color::Rgb(239, 83, 80))),
+        Span::styled("● ", Style::default().fg(Color::Rgb(251, 191, 36))),
+        Span::styled("●  ", Style::default().fg(Color::Rgb(134, 239, 172))),
+        Span::styled("polyphony - tui", Style::default().fg(theme.muted)),
+    ])
+}
+
+fn titlebar_badges(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Line<'static> {
     let (mode_label, mode_color) = match snapshot.dispatch_mode {
         DispatchMode::Manual => ("manual", theme.info),
         DispatchMode::Automatic => ("auto", theme.success),
@@ -182,7 +184,7 @@ fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
         DispatchMode::Stop => ("stop", theme.danger),
     };
 
-    let mut status_spans = vec![
+    let mut spans = vec![
         Span::styled("● ", Style::default().fg(mode_color)),
         Span::styled(
             mode_label,
@@ -192,15 +194,16 @@ fn header_status_title(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
         ),
     ];
 
-    if snapshot.from_cache {
-        status_spans.push(Span::styled(
-            " (cached)",
-            Style::default().fg(theme.warning),
-        ));
+    if let Some((label, color)) = github_connection_label(snapshot, theme.success) {
+        spans.push(Span::styled("  ", Style::default()));
+        spans.push(Span::styled(label, Style::default().fg(color)));
     }
 
-    status_spans.push(Span::styled(" ", Style::default()));
-    Line::from(status_spans)
+    if snapshot.from_cache {
+        spans.push(Span::styled("  cached", Style::default().fg(theme.warning)));
+    }
+
+    Line::from(spans)
 }
 
 /// Session and weekly budget percentages for a provider.
@@ -319,12 +322,4 @@ fn compact_budget_footer(
     }
 
     Line::from(spans)
-}
-
-fn header_status_width(area_width: u16, summary: &Line<'_>, title: &Line<'_>) -> u16 {
-    let desired_content_width = summary.width().max(title.width());
-    let desired_total_width = desired_content_width.saturating_add(2);
-    let desired_total_width = u16::try_from(desired_total_width).unwrap_or(u16::MAX);
-    let max_status_width = area_width.saturating_sub(MIN_TAB_SECTION_WIDTH);
-    desired_total_width.min(max_status_width)
 }
