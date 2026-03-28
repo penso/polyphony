@@ -46,7 +46,7 @@
   <text x="340" y="290" font-family="Inter, system-ui, sans-serif" font-size="72" font-weight="800" fill="#f0f0f5">Polyphony</text>
 
   <!-- Tagline -->
-  <text x="340" y="350" font-family="Inter, system-ui, sans-serif" font-size="28" font-weight="400" fill="#a78bfa">Orchestrate AI Agents from Your Terminal</text>
+  <text x="340" y="350" font-family="Inter, system-ui, sans-serif" font-size="28" font-weight="400" fill="#a78bfa">Git-Native AI Orchestration</text>
 
   <!-- URL -->
   <text x="340" y="410" font-family="JetBrains Mono, monospace" font-size="20" font-weight="400" fill="#6b7280">www.polyphony.to</text>

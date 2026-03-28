@@ -4,7 +4,7 @@
 
 # Polyphony
 
-Repo-native AI orchestration engine. Issue trackers to coding agents, live in your terminal.
+Git-native AI orchestration engine. Trigger coding agents from issues, PRs, webhooks, or schedules.
 
 [![CI](https://github.com/penso/polyphony/actions/workflows/ci.yml/badge.svg)](https://github.com/penso/polyphony/actions/workflows/ci.yml)
 [![Rust nightly-2025-11-30](https://img.shields.io/badge/rust-nightly--2025--11--30-orange?logo=rust)](justfile)
