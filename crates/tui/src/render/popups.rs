@@ -231,11 +231,6 @@ pub fn draw_agent_picker_modal(
         }
         let is_selected = i == app.agent_picker_selected;
 
-        let marker = if is_selected {
-            "▸ "
-        } else {
-            "  "
-        };
         let label_style = if is_selected {
             Style::default()
                 .fg(theme.highlight)
@@ -263,7 +258,7 @@ pub fn draw_agent_picker_modal(
             height: 1,
         };
         let mut spans = vec![
-            Span::styled(marker, Style::default().fg(theme.highlight)),
+            Span::styled("  ", Style::default()),
             Span::styled(profile.name.clone(), label_style),
             Span::styled(
                 format!(" ({})", profile.kind),

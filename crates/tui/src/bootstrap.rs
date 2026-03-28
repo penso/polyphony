@@ -150,7 +150,7 @@ fn draw_workflow_bootstrap(
 
     let cancel_style = if state.choice == BootstrapChoice::Cancel {
         Style::default()
-            .fg(Color::Black)
+            .fg(theme.foreground)
             .bg(theme.muted)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -158,7 +158,7 @@ fn draw_workflow_bootstrap(
     };
     let create_style = if state.choice == BootstrapChoice::Create {
         Style::default()
-            .fg(Color::Black)
+            .fg(theme.background)
             .bg(theme.highlight)
             .add_modifier(Modifier::BOLD)
     } else {

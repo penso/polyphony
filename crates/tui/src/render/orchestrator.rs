@@ -184,7 +184,8 @@ fn draw_status_panel(
                 )))
                 .borders(ratatui::widgets::Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.border)),
+                .border_style(Style::default().fg(theme.border))
+                .style(Style::default().bg(theme.panel)),
         ),
         area,
     );
@@ -909,24 +910,6 @@ fn draw_movements_table(
         ))
     };
 
-    // Legend
-    let legend = Line::from(vec![
-        Span::styled(" ●", Style::default().fg(theme.success)),
-        Span::styled(":active  ", Style::default().fg(theme.muted)),
-        Span::styled("◌", Style::default().fg(theme.info)),
-        Span::styled(":planning  ", Style::default().fg(theme.muted)),
-        Span::styled("◐", Style::default().fg(theme.success)),
-        Span::styled(":running  ", Style::default().fg(theme.muted)),
-        Span::styled("✓", Style::default().fg(theme.success)),
-        Span::styled(":delivered  ", Style::default().fg(theme.muted)),
-        Span::styled("✕", Style::default().fg(theme.danger)),
-        Span::styled(":failed  ", Style::default().fg(theme.muted)),
-        Span::styled("⊘", Style::default().fg(theme.muted)),
-        Span::styled(":cancelled  ", Style::default().fg(theme.muted)),
-        Span::styled("…", Style::default().fg(theme.info)),
-        Span::styled(":pending ", Style::default().fg(theme.muted)),
-    ]);
-
     let time_col_width: u16 = if compact {
         7
     } else {
@@ -942,14 +925,15 @@ fn draw_movements_table(
     .block(
         Block::default()
             .title(title)
-            .title_bottom(legend)
             .title_bottom(
                 Line::from(vec![
-                    Span::styled("─f:", Style::default().fg(theme.muted)),
+                    Span::styled(footer_info, Style::default().fg(theme.muted)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("f:", Style::default().fg(theme.muted)),
                     Span::styled("feedback", Style::default().fg(theme.highlight)),
-                    Span::styled(" s:", Style::default().fg(theme.muted)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("sorted by ", Style::default().fg(theme.muted)),
                     Span::styled(sort_label, Style::default().fg(theme.highlight)),
-                    Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
                 ])
                 .right_aligned(),
             )
@@ -959,7 +943,8 @@ fn draw_movements_table(
                 theme.highlight
             } else {
                 theme.border
-            })),
+            }))
+            .style(Style::default().bg(theme.panel)),
     );
 
     frame.render_stateful_widget(table, area, &mut app.movements_state);

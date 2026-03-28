@@ -1,0 +1,257 @@
+/* Polyphony Website — Custom Styles */
+
+/* ===== Theme Variables ===== */
+:root {
+  --bg: #f8f9fa;
+  --bg-card: #ffffff;
+  --bg-elevated: #f0f0f5;
+  --text-primary: #1a1a2e;
+  --text-secondary: #4a4a6a;
+  --text-muted: #6b7280;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-subtle: rgba(0, 0, 0, 0.05);
+  --terminal-bg: #1e1e2e;
+  --terminal-border: rgba(0, 0, 0, 0.15);
+  --terminal-titlebar: rgba(0, 0, 0, 0.05);
+  --glass-bg: rgba(0, 0, 0, 0.03);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --nav-scrolled: rgba(248, 249, 250, 0.9);
+  --shadow-terminal: 0 0 0 1px rgba(124, 58, 237, 0.08), 0 20px 60px rgba(0, 0, 0, 0.1), 0 0 120px rgba(124, 58, 237, 0.03);
+  --icon-invert: 0;
+  --scrollbar-track: #f0f0f5;
+  --scrollbar-thumb: #c4c4d4;
+  --scrollbar-thumb-hover: #a4a4b4;
+}
+
+.dark {
+  --bg: #0a0a0f;
+  --bg-card: #12121a;
+  --bg-elevated: #1a1a2e;
+  --text-primary: #e5e5ef;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --terminal-bg: #12121a;
+  --terminal-border: rgba(255, 255, 255, 0.08);
+  --terminal-titlebar: rgba(255, 255, 255, 0.03);
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --nav-scrolled: rgba(10, 10, 15, 0.9);
+  --shadow-terminal: 0 0 0 1px rgba(124, 58, 237, 0.1), 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 120px rgba(124, 58, 237, 0.05);
+  --icon-invert: 1;
+  --scrollbar-track: #0a0a0f;
+  --scrollbar-thumb: #2a2a3e;
+  --scrollbar-thumb-hover: #3a3a5e;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Scroll animation base states */
+[data-animate] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+
+[data-animate].animate-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Staggered children */
+[data-animate-stagger] > [data-animate]:nth-child(1) { transition-delay: 0ms; }
+[data-animate-stagger] > [data-animate]:nth-child(2) { transition-delay: 100ms; }
+[data-animate-stagger] > [data-animate]:nth-child(3) { transition-delay: 200ms; }
+[data-animate-stagger] > [data-animate]:nth-child(4) { transition-delay: 300ms; }
+[data-animate-stagger] > [data-animate]:nth-child(5) { transition-delay: 400ms; }
+[data-animate-stagger] > [data-animate]:nth-child(6) { transition-delay: 500ms; }
+
+/* Terminal typing cursor */
+.typing-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 18px;
+  background: #7c3aed;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Terminal window chrome */
+.terminal-chrome {
+  background: var(--terminal-bg);
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow-terminal);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.terminal-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--terminal-titlebar);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.terminal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+/* Glass card */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, background-color 0.3s ease;
+}
+
+.glass-card:hover {
+  border-color: rgba(124, 58, 237, 0.3);
+  box-shadow: 0 0 30px rgba(124, 58, 237, 0.05);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 50%, #6366f1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Hero background */
+.hero-bg {
+  background-color: var(--bg);
+  transition: background-color 0.3s ease;
+}
+.dark .hero-bg {
+  background-image: url('assets/hero-bg.svg');
+  background-size: cover;
+  background-position: center;
+}
+
+/* Glow effects */
+.glow-accent {
+  box-shadow: 0 0 40px rgba(124, 58, 237, 0.15);
+}
+
+/* Nav transition */
+.nav-scrolled {
+  background: var(--nav-scrolled) !important;
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Timeline connector */
+.timeline-connector {
+  position: absolute;
+  left: 23px;
+  top: 48px;
+  bottom: -24px;
+  width: 2px;
+  background: linear-gradient(to bottom, #7c3aed, rgba(124, 58, 237, 0.1));
+}
+
+/* Integration logo grid hover */
+.integration-icon {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  opacity: 0.6;
+}
+.integration-icon:hover {
+  transform: scale(1.1);
+  opacity: 1;
+}
+
+/* Icon inversion for dark mode */
+.icon-auto-invert {
+  filter: invert(var(--icon-invert));
+  opacity: 0.8;
+}
+
+/* TUI tab active state */
+.tui-tab {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* TUI row click hint */
+.tui-row {
+  user-select: none;
+}
+
+/* Copy button feedback */
+.copy-btn.copied {
+  color: #22c55e !important;
+}
+
+/* Braille spinner */
+@keyframes braille-spin {
+  0%   { content: '⠋'; }
+  10%  { content: '⠙'; }
+  20%  { content: '⠹'; }
+  30%  { content: '⠸'; }
+  40%  { content: '⠼'; }
+  50%  { content: '⠴'; }
+  60%  { content: '⠦'; }
+  70%  { content: '⠧'; }
+  80%  { content: '⠇'; }
+  90%  { content: '⠏'; }
+}
+
+.spinner::before {
+  animation: braille-spin 0.8s linear infinite;
+  content: '⠋';
+}
+
+/* Screenshot placeholder */
+.screenshot-placeholder {
+  position: relative;
+}
+
+.screenshot-placeholder img {
+  display: block;
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(124, 58, 237, 0.05);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.screenshot-placeholder:hover img {
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.2);
+}
+
+/* Theme transition for all themed elements */
+body, .terminal-chrome, .glass-card, nav {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}

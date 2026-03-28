@@ -160,7 +160,6 @@ pub fn draw_triggers_tab(
     }; // "Tasks" + space
     let title_max_width = (area.width as usize).saturating_sub(
         2 // borders
-            + 1 // highlight symbol
             + workspace_col_width as usize
             + time_col_width as usize
             + source_col_width as usize
@@ -306,6 +305,10 @@ pub fn draw_triggers_tab(
     let count = indices.len();
     let footer_info = selection_info(app.issues_state.selected(), count);
     let sort_label = app.issue_sort.label();
+    let running_count = trigger_data
+        .iter()
+        .filter(|(trigger, ..)| running_ids.contains(trigger.trigger_id.as_str()))
+        .count();
 
     let title_spans = if app.search_active {
         vec![
@@ -375,37 +378,28 @@ pub fn draw_triggers_tab(
                 );
             }
             block
-                .title_bottom(Line::from({
-                    let has_approval_markers = !trigger_data.is_empty();
-                    let mut legend = vec![
-                        Span::styled(" ●", Style::default().fg(theme.highlight)),
-                        Span::styled(":workspace  ", Style::default().fg(theme.muted)),
-                    ];
-                    if has_approval_markers {
-                        legend.extend([
-                            Span::styled("✓", Style::default().fg(theme.success)),
-                            Span::styled(":approved  ", Style::default().fg(theme.muted)),
-                            Span::styled("◷", Style::default().fg(theme.warning)),
-                            Span::styled(":pending  ", Style::default().fg(theme.muted)),
-                        ]);
-                    }
-                    legend.extend([
-                        Span::styled("●", Style::default().fg(theme.success)),
-                        Span::styled(":open  ", Style::default().fg(theme.muted)),
-                        Span::styled("○", Style::default().fg(theme.info)),
-                        Span::styled(":todo  ", Style::default().fg(theme.muted)),
-                        Span::styled("✓", Style::default().fg(theme.muted)),
-                        Span::styled(":done ", Style::default().fg(theme.muted)),
-                    ]);
-                    legend
-                }))
                 .title_bottom(
                     Line::from(vec![
-                        Span::styled("─n:", Style::default().fg(theme.muted)),
+                        Span::styled(footer_info, Style::default().fg(theme.muted)),
+                        Span::styled(" • ", Style::default().fg(theme.border)),
+                        Span::styled("n:", Style::default().fg(theme.muted)),
                         Span::styled("new", Style::default().fg(theme.highlight)),
-                        Span::styled(" s:", Style::default().fg(theme.muted)),
+                        Span::styled(" • ", Style::default().fg(theme.border)),
+                        Span::styled("sorted by ", Style::default().fg(theme.muted)),
                         Span::styled(sort_label, Style::default().fg(theme.highlight)),
-                        Span::styled(format!(" {footer_info}─"), Style::default().fg(theme.muted)),
+                        if running_count > 0 {
+                            Span::styled(" • ", Style::default().fg(theme.border))
+                        } else {
+                            Span::raw("")
+                        },
+                        if running_count > 0 {
+                            Span::styled(
+                                format!("{running_count} running"),
+                                Style::default().fg(theme.warning),
+                            )
+                        } else {
+                            Span::raw("")
+                        },
                     ])
                     .right_aligned(),
                 )

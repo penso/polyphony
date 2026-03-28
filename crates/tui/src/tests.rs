@@ -127,6 +127,25 @@ fn render_does_not_panic() {
 }
 
 #[test]
+fn render_uses_chrome_header_without_arrow_selection() {
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let snapshot = test_snapshot(3);
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("polyphony - tui"), "{screen}");
+    assert!(!screen.contains("▸"), "{screen}");
+}
+
+#[test]
 fn leaving_modal_blanks_previous_ui() {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();

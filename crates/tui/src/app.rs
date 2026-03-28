@@ -13,9 +13,9 @@ use ratatui::{layout::Rect, widgets::TableState};
 const RPS_HISTORY_CAP: usize = 120;
 /// How many live agent log lines to show under each running agent in the tree.
 const MAX_VISIBLE_AGENT_LOG_LINES: usize = 1;
-pub(crate) const TAB_DIVIDER: &str = "  ";
-pub(crate) const TAB_PADDING_LEFT: &str = "";
-pub(crate) const TAB_PADDING_RIGHT: &str = "";
+pub(crate) const TAB_DIVIDER: &str = " ";
+pub(crate) const TAB_PADDING_LEFT: &str = " ";
+pub(crate) const TAB_PADDING_RIGHT: &str = " ";
 
 use crate::{LogBuffer, theme::Theme};
 

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <circle cx="6" cy="12" r="4"/>
+  <circle cx="18" cy="12" r="4"/>
+  <circle cx="12" cy="5" r="3.5"/>
+  <circle cx="12" cy="19" r="3.5"/>
+  <line x1="6" y1="12" x2="12" y2="5" stroke="currentColor" stroke-width="1.5" opacity="0.4"/>
+  <line x1="12" y1="5" x2="18" y2="12" stroke="currentColor" stroke-width="1.5" opacity="0.4"/>
+  <line x1="18" y1="12" x2="12" y2="19" stroke="currentColor" stroke-width="1.5" opacity="0.4"/>
+  <line x1="12" y1="19" x2="6" y2="12" stroke="currentColor" stroke-width="1.5" opacity="0.4"/>
+</svg>

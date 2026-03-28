@@ -271,13 +271,8 @@ pub(crate) fn draw_trigger_detail(
     related_movements.sort_by_key(|m| m.created_at);
     if !related_movements.is_empty() {
         body_lines.push(Line::default());
-        let section_marker = if movements_focused {
-            "▸ "
-        } else {
-            ""
-        };
         body_lines.push(Line::from(vec![
-            Span::styled(section_marker, Style::default().fg(theme.highlight)),
+            Span::styled("  ", Style::default()),
             Span::styled(
                 "Related Movements",
                 Style::default()
@@ -318,13 +313,6 @@ pub(crate) fn draw_trigger_detail(
                 super::orchestrator::movement_status_emoji_pub(&m.status, theme);
             let status_color = super::orchestrator::movement_status_color_pub(&m.status, theme);
             let is_selected = movements_focused && i == movements_selected;
-            let prefix = if is_selected {
-                "▸ "
-            } else if movements_focused {
-                "  "
-            } else {
-                ""
-            };
             let name_style = if is_selected {
                 Style::default()
                     .fg(theme.foreground)
@@ -340,8 +328,8 @@ pub(crate) fn draw_trigger_detail(
                 .with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M")
                 .to_string();
-            body_lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(theme.highlight)),
+            let mut line = Line::from(vec![
+                Span::styled("  ", Style::default()),
                 Span::styled(format!("{ts} "), Style::default().fg(theme.muted)),
                 Span::styled(format!("{status_emoji} "), Style::default().fg(emoji_color)),
                 Span::styled(
@@ -360,7 +348,11 @@ pub(crate) fn draw_trigger_detail(
                     ),
                     Style::default().fg(theme.muted),
                 ),
-            ]));
+            ]);
+            if is_selected {
+                line = line.style(Style::default().bg(theme.selection));
+            }
+            body_lines.push(line);
         }
     }
 
@@ -372,13 +364,8 @@ pub(crate) fn draw_trigger_detail(
         .collect();
     if !running_agents.is_empty() {
         body_lines.push(Line::default());
-        let section_marker = if agents_focused {
-            "▸ "
-        } else {
-            ""
-        };
         body_lines.push(Line::from(vec![
-            Span::styled(section_marker, Style::default().fg(theme.highlight)),
+            Span::styled("  ", Style::default()),
             Span::styled(
                 "Running Agents",
                 Style::default()
@@ -388,13 +375,6 @@ pub(crate) fn draw_trigger_detail(
         ]));
         for (i, agent) in running_agents.iter().enumerate() {
             let is_selected = agents_focused && i == agents_selected;
-            let prefix = if is_selected {
-                "▸ "
-            } else if agents_focused {
-                "  "
-            } else {
-                ""
-            };
             let name_style = if is_selected {
                 Style::default()
                     .fg(theme.foreground)
@@ -402,15 +382,8 @@ pub(crate) fn draw_trigger_detail(
             } else {
                 Style::default().fg(theme.foreground)
             };
-            body_lines.push(Line::from(vec![
-                Span::styled(
-                    prefix,
-                    Style::default().fg(if is_selected {
-                        theme.highlight
-                    } else {
-                        theme.success
-                    }),
-                ),
+            let mut line = Line::from(vec![
+                Span::styled("  ", Style::default().fg(theme.success)),
                 Span::styled(agent.agent_name.clone(), name_style),
                 Span::styled(
                     format!("  turn {}/{} ", agent.turn_count, agent.max_turns),
@@ -420,7 +393,11 @@ pub(crate) fn draw_trigger_detail(
                     agent.model.as_deref().unwrap_or("-"),
                     Style::default().fg(theme.muted),
                 ),
-            ]));
+            ]);
+            if is_selected {
+                line = line.style(Style::default().bg(theme.selection));
+            }
+            body_lines.push(line);
         }
     }
 

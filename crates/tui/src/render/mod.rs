@@ -31,10 +31,16 @@ const STICKY_TOAST_DEBOUNCE_MS: i64 = 100;
 pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &mut AppState) {
     app.frame_count = app.frame_count.wrapping_add(1);
 
+    frame.render_widget(
+        ratatui::widgets::Block::default()
+            .style(ratatui::style::Style::default().bg(app.theme.background)),
+        frame.area(),
+    );
+
     let areas = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(3), // Header tabs
+            ratatui::layout::Constraint::Length(4), // Header chrome + tabs
             ratatui::layout::Constraint::Min(6),    // Main content
             ratatui::layout::Constraint::Length(1), // Footer version bar
         ])

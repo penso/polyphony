@@ -118,21 +118,12 @@ pub fn draw_deliverables_tab(
                     .fg(theme.foreground)
                     .add_modifier(Modifier::BOLD),
             )))
-            .title_bottom(Line::from(vec![
-                Span::styled(" ●", Style::default().fg(theme.success)),
-                Span::styled(":open  ", Style::default().fg(theme.muted)),
-                Span::styled("◷", Style::default().fg(theme.warning)),
-                Span::styled(":waiting  ", Style::default().fg(theme.muted)),
-                Span::styled("✓", Style::default().fg(theme.highlight)),
-                Span::styled(":merged  ", Style::default().fg(theme.muted)),
-                Span::styled("✕", Style::default().fg(theme.danger)),
-                Span::styled(":rejected", Style::default().fg(theme.muted)),
-            ]))
             .title_bottom(
-                Line::from(Span::styled(
-                    format!("─{footer_info}─"),
-                    Style::default().fg(theme.muted),
-                ))
+                Line::from(vec![
+                    Span::styled(footer_info, Style::default().fg(theme.muted)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("review queue", Style::default().fg(theme.highlight)),
+                ])
                 .right_aligned(),
             )
             .borders(ratatui::widgets::Borders::ALL)
@@ -141,7 +132,8 @@ pub fn draw_deliverables_tab(
                 theme.highlight
             } else {
                 theme.border
-            })),
+            }))
+            .style(Style::default().bg(theme.panel)),
     );
 
     frame.render_stateful_widget(table, area, &mut app.deliverables_state);
