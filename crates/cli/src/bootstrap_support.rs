@@ -103,9 +103,35 @@ pub(crate) fn maybe_seed_repo_config_with_github_detection(
         .canonicalize()
         .unwrap_or_else(|_| workflow_root.clone());
 
+    // Detect AI coding agents and seed user config with their profiles.
+    let detected_agents = polyphony_workflow::detect_agents();
+    if let Some(ucp) = user_config_path {
+        if polyphony_workflow::ensure_user_config_file_with_agents(ucp, &detected_agents)? {
+            if detected_agents.is_empty() {
+                eprintln!(
+                    "No AI coding agents detected. See https://polyphony.to/docs/agents for setup."
+                );
+            } else {
+                eprintln!(
+                    "Detected agent(s): {} — configured automatically.",
+                    detected_agents
+                        .iter()
+                        .map(|a| a.profile_name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+    }
+    let default_agent = detected_agents.first().map(|a| a.profile_name.as_str());
+
     // Try beads first (local tracker, highest priority).
     if workflow_root.join(".beads").is_dir() {
-        if polyphony_workflow::seed_repo_config_with_beads(&rcp, &source_repo_path)? {
+        if polyphony_workflow::seed_repo_config_with_beads_and_default_agent(
+            &rcp,
+            &source_repo_path,
+            default_agent,
+        )? {
             eprintln!("Detected beads issue tracker — tracker configured automatically.");
             tracing::info!(
                 workflow_path = %workflow_path.display(),
@@ -118,7 +144,12 @@ pub(crate) fn maybe_seed_repo_config_with_github_detection(
 
     // Try to detect a GitHub remote and pre-configure the tracker.
     if let Some(github_repo) = polyphony_git::detect_github_remote(&workflow_root) {
-        if seed_repo_config_with_github(&rcp, &source_repo_path, &github_repo)? {
+        if polyphony_workflow::seed_repo_config_with_github_and_default_agent(
+            &rcp,
+            &source_repo_path,
+            &github_repo,
+            default_agent,
+        )? {
             eprintln!(
                 "Detected GitHub repository: {github_repo} — tracker configured automatically."
             );
@@ -133,7 +164,11 @@ pub(crate) fn maybe_seed_repo_config_with_github_detection(
     }
 
     // Fallback: seed with kind = "none" and signal that the user should configure manually.
-    if ensure_repo_config_file(&rcp, &source_repo_path)? {
+    if polyphony_workflow::ensure_repo_config_file_with_default_agent(
+        &rcp,
+        &source_repo_path,
+        default_agent,
+    )? {
         tracing::info!(
             workflow_path = %workflow_path.display(),
             repo_config_path = %rcp.display(),

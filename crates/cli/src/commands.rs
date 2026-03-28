@@ -551,6 +551,45 @@ pub(crate) fn handle_doctor_command(
         }
     }
 
+    // Agent detection scan
+    println!();
+    println!("Agent detection:");
+    let known_agents = [
+        ("claude", &["ANTHROPIC_API_KEY", "CLAUDE_OAUTH_TOKEN"][..]),
+        ("codex", &["CODEX_API_KEY", "OPENAI_API_KEY"]),
+        ("pi", &[]),
+        ("openclaw", &[]),
+        ("copilot", &["GITHUB_TOKEN"]),
+        ("kimi", &["KIMI_API_KEY", "MOONSHOT_API_KEY"]),
+    ];
+    for (name, env_vars) in &known_agents {
+        print!("  {name:10} ... ");
+        match which_binary(name) {
+            Some(path) => {
+                let mut extras = vec![format!("{}", path.display())];
+                for var in *env_vars {
+                    if env::var_os(var).is_some() {
+                        extras.push(format!("{var} set"));
+                    }
+                }
+                println!("\u{2713} {}", extras.join(", "));
+            },
+            None => println!("\u{2717} not found"),
+        }
+    }
+    // API-only agents
+    for (name, var) in [
+        ("openai (API)", "OPENAI_API_KEY"),
+        ("openrouter", "OPENROUTER_API_KEY"),
+    ] {
+        print!("  {name:10} ... ");
+        if env::var_os(var).is_some() {
+            println!("\u{2713} {var} set");
+        } else {
+            println!("\u{2717} {var} not set");
+        }
+    }
+
     println!();
     if failures == 0 {
         println!("All checks passed.");
@@ -723,16 +762,7 @@ fn print_json_value(value: &serde_json::Value) -> Result<(), Error> {
 }
 
 fn which_binary(name: &str) -> Option<PathBuf> {
-    env::var_os("PATH").and_then(|paths| {
-        env::split_paths(&paths).find_map(|dir| {
-            let full = dir.join(name);
-            if full.is_file() {
-                Some(full)
-            } else {
-                None
-            }
-        })
-    })
+    polyphony_workflow::which_binary(name)
 }
 
 fn run_shell_command(cmd: &str) -> Result<std::process::Output, std::io::Error> {

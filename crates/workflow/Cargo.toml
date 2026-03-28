@@ -12,3 +12,6 @@ serde.workspace = true
 serde_yaml.workspace = true
 thiserror.workspace = true
 polyphony-core = { path = "../core" }
+
+[dev-dependencies]
+toml.workspace = true

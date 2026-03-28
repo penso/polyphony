@@ -103,6 +103,14 @@ pub fn ensure_repo_config_file(
     path: impl AsRef<Path>,
     source_repo_path: &Path,
 ) -> Result<bool, Error> {
+    ensure_repo_config_file_with_default_agent(path, source_repo_path, None)
+}
+
+pub fn ensure_repo_config_file_with_default_agent(
+    path: impl AsRef<Path>,
+    source_repo_path: &Path,
+    default_agent: Option<&str>,
+) -> Result<bool, Error> {
     let path = path.as_ref();
     if path.exists() {
         if path.is_file() {
@@ -114,8 +122,11 @@ pub fn ensure_repo_config_file(
         )));
     }
     ensure_parent_dir(path, "repo config path")?;
-    fs::write(path, default_repo_config_toml(source_repo_path))
-        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    fs::write(
+        path,
+        default_repo_config_toml_with_default_agent(source_repo_path, default_agent),
+    )
+    .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
     Ok(true)
 }
 
@@ -206,6 +217,99 @@ pub fn default_repo_config_toml(source_repo_path: &Path) -> String {
         "{{SOURCE_REPO_PATH}}",
         &source_repo_path.display().to_string(),
     )
+}
+
+/// Generate a repo config TOML with the default agent set to the given name.
+pub fn default_repo_config_toml_with_default_agent(
+    source_repo_path: &Path,
+    default_agent: Option<&str>,
+) -> String {
+    let base = default_repo_config_toml(source_repo_path);
+    match default_agent {
+        Some(agent) => base.replace(
+            "default = \"implementer\"",
+            &format!("default = \"{agent}\""),
+        ),
+        None => base,
+    }
+}
+
+/// Ensure the user config file exists, injecting detected agent profiles.
+///
+/// When the file already exists, returns `Ok(false)` without modification.
+/// When agents are provided, their TOML snippets are inserted after `[agents.profiles]`.
+pub fn ensure_user_config_file_with_agents(
+    path: &Path,
+    agents: &[crate::detect::DetectedAgent],
+) -> Result<bool, Error> {
+    if path.exists() {
+        if path.is_file() {
+            return Ok(false);
+        }
+        return Err(Error::Config(format!(
+            "config path `{}` exists but is not a file",
+            path.display()
+        )));
+    }
+    ensure_parent_dir(path, "config path")?;
+    let template = default_user_config_toml();
+    let content = if agents.is_empty() {
+        template.to_string()
+    } else {
+        inject_agent_profiles(template, agents)
+    };
+    fs::write(path, content)
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    Ok(true)
+}
+
+/// Insert agent TOML snippets after the `[agents.profiles]` line and its comment block,
+/// replacing the commented-out examples.
+fn inject_agent_profiles(template: &str, agents: &[crate::detect::DetectedAgent]) -> String {
+    // Find the end of the `[agents.profiles]` section: the first non-comment, non-blank line
+    // after the `[agents.profiles]` header, or the next `[section]` header.
+    let mut lines: Vec<&str> = template.lines().collect();
+    let marker = lines.iter().position(|l| l.trim() == "[agents.profiles]");
+    let Some(marker_idx) = marker else {
+        // Fallback: just append
+        let mut out = template.to_string();
+        out.push_str(&crate::detect::agent_profiles_toml(agents));
+        return out;
+    };
+
+    // Find the next section header after [agents.profiles]
+    let next_section = lines
+        .iter()
+        .enumerate()
+        .skip(marker_idx + 1)
+        .find(|(_, l)| {
+            let trimmed = l.trim();
+            trimmed.starts_with('[') && !trimmed.starts_with("# [")
+        })
+        .map(|(i, _)| i);
+
+    // Remove the commented-out examples between [agents.profiles] and the next section
+    let insert_at = next_section.unwrap_or(lines.len());
+
+    // Keep [agents.profiles] and one blank/comment line, remove the rest up to next section
+    let keep_through = marker_idx + 1; // Keep the [agents.profiles] line itself
+    // Remove lines from keep_through..insert_at (the commented examples)
+    lines.drain(keep_through..insert_at);
+
+    // Insert the detected profiles right after [agents.profiles]
+    let profiles_text = crate::detect::agent_profiles_toml(agents);
+    let insert_idx = keep_through; // right after [agents.profiles]
+    let profile_lines: Vec<&str> = profiles_text.lines().collect();
+    for (i, line) in profile_lines.iter().enumerate() {
+        lines.insert(insert_idx + i, line);
+    }
+
+    let mut out = lines.join("\n");
+    // Ensure trailing newline
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 pub fn default_repo_agent_prompt_templates() -> [(&'static str, &'static str); 5] {
@@ -321,30 +425,15 @@ pub fn seed_repo_config_with_github(
     source_repo_path: &Path,
     github_repo: &str,
 ) -> Result<bool, Error> {
-    let path = path.as_ref();
-    if path.exists() {
-        if path.is_file() {
-            return Ok(false);
-        }
-        return Err(Error::Config(format!(
-            "repo config path `{}` exists but is not a file",
-            path.display()
-        )));
-    }
-    ensure_parent_dir(path, "repo config path")?;
-    let content = default_repo_config_toml(source_repo_path).replace(
-        "kind = \"none\"",
-        &format!("kind = \"github\"\nrepository = \"{github_repo}\""),
-    );
-    fs::write(path, content)
-        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
-    Ok(true)
+    seed_repo_config_with_github_and_default_agent(path, source_repo_path, github_repo, None)
 }
 
-/// Write a repo config file with the beads tracker pre-configured.
-pub fn seed_repo_config_with_beads(
+/// Write a repo config file with the GitHub tracker and optional default agent.
+pub fn seed_repo_config_with_github_and_default_agent(
     path: impl AsRef<Path>,
     source_repo_path: &Path,
+    github_repo: &str,
+    default_agent: Option<&str>,
 ) -> Result<bool, Error> {
     let path = path.as_ref();
     if path.exists() {
@@ -357,10 +446,46 @@ pub fn seed_repo_config_with_beads(
         )));
     }
     ensure_parent_dir(path, "repo config path")?;
-    let content = default_repo_config_toml(source_repo_path).replace(
-        "kind = \"none\"",
-        "kind = \"beads\"\nactive_states = [\"Open\", \"In Progress\", \"Blocked\"]\nterminal_states = [\"Closed\", \"Deferred\"]",
-    );
+    let content = default_repo_config_toml_with_default_agent(source_repo_path, default_agent)
+        .replace(
+            "kind = \"none\"",
+            &format!("kind = \"github\"\nrepository = \"{github_repo}\""),
+        );
+    fs::write(path, content)
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
+    Ok(true)
+}
+
+/// Write a repo config file with the beads tracker pre-configured.
+pub fn seed_repo_config_with_beads(
+    path: impl AsRef<Path>,
+    source_repo_path: &Path,
+) -> Result<bool, Error> {
+    seed_repo_config_with_beads_and_default_agent(path, source_repo_path, None)
+}
+
+/// Write a repo config file with the beads tracker and optional default agent.
+pub fn seed_repo_config_with_beads_and_default_agent(
+    path: impl AsRef<Path>,
+    source_repo_path: &Path,
+    default_agent: Option<&str>,
+) -> Result<bool, Error> {
+    let path = path.as_ref();
+    if path.exists() {
+        if path.is_file() {
+            return Ok(false);
+        }
+        return Err(Error::Config(format!(
+            "repo config path `{}` exists but is not a file",
+            path.display()
+        )));
+    }
+    ensure_parent_dir(path, "repo config path")?;
+    let content = default_repo_config_toml_with_default_agent(source_repo_path, default_agent)
+        .replace(
+            "kind = \"none\"",
+            "kind = \"beads\"\nactive_states = [\"Open\", \"In Progress\", \"Blocked\"]\nterminal_states = [\"Closed\", \"Deferred\"]",
+        );
     fs::write(path, content)
         .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
     Ok(true)

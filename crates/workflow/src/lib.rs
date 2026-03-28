@@ -430,6 +430,7 @@ pub struct LoadedWorkflow {
     pub agent_prompts: HashMap<String, AgentPromptConfig>,
 }
 
+pub mod detect;
 mod files;
 mod prelude;
 pub(crate) mod render;
@@ -440,13 +441,20 @@ mod tests;
 
 pub(crate) use crate::service::*;
 pub use crate::{
+    detect::{
+        DetectedAgent, DetectionEnv, SystemEnv, agent_profiles_toml, detect_agents,
+        detect_agents_with, which_binary,
+    },
     files::{
         agent_prompt_dirs, default_repo_agent_prompt_templates, default_repo_config_toml,
-        default_user_config_toml, default_workflow_md, ensure_repo_agent_prompt_files,
-        ensure_repo_config_file, ensure_user_config_file, ensure_workflow_file, load_workflow,
+        default_repo_config_toml_with_default_agent, default_user_config_toml, default_workflow_md,
+        ensure_repo_agent_prompt_files, ensure_repo_config_file,
+        ensure_repo_config_file_with_default_agent, ensure_user_config_file,
+        ensure_user_config_file_with_agents, ensure_workflow_file, load_workflow,
         load_workflow_with_user_config, repo_agent_prompt_dir, repo_config_path,
-        seed_repo_config_with_beads, seed_repo_config_with_github, user_agent_prompt_dir,
-        user_config_path,
+        seed_repo_config_with_beads, seed_repo_config_with_beads_and_default_agent,
+        seed_repo_config_with_github, seed_repo_config_with_github_and_default_agent,
+        user_agent_prompt_dir, user_config_path,
     },
     render::{
         agent_definition, agent_definition_with_pty, apply_agent_prompt_template,
