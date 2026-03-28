@@ -1,25 +1,38 @@
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="en" class="scroll-smooth dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>Polyphony — Orchestrate AI Agents from Your Terminal</title>
   <meta name="description" content="Connect your issue tracker, dispatch AI coding agents, and watch them work — all from a single TUI dashboard.">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 
+  <!-- Theme: prevent FOUC -->
+  <script>
+    (function(){
+      var t = localStorage.getItem('theme') || 'system';
+      if (t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    })();
+  </script>
+
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
+      darkMode: 'class',
       theme: {
         extend: {
           colors: {
-            bg: { DEFAULT: '#0a0a0f', card: '#12121a', elevated: '#1a1a2e' },
             accent: { DEFAULT: '#7c3aed', light: '#a78bfa', dim: '#4c1d95' },
             amber: { DEFAULT: '#f59e0b', light: '#fbbf24' },
             muted: '#6b7280',
@@ -36,7 +49,7 @@
   <!-- Custom styles -->
   <link rel="stylesheet" href="styles.css">
 </head>
-<body class="bg-bg text-gray-100 font-sans antialiased">
+<body class="bg-[var(--bg)] text-[var(--text-primary)] font-sans antialiased transition-colors duration-300">
 
   <!-- ========== 1. NAVIGATION ========== -->
   <nav id="main-nav" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300">
@@ -45,13 +58,19 @@
         <img src="assets/logo.svg" alt="Polyphony" class="w-8 h-8">
         <span class="text-lg font-bold tracking-tight">Polyphony</span>
       </a>
-      <div class="hidden md:flex items-center gap-8 text-sm text-gray-400">
-        <a href="#features" class="hover:text-white transition-colors">Features</a>
-        <a href="#how-it-works" class="hover:text-white transition-colors">How It Works</a>
-        <a href="#agents" class="hover:text-white transition-colors">Agents</a>
-        <a href="#dashboard" class="hover:text-white transition-colors">Dashboard</a>
+      <div class="hidden md:flex items-center gap-8 text-sm text-[var(--text-secondary)]">
+        <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
+        <a href="#how-it-works" class="hover:text-[var(--text-primary)] transition-colors">How It Works</a>
+        <a href="#agents" class="hover:text-[var(--text-primary)] transition-colors">Agents</a>
+        <a href="#dashboard" class="hover:text-[var(--text-primary)] transition-colors">Dashboard</a>
+        <!-- Theme toggle -->
+        <button id="theme-toggle" title="Theme: System" class="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)] transition-colors">
+          <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="theme-icon-system" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
         <a href="https://github.com/penso/polyphony" target="_blank" rel="noopener"
-           class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 hover:border-accent/50 transition-colors">
+           class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border)] hover:border-accent/50 transition-colors">
           <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           GitHub
         </a>
@@ -67,15 +86,15 @@
           Orchestrate AI agents
           <span class="gradient-text">from your terminal</span>
         </h1>
-        <p class="text-lg sm:text-xl text-gray-400 max-w-2xl mb-10 leading-relaxed">
-          Connect your issue tracker. Assign coding agents. Watch them work — all from a single TUI dashboard.
+        <p class="text-lg sm:text-xl text-[var(--text-secondary)] max-w-2xl mb-10 leading-relaxed">
+          Connect your issue tracker. Assign coding agents. Watch them work — from a terminal dashboard or the web.
         </p>
         <div class="flex flex-wrap gap-4">
           <a href="#install" class="px-6 py-3 bg-accent hover:bg-accent-light rounded-lg font-semibold text-white transition-colors glow-accent">
             Get Started
           </a>
           <a href="https://github.com/penso/polyphony" target="_blank" rel="noopener"
-             class="px-6 py-3 border border-white/20 hover:border-accent/50 rounded-lg font-semibold text-gray-300 hover:text-white transition-colors">
+             class="px-6 py-3 border border-[var(--border)] hover:border-accent/50 rounded-lg font-semibold text-[var(--text-primary)] hover:text-[var(--text-primary)] transition-colors">
             View on GitHub
           </a>
         </div>
@@ -88,10 +107,10 @@
             <div class="terminal-dot bg-red-500/80"></div>
             <div class="terminal-dot bg-yellow-500/80"></div>
             <div class="terminal-dot bg-green-500/80"></div>
-            <span class="text-xs text-gray-500 ml-2 font-mono">polyphony — terminal</span>
+            <span class="text-xs text-[var(--text-muted)] ml-2 font-mono">polyphony — terminal</span>
           </div>
           <div class="p-6 font-mono text-sm leading-relaxed">
-            <pre id="typing-output" class="text-accent-light whitespace-pre min-h-[180px]"></pre>
+            <pre id="typing-output" class="text-accent-light whitespace-pre min-h-[180px] font-mono"></pre>
             <span class="typing-cursor"></span>
           </div>
         </div>
@@ -102,23 +121,102 @@
   <!-- ========== 3. QUICK START / INSTALL ========== -->
   <section id="install" class="py-24">
     <div class="max-w-6xl mx-auto px-6">
-      <div class="max-w-xl mx-auto" data-animate>
-        <h2 class="text-2xl font-bold text-center mb-8">Get started in seconds</h2>
-        <div class="terminal-chrome">
-          <div class="terminal-titlebar">
-            <div class="terminal-dot bg-red-500/80"></div>
-            <div class="terminal-dot bg-yellow-500/80"></div>
-            <div class="terminal-dot bg-green-500/80"></div>
+      <h2 class="text-2xl font-bold text-center mb-8" data-animate>Get started in seconds</h2>
+
+      <!-- Install tabs -->
+      <div class="max-w-2xl mx-auto" data-animate>
+        <div class="flex gap-2 mb-4 justify-center">
+          <button class="install-tab px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-accent/20 text-accent-light" data-install="macos">macOS</button>
+          <button class="install-tab px-4 py-2 rounded-lg text-sm font-medium transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]" data-install="linux">Linux</button>
+          <button class="install-tab px-4 py-2 rounded-lg text-sm font-medium transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]" data-install="windows">Windows</button>
+          <button class="install-tab px-4 py-2 rounded-lg text-sm font-medium transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]" data-install="source">From source</button>
+        </div>
+
+        <!-- macOS -->
+        <div class="install-panel" data-install-panel="macos">
+          <div class="terminal-chrome">
+            <div class="terminal-titlebar">
+              <div class="terminal-dot bg-red-500/80"></div>
+              <div class="terminal-dot bg-yellow-500/80"></div>
+              <div class="terminal-dot bg-green-500/80"></div>
+            </div>
+            <div class="p-5 flex items-center justify-between gap-4">
+              <code class="font-mono text-accent-light text-sm sm:text-base">
+                <span class="text-muted">$</span> brew install penso/polyphony/polyphony
+              </code>
+              <button class="copy-btn text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-sm font-mono shrink-0"
+                      data-copy="brew install penso/polyphony/polyphony">
+                Copy
+              </button>
+            </div>
           </div>
-          <div class="p-5 flex items-center justify-between gap-4">
-            <code class="font-mono text-accent-light text-sm sm:text-base">
-              <span class="text-muted">$</span> cargo install polyphony
-            </code>
-            <button class="copy-btn text-gray-500 hover:text-white transition-colors text-sm font-mono shrink-0"
-                    data-copy="cargo install polyphony">
-              Copy
-            </button>
+          <p class="text-xs text-[var(--text-muted)] mt-3 text-center">Universal binary (Apple Silicon + Intel)</p>
+        </div>
+
+        <!-- Linux -->
+        <div class="install-panel hidden" data-install-panel="linux">
+          <div class="terminal-chrome">
+            <div class="terminal-titlebar">
+              <div class="terminal-dot bg-red-500/80"></div>
+              <div class="terminal-dot bg-yellow-500/80"></div>
+              <div class="terminal-dot bg-green-500/80"></div>
+            </div>
+            <div class="p-5 flex items-center justify-between gap-4">
+              <code class="font-mono text-accent-light text-sm sm:text-base">
+                <span class="text-muted">$</span> curl -fsSL https://raw.githubusercontent.com/penso/polyphony/main/install.sh | sh
+              </code>
+              <button class="copy-btn text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-sm font-mono shrink-0"
+                      data-copy="curl -fsSL https://raw.githubusercontent.com/penso/polyphony/main/install.sh | sh">
+                Copy
+              </button>
+            </div>
           </div>
+          <p class="text-xs text-[var(--text-muted)] mt-3 text-center">Auto-detects x86_64/aarch64. Downloads pre-built binary from <a href="https://github.com/penso/polyphony/releases" target="_blank" rel="noopener" class="text-accent-light hover:underline">GitHub Releases</a>.</p>
+        </div>
+
+        <!-- Windows -->
+        <div class="install-panel hidden" data-install-panel="windows">
+          <div class="terminal-chrome">
+            <div class="terminal-titlebar">
+              <div class="terminal-dot bg-red-500/80"></div>
+              <div class="terminal-dot bg-yellow-500/80"></div>
+              <div class="terminal-dot bg-green-500/80"></div>
+            </div>
+            <div class="p-5 flex items-center justify-between gap-4">
+              <code class="font-mono text-accent-light text-xs sm:text-sm break-all">
+                <span class="text-muted">&gt;</span> irm https://raw.githubusercontent.com/penso/polyphony/main/install.ps1 | iex
+              </code>
+              <button class="copy-btn text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-sm font-mono shrink-0"
+                      data-copy="irm https://raw.githubusercontent.com/penso/polyphony/main/install.ps1 | iex">
+                Copy
+              </button>
+            </div>
+          </div>
+          <p class="text-xs text-[var(--text-muted)] mt-3 text-center">Pre-built binary for x86_64. Or download the .zip from <a href="https://github.com/penso/polyphony/releases" target="_blank" rel="noopener" class="text-accent-light hover:underline">GitHub Releases</a>.</p>
+        </div>
+
+        <!-- From source -->
+        <div class="install-panel hidden" data-install-panel="source">
+          <div class="terminal-chrome">
+            <div class="terminal-titlebar">
+              <div class="terminal-dot bg-red-500/80"></div>
+              <div class="terminal-dot bg-yellow-500/80"></div>
+              <div class="terminal-dot bg-green-500/80"></div>
+            </div>
+            <div class="p-5 space-y-2">
+              <div class="flex items-center justify-between gap-4">
+                <code class="font-mono text-accent-light text-sm sm:text-base">
+                  <span class="text-muted">$</span> git clone https://github.com/penso/polyphony.git
+                </code>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <code class="font-mono text-accent-light text-sm sm:text-base">
+                  <span class="text-muted">$</span> cd polyphony &amp;&amp; cargo +nightly build --release -p polyphony-cli
+                </code>
+              </div>
+            </div>
+          </div>
+          <p class="text-xs text-[var(--text-muted)] mt-3 text-center">Requires Rust nightly. Works on any platform Rust supports.</p>
         </div>
       </div>
     </div>
@@ -132,7 +230,7 @@
         <div class="glass-card p-8" data-animate>
           <div class="text-3xl mb-4">🎯</div>
           <h3 class="text-lg font-bold mb-2">Issue → Agent → PR</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">
             Connect trackers, dispatch agents, get pull requests automatically. From issue to shipped code, hands-free.
           </p>
         </div>
@@ -140,7 +238,7 @@
         <div class="glass-card p-8" data-animate>
           <div class="text-3xl mb-4">🤖</div>
           <h3 class="text-lg font-bold mb-2">Multi-Agent</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">
             Claude, Codex, Copilot, Pi — use whichever agent fits the task. Mix and match with fallback chains.
           </p>
         </div>
@@ -148,8 +246,8 @@
         <div class="glass-card p-8" data-animate>
           <div class="text-3xl mb-4">📦</div>
           <h3 class="text-lg font-bold mb-2">Repo-Native</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">
-            Workflow policy lives in WORKFLOW.md, version-controlled with your code. No external config servers.
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">
+            Inspired by <a href="https://github.com/openai/symphony" target="_blank" rel="noopener" class="text-accent-light hover:underline">OpenAI Symphony</a>, workflow policy lives in WORKFLOW.md — version-controlled with your code. No external config servers.
           </p>
         </div>
       </div>
@@ -160,7 +258,7 @@
   <section id="how-it-works" class="py-24">
     <div class="max-w-6xl mx-auto px-6">
       <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>How it works</h2>
-      <p class="text-gray-400 text-center mb-16 max-w-xl mx-auto" data-animate>
+      <p class="text-[var(--text-secondary)] text-center mb-16 max-w-xl mx-auto" data-animate>
         Four steps from issue to shipped code.
       </p>
 
@@ -170,9 +268,9 @@
           <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">1</div>
           <div class="timeline-connector"></div>
           <h3 class="text-xl font-bold mb-2">Configure</h3>
-          <p class="text-gray-400 text-sm mb-4">Point to your tracker (GitHub, GitLab, Linear) and choose agents.</p>
+          <p class="text-[var(--text-secondary)] text-sm mb-4">Point to your tracker (GitHub, GitLab, Linear) and choose agents.</p>
           <div class="terminal-chrome text-xs">
-            <div class="p-4 font-mono text-gray-400">
+            <div class="p-4 font-mono text-[var(--text-secondary)]">
               <div><span class="text-accent-light">tracker</span>: github</div>
               <div><span class="text-accent-light">agents</span>:</div>
               <div>  - <span class="text-amber">claude</span></div>
@@ -187,8 +285,8 @@
           <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">2</div>
           <div class="timeline-connector"></div>
           <h3 class="text-xl font-bold mb-2">Orchestrate</h3>
-          <p class="text-gray-400 text-sm mb-4">Polyphony polls for issues, creates isolated workspaces, and dispatches agents.</p>
-          <div class="glass-card p-4 text-xs font-mono text-gray-400">
+          <p class="text-[var(--text-secondary)] text-sm mb-4">Polyphony polls for issues, creates isolated workspaces, and dispatches agents.</p>
+          <div class="glass-card p-4 text-xs font-mono text-[var(--text-secondary)]">
             <div class="text-amber">⠋ Polling tracker...</div>
             <div class="text-green-400">✓ Found 3 new issues</div>
             <div class="text-accent-light">→ Creating worktree for #42</div>
@@ -201,15 +299,13 @@
           <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">3</div>
           <div class="timeline-connector"></div>
           <h3 class="text-xl font-bold mb-2">Monitor</h3>
-          <p class="text-gray-400 text-sm mb-4">Live TUI dashboard shows agent progress, retries, and results in real time.</p>
+          <p class="text-[var(--text-secondary)] text-sm mb-4">Live TUI dashboard shows agent progress, retries, and results in real time.</p>
           <div class="terminal-chrome text-xs">
-            <div class="p-4 font-mono">
-              <div class="text-gray-500">┌─ Movements ─────────────────────────────┐</div>
-              <div>│ <span class="text-green-400">⠹</span> #42  Fix auth refresh  <span class="text-accent-light">claude</span>  <span class="text-amber">running</span> │</div>
-              <div>│ <span class="text-green-400">●</span> #43  Add rate limits   <span class="text-accent-light">codex</span>   <span class="text-green-400">done</span>    │</div>
-              <div>│ <span class="text-gray-500">◷</span> #44  Update docs       <span class="text-accent-light">pi</span>      <span class="text-gray-500">queued</span>  │</div>
-              <div class="text-gray-500">└─────────────────────────── 1 of 3 ──────┘</div>
-            </div>
+            <pre class="p-4 font-mono whitespace-pre"><span class="text-[var(--text-muted)]">+- Movements -----------------------------+</span>
+| <span class="text-green-400">~</span> #42 Fix auth refresh  <span class="text-accent-light">claude</span>  <span class="text-amber">running</span> |
+| <span class="text-green-400">*</span> #43 Add rate limits   <span class="text-accent-light">codex</span>   <span class="text-green-400">done</span>    |
+| <span class="text-[var(--text-muted)]">.</span> #44 Update docs       <span class="text-accent-light">pi</span>      <span class="text-[var(--text-muted)]">queued</span>  |
+<span class="text-[var(--text-muted)]">+------------------------ 1 of 3 ---------+</span></pre>
           </div>
         </div>
 
@@ -217,12 +313,12 @@
         <div class="relative pl-16" data-animate>
           <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">4</div>
           <h3 class="text-xl font-bold mb-2">Ship</h3>
-          <p class="text-gray-400 text-sm mb-4">Agents commit, push, and open PRs. Review and merge.</p>
-          <div class="glass-card p-4 text-xs font-mono text-gray-400">
+          <p class="text-[var(--text-secondary)] text-sm mb-4">Agents commit, push, and open PRs. Review and merge.</p>
+          <div class="glass-card p-4 text-xs font-mono text-[var(--text-secondary)]">
             <div class="text-green-400">✓ Agent committed 3 files</div>
             <div class="text-green-400">✓ Pushed to fix/auth-refresh</div>
             <div class="text-accent-light">→ PR #87 opened: "Fix auth token refresh"</div>
-            <div class="text-gray-500">  Waiting for review...</div>
+            <div class="text-[var(--text-muted)]">  Waiting for review...</div>
           </div>
         </div>
       </div>
@@ -233,7 +329,7 @@
   <section id="agents" class="py-24">
     <div class="max-w-6xl mx-auto px-6 text-center">
       <h2 class="text-3xl sm:text-4xl font-bold mb-4" data-animate>Works with your stack</h2>
-      <p class="text-gray-400 mb-16 max-w-xl mx-auto" data-animate>
+      <p class="text-[var(--text-secondary)] mb-16 max-w-xl mx-auto" data-animate>
         Connect any tracker and dispatch to any agent.
       </p>
 
@@ -243,7 +339,7 @@
           <p class="text-xs uppercase tracking-widest text-muted mb-6">Issue Trackers</p>
           <div class="flex flex-wrap items-center justify-center gap-6">
             <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/github.svg" alt="GitHub" class="w-6 h-6 invert opacity-80"> GitHub
+              <img src="assets/icons/github.svg" alt="GitHub" class="w-6 h-6 icon-auto-invert"> GitHub
             </div>
             <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
               <img src="assets/icons/gitlab.svg" alt="GitLab" class="w-6 h-6" style="filter: invert(45%) sepia(90%) saturate(1500%) hue-rotate(360deg) brightness(100%)"> GitLab
@@ -268,13 +364,13 @@
               <img src="assets/icons/codex.svg" alt="Codex" class="w-6 h-6" style="filter: invert(70%) sepia(20%) saturate(500%) hue-rotate(80deg) brightness(105%)"> Codex
             </div>
             <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/copilot.svg" alt="Copilot" class="w-6 h-6 invert opacity-80"> Copilot
+              <img src="assets/icons/copilot.svg" alt="Copilot" class="w-6 h-6 icon-auto-invert"> Copilot
             </div>
             <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
               <img src="assets/icons/pi.svg" alt="Pi" class="w-6 h-6" style="filter: invert(70%) sepia(40%) saturate(800%) hue-rotate(130deg) brightness(110%)"> Pi
             </div>
             <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/openai.svg" alt="OpenAI" class="w-6 h-6 invert opacity-80"> OpenAI-compatible
+              <img src="assets/icons/openai.svg" alt="OpenAI" class="w-6 h-6 icon-auto-invert"> OpenAI-compatible
             </div>
             <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
               <img src="assets/icons/acp.svg" alt="ACP" class="w-6 h-6" style="filter: invert(50%) sepia(80%) saturate(1500%) hue-rotate(240deg) brightness(110%)"> ACP
@@ -289,7 +385,7 @@
   <section id="dashboard" class="py-24">
     <div class="max-w-6xl mx-auto px-6">
       <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>A dashboard built for the terminal</h2>
-      <p class="text-gray-400 text-center mb-12 max-w-xl mx-auto" data-animate>
+      <p class="text-[var(--text-secondary)] text-center mb-12 max-w-xl mx-auto" data-animate>
         Full TUI with sortable tables, detail modals, live spinners, and workspace status.
       </p>
 
@@ -299,69 +395,185 @@
             <div class="terminal-dot bg-red-500/80"></div>
             <div class="terminal-dot bg-yellow-500/80"></div>
             <div class="terminal-dot bg-green-500/80"></div>
-            <span class="text-xs text-gray-500 ml-2 font-mono">polyphony — tui</span>
+            <span class="text-xs text-[var(--text-muted)] ml-2 font-mono">polyphony — tui</span>
           </div>
-          <div class="p-6 font-mono text-xs sm:text-sm">
+          <div class="p-6 font-mono text-xs sm:text-sm" id="tui-demo">
             <!-- Tabs -->
             <div class="flex gap-1 mb-4">
-              <span class="px-3 py-1 bg-accent/20 text-accent-light rounded text-xs font-bold">Issues</span>
-              <span class="px-3 py-1 text-gray-500 rounded text-xs">Movements</span>
-              <span class="px-3 py-1 text-gray-500 rounded text-xs">Agents</span>
+              <button class="tui-tab px-3 py-1 rounded text-xs font-bold transition-colors bg-accent/20 text-accent-light" data-tab="issues">Issues</button>
+              <button class="tui-tab px-3 py-1 rounded text-xs transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]" data-tab="movements">Movements</button>
+              <button class="tui-tab px-3 py-1 rounded text-xs transition-colors text-[var(--text-muted)] hover:text-[var(--text-primary)]" data-tab="agents">Agents</button>
             </div>
-            <!-- Table header -->
-            <div class="text-gray-500 border-b border-white/5 pb-2 mb-2 grid grid-cols-12 gap-2">
-              <span class="col-span-1"></span>
-              <span class="col-span-1">ID</span>
-              <span class="col-span-5">Title</span>
-              <span class="col-span-2">Agent</span>
-              <span class="col-span-1">Status</span>
-              <span class="col-span-2">Updated</span>
+
+            <!-- ISSUES TAB -->
+            <div class="tui-panel" data-panel="issues">
+              <div class="text-[var(--text-muted)] border-b border-[var(--border-subtle)] pb-2 mb-2 grid grid-cols-12 gap-2">
+                <span class="col-span-1"></span>
+                <span class="col-span-1">ID</span>
+                <span class="col-span-5">Title</span>
+                <span class="col-span-2">Agent</span>
+                <span class="col-span-1">Status</span>
+                <span class="col-span-2">Updated</span>
+              </div>
+              <div class="tui-row bg-accent/10 border border-accent/20 rounded px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-accent/15 transition-colors" data-detail="issue-42">
+                <span class="col-span-1 text-green-400"><span class="spinner"></span></span>
+                <span class="col-span-1 text-muted">#42</span>
+                <span class="col-span-5 text-white">Fix auth token refresh</span>
+                <span class="col-span-2 text-accent-light">claude</span>
+                <span class="col-span-1 text-amber">⠋</span>
+                <span class="col-span-2 text-muted">2m ago</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="issue-43">
+                <span class="col-span-1 text-green-400">●</span>
+                <span class="col-span-1 text-muted">#43</span>
+                <span class="col-span-5">Add rate limiting middleware</span>
+                <span class="col-span-2 text-accent-light">codex</span>
+                <span class="col-span-1 text-green-400">✓</span>
+                <span class="col-span-2 text-muted">15m ago</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="issue-44">
+                <span class="col-span-1"></span>
+                <span class="col-span-1 text-muted">#44</span>
+                <span class="col-span-5">Update API documentation</span>
+                <span class="col-span-2 text-accent-light">pi</span>
+                <span class="col-span-1 text-[var(--text-muted)]">◷</span>
+                <span class="col-span-2 text-muted">1h ago</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="issue-45">
+                <span class="col-span-1"></span>
+                <span class="col-span-1 text-muted">#45</span>
+                <span class="col-span-5">Refactor database connection pool</span>
+                <span class="col-span-2 text-accent-light">claude</span>
+                <span class="col-span-1 text-red-400">✕</span>
+                <span class="col-span-2 text-muted">3h ago</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="issue-46">
+                <span class="col-span-1"></span>
+                <span class="col-span-1 text-muted">#46</span>
+                <span class="col-span-5">Add WebSocket support</span>
+                <span class="col-span-2 text-accent-light">codex</span>
+                <span class="col-span-1 text-green-400">✓</span>
+                <span class="col-span-2 text-muted">5h ago</span>
+              </div>
+              <div class="mt-3 pt-2 border-t border-[var(--border-subtle)] text-[var(--text-muted)] flex justify-between text-xs">
+                <span>1 of 5 &middot; sorted by updated</span>
+                <span class="text-amber">1 running</span>
+              </div>
             </div>
-            <!-- Rows -->
-            <div class="bg-accent/10 border border-accent/20 rounded px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1">
-              <span class="col-span-1 text-green-400"><span class="spinner"></span></span>
-              <span class="col-span-1 text-muted">#42</span>
-              <span class="col-span-5 text-white">Fix auth token refresh</span>
-              <span class="col-span-2 text-accent-light">claude</span>
-              <span class="col-span-1 text-amber">⠋</span>
-              <span class="col-span-2 text-muted">2m ago</span>
+
+            <!-- MOVEMENTS TAB -->
+            <div class="tui-panel hidden" data-panel="movements">
+              <div class="text-[var(--text-muted)] border-b border-[var(--border-subtle)] pb-2 mb-2 grid grid-cols-12 gap-2">
+                <span class="col-span-1"></span>
+                <span class="col-span-2">Movement</span>
+                <span class="col-span-3">Issue</span>
+                <span class="col-span-2">Agent</span>
+                <span class="col-span-1">Try</span>
+                <span class="col-span-1">Status</span>
+                <span class="col-span-2">Duration</span>
+              </div>
+              <div class="tui-row bg-accent/10 border border-accent/20 rounded px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-accent/15 transition-colors" data-detail="mov-1">
+                <span class="col-span-1 text-green-400"><span class="spinner"></span></span>
+                <span class="col-span-2 text-muted">mv-0017</span>
+                <span class="col-span-3 text-white">#42 Fix auth token</span>
+                <span class="col-span-2 text-accent-light">claude</span>
+                <span class="col-span-1 text-muted">1/3</span>
+                <span class="col-span-1 text-amber">⠋</span>
+                <span class="col-span-2 text-muted">4m 12s</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="mov-2">
+                <span class="col-span-1 text-green-400">●</span>
+                <span class="col-span-2 text-muted">mv-0016</span>
+                <span class="col-span-3">#43 Add rate limiting</span>
+                <span class="col-span-2 text-accent-light">codex</span>
+                <span class="col-span-1 text-muted">1/3</span>
+                <span class="col-span-1 text-green-400">✓</span>
+                <span class="col-span-2 text-muted">12m 47s</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="mov-3">
+                <span class="col-span-1"></span>
+                <span class="col-span-2 text-muted">mv-0015</span>
+                <span class="col-span-3">#45 Refactor db pool</span>
+                <span class="col-span-2 text-accent-light">claude</span>
+                <span class="col-span-1 text-red-400">3/3</span>
+                <span class="col-span-1 text-red-400">✕</span>
+                <span class="col-span-2 text-muted">8m 03s</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="mov-4">
+                <span class="col-span-1"></span>
+                <span class="col-span-2 text-muted">mv-0014</span>
+                <span class="col-span-3">#46 Add WebSocket</span>
+                <span class="col-span-2 text-accent-light">codex</span>
+                <span class="col-span-1 text-muted">2/3</span>
+                <span class="col-span-1 text-green-400">✓</span>
+                <span class="col-span-2 text-muted">21m 35s</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="mov-5">
+                <span class="col-span-1"></span>
+                <span class="col-span-2 text-muted">mv-0013</span>
+                <span class="col-span-3">#44 Update API docs</span>
+                <span class="col-span-2 text-accent-light">pi</span>
+                <span class="col-span-1 text-muted">—</span>
+                <span class="col-span-1 text-[var(--text-muted)]">◷</span>
+                <span class="col-span-2 text-muted">queued</span>
+              </div>
+              <div class="mt-3 pt-2 border-t border-[var(--border-subtle)] text-[var(--text-muted)] flex justify-between text-xs">
+                <span>1 of 5 &middot; sorted by started</span>
+                <span><span class="text-amber">1 running</span> · <span class="text-red-400">1 failed</span></span>
+              </div>
             </div>
-            <div class="px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1">
-              <span class="col-span-1 text-green-400">●</span>
-              <span class="col-span-1 text-muted">#43</span>
-              <span class="col-span-5">Add rate limiting middleware</span>
-              <span class="col-span-2 text-accent-light">codex</span>
-              <span class="col-span-1 text-green-400">✓</span>
-              <span class="col-span-2 text-muted">15m ago</span>
+
+            <!-- AGENTS TAB -->
+            <div class="tui-panel hidden" data-panel="agents">
+              <div class="text-[var(--text-muted)] border-b border-[var(--border-subtle)] pb-2 mb-2 grid grid-cols-12 gap-2">
+                <span class="col-span-1"></span>
+                <span class="col-span-2">Agent</span>
+                <span class="col-span-2">Transport</span>
+                <span class="col-span-1">Status</span>
+                <span class="col-span-2">Current</span>
+                <span class="col-span-2">Done/Fail</span>
+                <span class="col-span-2">Tokens</span>
+              </div>
+              <div class="tui-row bg-accent/10 border border-accent/20 rounded px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-accent/15 transition-colors" data-detail="agent-claude">
+                <span class="col-span-1 text-green-400"><span class="spinner"></span></span>
+                <span class="col-span-2 text-white">claude</span>
+                <span class="col-span-2 text-muted">cli</span>
+                <span class="col-span-1 text-amber">⠋</span>
+                <span class="col-span-2 text-accent-light">#42</span>
+                <span class="col-span-2"><span class="text-green-400">3</span>/<span class="text-red-400">1</span></span>
+                <span class="col-span-2 text-muted">142.8k</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1 cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="agent-codex">
+                <span class="col-span-1 text-green-400">●</span>
+                <span class="col-span-2">codex</span>
+                <span class="col-span-2 text-muted">cli</span>
+                <span class="col-span-1 text-green-400">●</span>
+                <span class="col-span-2 text-muted">idle</span>
+                <span class="col-span-2"><span class="text-green-400">5</span>/<span class="text-red-400">0</span></span>
+                <span class="col-span-2 text-muted">89.2k</span>
+              </div>
+              <div class="tui-row px-2 py-1.5 grid grid-cols-12 gap-2 items-center cursor-pointer hover:bg-[var(--glass-bg)] rounded transition-colors" data-detail="agent-pi">
+                <span class="col-span-1"></span>
+                <span class="col-span-2">pi</span>
+                <span class="col-span-2 text-muted">acp</span>
+                <span class="col-span-1 text-[var(--text-muted)]">◷</span>
+                <span class="col-span-2 text-muted">queued</span>
+                <span class="col-span-2"><span class="text-green-400">1</span>/<span class="text-red-400">0</span></span>
+                <span class="col-span-2 text-muted">12.4k</span>
+              </div>
+              <div class="mt-3 pt-2 border-t border-[var(--border-subtle)] text-[var(--text-muted)] flex justify-between text-xs">
+                <span>1 of 3 &middot; sorted by name</span>
+                <span><span class="text-green-400">9</span> done · <span class="text-red-400">1</span> failed · <span class="text-muted">244.4k tokens</span></span>
+              </div>
             </div>
-            <div class="px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1">
-              <span class="col-span-1"></span>
-              <span class="col-span-1 text-muted">#44</span>
-              <span class="col-span-5">Update API documentation</span>
-              <span class="col-span-2 text-accent-light">pi</span>
-              <span class="col-span-1 text-gray-500">◷</span>
-              <span class="col-span-2 text-muted">1h ago</span>
-            </div>
-            <div class="px-2 py-1.5 grid grid-cols-12 gap-2 items-center mb-1">
-              <span class="col-span-1"></span>
-              <span class="col-span-1 text-muted">#45</span>
-              <span class="col-span-5">Refactor database connection pool</span>
-              <span class="col-span-2 text-accent-light">claude</span>
-              <span class="col-span-1 text-red-400">✕</span>
-              <span class="col-span-2 text-muted">3h ago</span>
-            </div>
-            <div class="px-2 py-1.5 grid grid-cols-12 gap-2 items-center">
-              <span class="col-span-1"></span>
-              <span class="col-span-1 text-muted">#46</span>
-              <span class="col-span-5">Add WebSocket support</span>
-              <span class="col-span-2 text-accent-light">codex</span>
-              <span class="col-span-1 text-green-400">✓</span>
-              <span class="col-span-2 text-muted">5h ago</span>
-            </div>
-            <!-- Footer -->
-            <div class="mt-3 pt-2 border-t border-white/5 text-gray-500 flex justify-between text-xs">
-              <span>1 of 5 &middot; sorted by updated</span>
-              <span class="text-amber">1 running</span>
+
+            <!-- DETAIL MODAL (hidden by default) -->
+            <div id="tui-detail-modal" class="hidden mt-3 border border-accent/30 rounded-lg bg-[var(--bg-elevated)] backdrop-blur overflow-hidden">
+              <div class="flex items-center justify-between px-4 py-2 border-b border-[var(--border-subtle)] bg-[var(--glass-bg)]">
+                <span id="tui-detail-title" class="text-xs font-bold text-accent-light"></span>
+                <button id="tui-detail-close" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] text-xs transition-colors">Esc</button>
+              </div>
+              <div id="tui-detail-body" class="p-4 text-xs leading-relaxed"></div>
             </div>
           </div>
         </div>
@@ -373,7 +585,7 @@
   <section class="py-24">
     <div class="max-w-6xl mx-auto px-6">
       <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>Built for real workflows</h2>
-      <p class="text-gray-400 text-center mb-16 max-w-xl mx-auto" data-animate>
+      <p class="text-[var(--text-secondary)] text-center mb-16 max-w-xl mx-auto" data-animate>
         Everything you need to run AI agents in production.
       </p>
 
@@ -381,32 +593,32 @@
         <div class="glass-card p-8" data-animate>
           <div class="text-2xl mb-3 text-accent-light">⎔</div>
           <h3 class="font-bold mb-2">Isolated Workspaces</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">Each agent gets its own git worktree. No conflicts, no interference, clean diffs.</p>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Each agent gets its own git worktree. No conflicts, no interference, clean diffs.</p>
         </div>
         <div class="glass-card p-8" data-animate>
           <div class="text-2xl mb-3 text-accent-light">↻</div>
           <h3 class="font-bold mb-2">Retry &amp; Fallback</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">Automatic retry with configurable agent fallback chains. If Claude fails, try Codex.</p>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Automatic retry with configurable agent fallback chains. If Claude fails, try Codex.</p>
         </div>
         <div class="glass-card p-8" data-animate>
           <div class="text-2xl mb-3 text-accent-light">⊘</div>
           <h3 class="font-bold mb-2">Budget Control</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">Token and cost-aware throttling. Set concurrency limits and per-issue budgets.</p>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Token and cost-aware throttling. Set concurrency limits and per-issue budgets.</p>
         </div>
         <div class="glass-card p-8" data-animate>
           <div class="text-2xl mb-3 text-accent-light">⬡</div>
           <h3 class="font-bold mb-2">Workflow Policy</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">YAML + Liquid templates in WORKFLOW.md. Define routing, priority, and agent selection rules.</p>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">YAML + Liquid templates in WORKFLOW.md. Define routing, priority, and agent selection rules.</p>
         </div>
         <div class="glass-card p-8" data-animate>
           <div class="text-2xl mb-3 text-accent-light">◉</div>
           <h3 class="font-bold mb-2">Live Observability</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">Real-time TUI with snapshots and non-blocking updates. Never miss an agent's progress.</p>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Real-time TUI with snapshots and non-blocking updates. Never miss an agent's progress.</p>
         </div>
         <div class="glass-card p-8" data-animate>
           <div class="text-2xl mb-3 text-accent-light">⇒</div>
           <h3 class="font-bold mb-2">Handoff Automation</h3>
-          <p class="text-gray-400 text-sm leading-relaxed">Auto-commit, push, PR creation, and feedback loops. Agents ship code, not just write it.</p>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Auto-commit, push, PR creation, and feedback loops. Agents ship code, not just write it.</p>
         </div>
       </div>
     </div>
@@ -417,7 +629,7 @@
     <div class="max-w-6xl mx-auto px-6 text-center">
       <div class="max-w-2xl mx-auto" data-animate>
         <h2 class="text-3xl sm:text-4xl font-bold mb-4">Built in the open</h2>
-        <p class="text-gray-400 mb-8 leading-relaxed">
+        <p class="text-[var(--text-secondary)] mb-8 leading-relaxed">
           Polyphony is open source under the MIT license. Read the code, open issues, send PRs.
         </p>
         <div class="flex flex-wrap items-center justify-center gap-4 mb-8">
@@ -425,9 +637,9 @@
              class="px-6 py-3 bg-accent hover:bg-accent-light rounded-lg font-semibold text-white transition-colors glow-accent">
             Star on GitHub
           </a>
-          <span class="px-3 py-1 border border-white/10 rounded-full text-xs text-gray-400 font-mono">MIT License</span>
+          <span class="px-3 py-1 border border-[var(--border)] rounded-full text-xs text-[var(--text-secondary)] font-mono">MIT License</span>
         </div>
-        <p class="text-sm text-gray-500">
+        <p class="text-sm text-[var(--text-muted)]">
           Contributions welcome. Check the issues tab for good first issues.
         </p>
       </div>
@@ -435,44 +647,44 @@
   </section>
 
   <!-- ========== 10. FOOTER ========== -->
-  <footer class="border-t border-white/5 py-16">
+  <footer class="border-t border-[var(--border-subtle)] py-16">
     <div class="max-w-6xl mx-auto px-6">
       <div class="grid sm:grid-cols-3 gap-12 mb-12">
         <!-- Product -->
         <div>
-          <h4 class="text-sm font-semibold mb-4 text-gray-300">Product</h4>
-          <ul class="space-y-2 text-sm text-gray-500">
-            <li><a href="#features" class="hover:text-gray-300 transition-colors">Features</a></li>
-            <li><a href="#how-it-works" class="hover:text-gray-300 transition-colors">How It Works</a></li>
-            <li><a href="#dashboard" class="hover:text-gray-300 transition-colors">Dashboard</a></li>
-            <li><a href="#install" class="hover:text-gray-300 transition-colors">Install</a></li>
+          <h4 class="text-sm font-semibold mb-4 text-[var(--text-primary)]">Product</h4>
+          <ul class="space-y-2 text-sm text-[var(--text-muted)]">
+            <li><a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a></li>
+            <li><a href="#how-it-works" class="hover:text-[var(--text-primary)] transition-colors">How It Works</a></li>
+            <li><a href="#dashboard" class="hover:text-[var(--text-primary)] transition-colors">Dashboard</a></li>
+            <li><a href="#install" class="hover:text-[var(--text-primary)] transition-colors">Install</a></li>
           </ul>
         </div>
         <!-- Developer -->
         <div>
-          <h4 class="text-sm font-semibold mb-4 text-gray-300">Developer</h4>
-          <ul class="space-y-2 text-sm text-gray-500">
-            <li><a href="https://github.com/penso/polyphony" target="_blank" rel="noopener" class="hover:text-gray-300 transition-colors">GitHub</a></li>
-            <li><a href="https://github.com/penso/polyphony/issues" target="_blank" rel="noopener" class="hover:text-gray-300 transition-colors">Issues</a></li>
-            <li><a href="https://github.com/penso/polyphony/releases" target="_blank" rel="noopener" class="hover:text-gray-300 transition-colors">Releases</a></li>
+          <h4 class="text-sm font-semibold mb-4 text-[var(--text-primary)]">Developer</h4>
+          <ul class="space-y-2 text-sm text-[var(--text-muted)]">
+            <li><a href="https://github.com/penso/polyphony" target="_blank" rel="noopener" class="hover:text-[var(--text-primary)] transition-colors">GitHub</a></li>
+            <li><a href="https://github.com/penso/polyphony/issues" target="_blank" rel="noopener" class="hover:text-[var(--text-primary)] transition-colors">Issues</a></li>
+            <li><a href="https://github.com/penso/polyphony/releases" target="_blank" rel="noopener" class="hover:text-[var(--text-primary)] transition-colors">Releases</a></li>
           </ul>
         </div>
         <!-- Community -->
         <div>
-          <h4 class="text-sm font-semibold mb-4 text-gray-300">Community</h4>
-          <ul class="space-y-2 text-sm text-gray-500">
-            <li><a href="https://github.com/penso/polyphony/discussions" target="_blank" rel="noopener" class="hover:text-gray-300 transition-colors">Discussions</a></li>
-            <li><a href="https://github.com/penso/polyphony/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" class="hover:text-gray-300 transition-colors">Contributing</a></li>
+          <h4 class="text-sm font-semibold mb-4 text-[var(--text-primary)]">Community</h4>
+          <ul class="space-y-2 text-sm text-[var(--text-muted)]">
+            <li><a href="https://github.com/penso/polyphony/discussions" target="_blank" rel="noopener" class="hover:text-[var(--text-primary)] transition-colors">Discussions</a></li>
+            <li><a href="https://github.com/penso/polyphony/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener" class="hover:text-[var(--text-primary)] transition-colors">Contributing</a></li>
           </ul>
         </div>
       </div>
 
-      <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-8 border-t border-white/5">
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-8 border-t border-[var(--border-subtle)]">
         <div class="flex items-center gap-3">
           <img src="assets/logo.svg" alt="Polyphony" class="w-5 h-5 opacity-50">
-          <span class="text-xs text-gray-600">Polyphony</span>
+          <span class="text-xs text-[var(--text-muted)]">Polyphony</span>
         </div>
-        <p class="text-xs text-gray-600">&copy; 2025 Polyphony contributors. MIT License.</p>
+        <p class="text-xs text-[var(--text-muted)]">&copy; 2025 Polyphony contributors. MIT License.</p>
       </div>
     </div>
   </footer>
