@@ -1,0 +1,50 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Tasks{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Tasks</h1>
+
+{% if tasks %}
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Movement</th>
+        <th>Title</th>
+        <th>Category</th>
+        <th>Status</th>
+        <th>Agent</th>
+        <th>Turns</th>
+        <th>Tokens</th>
+        <th>Started</th>
+        <th>Finished</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for t in tasks %}
+    <tr>
+      <td style="color: var(--muted);">{{ t.ordinal }}</td>
+      <td style="color: var(--muted);">{{ t.movement_id }}</td>
+      <td>{{ t.title }}</td>
+      <td style="color: var(--muted);">{{ t.category }}</td>
+      <td>
+        {% if t.status == "completed" %}<span class="badge badge-success">{{ t.status }}</span>
+        {% elif t.status == "failed" or t.status == "cancelled" %}<span class="badge badge-failed">{{ t.status }}</span>
+        {% elif t.status == "in_progress" %}<span class="badge badge-running">{{ t.status }}</span>
+        {% else %}<span class="badge badge-pending">{{ t.status }}</span>{% endif %}
+      </td>
+      <td>{{ t.agent_name }}</td>
+      <td style="color: var(--muted);">{{ t.turns_completed }}</td>
+      <td style="color: var(--muted);">{{ t.total_tokens }}</td>
+      <td style="color: var(--muted);">{{ t.started_at }}</td>
+      <td style="color: var(--muted);">{{ t.finished_at }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">No tasks yet.</div>
+{% endif %}
+{% endblock %}

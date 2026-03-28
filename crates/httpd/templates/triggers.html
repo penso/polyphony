@@ -1,0 +1,44 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Triggers{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Triggers</h1>
+
+{% if visible_triggers %}
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Kind</th>
+        <th>Source</th>
+        <th>Title</th>
+        <th>Status</th>
+        <th>Priority</th>
+        <th>Labels</th>
+        <th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for t in visible_triggers %}
+    <tr>
+      <td style="color: var(--muted);">{{ t.identifier }}</td>
+      <td>{{ t.kind }}</td>
+      <td style="color: var(--muted);">{{ t.source }}</td>
+      <td>
+        {% if t.url %}<a href="{{ t.url }}" target="_blank">{{ t.title }}</a>
+        {% else %}{{ t.title }}{% endif %}
+      </td>
+      <td><span class="badge badge-pending">{{ t.status }}</span></td>
+      <td>{{ t.priority }}</td>
+      <td style="color: var(--muted);">{{ t.labels | join(", ") }}</td>
+      <td style="color: var(--muted);">{{ t.updated_at }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">No pending triggers.</div>
+{% endif %}
+{% endblock %}

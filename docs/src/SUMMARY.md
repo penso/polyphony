@@ -23,6 +23,7 @@
   - [polyphony-tools](./crates/polyphony-tools.md)
   - [polyphony-sqlite](./crates/polyphony-sqlite.md)
   - [polyphony-tui](./crates/polyphony-tui.md)
+  - [polyphony-httpd](./crates/polyphony-httpd.md)
   - [polyphony-cli](./crates/polyphony-cli.md)
 - [Provider Crates](./providers.md)
   - [polyphony-agent-common](./providers/polyphony-agent-common.md)
