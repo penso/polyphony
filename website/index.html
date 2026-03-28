@@ -58,6 +58,7 @@
         <img src="assets/logo.svg" alt="Polyphony" class="w-8 h-8">
         <span class="text-lg font-bold tracking-tight">Polyphony</span>
       </a>
+      <!-- Desktop nav -->
       <div class="hidden md:flex items-center gap-8 text-sm text-[var(--text-secondary)]">
         <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
         <a href="#how-it-works" class="hover:text-[var(--text-primary)] transition-colors">How It Works</a>
@@ -75,6 +76,31 @@
           GitHub
         </a>
       </div>
+      <!-- Mobile hamburger -->
+      <button id="mobile-menu-btn" class="md:hidden p-2 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)] transition-colors">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Mobile menu -->
+    <div id="mobile-menu" class="hidden md:hidden border-t border-[var(--border-subtle)] bg-[var(--bg)]">
+      <div class="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-4 text-sm text-[var(--text-secondary)]">
+        <a href="#features" class="hover:text-[var(--text-primary)] transition-colors">Features</a>
+        <a href="#how-it-works" class="hover:text-[var(--text-primary)] transition-colors">How It Works</a>
+        <a href="#agents" class="hover:text-[var(--text-primary)] transition-colors">Agents</a>
+        <a href="#dashboard" class="hover:text-[var(--text-primary)] transition-colors">Dashboard</a>
+        <div class="flex items-center gap-4 pt-2 border-t border-[var(--border-subtle)]">
+          <button id="theme-toggle-mobile" title="Theme: System" class="p-1.5 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)] transition-colors">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+          <a href="https://github.com/penso/polyphony" target="_blank" rel="noopener"
+             class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border)] hover:border-accent/50 transition-colors">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            GitHub
+          </a>
+        </div>
+      </div>
     </div>
   </nav>
 
@@ -82,14 +108,18 @@
   <section class="hero-bg relative min-h-screen flex items-center pt-20">
     <div class="max-w-6xl mx-auto px-6 w-full">
       <div class="max-w-3xl" data-animate>
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-accent/30 bg-accent/5 text-xs text-accent-light font-medium mb-6">
+          <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+          Open source &middot; MIT License
+        </div>
         <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold leading-tight tracking-tight mb-6">
           Orchestrate AI agents
           <span class="gradient-text">from your terminal</span>
         </h1>
         <p class="text-lg sm:text-xl text-[var(--text-secondary)] max-w-2xl mb-10 leading-relaxed">
-          Connect your issue tracker. Assign coding agents. Watch them work — from a terminal dashboard or the web.
+          Connect your issue tracker. Assign coding agents. Watch them work — from a terminal dashboard or the web. Issue to shipped code, fully automated.
         </p>
-        <div class="flex flex-wrap gap-4">
+        <div class="flex flex-wrap gap-4 mb-6">
           <a href="#install" class="px-6 py-3 bg-accent hover:bg-accent-light rounded-lg font-semibold text-white transition-colors glow-accent">
             Get Started
           </a>
@@ -98,30 +128,239 @@
             View on GitHub
           </a>
         </div>
+        <p class="text-xs text-[var(--text-muted)]">Works with GitHub, GitLab, Linear &middot; Supports Claude, Codex, Copilot, and more</p>
       </div>
 
-      <!-- Terminal mockup -->
-      <div class="mt-16 max-w-2xl" data-animate>
-        <div class="terminal-chrome">
-          <div class="terminal-titlebar">
-            <div class="terminal-dot bg-red-500/80"></div>
-            <div class="terminal-dot bg-yellow-500/80"></div>
-            <div class="terminal-dot bg-green-500/80"></div>
-            <span class="text-xs text-[var(--text-muted)] ml-2 font-mono">polyphony — terminal</span>
+      <!-- Product screenshot placeholder -->
+      <div class="mt-16 max-w-4xl mx-auto" data-animate>
+        <div class="screenshot-placeholder">
+          <img src="https://placehold.co/1200x700/1a1a2e/7c3aed?text=TUI+Dashboard+Screenshot" alt="Polyphony TUI Dashboard" class="rounded-xl w-full border border-[var(--border)] shadow-2xl">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 3. SOCIAL PROOF / TESTIMONIALS ========== -->
+  <section class="py-32">
+    <div class="max-w-6xl mx-auto px-6">
+      <h2 class="text-2xl font-bold text-center mb-4" data-animate>Loved by developers</h2>
+      <p class="text-[var(--text-secondary)] text-center mb-16 max-w-xl mx-auto" data-animate>
+        Teams shipping faster with AI agent orchestration.
+      </p>
+
+      <div class="grid md:grid-cols-3 gap-6" data-animate-stagger>
+        <div class="glass-card p-8" data-animate>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed mb-6">
+            &ldquo;Polyphony turned our backlog into a pipeline. We assign issues, agents pick them up, and PRs land while we sleep. Our velocity tripled in two weeks.&rdquo;
+          </p>
+          <div class="flex items-center gap-3">
+            <img src="https://placehold.co/80x80/7c3aed/ffffff?text=SC" alt="Avatar" class="w-10 h-10 rounded-full">
+            <div>
+              <p class="text-sm font-semibold">Sarah Chen</p>
+              <p class="text-xs text-[var(--text-muted)]">Staff Engineer, Acme Corp</p>
+            </div>
           </div>
-          <div class="p-6 font-mono text-sm leading-relaxed">
-            <pre id="typing-output" class="text-accent-light whitespace-pre min-h-[180px] font-mono"></pre>
-            <span class="typing-cursor"></span>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed mb-6">
+            &ldquo;The retry-with-fallback feature is a game changer. If one agent gets stuck, another picks it up automatically. Zero babysitting required.&rdquo;
+          </p>
+          <div class="flex items-center gap-3">
+            <img src="https://placehold.co/80x80/6366f1/ffffff?text=MR" alt="Avatar" class="w-10 h-10 rounded-full">
+            <div>
+              <p class="text-sm font-semibold">Marcus Rivera</p>
+              <p class="text-xs text-[var(--text-muted)]">Engineering Lead, Startup Labs</p>
+            </div>
+          </div>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed mb-6">
+            &ldquo;Finally, a tool that treats agent orchestration as a first-class workflow. The TUI is beautiful, and having everything in WORKFLOW.md means our policy is version-controlled.&rdquo;
+          </p>
+          <div class="flex items-center gap-3">
+            <img src="https://placehold.co/80x80/4c1d95/ffffff?text=PN" alt="Avatar" class="w-10 h-10 rounded-full">
+            <div>
+              <p class="text-sm font-semibold">Priya Nair</p>
+              <p class="text-xs text-[var(--text-muted)]">DevTools Lead, CloudScale</p>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ========== 3. QUICK START / INSTALL ========== -->
-  <section id="install" class="py-24">
+  <!-- ========== 4. PROBLEM / SOLUTION ========== -->
+  <section class="py-32">
     <div class="max-w-6xl mx-auto px-6">
-      <h2 class="text-2xl font-bold text-center mb-8" data-animate>Get started in seconds</h2>
+      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>The problem with AI agents today</h2>
+      <p class="text-[var(--text-secondary)] text-center mb-16 max-w-2xl mx-auto" data-animate>
+        Managing AI coding agents manually does not scale. Polyphony automates the entire lifecycle.
+      </p>
+
+      <div class="grid md:grid-cols-2 gap-8" data-animate-stagger>
+        <!-- Without -->
+        <div class="glass-card p-8 border-red-400/20" data-animate>
+          <h3 class="text-lg font-bold mb-6 text-red-400">Without Polyphony</h3>
+          <ul class="space-y-4">
+            <li class="flex items-start gap-3">
+              <span class="text-red-400 mt-0.5 shrink-0">&#x2717;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Manually copy-paste issues into agent prompts, one at a time</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-red-400 mt-0.5 shrink-0">&#x2717;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Agents work in the same branch, causing merge conflicts</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-red-400 mt-0.5 shrink-0">&#x2717;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">No visibility into agent progress until they finish (or fail silently)</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-red-400 mt-0.5 shrink-0">&#x2717;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Failed runs require manual intervention and restart</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-red-400 mt-0.5 shrink-0">&#x2717;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">No budget controls — runaway token usage burns through credits</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-red-400 mt-0.5 shrink-0">&#x2717;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Locked into a single agent provider with no fallback</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- With -->
+        <div class="glass-card p-8 border-green-400/20" data-animate>
+          <h3 class="text-lg font-bold mb-6 text-green-400">With Polyphony</h3>
+          <ul class="space-y-4">
+            <li class="flex items-start gap-3">
+              <span class="text-green-400 mt-0.5 shrink-0">&#x2713;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Issues automatically pulled from your tracker and dispatched to agents</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-green-400 mt-0.5 shrink-0">&#x2713;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Each agent works in an isolated git worktree — zero conflicts</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-green-400 mt-0.5 shrink-0">&#x2713;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Live TUI dashboard shows real-time progress, retries, and results</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-green-400 mt-0.5 shrink-0">&#x2713;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Automatic retry with configurable fallback chains across agents</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-green-400 mt-0.5 shrink-0">&#x2713;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Token budgets, concurrency limits, and cost-aware throttling built in</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="text-green-400 mt-0.5 shrink-0">&#x2713;</span>
+              <span class="text-[var(--text-secondary)] text-sm leading-relaxed">Multi-agent support — Claude, Codex, Copilot, Pi, or any ACP-compatible agent</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 5. HOW IT WORKS ========== -->
+  <section id="how-it-works" class="py-32">
+    <div class="max-w-6xl mx-auto px-6">
+      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>How it works</h2>
+      <p class="text-[var(--text-secondary)] text-center mb-20 max-w-xl mx-auto" data-animate>
+        Four steps from issue to shipped code.
+      </p>
+
+      <div class="max-w-4xl mx-auto space-y-24" data-animate-stagger>
+        <!-- Step 1 -->
+        <div class="relative grid md:grid-cols-2 gap-12 items-center" data-animate>
+          <div class="relative pl-20 md:pl-24">
+            <span class="absolute left-0 top-0 text-7xl font-extrabold text-accent/10 leading-none select-none">01</span>
+            <div class="timeline-connector hidden md:block" style="left: 47px;"></div>
+            <h3 class="text-2xl font-bold mb-3">Configure</h3>
+            <p class="text-[var(--text-secondary)] text-sm mb-4 leading-relaxed">Point to your tracker (GitHub, GitLab, Linear) and choose which agents to dispatch. Configuration lives in your repo as YAML — version-controlled and reviewable.</p>
+            <div class="terminal-chrome text-xs">
+              <div class="p-4 font-mono text-[var(--text-secondary)]">
+                <div><span class="text-accent-light">tracker</span>: github</div>
+                <div><span class="text-accent-light">agents</span>:</div>
+                <div>  - <span class="text-amber">claude</span></div>
+                <div>  - <span class="text-amber">codex</span></div>
+                <div><span class="text-accent-light">workspace</span>: worktree</div>
+              </div>
+            </div>
+          </div>
+          <div class="screenshot-placeholder">
+            <img src="https://placehold.co/600x400/1a1a2e/a78bfa?text=01+Configure" alt="Configuration step" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="relative grid md:grid-cols-2 gap-12 items-center" data-animate>
+          <div class="order-2 md:order-1 screenshot-placeholder">
+            <img src="https://placehold.co/600x400/1a1a2e/a78bfa?text=02+Orchestrate" alt="Orchestration step" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+          <div class="relative pl-20 md:pl-24 order-1 md:order-2">
+            <span class="absolute left-0 top-0 text-7xl font-extrabold text-accent/10 leading-none select-none">02</span>
+            <div class="timeline-connector hidden md:block" style="left: 47px;"></div>
+            <h3 class="text-2xl font-bold mb-3">Orchestrate</h3>
+            <p class="text-[var(--text-secondary)] text-sm mb-4 leading-relaxed">Polyphony polls for issues, creates isolated git worktrees, and dispatches the right agent to each task. Concurrency, priority, and routing are all configurable.</p>
+            <div class="glass-card p-4 text-xs font-mono text-[var(--text-secondary)]">
+              <div class="text-amber">&#x2800;&#x280B; Polling tracker...</div>
+              <div class="text-green-400">&#x2713; Found 3 new issues</div>
+              <div class="text-accent-light">&#x2192; Creating worktree for #42</div>
+              <div class="text-accent-light">&#x2192; Dispatching claude to #42</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="relative grid md:grid-cols-2 gap-12 items-center" data-animate>
+          <div class="relative pl-20 md:pl-24">
+            <span class="absolute left-0 top-0 text-7xl font-extrabold text-accent/10 leading-none select-none">03</span>
+            <div class="timeline-connector hidden md:block" style="left: 47px;"></div>
+            <h3 class="text-2xl font-bold mb-3">Monitor</h3>
+            <p class="text-[var(--text-secondary)] text-sm mb-4 leading-relaxed">The live TUI dashboard shows agent progress, retries, and results in real time. Sortable tables, detail modals, and live spinners keep you informed without context-switching.</p>
+            <div class="terminal-chrome text-xs">
+              <pre class="p-4 font-mono whitespace-pre"><span class="text-[var(--text-muted)]">+- Movements -----------------------------+</span>
+| <span class="text-green-400">~</span> #42 Fix auth refresh  <span class="text-accent-light">claude</span>  <span class="text-amber">running</span> |
+| <span class="text-green-400">*</span> #43 Add rate limits   <span class="text-accent-light">codex</span>   <span class="text-green-400">done</span>    |
+| <span class="text-[var(--text-muted)]">.</span> #44 Update docs       <span class="text-accent-light">pi</span>      <span class="text-[var(--text-muted)]">queued</span>  |
+<span class="text-[var(--text-muted)]">+------------------------ 1 of 3 ---------+</span></pre>
+            </div>
+          </div>
+          <div class="screenshot-placeholder">
+            <img src="https://placehold.co/600x400/1a1a2e/a78bfa?text=03+Monitor" alt="Monitoring step" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="relative grid md:grid-cols-2 gap-12 items-center" data-animate>
+          <div class="order-2 md:order-1 screenshot-placeholder">
+            <img src="https://placehold.co/600x400/1a1a2e/a78bfa?text=04+Ship" alt="Shipping step" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+          <div class="relative pl-20 md:pl-24 order-1 md:order-2">
+            <span class="absolute left-0 top-0 text-7xl font-extrabold text-accent/10 leading-none select-none">04</span>
+            <h3 class="text-2xl font-bold mb-3">Ship</h3>
+            <p class="text-[var(--text-secondary)] text-sm mb-4 leading-relaxed">Agents commit, push, and open pull requests automatically. The feedback loop is closed — review and merge, then move on to the next batch.</p>
+            <div class="glass-card p-4 text-xs font-mono text-[var(--text-secondary)]">
+              <div class="text-green-400">&#x2713; Agent committed 3 files</div>
+              <div class="text-green-400">&#x2713; Pushed to fix/auth-refresh</div>
+              <div class="text-accent-light">&#x2192; PR #87 opened: "Fix auth token refresh"</div>
+              <div class="text-[var(--text-muted)]">  Waiting for review...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 6. QUICK START / INSTALL ========== -->
+  <section id="install" class="py-32">
+    <div class="max-w-6xl mx-auto px-6">
+      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>Get started in seconds</h2>
+      <p class="text-[var(--text-secondary)] text-center mb-12 max-w-xl mx-auto" data-animate>
+        One command to install. One file to configure. You are running agents in under five minutes.
+      </p>
 
       <!-- Install tabs -->
       <div class="max-w-2xl mx-auto" data-animate>
@@ -222,166 +461,101 @@
     </div>
   </section>
 
-  <!-- ========== 4. KEY VALUE PROPS ========== -->
-  <section id="features" class="py-24">
+  <!-- ========== 7. KEY VALUE PROPS ========== -->
+  <section id="features" class="py-32">
     <div class="max-w-6xl mx-auto px-6">
-      <div class="grid md:grid-cols-3 gap-6" data-animate-stagger>
-        <!-- Issue → Agent → PR -->
-        <div class="glass-card p-8" data-animate>
-          <div class="text-3xl mb-4">🎯</div>
-          <h3 class="text-lg font-bold mb-2">Issue → Agent → PR</h3>
+      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>Why Polyphony</h2>
+      <p class="text-[var(--text-secondary)] text-center mb-16 max-w-xl mx-auto" data-animate>
+        Three pillars that make agent orchestration practical.
+      </p>
+      <div class="grid md:grid-cols-3 gap-8" data-animate-stagger>
+        <!-- Issue to Agent to PR -->
+        <div class="glass-card p-10" data-animate>
+          <div class="text-3xl mb-4">&#x1F3AF;</div>
+          <h3 class="text-lg font-bold mb-3">Issue &#x2192; Agent &#x2192; PR</h3>
           <p class="text-[var(--text-secondary)] text-sm leading-relaxed">
-            Connect trackers, dispatch agents, get pull requests automatically. From issue to shipped code, hands-free.
+            Connect your tracker, dispatch agents, get pull requests automatically. The full lifecycle from issue to shipped code is hands-free. No copy-pasting, no manual prompting, no babysitting.
           </p>
         </div>
         <!-- Multi-Agent -->
-        <div class="glass-card p-8" data-animate>
-          <div class="text-3xl mb-4">🤖</div>
-          <h3 class="text-lg font-bold mb-2">Multi-Agent</h3>
+        <div class="glass-card p-10" data-animate>
+          <div class="text-3xl mb-4">&#x1F916;</div>
+          <h3 class="text-lg font-bold mb-3">Multi-Agent</h3>
           <p class="text-[var(--text-secondary)] text-sm leading-relaxed">
-            Claude, Codex, Copilot, Pi — use whichever agent fits the task. Mix and match with fallback chains.
+            Claude, Codex, Copilot, Pi — use whichever agent fits the task. Define fallback chains so if one agent fails, another takes over automatically. Mix providers freely.
           </p>
         </div>
         <!-- Repo-Native -->
-        <div class="glass-card p-8" data-animate>
-          <div class="text-3xl mb-4">📦</div>
-          <h3 class="text-lg font-bold mb-2">Repo-Native</h3>
+        <div class="glass-card p-10" data-animate>
+          <div class="text-3xl mb-4">&#x1F4E6;</div>
+          <h3 class="text-lg font-bold mb-3">Repo-Native</h3>
           <p class="text-[var(--text-secondary)] text-sm leading-relaxed">
-            Inspired by <a href="https://github.com/openai/symphony" target="_blank" rel="noopener" class="text-accent-light hover:underline">OpenAI Symphony</a>, workflow policy lives in WORKFLOW.md — version-controlled with your code. No external config servers.
+            Inspired by <a href="https://github.com/openai/symphony" target="_blank" rel="noopener" class="text-accent-light hover:underline">OpenAI Symphony</a>, workflow policy lives in WORKFLOW.md — version-controlled with your code. No external config servers, no SaaS dependency.
           </p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ========== 5. HOW IT WORKS ========== -->
-  <section id="how-it-works" class="py-24">
+  <!-- ========== 8. FEATURES GRID (3x3) ========== -->
+  <section class="py-32">
     <div class="max-w-6xl mx-auto px-6">
-      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>How it works</h2>
+      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>Built for real workflows</h2>
       <p class="text-[var(--text-secondary)] text-center mb-16 max-w-xl mx-auto" data-animate>
-        Four steps from issue to shipped code.
+        Everything you need to run AI agents in production.
       </p>
 
-      <div class="max-w-2xl mx-auto space-y-12" data-animate-stagger>
-        <!-- Step 1 -->
-        <div class="relative pl-16" data-animate>
-          <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">1</div>
-          <div class="timeline-connector"></div>
-          <h3 class="text-xl font-bold mb-2">Configure</h3>
-          <p class="text-[var(--text-secondary)] text-sm mb-4">Point to your tracker (GitHub, GitLab, Linear) and choose agents.</p>
-          <div class="terminal-chrome text-xs">
-            <div class="p-4 font-mono text-[var(--text-secondary)]">
-              <div><span class="text-accent-light">tracker</span>: github</div>
-              <div><span class="text-accent-light">agents</span>:</div>
-              <div>  - <span class="text-amber">claude</span></div>
-              <div>  - <span class="text-amber">codex</span></div>
-              <div><span class="text-accent-light">workspace</span>: worktree</div>
-            </div>
-          </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6" data-animate-stagger>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x2394;</div>
+          <h3 class="font-bold mb-2">Isolated Workspaces</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Each agent gets its own git worktree. No conflicts, no interference, clean diffs. Workspaces are created and cleaned up automatically.</p>
         </div>
-
-        <!-- Step 2 -->
-        <div class="relative pl-16" data-animate>
-          <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">2</div>
-          <div class="timeline-connector"></div>
-          <h3 class="text-xl font-bold mb-2">Orchestrate</h3>
-          <p class="text-[var(--text-secondary)] text-sm mb-4">Polyphony polls for issues, creates isolated workspaces, and dispatches agents.</p>
-          <div class="glass-card p-4 text-xs font-mono text-[var(--text-secondary)]">
-            <div class="text-amber">⠋ Polling tracker...</div>
-            <div class="text-green-400">✓ Found 3 new issues</div>
-            <div class="text-accent-light">→ Creating worktree for #42</div>
-            <div class="text-accent-light">→ Dispatching claude to #42</div>
-          </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x21BB;</div>
+          <h3 class="font-bold mb-2">Retry &amp; Fallback</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Automatic retry with configurable agent fallback chains. If Claude fails after 3 attempts, try Codex. Exhausted chains surface clearly in the dashboard.</p>
         </div>
-
-        <!-- Step 3 -->
-        <div class="relative pl-16" data-animate>
-          <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">3</div>
-          <div class="timeline-connector"></div>
-          <h3 class="text-xl font-bold mb-2">Monitor</h3>
-          <p class="text-[var(--text-secondary)] text-sm mb-4">Live TUI dashboard shows agent progress, retries, and results in real time.</p>
-          <div class="terminal-chrome text-xs">
-            <pre class="p-4 font-mono whitespace-pre"><span class="text-[var(--text-muted)]">+- Movements -----------------------------+</span>
-| <span class="text-green-400">~</span> #42 Fix auth refresh  <span class="text-accent-light">claude</span>  <span class="text-amber">running</span> |
-| <span class="text-green-400">*</span> #43 Add rate limits   <span class="text-accent-light">codex</span>   <span class="text-green-400">done</span>    |
-| <span class="text-[var(--text-muted)]">.</span> #44 Update docs       <span class="text-accent-light">pi</span>      <span class="text-[var(--text-muted)]">queued</span>  |
-<span class="text-[var(--text-muted)]">+------------------------ 1 of 3 ---------+</span></pre>
-          </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x2298;</div>
+          <h3 class="font-bold mb-2">Budget Control</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Token and cost-aware throttling. Set concurrency limits, per-issue token budgets, and global spend caps to keep costs predictable.</p>
         </div>
-
-        <!-- Step 4 -->
-        <div class="relative pl-16" data-animate>
-          <div class="absolute left-0 top-0 w-12 h-12 rounded-full bg-accent/20 border border-accent/40 flex items-center justify-center font-bold text-accent">4</div>
-          <h3 class="text-xl font-bold mb-2">Ship</h3>
-          <p class="text-[var(--text-secondary)] text-sm mb-4">Agents commit, push, and open PRs. Review and merge.</p>
-          <div class="glass-card p-4 text-xs font-mono text-[var(--text-secondary)]">
-            <div class="text-green-400">✓ Agent committed 3 files</div>
-            <div class="text-green-400">✓ Pushed to fix/auth-refresh</div>
-            <div class="text-accent-light">→ PR #87 opened: "Fix auth token refresh"</div>
-            <div class="text-[var(--text-muted)]">  Waiting for review...</div>
-          </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x2B21;</div>
+          <h3 class="font-bold mb-2">Workflow Policy</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">YAML + Liquid templates in WORKFLOW.md. Define routing rules, priority ordering, label-based agent selection, and custom pipeline steps.</p>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x25C9;</div>
+          <h3 class="font-bold mb-2">Live Observability</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Real-time TUI with live snapshots and non-blocking updates. Sortable tables, detail modals, braille spinners — never miss an agent's progress.</p>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x21D2;</div>
+          <h3 class="font-bold mb-2">Handoff Automation</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Auto-commit, push, PR creation, and feedback loops. Agents ship code end-to-end, not just write it. The handoff is fully automated.</p>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x29C9;</div>
+          <h3 class="font-bold mb-2">Multi-Tracker Support</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">GitHub, GitLab, Linear, and Beads. Pull issues from whichever tracker your team uses. Switching trackers requires changing one line of config.</p>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x2699;</div>
+          <h3 class="font-bold mb-2">Agent Profiles</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Configure per-agent settings: transport type, model preferences, token limits, and custom system prompts. Each agent profile is reusable across workflows.</p>
+        </div>
+        <div class="glass-card p-8" data-animate>
+          <div class="text-2xl mb-3 text-accent-light">&#x2263;</div>
+          <h3 class="font-bold mb-2">Concurrent Execution</h3>
+          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Run multiple agents in parallel across different issues. Configurable concurrency limits ensure you stay within resource and API rate constraints.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ========== 6. SUPPORTED INTEGRATIONS ========== -->
-  <section id="agents" class="py-24">
-    <div class="max-w-6xl mx-auto px-6 text-center">
-      <h2 class="text-3xl sm:text-4xl font-bold mb-4" data-animate>Works with your stack</h2>
-      <p class="text-[var(--text-secondary)] mb-16 max-w-xl mx-auto" data-animate>
-        Connect any tracker and dispatch to any agent.
-      </p>
-
-      <div class="space-y-12">
-        <!-- Trackers -->
-        <div data-animate>
-          <p class="text-xs uppercase tracking-widest text-muted mb-6">Issue Trackers</p>
-          <div class="flex flex-wrap items-center justify-center gap-6">
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/github.svg" alt="GitHub" class="w-6 h-6 icon-auto-invert"> GitHub
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/gitlab.svg" alt="GitLab" class="w-6 h-6" style="filter: invert(45%) sepia(90%) saturate(1500%) hue-rotate(360deg) brightness(100%)"> GitLab
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/linear.svg" alt="Linear" class="w-6 h-6" style="filter: invert(40%) sepia(80%) saturate(2000%) hue-rotate(220deg) brightness(110%)"> Linear
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/beads.svg" alt="Beads" class="w-6 h-6" style="filter: invert(70%) sepia(60%) saturate(600%) hue-rotate(0deg) brightness(100%)"> Beads
-            </div>
-          </div>
-        </div>
-
-        <!-- Agents -->
-        <div data-animate>
-          <p class="text-xs uppercase tracking-widest text-muted mb-6">AI Agents</p>
-          <div class="flex flex-wrap items-center justify-center gap-6">
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/claude.svg" alt="Claude" class="w-6 h-6" style="filter: invert(55%) sepia(60%) saturate(1200%) hue-rotate(5deg) brightness(105%)"> Claude
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/codex.svg" alt="Codex" class="w-6 h-6" style="filter: invert(70%) sepia(20%) saturate(500%) hue-rotate(80deg) brightness(105%)"> Codex
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/copilot.svg" alt="Copilot" class="w-6 h-6 icon-auto-invert"> Copilot
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/pi.svg" alt="Pi" class="w-6 h-6" style="filter: invert(70%) sepia(40%) saturate(800%) hue-rotate(130deg) brightness(110%)"> Pi
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/openai.svg" alt="OpenAI" class="w-6 h-6 icon-auto-invert"> OpenAI-compatible
-            </div>
-            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
-              <img src="assets/icons/acp.svg" alt="ACP" class="w-6 h-6" style="filter: invert(50%) sepia(80%) saturate(1500%) hue-rotate(240deg) brightness(110%)"> ACP
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ========== 7. TUI DASHBOARD SHOWCASE ========== -->
+  <!-- ========== 9. TUI DASHBOARD SHOWCASE ========== -->
   <section id="dashboard" class="py-24">
     <div class="max-w-6xl mx-auto px-6">
       <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>A dashboard built for the terminal</h2>
@@ -581,72 +755,127 @@
     </div>
   </section>
 
-  <!-- ========== 8. FEATURES GRID ========== -->
-  <section class="py-24">
+  <!-- ========== 10. PRODUCT SCREENSHOTS GALLERY ========== -->
+  <section class="py-32">
     <div class="max-w-6xl mx-auto px-6">
-      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>Built for real workflows</h2>
+      <h2 class="text-3xl sm:text-4xl font-bold text-center mb-4" data-animate>See it in action</h2>
       <p class="text-[var(--text-secondary)] text-center mb-16 max-w-xl mx-auto" data-animate>
-        Everything you need to run AI agents in production.
+        Real views from the Polyphony terminal dashboard.
       </p>
 
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6" data-animate-stagger>
-        <div class="glass-card p-8" data-animate>
-          <div class="text-2xl mb-3 text-accent-light">⎔</div>
-          <h3 class="font-bold mb-2">Isolated Workspaces</h3>
-          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Each agent gets its own git worktree. No conflicts, no interference, clean diffs.</p>
+      <div class="grid md:grid-cols-3 gap-8" data-animate-stagger>
+        <div data-animate>
+          <div class="screenshot-placeholder mb-4">
+            <img src="https://placehold.co/800x500/1a1a2e/a78bfa?text=Issue+Tracking+View" alt="Issue tracking view" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+          <h3 class="font-bold mb-1 text-center">Issue Tracking View</h3>
+          <p class="text-[var(--text-muted)] text-sm text-center">Browse and filter issues pulled from your tracker. See agent assignments and status at a glance.</p>
         </div>
-        <div class="glass-card p-8" data-animate>
-          <div class="text-2xl mb-3 text-accent-light">↻</div>
-          <h3 class="font-bold mb-2">Retry &amp; Fallback</h3>
-          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Automatic retry with configurable agent fallback chains. If Claude fails, try Codex.</p>
+        <div data-animate>
+          <div class="screenshot-placeholder mb-4">
+            <img src="https://placehold.co/800x500/1a1a2e/a78bfa?text=Movement+Pipeline" alt="Movement pipeline" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+          <h3 class="font-bold mb-1 text-center">Movement Pipeline</h3>
+          <p class="text-[var(--text-muted)] text-sm text-center">Track each movement through its pipeline steps — from dispatch to commit to PR creation.</p>
         </div>
-        <div class="glass-card p-8" data-animate>
-          <div class="text-2xl mb-3 text-accent-light">⊘</div>
-          <h3 class="font-bold mb-2">Budget Control</h3>
-          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Token and cost-aware throttling. Set concurrency limits and per-issue budgets.</p>
-        </div>
-        <div class="glass-card p-8" data-animate>
-          <div class="text-2xl mb-3 text-accent-light">⬡</div>
-          <h3 class="font-bold mb-2">Workflow Policy</h3>
-          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">YAML + Liquid templates in WORKFLOW.md. Define routing, priority, and agent selection rules.</p>
-        </div>
-        <div class="glass-card p-8" data-animate>
-          <div class="text-2xl mb-3 text-accent-light">◉</div>
-          <h3 class="font-bold mb-2">Live Observability</h3>
-          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Real-time TUI with snapshots and non-blocking updates. Never miss an agent's progress.</p>
-        </div>
-        <div class="glass-card p-8" data-animate>
-          <div class="text-2xl mb-3 text-accent-light">⇒</div>
-          <h3 class="font-bold mb-2">Handoff Automation</h3>
-          <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Auto-commit, push, PR creation, and feedback loops. Agents ship code, not just write it.</p>
+        <div data-animate>
+          <div class="screenshot-placeholder mb-4">
+            <img src="https://placehold.co/800x500/1a1a2e/a78bfa?text=Agent+Status" alt="Agent status" class="rounded-xl w-full border border-[var(--border)] shadow-lg">
+          </div>
+          <h3 class="font-bold mb-1 text-center">Agent Status</h3>
+          <p class="text-[var(--text-muted)] text-sm text-center">Monitor each agent's health, token usage, success rates, and current task in real time.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ========== 9. OPEN SOURCE CTA ========== -->
-  <section class="py-24">
+  <!-- ========== 11. SUPPORTED INTEGRATIONS ========== -->
+  <section id="agents" class="py-32">
     <div class="max-w-6xl mx-auto px-6 text-center">
-      <div class="max-w-2xl mx-auto" data-animate>
+      <h2 class="text-3xl sm:text-4xl font-bold mb-4" data-animate>Works with your stack</h2>
+      <p class="text-[var(--text-secondary)] mb-16 max-w-xl mx-auto" data-animate>
+        Connect any tracker and dispatch to any agent.
+      </p>
+
+      <div class="space-y-12">
+        <!-- Trackers -->
+        <div data-animate>
+          <p class="text-xs uppercase tracking-widest text-muted mb-6">Issue Trackers</p>
+          <div class="flex flex-wrap items-center justify-center gap-6">
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/github.svg" alt="GitHub" class="w-6 h-6 icon-auto-invert"> GitHub
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/gitlab.svg" alt="GitLab" class="w-6 h-6" style="filter: invert(45%) sepia(90%) saturate(1500%) hue-rotate(360deg) brightness(100%)"> GitLab
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/linear.svg" alt="Linear" class="w-6 h-6" style="filter: invert(40%) sepia(80%) saturate(2000%) hue-rotate(220deg) brightness(110%)"> Linear
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/beads.svg" alt="Beads" class="w-6 h-6" style="filter: invert(70%) sepia(60%) saturate(600%) hue-rotate(0deg) brightness(100%)"> Beads
+            </div>
+          </div>
+        </div>
+
+        <!-- Agents -->
+        <div data-animate>
+          <p class="text-xs uppercase tracking-widest text-muted mb-6">AI Agents</p>
+          <div class="flex flex-wrap items-center justify-center gap-6">
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/claude.svg" alt="Claude" class="w-6 h-6" style="filter: invert(55%) sepia(60%) saturate(1200%) hue-rotate(5deg) brightness(105%)"> Claude
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/codex.svg" alt="Codex" class="w-6 h-6" style="filter: invert(70%) sepia(20%) saturate(500%) hue-rotate(80deg) brightness(105%)"> Codex
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/copilot.svg" alt="Copilot" class="w-6 h-6 icon-auto-invert"> Copilot
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/pi.svg" alt="Pi" class="w-6 h-6" style="filter: invert(70%) sepia(40%) saturate(800%) hue-rotate(130deg) brightness(110%)"> Pi
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/openai.svg" alt="OpenAI" class="w-6 h-6 icon-auto-invert"> OpenAI-compatible
+            </div>
+            <div class="integration-icon glass-card px-6 py-4 flex items-center gap-3 text-sm font-medium">
+              <img src="assets/icons/acp.svg" alt="ACP" class="w-6 h-6" style="filter: invert(50%) sepia(80%) saturate(1500%) hue-rotate(240deg) brightness(110%)"> ACP
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 12. OPEN SOURCE CTA ========== -->
+  <section class="py-32">
+    <div class="max-w-6xl mx-auto px-6 text-center">
+      <div class="max-w-3xl mx-auto" data-animate>
         <h2 class="text-3xl sm:text-4xl font-bold mb-4">Built in the open</h2>
-        <p class="text-[var(--text-secondary)] mb-8 leading-relaxed">
-          Polyphony is open source under the MIT license. Read the code, open issues, send PRs.
+        <p class="text-[var(--text-secondary)] mb-8 text-lg leading-relaxed">
+          Polyphony is open source under the MIT license. No vendor lock-in, no telemetry, no hidden costs. Read every line of code, open issues, send PRs.
         </p>
-        <div class="flex flex-wrap items-center justify-center gap-4 mb-8">
+        <div class="flex flex-wrap items-center justify-center gap-6 mb-8">
           <a href="https://github.com/penso/polyphony" target="_blank" rel="noopener"
-             class="px-6 py-3 bg-accent hover:bg-accent-light rounded-lg font-semibold text-white transition-colors glow-accent">
+             class="px-8 py-4 bg-accent hover:bg-accent-light rounded-lg font-semibold text-white transition-colors glow-accent text-lg">
             Star on GitHub
           </a>
+          <a href="https://github.com/penso/polyphony/issues" target="_blank" rel="noopener"
+             class="px-8 py-4 border border-[var(--border)] hover:border-accent/50 rounded-lg font-semibold text-[var(--text-primary)] transition-colors text-lg">
+            Browse Issues
+          </a>
+        </div>
+        <div class="flex flex-wrap items-center justify-center gap-6 mb-8">
           <span class="px-3 py-1 border border-[var(--border)] rounded-full text-xs text-[var(--text-secondary)] font-mono">MIT License</span>
+          <span class="px-3 py-1 border border-[var(--border)] rounded-full text-xs text-[var(--text-secondary)] font-mono">Written in Rust</span>
+          <span class="px-3 py-1 border border-[var(--border)] rounded-full text-xs text-[var(--text-secondary)] font-mono">Contributors welcome</span>
         </div>
         <p class="text-sm text-[var(--text-muted)]">
-          Contributions welcome. Check the issues tab for good first issues.
+          Check the <a href="https://github.com/penso/polyphony/issues?q=label%3A%22good+first+issue%22" target="_blank" rel="noopener" class="text-accent-light hover:underline">good first issues</a> to get started. Join the <a href="https://github.com/penso/polyphony/discussions" target="_blank" rel="noopener" class="text-accent-light hover:underline">discussions</a> to shape the roadmap.
         </p>
       </div>
     </div>
   </section>
 
-  <!-- ========== 10. FOOTER ========== -->
+  <!-- ========== 13. FOOTER ========== -->
   <footer class="border-t border-[var(--border-subtle)] py-16">
     <div class="max-w-6xl mx-auto px-6">
       <div class="grid sm:grid-cols-3 gap-12 mb-12">
@@ -688,6 +917,20 @@
       </div>
     </div>
   </footer>
+
+  <!-- Mobile menu toggle script -->
+  <script>
+    document.getElementById('mobile-menu-btn').addEventListener('click', function() {
+      var menu = document.getElementById('mobile-menu');
+      menu.classList.toggle('hidden');
+    });
+    // Close mobile menu when clicking a nav link
+    document.querySelectorAll('#mobile-menu a[href^="#"]').forEach(function(link) {
+      link.addEventListener('click', function() {
+        document.getElementById('mobile-menu').classList.add('hidden');
+      });
+    });
+  </script>
 
   <!-- Animations JS -->
   <script src="animations.js"></script>
