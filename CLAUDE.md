@@ -30,6 +30,12 @@ For general repository rules, Rust workflow, testing expectations, and release h
 - **Footer:** Show selection position (e.g. "3 of 12") and any relevant counts (e.g. retrying agents) in the table block's bottom border.
 - **Sorting:** Support sort toggling (e.g. `s` key) where it makes sense. Show the current sort label in the footer.
 
+## Website and Social Image
+
+- The OpenGraph image (`website/assets/og-image.svg` → `og-image.png`) shows the TUI dashboard as a backdrop behind the Polyphony branding. It should visually match what a user actually sees in the product.
+- When the TUI layout, columns, or tab structure changes, update the SVG to reflect the new UI. Render the PNG via Playwright (see `og-render.html` pattern) — ImageMagick does not render the SVG faithfully.
+- Bump the `?v=` cache-busting parameter on the image URLs in `website/index.html` after regenerating the PNG.
+
 ## Type System Conventions
 
 - Prefer enums over `String` for fields with a fixed set of values. Enums catch invalid values at compile time (or deserialization time), enable exhaustive `match`, and eliminate manual string validation.
