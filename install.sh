@@ -3,7 +3,7 @@
 # https://github.com/penso/polyphony
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/penso/polyphony/main/install.sh | sh
+#   curl -fsSL https://www.polyphony.to/install.sh | sh
 #
 # Or with options:
 #   curl -fsSL ... | sh -s -- --no-homebrew
@@ -85,7 +85,7 @@ Environment variables:
     INSTALL_DIR         Binary installation directory (default: ~/.local/bin)
 
 Examples:
-    curl -fsSL https://raw.githubusercontent.com/penso/polyphony/main/install.sh | sh
+    curl -fsSL https://www.polyphony.to/install.sh | sh
     curl -fsSL ... | sh -s -- --method=binary
     curl -fsSL ... | sh -s -- --version=20260315.01
 EOF
@@ -412,7 +412,7 @@ main() {
         printf "  ${BOLD}polyphony${NC}          # Launch the TUI dashboard\n"
         printf "  ${BOLD}polyphony --help${NC}   # Show help\n"
         printf "\n"
-        printf "Documentation: ${BLUE}https://github.com/${GITHUB_REPO}${NC}\n"
+        printf "Documentation: ${BLUE}https://www.polyphony.to${NC}\n"
     elif [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
         printf "\n"
         success "Installation complete!"
