@@ -109,7 +109,11 @@
   <text x="200" y="515" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="400" fill="#a78bfa">Git-Native AI Orchestration</text>
 
   <!-- URL -->
-  <text x="200" y="560" font-family="JetBrains Mono, monospace" font-size="16" font-weight="400" fill="#6b7280">polyphony.to</text>
+  <text x="200" y="565" font-family="JetBrains Mono, monospace" font-size="28" font-weight="600" fill="#e0e0e5">polyphony.to</text>
+
+  <!-- MIT License badge -->
+  <rect x="880" y="480" width="200" height="48" rx="8" fill="#7c3aed" opacity="0.9"/>
+  <text x="980" y="511" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">MIT License</text>
 
   <!-- Accent line at bottom -->
   <rect x="0" y="620" width="1200" height="10" fill="url(#accent)"/>
