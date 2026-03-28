@@ -15,10 +15,7 @@ pub(crate) use polyphony_core::{
     RuntimeSnapshot, TrackerKind, WorkspaceCommitter,
 };
 pub(crate) use polyphony_orchestrator::{RuntimeCommand, RuntimeComponents};
-pub(crate) use polyphony_workflow::{
-    ServiceConfig, ensure_repo_config_file, ensure_workflow_file, repo_config_path,
-    seed_repo_config_with_github,
-};
+pub(crate) use polyphony_workflow::{ServiceConfig, ensure_workflow_file, repo_config_path};
 pub(crate) use tokio::sync::{mpsc, watch};
 pub(crate) use tracing::{info, warn};
 #[cfg(feature = "tracing")]

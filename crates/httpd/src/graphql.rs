@@ -61,6 +61,7 @@ pub(crate) enum GqlTaskCategory {
     Testing,
     Documentation,
     Review,
+    Feedback,
 }
 
 impl From<polyphony_core::TaskCategory> for GqlTaskCategory {
@@ -71,6 +72,7 @@ impl From<polyphony_core::TaskCategory> for GqlTaskCategory {
             polyphony_core::TaskCategory::Testing => Self::Testing,
             polyphony_core::TaskCategory::Documentation => Self::Documentation,
             polyphony_core::TaskCategory::Review => Self::Review,
+            polyphony_core::TaskCategory::Feedback => Self::Feedback,
         }
     }
 }

@@ -62,7 +62,7 @@ pub(crate) fn maybe_seed_repo_config_file(
     let source_repo_path = workflow_root
         .canonicalize()
         .unwrap_or_else(|_| workflow_root.clone());
-    if ensure_repo_config_file(&repo_config_path, &source_repo_path)? {
+    if polyphony_workflow::ensure_repo_config_file(&repo_config_path, &source_repo_path)? {
         tracing::info!(
             workflow_path = %workflow_path.display(),
             repo_config_path = %repo_config_path.display(),
@@ -105,22 +105,22 @@ pub(crate) fn maybe_seed_repo_config_with_github_detection(
 
     // Detect AI coding agents and seed user config with their profiles.
     let detected_agents = polyphony_workflow::detect_agents();
-    if let Some(ucp) = user_config_path {
-        if polyphony_workflow::ensure_user_config_file_with_agents(ucp, &detected_agents)? {
-            if detected_agents.is_empty() {
-                eprintln!(
-                    "No AI coding agents detected. See https://polyphony.to/docs/agents for setup."
-                );
-            } else {
-                eprintln!(
-                    "Detected agent(s): {} — configured automatically.",
-                    detected_agents
-                        .iter()
-                        .map(|a| a.profile_name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
+    if let Some(ucp) = user_config_path
+        && polyphony_workflow::ensure_user_config_file_with_agents(ucp, &detected_agents)?
+    {
+        if detected_agents.is_empty() {
+            eprintln!(
+                "No AI coding agents detected. See https://polyphony.to/docs/agents for setup."
+            );
+        } else {
+            eprintln!(
+                "Detected agent(s): {} — configured automatically.",
+                detected_agents
+                    .iter()
+                    .map(|a| a.profile_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
     }
     let default_agent = detected_agents.first().map(|a| a.profile_name.as_str());
