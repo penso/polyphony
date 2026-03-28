@@ -233,71 +233,69 @@ pub(crate) fn is_active_state(active_states: &[String], state: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(state))
 }
 
-pub(crate) fn synthetic_issue_for_pull_request_review(trigger: &PullRequestReviewTrigger) -> Issue {
+pub(crate) fn synthetic_issue_for_pull_request_review(event: &PullRequestReviewEvent) -> Issue {
     Issue {
-        id: trigger.synthetic_issue_id(),
-        identifier: trigger.display_identifier(),
-        title: format!("Review PR #{}: {}", trigger.number, trigger.title),
+        id: event.synthetic_issue_id(),
+        identifier: event.display_identifier(),
+        title: format!("Review PR #{}: {}", event.number, event.title),
         description: Some(format!(
             "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nCheckout ref: {}\nAuthor: {}\nLabels: {}",
-            trigger.repository,
-            trigger.base_branch,
-            trigger.head_branch,
-            trigger.head_sha,
-            trigger.checkout_ref.as_deref().unwrap_or("<none>"),
-            trigger.author_login.as_deref().unwrap_or("<unknown>"),
-            if trigger.labels.is_empty() {
+            event.repository,
+            event.base_branch,
+            event.head_branch,
+            event.head_sha,
+            event.checkout_ref.as_deref().unwrap_or("<none>"),
+            event.author_login.as_deref().unwrap_or("<unknown>"),
+            if event.labels.is_empty() {
                 "<none>".to_string()
             } else {
-                trigger.labels.join(", ")
+                event.labels.join(", ")
             }
         )),
         state: "Review".into(),
-        branch_name: Some(format!("pr-review/{}", trigger.number)),
-        url: trigger.url.clone(),
-        updated_at: trigger.updated_at,
+        branch_name: Some(format!("pr-review/{}", event.number)),
+        url: event.url.clone(),
+        updated_at: event.updated_at,
         ..Issue::default()
     }
 }
 
-pub(crate) fn synthetic_issue_for_pull_request_comment(
-    trigger: &PullRequestCommentTrigger,
-) -> Issue {
-    let line = trigger
+pub(crate) fn synthetic_issue_for_pull_request_comment(event: &PullRequestCommentEvent) -> Issue {
+    let line = event
         .line
         .map(|line| format!(":{line}"))
         .unwrap_or_default();
     Issue {
-        id: trigger.synthetic_issue_id(),
-        identifier: trigger.display_identifier(),
+        id: event.synthetic_issue_id(),
+        identifier: event.display_identifier(),
         title: format!(
             "Review unresolved PR comment on {}{}: {}",
-            trigger.path, line, trigger.pull_request_title
+            event.path, line, event.pull_request_title
         ),
         description: Some(format!(
             "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nCheckout ref: {}\nPath: {}\nLine: {}\nAuthor: {}\nLabels: {}\n\nComment:\n{}",
-            trigger.repository,
-            trigger.base_branch,
-            trigger.head_branch,
-            trigger.head_sha,
-            trigger.checkout_ref.as_deref().unwrap_or("<none>"),
-            trigger.path,
-            trigger
+            event.repository,
+            event.base_branch,
+            event.head_branch,
+            event.head_sha,
+            event.checkout_ref.as_deref().unwrap_or("<none>"),
+            event.path,
+            event
                 .line
                 .map(|line| line.to_string())
                 .unwrap_or_else(|| "<none>".into()),
-            trigger.author_login.as_deref().unwrap_or("<unknown>"),
-            if trigger.labels.is_empty() {
+            event.author_login.as_deref().unwrap_or("<unknown>"),
+            if event.labels.is_empty() {
                 "<none>".to_string()
             } else {
-                trigger.labels.join(", ")
+                event.labels.join(", ")
             },
-            trigger.body
+            event.body
         )),
         state: "Review".into(),
-        branch_name: Some(format!("pr-comment-review/{}", trigger.number)),
-        url: trigger.url.clone(),
-        updated_at: trigger.updated_at.or(trigger.created_at),
+        branch_name: Some(format!("pr-comment-review/{}", event.number)),
+        url: event.url.clone(),
+        updated_at: event.updated_at.or(event.created_at),
         ..Issue::default()
     }
 }
@@ -333,41 +331,39 @@ pub(crate) fn pull_request_comment_review_comment_marker(
     )
 }
 
-pub(crate) fn pull_request_trigger_author(trigger: &PullRequestTrigger) -> Option<&str> {
-    match trigger {
-        PullRequestTrigger::Review(trigger) => trigger.author_login.as_deref(),
-        PullRequestTrigger::Comment(trigger) => trigger.author_login.as_deref(),
-        PullRequestTrigger::Conflict(trigger) => trigger.author_login.as_deref(),
+pub(crate) fn pull_request_event_author(event: &PullRequestEvent) -> Option<&str> {
+    match event {
+        PullRequestEvent::Review(event) => event.author_login.as_deref(),
+        PullRequestEvent::Comment(event) => event.author_login.as_deref(),
+        PullRequestEvent::Conflict(event) => event.author_login.as_deref(),
     }
 }
 
-pub(crate) fn pull_request_trigger_subject(trigger: &PullRequestTrigger) -> String {
-    match trigger {
-        PullRequestTrigger::Review(trigger) => {
-            format!("PR review {}", trigger.display_identifier())
+pub(crate) fn pull_request_event_subject(event: &PullRequestEvent) -> String {
+    match event {
+        PullRequestEvent::Review(event) => {
+            format!("PR review {}", event.display_identifier())
         },
-        PullRequestTrigger::Comment(trigger) => format!(
-            "PR comment {} {}",
-            trigger.display_identifier(),
-            trigger.path
-        ),
-        PullRequestTrigger::Conflict(trigger) => format!(
+        PullRequestEvent::Comment(event) => {
+            format!("PR comment {} {}", event.display_identifier(), event.path)
+        },
+        PullRequestEvent::Conflict(event) => format!(
             "PR conflict {} against {}",
-            trigger.display_identifier(),
-            trigger.base_branch
+            event.display_identifier(),
+            event.base_branch
         ),
     }
 }
 
-pub(crate) fn pull_request_trigger_kind_label(trigger: &PullRequestTrigger) -> &'static str {
-    match trigger {
-        PullRequestTrigger::Review(_) => "PR review",
-        PullRequestTrigger::Comment(_) => "PR comment",
-        PullRequestTrigger::Conflict(_) => "PR conflict",
+pub(crate) fn pull_request_event_kind_label(event: &PullRequestEvent) -> &'static str {
+    match event {
+        PullRequestEvent::Review(_) => "PR review",
+        PullRequestEvent::Comment(_) => "PR comment",
+        PullRequestEvent::Conflict(_) => "PR conflict",
     }
 }
 
-pub(crate) fn truncate_for_trigger_title(value: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_for_inbox_title(value: &str, max_chars: usize) -> String {
     let cleaned = strip_markup_for_title(value);
     let trimmed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     if trimmed.chars().count() <= max_chars {
@@ -377,7 +373,7 @@ pub(crate) fn truncate_for_trigger_title(value: &str, max_chars: usize) -> Strin
     format!("{}…", &trimmed[..end])
 }
 
-/// Remove HTML tags and markdown image syntax from text so trigger titles
+/// Remove HTML tags and markdown image syntax from text so event titles
 /// display cleanly in the TUI listing.
 fn strip_markup_for_title(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -690,14 +686,15 @@ pub(crate) fn dispatch_order(left: &Issue, right: &Issue) -> std::cmp::Ordering 
 
 pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
     RuntimeSnapshot {
+        repo_ids: Vec::new(),
         generated_at: Utc::now(),
         counts: SnapshotCounts::default(),
         cadence: RuntimeCadence::default(),
-        visible_issues: Vec::new(),
-        visible_triggers: Vec::new(),
-        approved_issue_keys: Vec::new(),
+        tracker_issues: Vec::new(),
+        inbox_items: Vec::new(),
+        approved_inbox_keys: Vec::new(),
         running: Vec::new(),
-        agent_history: Vec::new(),
+        agent_run_history: Vec::new(),
         retrying: Vec::new(),
         codex_totals: CodexTotals::default(),
         rate_limits: None,
@@ -707,7 +704,7 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
         saved_contexts: Vec::new(),
         recent_events: Vec::new(),
         pending_user_interactions: Vec::new(),
-        movements: Vec::new(),
+        runs: Vec::new(),
         tasks: Vec::new(),
         loading: LoadingState::default(),
         dispatch_mode: polyphony_core::DispatchMode::default(),
@@ -720,14 +717,15 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
     }
 }
 
-pub(crate) fn build_persisted_run_record(
+pub(crate) fn build_persisted_agent_run_record(
     running: &RunningTask,
     status: AttemptStatus,
     finished_at: DateTime<Utc>,
     error: Option<String>,
     saved_context: Option<AgentContextSnapshot>,
-) -> PersistedRunRecord {
-    PersistedRunRecord {
+) -> PersistedAgentRunRecord {
+    PersistedAgentRunRecord {
+        repo_id: String::new(),
         issue_id: running.issue.id.clone(),
         issue_identifier: running.issue.identifier.clone(),
         agent_name: running.agent_name.clone(),
@@ -786,7 +784,9 @@ pub(crate) fn saved_context_metadata(mut context: AgentContextSnapshot) -> Agent
     context
 }
 
-pub(crate) fn persisted_run_metadata(mut run: PersistedRunRecord) -> PersistedRunRecord {
+pub(crate) fn persisted_agent_run_metadata(
+    mut run: PersistedAgentRunRecord,
+) -> PersistedAgentRunRecord {
     run.saved_context = None;
     run
 }
@@ -814,11 +814,15 @@ pub(crate) async fn append_workspace_agent_event_artifact(
         .await
 }
 
-pub(crate) async fn append_workspace_run_record_artifact(
+pub(crate) async fn append_workspace_agent_run_artifact(
     workspace_path: &Path,
-    run: &PersistedRunRecord,
+    run: &PersistedAgentRunRecord,
 ) -> Result<(), Error> {
-    append_workspace_jsonl_record(&workspace_run_history_artifact_path(workspace_path), run).await
+    append_workspace_jsonl_record(
+        &workspace_agent_run_history_artifact_path(workspace_path),
+        run,
+    )
+    .await
 }
 
 pub(crate) async fn persist_workspace_saved_context_artifact(
@@ -867,9 +871,9 @@ async fn append_workspace_jsonl_record<T: Serialize>(path: &Path, value: &T) -> 
     Ok(())
 }
 
-pub(crate) fn issue_trigger_source(
+pub(crate) fn issue_event_source(
     tracker_kind: polyphony_core::TrackerKind,
-    row: &VisibleIssueRow,
+    row: &TrackerIssueRow,
 ) -> String {
     row.issue_id
         .split(':')
@@ -900,9 +904,9 @@ pub(crate) fn approval_key_for_issue(
 
 pub(crate) fn approval_key_for_row(
     tracker_kind: polyphony_core::TrackerKind,
-    row: &VisibleIssueRow,
+    row: &TrackerIssueRow,
 ) -> String {
-    issue_key_for_source(&issue_trigger_source(tracker_kind, row), &row.issue_id)
+    issue_key_for_source(&issue_event_source(tracker_kind, row), &row.issue_id)
 }
 
 pub(crate) fn issue_source_for_issue(
@@ -918,8 +922,9 @@ pub(crate) fn issue_source_for_issue(
         .unwrap_or_else(|| tracker_kind.to_string())
 }
 
-pub(crate) fn summarize_issue(issue: &Issue) -> VisibleIssueRow {
-    VisibleIssueRow {
+pub(crate) fn summarize_issue(issue: &Issue) -> TrackerIssueRow {
+    TrackerIssueRow {
+        repo_id: String::new(),
         issue_id: issue.id.clone(),
         issue_identifier: issue.identifier.clone(),
         title: issue.title.clone(),
@@ -1034,6 +1039,7 @@ mod tests {
     fn compact_saved_context_trims_old_entries_and_long_messages() {
         let now = Utc::now();
         let mut context = AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "1".into(),
             issue_identifier: "ISSUE-1".into(),
             updated_at: now,
@@ -1074,6 +1080,7 @@ mod tests {
     fn compact_saved_context_for_history_keeps_only_recent_tail() {
         let now = Utc::now();
         let saved_context = AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "1".into(),
             issue_identifier: "ISSUE-1".into(),
             updated_at: now,
@@ -1135,6 +1142,7 @@ mod tests {
             raw: None,
         };
         let context = AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "issue-7".into(),
             issue_identifier: "DOG-7".into(),
             updated_at: now,
@@ -1153,7 +1161,8 @@ mod tests {
                 message: "hello".into(),
             }],
         };
-        let run = PersistedRunRecord {
+        let run = PersistedAgentRunRecord {
+            repo_id: String::new(),
             issue_id: "issue-7".into(),
             issue_identifier: "DOG-7".into(),
             agent_name: "implementer".into(),
@@ -1183,7 +1192,7 @@ mod tests {
         persist_workspace_saved_context_artifact(&workspace_path, &context)
             .await
             .unwrap();
-        append_workspace_run_record_artifact(&workspace_path, &run)
+        append_workspace_agent_run_artifact(&workspace_path, &run)
             .await
             .unwrap();
 
@@ -1195,7 +1204,7 @@ mod tests {
             tokio::fs::read_to_string(artifact_dir.join("saved-context.json"))
                 .await
                 .unwrap();
-        let runs: String = tokio::fs::read_to_string(artifact_dir.join("run-history.jsonl"))
+        let runs: String = tokio::fs::read_to_string(artifact_dir.join("agent-run-history.jsonl"))
             .await
             .unwrap();
 
@@ -1307,7 +1316,7 @@ mod tests {
     #[test]
     fn truncate_strips_html_tags() {
         let input = r#"**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Skip signing in dry-run**"#;
-        let result = truncate_for_trigger_title(input, 80);
+        let result = truncate_for_inbox_title(input, 80);
         assert!(
             !result.contains("<sub>"),
             "HTML tags should be stripped: {result}"
@@ -1325,7 +1334,7 @@ mod tests {
     #[test]
     fn truncate_strips_greptile_html_badges() {
         let input = r##"<a href="#"><img alt="P2" src="https://greptile-static-assets.s3.amazonaws.com/badges/P2.svg"></a> Some issue title"##;
-        let result = truncate_for_trigger_title(input, 80);
+        let result = truncate_for_inbox_title(input, 80);
         assert!(!result.contains("<a"), "HTML should be stripped: {result}");
         assert!(
             !result.contains("greptile"),
@@ -1339,9 +1348,6 @@ mod tests {
 
     #[test]
     fn truncate_preserves_plain_text() {
-        assert_eq!(
-            truncate_for_trigger_title("Simple title", 80),
-            "Simple title"
-        );
+        assert_eq!(truncate_for_inbox_title("Simple title", 80), "Simple title");
     }
 }

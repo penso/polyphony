@@ -37,7 +37,7 @@ impl fmt::Display for AttemptStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MovementStatus {
+pub enum RunStatus {
     Pending,
     Planning,
     InProgress,
@@ -47,7 +47,7 @@ pub enum MovementStatus {
     Cancelled,
 }
 
-impl fmt::Display for MovementStatus {
+impl fmt::Display for RunStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::Pending => "pending",
@@ -62,9 +62,9 @@ impl fmt::Display for MovementStatus {
     }
 }
 
-/// Tracks where a pipeline movement is in its lifecycle.
+/// Tracks where a pipeline run is in its lifecycle.
 ///
-/// Persisted on the `Movement` so the orchestrator can resume correctly after
+/// Persisted on the `Run` so the orchestrator can resume correctly after
 /// a restart without re-running stages that already completed.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -90,14 +90,14 @@ impl fmt::Display for PipelineStage {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum MovementKind {
+pub enum RunKind {
     #[default]
     IssueDelivery,
     PullRequestReview,
     PullRequestCommentReview,
 }
 
-impl fmt::Display for MovementKind {
+impl fmt::Display for RunKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Self::IssueDelivery => "issue_delivery",
@@ -311,7 +311,7 @@ pub struct ReviewTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PullRequestReviewTrigger {
+pub struct PullRequestReviewEvent {
     pub provider: ReviewProviderKind,
     pub repository: String,
     pub number: u64,
@@ -325,7 +325,7 @@ pub struct PullRequestReviewTrigger {
     #[serde(default)]
     pub author_login: Option<String>,
     #[serde(default)]
-    pub approval_state: IssueApprovalState,
+    pub approval_state: DispatchApprovalState,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -334,7 +334,7 @@ pub struct PullRequestReviewTrigger {
     pub is_draft: bool,
 }
 
-impl PullRequestReviewTrigger {
+impl PullRequestReviewEvent {
     pub fn display_identifier(&self) -> String {
         format!("{}#{}", self.repository, self.number)
     }
@@ -365,7 +365,7 @@ impl PullRequestReviewTrigger {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PullRequestCommentTrigger {
+pub struct PullRequestCommentEvent {
     pub provider: ReviewProviderKind,
     pub repository: String,
     pub number: u64,
@@ -384,7 +384,7 @@ pub struct PullRequestCommentTrigger {
     #[serde(default)]
     pub author_login: Option<String>,
     #[serde(default)]
-    pub approval_state: IssueApprovalState,
+    pub approval_state: DispatchApprovalState,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -393,7 +393,7 @@ pub struct PullRequestCommentTrigger {
     pub is_draft: bool,
 }
 
-impl PullRequestCommentTrigger {
+impl PullRequestCommentEvent {
     pub fn display_identifier(&self) -> String {
         format!("{}#{}", self.repository, self.number)
     }
@@ -424,7 +424,7 @@ impl PullRequestCommentTrigger {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PullRequestConflictTrigger {
+pub struct PullRequestConflictEvent {
     pub provider: ReviewProviderKind,
     pub repository: String,
     pub number: u64,
@@ -438,7 +438,7 @@ pub struct PullRequestConflictTrigger {
     #[serde(default)]
     pub author_login: Option<String>,
     #[serde(default)]
-    pub approval_state: IssueApprovalState,
+    pub approval_state: DispatchApprovalState,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -449,7 +449,7 @@ pub struct PullRequestConflictTrigger {
     pub merge_state_status: String,
 }
 
-impl PullRequestConflictTrigger {
+impl PullRequestConflictEvent {
     pub fn display_identifier(&self) -> String {
         format!("{}#{}", self.repository, self.number)
     }
@@ -481,47 +481,47 @@ impl PullRequestConflictTrigger {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
-pub enum PullRequestTrigger {
-    Review(PullRequestReviewTrigger),
-    Comment(PullRequestCommentTrigger),
-    Conflict(PullRequestConflictTrigger),
+pub enum PullRequestEvent {
+    Review(PullRequestReviewEvent),
+    Comment(PullRequestCommentEvent),
+    Conflict(PullRequestConflictEvent),
 }
 
-impl PullRequestTrigger {
+impl PullRequestEvent {
     pub fn dedupe_key(&self) -> String {
         match self {
-            Self::Review(trigger) => trigger.dedupe_key(),
-            Self::Comment(trigger) => trigger.dedupe_key(),
-            Self::Conflict(trigger) => trigger.dedupe_key(),
+            Self::Review(event) => event.dedupe_key(),
+            Self::Comment(event) => event.dedupe_key(),
+            Self::Conflict(event) => event.dedupe_key(),
         }
     }
 
     pub fn synthetic_issue_id(&self) -> String {
         match self {
-            Self::Review(trigger) => trigger.synthetic_issue_id(),
-            Self::Comment(trigger) => trigger.synthetic_issue_id(),
-            Self::Conflict(trigger) => trigger.synthetic_issue_id(),
+            Self::Review(event) => event.synthetic_issue_id(),
+            Self::Comment(event) => event.synthetic_issue_id(),
+            Self::Conflict(event) => event.synthetic_issue_id(),
         }
     }
 
     pub fn display_identifier(&self) -> String {
         match self {
-            Self::Review(trigger) => trigger.display_identifier(),
-            Self::Comment(trigger) => trigger.display_identifier(),
-            Self::Conflict(trigger) => trigger.display_identifier(),
+            Self::Review(event) => event.display_identifier(),
+            Self::Comment(event) => event.display_identifier(),
+            Self::Conflict(event) => event.display_identifier(),
         }
     }
 
     pub fn review_target(&self) -> ReviewTarget {
         match self {
-            Self::Review(trigger) => trigger.review_target(),
-            Self::Comment(trigger) => trigger.review_target(),
-            Self::Conflict(trigger) => trigger.review_target(),
+            Self::Review(event) => event.review_target(),
+            Self::Comment(event) => event.review_target(),
+            Self::Conflict(event) => event.review_target(),
         }
     }
 }
 
-/// Synthetic issue IDs are created by the orchestrator for PR triggers
+/// Synthetic issue IDs are created by the orchestrator for PR events
 /// (reviews, comments, conflicts) and have no corresponding tracker-side
 /// state.  They must be excluded from tracker refresh calls during
 /// reconciliation because no tracker will recognise them.
@@ -558,22 +558,23 @@ pub struct ReviewedPullRequestHead {
     pub key: String,
     pub target: ReviewTarget,
     pub reviewed_at: DateTime<Utc>,
-    pub movement_id: Option<MovementId>,
+    #[serde(default)]
+    pub run_id: Option<RunId>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MovementLogScope {
-    Trigger,
+pub enum RunLogScope {
+    Inbox,
     Agent,
     Reconciliation,
     Pipeline,
 }
 
-impl fmt::Display for MovementLogScope {
+impl fmt::Display for RunLogScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            Self::Trigger => "trigger",
+            Self::Inbox => "inbox",
             Self::Agent => "agent",
             Self::Reconciliation => "reconciliation",
             Self::Pipeline => "pipeline",
@@ -583,21 +584,21 @@ impl fmt::Display for MovementLogScope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MovementLogEntry {
+pub struct RunLogEntry {
     pub at: DateTime<Utc>,
-    pub scope: MovementLogScope,
+    pub scope: RunLogScope,
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Movement {
-    pub id: MovementId,
+pub struct Run {
+    pub id: RunId,
     #[serde(default)]
-    pub kind: MovementKind,
+    pub kind: RunKind,
     pub issue_id: Option<IssueId>,
     pub issue_identifier: Option<String>,
     pub title: String,
-    pub status: MovementStatus,
+    pub status: RunStatus,
     /// Tracks the current pipeline lifecycle stage for resume-after-restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline_stage: Option<PipelineStage>,
@@ -611,19 +612,19 @@ pub struct Movement {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub activity_log: Vec<MovementLogEntry>,
-    /// Explanation of why a movement was cancelled by reconciliation.
+    pub activity_log: Vec<RunLogEntry>,
+    /// Explanation of why a run was cancelled by reconciliation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_reason: Option<String>,
-    /// Ordered execution steps for this movement. Empty for legacy movements
+    /// Ordered execution steps for this run. Empty for legacy runs
     /// created before step tracking was introduced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<crate::StepRecord>,
 }
 
-const MAX_MOVEMENT_LOG_ENTRIES: usize = 64;
+const MAX_RUN_LOG_ENTRIES: usize = 64;
 
-impl Movement {
+impl Run {
     /// Returns the first step that is not Succeeded or Skipped.
     pub fn first_resumable_step(&self) -> Option<&crate::StepRecord> {
         self.steps.iter().find(|s| !s.is_complete())
@@ -651,14 +652,14 @@ impl Movement {
         }
     }
 
-    pub fn push_log(&mut self, scope: MovementLogScope, message: impl Into<String>) {
-        self.activity_log.push(MovementLogEntry {
+    pub fn push_log(&mut self, scope: RunLogScope, message: impl Into<String>) {
+        self.activity_log.push(RunLogEntry {
             at: Utc::now(),
             scope,
             message: message.into(),
         });
-        if self.activity_log.len() > MAX_MOVEMENT_LOG_ENTRIES {
-            let drain_count = self.activity_log.len() - MAX_MOVEMENT_LOG_ENTRIES;
+        if self.activity_log.len() > MAX_RUN_LOG_ENTRIES {
+            let drain_count = self.activity_log.len() - MAX_RUN_LOG_ENTRIES;
             self.activity_log.drain(..drain_count);
         }
     }
@@ -667,7 +668,7 @@ impl Movement {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: TaskId,
-    pub movement_id: MovementId,
+    pub run_id: RunId,
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -710,7 +711,7 @@ pub struct PlannedTask {
 }
 
 impl PlannedTask {
-    pub fn to_task(&self, movement_id: &str, ordinal: u32) -> Task {
+    pub fn to_task(&self, run_id: &str, ordinal: u32) -> Task {
         let now = Utc::now();
         let category = match self.category.to_ascii_lowercase().as_str() {
             "research" => TaskCategory::Research,
@@ -722,7 +723,7 @@ impl PlannedTask {
         };
         Task {
             id: format!("task-{}", Uuid::new_v4()),
-            movement_id: movement_id.to_string(),
+            run_id: run_id.to_string(),
             title: self.title.clone(),
             description: self.description.clone(),
             activity_log: Vec::new(),
@@ -745,13 +746,15 @@ impl PlannedTask {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MovementRow {
-    pub id: MovementId,
+pub struct RunRow {
     #[serde(default)]
-    pub kind: MovementKind,
+    pub repo_id: String,
+    pub id: RunId,
+    #[serde(default)]
+    pub kind: RunKind,
     pub issue_identifier: Option<String>,
     pub title: String,
-    pub status: MovementStatus,
+    pub status: RunStatus,
     pub task_count: usize,
     pub tasks_completed: usize,
     #[serde(default)]
@@ -765,7 +768,7 @@ pub struct MovementRow {
     pub workspace_path: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub activity_log: Vec<MovementLogEntry>,
+    pub activity_log: Vec<RunLogEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -774,8 +777,10 @@ pub struct MovementRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRow {
+    #[serde(default)]
+    pub repo_id: String,
     pub id: TaskId,
-    pub movement_id: MovementId,
+    pub run_id: RunId,
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -833,14 +838,14 @@ mod tests {
     }
 
     #[test]
-    fn movement_push_log_appends() {
-        let mut m = Movement {
-            id: "mov-1".into(),
-            kind: MovementKind::IssueDelivery,
+    fn run_push_log_appends() {
+        let mut run = Run {
+            id: "run-1".into(),
+            kind: RunKind::IssueDelivery,
             issue_id: None,
             issue_identifier: None,
             title: "test".into(),
-            status: MovementStatus::Pending,
+            status: RunStatus::Pending,
             pipeline_stage: None,
             manual_dispatch_directives: None,
             workspace_key: None,
@@ -853,21 +858,21 @@ mod tests {
             cancel_reason: None,
             steps: Vec::new(),
         };
-        m.push_log(MovementLogScope::Trigger, "state changed");
-        assert_eq!(m.activity_log.len(), 1);
-        assert_eq!(m.activity_log[0].scope, MovementLogScope::Trigger);
-        assert_eq!(m.activity_log[0].message, "state changed");
+        run.push_log(RunLogScope::Inbox, "state changed");
+        assert_eq!(run.activity_log.len(), 1);
+        assert_eq!(run.activity_log[0].scope, RunLogScope::Inbox);
+        assert_eq!(run.activity_log[0].message, "state changed");
     }
 
     #[test]
-    fn movement_push_log_truncates_at_capacity() {
-        let mut m = Movement {
-            id: "mov-2".into(),
-            kind: MovementKind::IssueDelivery,
+    fn run_push_log_truncates_at_capacity() {
+        let mut run = Run {
+            id: "run-2".into(),
+            kind: RunKind::IssueDelivery,
             issue_id: None,
             issue_identifier: None,
             title: "test".into(),
-            status: MovementStatus::Pending,
+            status: RunStatus::Pending,
             pipeline_stage: None,
             manual_dispatch_directives: None,
             workspace_key: None,
@@ -881,10 +886,10 @@ mod tests {
             steps: Vec::new(),
         };
         for i in 0..100 {
-            m.push_log(MovementLogScope::Pipeline, format!("entry {i}"));
+            run.push_log(RunLogScope::Pipeline, format!("entry {i}"));
         }
-        assert_eq!(m.activity_log.len(), 64);
-        assert_eq!(m.activity_log[0].message, "entry 36");
-        assert_eq!(m.activity_log[63].message, "entry 99");
+        assert_eq!(run.activity_log.len(), MAX_RUN_LOG_ENTRIES);
+        assert_eq!(run.activity_log[0].message, "entry 36");
+        assert_eq!(run.activity_log[63].message, "entry 99");
     }
 }

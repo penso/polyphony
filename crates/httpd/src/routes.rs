@@ -8,12 +8,16 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
+use axum_login::AuthManagerLayer;
 use minijinja::Environment;
 use polyphony_core::RuntimeSnapshot;
 use polyphony_orchestrator::RuntimeCommand;
+use polyphony_workflow::WebhooksConfig;
 use tokio::sync::{mpsc, watch};
+use tower_sessions::SessionManagerLayer;
+use tower_sessions_sqlx_store::SqliteStore;
 
-use crate::{graphql, templates};
+use crate::{auth, graphql, templates, webhooks};
 
 #[derive(Clone)]
 struct AppState {
@@ -22,32 +26,77 @@ struct AppState {
     template_env: Arc<Environment<'static>>,
 }
 
+/// Build the full httpd router.
+///
+/// When `auth_layer` is `Some`, dashboard pages require login.
+/// Webhook routes are always outside the auth layer (they have their own auth).
 pub fn build_router(
     snapshot_rx: watch::Receiver<RuntimeSnapshot>,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     template_dir: PathBuf,
+    auth_layer: Option<AuthManagerLayer<auth::Backend, SqliteStore>>,
+    session_layer: Option<SessionManagerLayer<SqliteStore>>,
+    webhooks_config: Option<WebhooksConfig>,
 ) -> Router {
-    let schema = graphql::build_schema(snapshot_rx.clone(), command_tx);
+    let schema = graphql::build_schema(snapshot_rx.clone(), command_tx.clone());
     let template_env = Arc::new(templates::build_env(&template_dir));
 
     let state = AppState {
         schema: schema.clone(),
         snapshot_rx,
-        template_env,
+        template_env: template_env.clone(),
     };
 
-    Router::new()
-        // SSR pages
+    // SSR + GraphQL pages
+    let dashboard_routes = Router::new()
         .route("/", get(page_index))
-        .route("/triggers", get(page_triggers))
-        .route("/movements", get(page_movements))
+        .route("/inbox", get(page_inbox))
+        .route("/runs", get(page_runs))
         .route("/agents", get(page_agents))
         .route("/tasks", get(page_tasks))
+        .route("/repos", get(page_repos))
         .route("/logs", get(page_logs))
-        // GraphQL
         .route("/graphql", get(graphql_playground).post(graphql_handler))
         .route_service("/graphql/ws", GraphQLSubscription::new(schema))
-        .with_state(state)
+        .with_state(state);
+
+    // Login/logout routes (always public)
+    let login_routes = Router::new()
+        .route("/login", get(auth::login_page).post(auth::login_submit))
+        .route("/logout", get(auth::logout))
+        .with_state(template_env);
+
+    // Webhook routes (own auth, outside dashboard auth)
+    let webhook_routes = if let Some(ref config) = webhooks_config {
+        if config.enabled {
+            webhooks::webhook_router(command_tx, config)
+        } else {
+            Router::new()
+        }
+    } else {
+        Router::new()
+    };
+
+    let mut app = Router::new();
+
+    if let (Some(auth_layer), Some(session_layer)) = (auth_layer, session_layer) {
+        // With auth: protect dashboard, keep login + webhooks public
+        let protected = dashboard_routes.route_layer(axum_login::login_required!(
+            auth::Backend,
+            login_url = "/login"
+        ));
+        app = app
+            .merge(protected)
+            .merge(login_routes)
+            .merge(webhook_routes)
+            .layer(auth_layer)
+            .layer(session_layer);
+    } else {
+        // No auth: all routes open, login page not needed
+        app = app.merge(dashboard_routes).merge(webhook_routes);
+    }
+
+    app
 }
 
 // ---------------------------------------------------------------------------
@@ -58,12 +107,12 @@ async fn page_index(State(state): State<AppState>) -> impl IntoResponse {
     render_page(&state, "index.html")
 }
 
-async fn page_triggers(State(state): State<AppState>) -> impl IntoResponse {
-    render_page(&state, "triggers.html")
+async fn page_inbox(State(state): State<AppState>) -> impl IntoResponse {
+    render_page(&state, "inbox.html")
 }
 
-async fn page_movements(State(state): State<AppState>) -> impl IntoResponse {
-    render_page(&state, "movements.html")
+async fn page_runs(State(state): State<AppState>) -> impl IntoResponse {
+    render_page(&state, "runs.html")
 }
 
 async fn page_agents(State(state): State<AppState>) -> impl IntoResponse {
@@ -72,6 +121,10 @@ async fn page_agents(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn page_tasks(State(state): State<AppState>) -> impl IntoResponse {
     render_page(&state, "tasks.html")
+}
+
+async fn page_repos(State(state): State<AppState>) -> impl IntoResponse {
+    render_page(&state, "repos.html")
 }
 
 async fn page_logs(State(state): State<AppState>) -> impl IntoResponse {

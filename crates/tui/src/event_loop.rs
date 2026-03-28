@@ -106,8 +106,8 @@ pub async fn run(
                             MouseEventKind::Down(event::MouseButton::Left) => {
                                 if let Some(tab) = app.tab_at_position(mouse.column, mouse.row) {
                                     app.active_tab = tab;
-                                } else if app.active_tab == app::ActiveTab::Triggers {
-                                    // Single click selects trigger row
+                                } else if app.active_tab == app::ActiveTab::Inbox {
+                                    // Single click selects inbox item row
                                     if let Some(idx) = app.issue_row_at_position(mouse.row) {
                                         app.issues_state.select(Some(idx));
                                     }
@@ -118,13 +118,13 @@ pub async fn run(
                                             && app.last_click_pos.1 == mouse.row
                                     });
                                     if is_double
-                                        && let Some(trigger) = app.selected_trigger(&snapshot)
+                                        && let Some(item) = app.selected_inbox_item(&snapshot)
                                     {
-                                        app.push_detail(crate::app::DetailView::Trigger {
-                                            trigger_id: trigger.trigger_id.clone(),
+                                        app.push_detail(crate::app::DetailView::InboxItem {
+                                            item_id: item.item_id.clone(),
                                             scroll: 0,
                                             focus: Default::default(),
-                                            movements_selected: 0,
+                                            runs_selected: 0,
                                             agents_selected: 0,
                                         });
                                         app.last_click_at = None;
@@ -280,8 +280,8 @@ fn handle_key_event(
                         .get(app.agent_picker_selected)
                         .map(|p| p.name.clone());
                     app.show_agent_picker = false;
-                    if let Some(trigger) = find_trigger_by_id(snapshot, &issue_id) {
-                        let _ = start_dispatch_for_trigger(app, trigger, agent_name);
+                    if let Some(item) = find_inbox_item_by_id(snapshot, &issue_id) {
+                        let _ = start_dispatch_for_inbox_item(app, item, agent_name);
                     }
                 }
             },
@@ -409,20 +409,20 @@ fn handle_key_event(
             },
             _ => {},
         }
-    } else if app.movements_search_active {
+    } else if app.runs_search_active {
         match key.code {
             KeyCode::Esc => {
-                app.movements_search_active = false;
-                app.movements_search_query.clear();
+                app.runs_search_active = false;
+                app.runs_search_query.clear();
             },
             KeyCode::Enter => {
-                app.movements_search_active = false;
+                app.runs_search_active = false;
             },
             KeyCode::Backspace => {
-                app.movements_search_query.pop();
+                app.runs_search_query.pop();
             },
             KeyCode::Char(c) => {
-                app.movements_search_query.push(c);
+                app.runs_search_query.push(c);
             },
             _ => {},
         }
@@ -470,7 +470,7 @@ fn selected_agent_artifact_request(
         crate::app::SelectedAgentRow::Running(running)
     } else {
         snapshot
-            .agent_history
+            .agent_run_history
             .get(agent_index.saturating_sub(snapshot.running.len()))
             .map(crate::app::SelectedAgentRow::History)?
     };
@@ -529,7 +529,7 @@ fn load_agent_artifact(
             agent_name,
             attempt,
             ..
-        } => Ok(polyphony_core::load_workspace_run_history_record(
+        } => Ok(polyphony_core::load_workspace_agent_run_history_record(
             &workspace_path,
             &issue_id,
             started_at,
@@ -566,7 +566,7 @@ fn handle_key(
         },
         KeyCode::Char('1') => {
             app.clear_detail_stack();
-            app.active_tab = app::ActiveTab::Triggers;
+            app.active_tab = app::ActiveTab::Inbox;
         },
         KeyCode::Char('2') => {
             app.clear_detail_stack();
@@ -587,6 +587,31 @@ fn handle_key(
         KeyCode::Char('6') => {
             app.clear_detail_stack();
             app.active_tab = app::ActiveTab::Logs;
+        },
+        KeyCode::Char('\\') => {
+            // Cycle through repo filter: All → repo1 → repo2 → ... → All
+            let repo_ids = &snapshot.repo_ids;
+            if repo_ids.is_empty() {
+                app.selected_repo = None;
+            } else {
+                match &app.selected_repo {
+                    None => {
+                        app.selected_repo = Some(repo_ids[0].clone());
+                        app.show_toast(format!("Filter: {}", repo_ids[0]), None);
+                    },
+                    Some(current) => {
+                        let idx = repo_ids.iter().position(|id| id == current);
+                        let next = idx.map(|i| i + 1).unwrap_or(0);
+                        if next < repo_ids.len() {
+                            app.selected_repo = Some(repo_ids[next].clone());
+                            app.show_toast(format!("Filter: {}", repo_ids[next]), None);
+                        } else {
+                            app.selected_repo = None;
+                            app.show_toast("Filter: All repos".to_string(), None);
+                        }
+                    },
+                }
+            }
         },
         KeyCode::Char('J') => {},
         KeyCode::Char('K') => {},
@@ -643,39 +668,39 @@ fn handle_key(
             }
         },
 
-        // Toggle collapse on movement rows (Orchestrator tab)
+        // Toggle collapse on run rows (Orchestrator tab)
         KeyCode::Char(' ') => {
             if app.active_tab == app::ActiveTab::Orchestrator
-                && let Some(app::OrchestratorTreeRow::Movement { snapshot_index }) =
+                && let Some(app::OrchestratorTreeRow::Run { snapshot_index }) =
                     app.selected_orchestrator_row().cloned()
             {
-                let movement = &snapshot.movements[snapshot_index];
-                app.toggle_movement_collapse(&movement.id.clone());
+                let run = &snapshot.runs[snapshot_index];
+                app.toggle_run_collapse(&run.id.clone());
                 app.rebuild_orchestrator_tree(snapshot);
             }
         },
 
         // Sort cycling
         KeyCode::Char('s') => {
-            if app.active_tab == app::ActiveTab::Triggers {
+            if app.active_tab == app::ActiveTab::Inbox {
                 app.issue_sort = app.issue_sort.cycle();
                 app.rebuild_sorted_indices(snapshot);
             } else if app.active_tab == app::ActiveTab::Orchestrator {
-                app.movement_sort = app.movement_sort.cycle();
+                app.run_sort = app.run_sort.cycle();
                 app.on_snapshot(snapshot);
             }
         },
 
         // Detail view (Enter opens for active tab)
         KeyCode::Enter => {
-            if app.active_tab == app::ActiveTab::Triggers
-                && let Some(trigger) = app.selected_trigger(snapshot)
+            if app.active_tab == app::ActiveTab::Inbox
+                && let Some(item) = app.selected_inbox_item(snapshot)
             {
-                app.push_detail(crate::app::DetailView::Trigger {
-                    trigger_id: trigger.trigger_id.clone(),
+                app.push_detail(crate::app::DetailView::InboxItem {
+                    item_id: item.item_id.clone(),
                     scroll: 0,
                     focus: Default::default(),
-                    movements_selected: 0,
+                    runs_selected: 0,
                     agents_selected: 0,
                 });
             } else if app.active_tab == app::ActiveTab::Tasks
@@ -687,20 +712,20 @@ fn handle_key(
                 });
             } else if app.active_tab == app::ActiveTab::Orchestrator {
                 match app.selected_orchestrator_row().cloned() {
-                    Some(app::OrchestratorTreeRow::Movement { snapshot_index }) => {
-                        let movement = &snapshot.movements[snapshot_index];
-                        app.push_detail(crate::app::DetailView::Movement {
-                            movement_id: movement.id.clone(),
+                    Some(app::OrchestratorTreeRow::Run { snapshot_index }) => {
+                        let run = &snapshot.runs[snapshot_index];
+                        app.push_detail(crate::app::DetailView::Run {
+                            run_id: run.id.clone(),
                             scroll: 0,
                         });
                     },
-                    Some(app::OrchestratorTreeRow::Trigger { trigger_index, .. }) => {
-                        let trigger = &snapshot.visible_triggers[trigger_index];
-                        app.push_detail(crate::app::DetailView::Trigger {
-                            trigger_id: trigger.trigger_id.clone(),
+                    Some(app::OrchestratorTreeRow::InboxItem { item_index, .. }) => {
+                        let item = &snapshot.inbox_items[item_index];
+                        app.push_detail(crate::app::DetailView::InboxItem {
+                            item_id: item.item_id.clone(),
                             scroll: 0,
                             focus: Default::default(),
-                            movements_selected: 0,
+                            runs_selected: 0,
                             agents_selected: 0,
                         });
                     },
@@ -739,22 +764,19 @@ fn handle_key(
                             });
                         }
                     },
-                    Some(app::OrchestratorTreeRow::Outcome {
-                        movement_snapshot_index,
-                    }) => {
-                        let movement = &snapshot.movements[movement_snapshot_index];
+                    Some(app::OrchestratorTreeRow::Outcome { run_snapshot_index }) => {
+                        let run = &snapshot.runs[run_snapshot_index];
                         app.push_detail(crate::app::DetailView::Deliverable {
-                            movement_id: movement.id.clone(),
+                            run_id: run.id.clone(),
                             scroll: 0,
                         });
                     },
                     Some(app::OrchestratorTreeRow::LogEntry {
-                        movement_snapshot_index,
-                        ..
+                        run_snapshot_index, ..
                     }) => {
-                        let movement = &snapshot.movements[movement_snapshot_index];
-                        app.push_detail(crate::app::DetailView::Movement {
-                            movement_id: movement.id.clone(),
+                        let run = &snapshot.runs[run_snapshot_index];
+                        app.push_detail(crate::app::DetailView::Run {
+                            run_id: run.id.clone(),
                             scroll: 0,
                         });
                     },
@@ -773,22 +795,21 @@ fn handle_key(
                         }
                     },
                     Some(app::OrchestratorTreeRow::Progress {
-                        movement_snapshot_index,
-                        ..
+                        run_snapshot_index, ..
                     }) => {
-                        let movement = &snapshot.movements[movement_snapshot_index];
-                        app.push_detail(crate::app::DetailView::Movement {
-                            movement_id: movement.id.clone(),
+                        let run = &snapshot.runs[run_snapshot_index];
+                        app.push_detail(crate::app::DetailView::Run {
+                            run_id: run.id.clone(),
                             scroll: 0,
                         });
                     },
                     None => {},
                 }
             } else if app.active_tab == app::ActiveTab::Deliverables
-                && let Some(movement) = app.selected_deliverable(snapshot)
+                && let Some(run) = app.selected_deliverable(snapshot)
             {
                 app.push_detail(crate::app::DetailView::Deliverable {
-                    movement_id: movement.id.clone(),
+                    run_id: run.id.clone(),
                     scroll: 0,
                 });
             } else if app.active_tab == app::ActiveTab::Agents
@@ -802,11 +823,11 @@ fn handle_key(
             }
         },
 
-        // Open trigger in browser
+        // Open item in browser
         KeyCode::Char('o') => {
-            if app.active_tab == app::ActiveTab::Triggers
-                && let Some(trigger) = app.selected_trigger(snapshot)
-                && let Some(url) = &trigger.url
+            if app.active_tab == app::ActiveTab::Inbox
+                && let Some(item) = app.selected_inbox_item(snapshot)
+                && let Some(url) = &item.url
             {
                 open_url(url);
             }
@@ -815,22 +836,18 @@ fn handle_key(
             let url = match app.active_tab {
                 app::ActiveTab::Deliverables => app
                     .selected_deliverable(snapshot)
-                    .and_then(|movement| movement.deliverable.as_ref())
+                    .and_then(|run| run.deliverable.as_ref())
                     .and_then(|deliverable| deliverable.url.as_deref()),
-                app::ActiveTab::Orchestrator => {
-                    app.selected_movement(snapshot).and_then(|movement| {
-                        movement
-                            .deliverable
-                            .as_ref()
-                            .and_then(|deliverable| deliverable.url.as_deref())
-                            .or_else(|| {
-                                movement
-                                    .review_target
-                                    .as_ref()
-                                    .and_then(|target| target.url.as_deref())
-                            })
-                    })
-                },
+                app::ActiveTab::Orchestrator => app.selected_run(snapshot).and_then(|run| {
+                    run.deliverable
+                        .as_ref()
+                        .and_then(|deliverable| deliverable.url.as_deref())
+                        .or_else(|| {
+                            run.review_target
+                                .as_ref()
+                                .and_then(|target| target.url.as_deref())
+                        })
+                }),
                 _ => None,
             };
             if let Some(url) = url {
@@ -840,48 +857,48 @@ fn handle_key(
 
         // Search
         KeyCode::Char('/') => {
-            if app.active_tab == app::ActiveTab::Triggers {
+            if app.active_tab == app::ActiveTab::Inbox {
                 app.search_active = true;
                 app.search_query.clear();
             } else if app.active_tab == app::ActiveTab::Orchestrator {
-                app.movements_search_active = true;
-                app.movements_search_query.clear();
+                app.runs_search_active = true;
+                app.runs_search_query.clear();
             } else if app.active_tab == app::ActiveTab::Logs {
                 app.logs_search_active = true;
                 app.logs_search_query.clear();
             }
         },
 
-        // Dispatch selected trigger
+        // Dispatch selected item
         KeyCode::Char('n') => {
-            if app.active_tab == app::ActiveTab::Triggers {
+            if app.active_tab == app::ActiveTab::Inbox {
                 app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
                 return None;
             }
         },
         KeyCode::Char('d') => {
-            if app.active_tab == app::ActiveTab::Triggers
-                && let Some(trigger) = app.selected_trigger(snapshot)
+            if app.active_tab == app::ActiveTab::Inbox
+                && let Some(item) = app.selected_inbox_item(snapshot)
             {
-                return start_dispatch_for_trigger(app, trigger, None);
+                return start_dispatch_for_inbox_item(app, item, None);
             }
         },
         KeyCode::Char('a') => {
-            if app.active_tab == app::ActiveTab::Triggers
-                && let Some(trigger) = app.selected_trigger(snapshot)
-                && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
+            if app.active_tab == app::ActiveTab::Inbox
+                && let Some(item) = app.selected_inbox_item(snapshot)
+                && item.approval_state == polyphony_core::DispatchApprovalState::Waiting
             {
-                app.show_toast(format!("Approving {}", trigger.identifier), None);
-                return Some(RuntimeCommand::ApproveIssueTrigger {
-                    issue_id: trigger.trigger_id.clone(),
-                    source: trigger.source.clone(),
+                app.show_toast(format!("Approving {}", item.identifier), None);
+                return Some(RuntimeCommand::ApproveInboxItem {
+                    item_id: item.item_id.clone(),
+                    source: item.source.clone(),
                 });
             }
-            if let Some(movement) = selected_resolvable_deliverable_movement(app, snapshot) {
-                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+            if let Some(run) = selected_resolvable_deliverable_run(app, snapshot) {
+                let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                 app.show_toast(format!("Accepting & merging {label}"), None);
-                return Some(RuntimeCommand::ResolveMovementDeliverable {
-                    movement_id: movement.id.clone(),
+                return Some(RuntimeCommand::ResolveRunDeliverable {
+                    run_id: run.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Accepted,
                 });
             }
@@ -889,37 +906,37 @@ fn handle_key(
 
         // Merge deliverable (local branch or PR)
         KeyCode::Char('M') => {
-            if let Some(movement) = selected_deliverable_movement(app, snapshot)
-                && movement.deliverable.is_some()
+            if let Some(run) = selected_deliverable_run(app, snapshot)
+                && run.deliverable.is_some()
             {
-                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                 app.show_toast(format!("Merging {label}"), None);
                 return Some(RuntimeCommand::MergeDeliverable {
-                    movement_id: movement.id.clone(),
+                    run_id: run.id.clone(),
                 });
             }
-            if let Some(app::DetailView::Movement { movement_id, .. }) = app.current_detail()
-                && let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                && movement.deliverable.is_some()
+            if let Some(app::DetailView::Run { run_id, .. }) = app.current_detail()
+                && let Some(run) = find_run_by_id(snapshot, run_id)
+                && run.deliverable.is_some()
             {
-                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                 app.show_toast(format!("Merging {label}"), None);
                 return Some(RuntimeCommand::MergeDeliverable {
-                    movement_id: movement.id.clone(),
+                    run_id: run.id.clone(),
                 });
             }
         },
 
         // Dispatch issue (pick agent)
         KeyCode::Char('D') => {
-            if app.active_tab == app::ActiveTab::Triggers
-                && let Some(issue) = app.selected_trigger(snapshot)
-                && issue.kind == VisibleTriggerKind::Issue
+            if app.active_tab == app::ActiveTab::Inbox
+                && let Some(issue) = app.selected_inbox_item(snapshot)
+                && issue.kind == InboxItemKind::Issue
                 && !snapshot.agent_profiles.is_empty()
             {
                 app.show_agent_picker = true;
                 app.agent_picker_selected = 0;
-                app.agent_picker_issue_id = Some(issue.trigger_id.clone());
+                app.agent_picker_issue_id = Some(issue.item_id.clone());
             }
         },
 
@@ -936,20 +953,20 @@ fn handle_key(
             };
         },
         KeyCode::Char('x') => {
-            if app.active_tab == app::ActiveTab::Triggers
-                && let Some(trigger) = app.selected_trigger(snapshot)
-                && trigger_can_close_issue(snapshot, trigger)
+            if app.active_tab == app::ActiveTab::Inbox
+                && let Some(item) = app.selected_inbox_item(snapshot)
+                && inbox_item_can_close_issue(snapshot, item)
             {
-                app.show_toast(format!("Closing {}", trigger.identifier), None);
-                return Some(RuntimeCommand::CloseIssueTrigger {
-                    issue_id: trigger.trigger_id.clone(),
+                app.show_toast(format!("Closing {}", item.identifier), None);
+                return Some(RuntimeCommand::CloseTrackerIssue {
+                    issue_id: item.item_id.clone(),
                 });
             }
-            if let Some(movement) = selected_resolvable_deliverable_movement(app, snapshot) {
-                let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+            if let Some(run) = selected_resolvable_deliverable_run(app, snapshot) {
+                let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                 app.show_toast(format!("Rejecting {label}"), None);
-                return Some(RuntimeCommand::ResolveMovementDeliverable {
-                    movement_id: movement.id.clone(),
+                return Some(RuntimeCommand::ResolveRunDeliverable {
+                    run_id: run.id.clone(),
                     decision: polyphony_core::DeliverableDecision::Rejected,
                 });
             }
@@ -959,7 +976,7 @@ fn handle_key(
         KeyCode::Char('w') => {
             let workspace = match app.active_tab {
                 app::ActiveTab::Orchestrator => app
-                    .selected_movement(snapshot)
+                    .selected_run(snapshot)
                     .and_then(|m| m.workspace_path.clone()),
                 app::ActiveTab::Agents => match app.selected_agent(snapshot) {
                     Some(app::SelectedAgentRow::Running(r)) => Some(r.workspace_path.clone()),
@@ -1003,86 +1020,83 @@ fn handle_key(
             }
         },
 
-        // Inject feedback into a movement from the Orchestration tab
+        // Inject feedback into a run from the Orchestration tab
         KeyCode::Char('f') => {
             if app.active_tab == app::ActiveTab::Orchestrator
                 && let Some(row) = app.selected_orchestrator_row().cloned()
             {
-                let movement = match row {
-                    app::OrchestratorTreeRow::Movement { snapshot_index, .. }
-                    | app::OrchestratorTreeRow::Trigger {
-                        movement_snapshot_index: snapshot_index,
+                let run = match row {
+                    app::OrchestratorTreeRow::Run { snapshot_index, .. }
+                    | app::OrchestratorTreeRow::InboxItem {
+                        run_snapshot_index: snapshot_index,
                         ..
                     }
                     | app::OrchestratorTreeRow::Progress {
-                        movement_snapshot_index: snapshot_index,
+                        run_snapshot_index: snapshot_index,
                         ..
                     }
                     | app::OrchestratorTreeRow::Outcome {
-                        movement_snapshot_index: snapshot_index,
+                        run_snapshot_index: snapshot_index,
                         ..
                     }
                     | app::OrchestratorTreeRow::LogEntry {
-                        movement_snapshot_index: snapshot_index,
+                        run_snapshot_index: snapshot_index,
                         ..
-                    } => snapshot.movements.get(snapshot_index),
+                    } => snapshot.runs.get(snapshot_index),
                     app::OrchestratorTreeRow::Task { snapshot_index, .. } => {
                         let task = &snapshot.tasks[snapshot_index];
-                        snapshot.movements.iter().find(|m| m.id == task.movement_id)
+                        snapshot.runs.iter().find(|m| m.id == task.run_id)
                     },
                     app::OrchestratorTreeRow::AgentSession { history_index, .. } => {
-                        let session = &snapshot.agent_history[history_index];
-                        snapshot.movements.iter().find(|m| {
+                        let session = &snapshot.agent_run_history[history_index];
+                        snapshot.runs.iter().find(|m| {
                             m.issue_identifier.as_deref() == Some(&session.issue_identifier)
                         })
                     },
                     app::OrchestratorTreeRow::RunningAgent { running_index, .. }
                     | app::OrchestratorTreeRow::AgentLogLine { running_index, .. } => {
                         let running = &snapshot.running[running_index];
-                        snapshot.movements.iter().find(|m| {
+                        snapshot.runs.iter().find(|m| {
                             m.issue_identifier.as_deref() == Some(running.issue_identifier.as_str())
                         })
                     },
                 };
-                if let Some(movement) = movement
-                    && movement.workspace_path.is_some()
+                if let Some(run) = run
+                    && run.workspace_path.is_some()
                 {
                     app.feedback_modal = Some(crate::app::FeedbackModalState::new(
-                        movement.id.clone(),
-                        movement.title.clone(),
+                        run.id.clone(),
+                        run.title.clone(),
                     ));
                     return None;
                 }
             }
         },
 
-        // Retry failed movement from its first failed task
+        // Retry failed run from its first failed task
         KeyCode::Char('t') => {
             if app.active_tab == app::ActiveTab::Orchestrator
                 && let Some(row) = app.selected_orchestrator_row().cloned()
             {
                 match row {
-                    app::OrchestratorTreeRow::Movement { snapshot_index, .. } => {
-                        let movement = &snapshot.movements[snapshot_index];
-                        if movement_can_retry(snapshot, &movement.id) {
-                            let label = movement
-                                .issue_identifier
-                                .as_deref()
-                                .unwrap_or(&movement.title);
+                    app::OrchestratorTreeRow::Run { snapshot_index, .. } => {
+                        let run = &snapshot.runs[snapshot_index];
+                        if run_can_retry(snapshot, &run.id) {
+                            let label = run.issue_identifier.as_deref().unwrap_or(&run.title);
                             app.show_toast(format!("Retrying {label}"), None);
-                            return Some(RuntimeCommand::RetryMovement {
-                                movement_id: movement.id.clone(),
+                            return Some(RuntimeCommand::RetryRun {
+                                run_id: run.id.clone(),
                             });
                         }
                     },
                     app::OrchestratorTreeRow::Task { snapshot_index, .. } => {
                         let task = &snapshot.tasks[snapshot_index];
                         if task.status != polyphony_core::TaskStatus::Completed
-                            && movement_can_retry(snapshot, &task.movement_id)
+                            && run_can_retry(snapshot, &task.run_id)
                         {
                             app.show_toast(format!("Retrying: {}", task.title), None);
-                            return Some(RuntimeCommand::RetryMovement {
-                                movement_id: task.movement_id.clone(),
+                            return Some(RuntimeCommand::RetryRun {
+                                run_id: task.run_id.clone(),
                             });
                         }
                     },
@@ -1104,7 +1118,7 @@ fn handle_key(
                 ) {
                     app.show_toast(format!("Resolved: {}", task.title), None);
                     return Some(RuntimeCommand::ResolveTask {
-                        movement_id: task.movement_id.clone(),
+                        run_id: task.run_id.clone(),
                         task_id: task.id.clone(),
                     });
                 }
@@ -1166,20 +1180,20 @@ fn handle_detail_key(
     let detail = app.current_detail().cloned()?;
 
     match detail {
-        crate::app::DetailView::Trigger { ref trigger_id, .. } => match key {
+        crate::app::DetailView::InboxItem { ref item_id, .. } => match key {
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
             KeyCode::Enter => {
-                // Open the single movement detail if one exists
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                    && let Some(movement) = snapshot
-                        .movements
+                // Open the single run detail if one exists
+                if let Some(item) = find_inbox_item_by_id(snapshot, item_id)
+                    && let Some(run) = snapshot
+                        .runs
                         .iter()
-                        .find(|m| m.issue_identifier.as_deref() == Some(&*trigger.identifier))
+                        .find(|m| m.issue_identifier.as_deref() == Some(&*item.identifier))
                 {
-                    app.push_detail(crate::app::DetailView::Movement {
-                        movement_id: movement.id.clone(),
+                    app.push_detail(crate::app::DetailView::Run {
+                        run_id: run.id.clone(),
                         scroll: 0,
                     });
                 }
@@ -1197,51 +1211,49 @@ fn handle_detail_key(
                 scroll_detail_back(app, 8);
             },
             KeyCode::Char('o') => {
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                    && let Some(url) = &trigger.url
+                if let Some(item) = find_inbox_item_by_id(snapshot, item_id)
+                    && let Some(url) = &item.url
                 {
                     open_url(url);
                 }
             },
             KeyCode::Char('a') => {
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                    && trigger.approval_state == polyphony_core::IssueApprovalState::Waiting
+                if let Some(item) = find_inbox_item_by_id(snapshot, item_id)
+                    && item.approval_state == polyphony_core::DispatchApprovalState::Waiting
                 {
-                    app.show_toast(format!("Approving {}", trigger.identifier), None);
-                    return Some(RuntimeCommand::ApproveIssueTrigger {
-                        issue_id: trigger.trigger_id.clone(),
-                        source: trigger.source.clone(),
+                    app.show_toast(format!("Approving {}", item.identifier), None);
+                    return Some(RuntimeCommand::ApproveInboxItem {
+                        item_id: item.item_id.clone(),
+                        source: item.source.clone(),
                     });
                 }
             },
             KeyCode::Char('x') => {
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id)
-                    && trigger_can_close_issue(snapshot, trigger)
+                if let Some(item) = find_inbox_item_by_id(snapshot, item_id)
+                    && inbox_item_can_close_issue(snapshot, item)
                 {
-                    app.show_toast(format!("Closing {}", trigger.identifier), None);
-                    return Some(RuntimeCommand::CloseIssueTrigger {
-                        issue_id: trigger.trigger_id.clone(),
+                    app.show_toast(format!("Closing {}", item.identifier), None);
+                    return Some(RuntimeCommand::CloseTrackerIssue {
+                        issue_id: item.item_id.clone(),
                     });
                 }
             },
             KeyCode::Char('d') => {
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
-                    return start_dispatch_for_trigger(app, trigger, None);
+                if let Some(item) = find_inbox_item_by_id(snapshot, item_id) {
+                    return start_dispatch_for_inbox_item(app, item, None);
                 }
             },
             KeyCode::Char('e') | KeyCode::Char('E') => {
-                if let Some(trigger) = find_trigger_by_id(snapshot, trigger_id) {
+                if let Some(item) = find_inbox_item_by_id(snapshot, item_id) {
                     app.push_detail(crate::app::DetailView::Events {
-                        filter: trigger.identifier.clone(),
+                        filter: item.identifier.clone(),
                         scroll: u16::MAX,
                     });
                 }
             },
             _ => {},
         },
-        crate::app::DetailView::Movement {
-            ref movement_id, ..
-        } => match key {
+        crate::app::DetailView::Run { ref run_id, .. } => match key {
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
@@ -1259,73 +1271,68 @@ fn handle_detail_key(
                 scroll_detail_back(app, 8);
             },
             KeyCode::Char('O') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
-                    let url = movement
+                if let Some(run) = find_run_by_id(snapshot, run_id) {
+                    let url = run
                         .deliverable
                         .as_ref()
                         .and_then(|d| d.url.as_deref())
-                        .or_else(|| {
-                            movement
-                                .review_target
-                                .as_ref()
-                                .and_then(|t| t.url.as_deref())
-                        });
+                        .or_else(|| run.review_target.as_ref().and_then(|t| t.url.as_deref()));
                     if let Some(url) = url {
                         open_url(url);
                     }
                 }
             },
             KeyCode::Char('t') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement_can_retry(snapshot, &movement.id)
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && run_can_retry(snapshot, &run.id)
                 {
-                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                     app.show_toast(format!("Retrying {label}"), None);
-                    return Some(RuntimeCommand::RetryMovement {
-                        movement_id: movement.id.clone(),
+                    return Some(RuntimeCommand::RetryRun {
+                        run_id: run.id.clone(),
                     });
                 }
             },
             KeyCode::Char('a') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement_can_resolve_deliverable(movement)
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && run_can_resolve_deliverable(run)
                 {
-                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                     app.show_toast(format!("Accepting & merging {label}"), None);
-                    return Some(RuntimeCommand::ResolveMovementDeliverable {
-                        movement_id: movement.id.clone(),
+                    return Some(RuntimeCommand::ResolveRunDeliverable {
+                        run_id: run.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Accepted,
                     });
                 }
             },
             KeyCode::Char('x') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement_can_resolve_deliverable(movement)
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && run_can_resolve_deliverable(run)
                 {
-                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                     app.show_toast(format!("Rejecting {label}"), None);
-                    return Some(RuntimeCommand::ResolveMovementDeliverable {
-                        movement_id: movement.id.clone(),
+                    return Some(RuntimeCommand::ResolveRunDeliverable {
+                        run_id: run.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
                     });
                 }
             },
             KeyCode::Char('f') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement.workspace_path.is_some()
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && run.workspace_path.is_some()
                 {
                     app.feedback_modal = Some(crate::app::FeedbackModalState::new(
-                        movement.id.clone(),
-                        movement.title.clone(),
+                        run.id.clone(),
+                        run.title.clone(),
                     ));
                 }
             },
             KeyCode::Char('e') | KeyCode::Char('E') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
-                    let filter = movement
+                if let Some(run) = find_run_by_id(snapshot, run_id) {
+                    let filter = run
                         .issue_identifier
                         .clone()
-                        .unwrap_or_else(|| movement.id.clone());
+                        .unwrap_or_else(|| run.id.clone());
                     app.push_detail(crate::app::DetailView::Events {
                         filter,
                         scroll: u16::MAX,
@@ -1333,8 +1340,8 @@ fn handle_detail_key(
                 }
             },
             KeyCode::Char('w') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && let Some(ws) = &movement.workspace_path
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && let Some(ws) = &run.workspace_path
                 {
                     let ws = if ws.is_relative() {
                         std::env::current_dir()
@@ -1371,11 +1378,11 @@ fn handle_detail_key(
             KeyCode::Char('t') => {
                 if let Some(task) = snapshot.tasks.iter().find(|task| task.id == *task_id)
                     && task.status != polyphony_core::TaskStatus::Completed
-                    && movement_can_retry(snapshot, &task.movement_id)
+                    && run_can_retry(snapshot, &task.run_id)
                 {
                     app.show_toast(format!("Retrying: {}", task.title), None);
-                    return Some(RuntimeCommand::RetryMovement {
-                        movement_id: task.movement_id.clone(),
+                    return Some(RuntimeCommand::RetryRun {
+                        run_id: task.run_id.clone(),
                     });
                 }
             },
@@ -1388,7 +1395,7 @@ fn handle_detail_key(
                 {
                     app.show_toast(format!("Resolved: {}", task.title), None);
                     return Some(RuntimeCommand::ResolveTask {
-                        movement_id: task.movement_id.clone(),
+                        run_id: task.run_id.clone(),
                         task_id: task.id.clone(),
                     });
                 }
@@ -1452,9 +1459,7 @@ fn handle_detail_key(
             },
             _ => {},
         },
-        crate::app::DetailView::Deliverable {
-            ref movement_id, ..
-        } => match key {
+        crate::app::DetailView::Deliverable { ref run_id, .. } => match key {
             KeyCode::Tab if in_split => {
                 app.split_focus = crate::app::SplitFocus::List;
             },
@@ -1472,42 +1477,37 @@ fn handle_detail_key(
                 scroll_detail_back(app, 8);
             },
             KeyCode::Char('O') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id) {
-                    let url = movement
+                if let Some(run) = find_run_by_id(snapshot, run_id) {
+                    let url = run
                         .deliverable
                         .as_ref()
                         .and_then(|d| d.url.as_deref())
-                        .or_else(|| {
-                            movement
-                                .review_target
-                                .as_ref()
-                                .and_then(|t| t.url.as_deref())
-                        });
+                        .or_else(|| run.review_target.as_ref().and_then(|t| t.url.as_deref()));
                     if let Some(url) = url {
                         open_url(url);
                     }
                 }
             },
             KeyCode::Char('a') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement_can_resolve_deliverable(movement)
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && run_can_resolve_deliverable(run)
                 {
-                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                     app.show_toast(format!("Accepting & merging {label}"), None);
-                    return Some(RuntimeCommand::ResolveMovementDeliverable {
-                        movement_id: movement.id.clone(),
+                    return Some(RuntimeCommand::ResolveRunDeliverable {
+                        run_id: run.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Accepted,
                     });
                 }
             },
             KeyCode::Char('x') => {
-                if let Some(movement) = find_movement_by_id(snapshot, movement_id)
-                    && movement_can_resolve_deliverable(movement)
+                if let Some(run) = find_run_by_id(snapshot, run_id)
+                    && run_can_resolve_deliverable(run)
                 {
-                    let label = movement.issue_identifier.as_deref().unwrap_or(&movement.id);
+                    let label = run.issue_identifier.as_deref().unwrap_or(&run.id);
                     app.show_toast(format!("Rejecting {label}"), None);
-                    return Some(RuntimeCommand::ResolveMovementDeliverable {
-                        movement_id: movement.id.clone(),
+                    return Some(RuntimeCommand::ResolveRunDeliverable {
+                        run_id: run.id.clone(),
                         decision: polyphony_core::DeliverableDecision::Rejected,
                     });
                 }
@@ -1625,23 +1625,20 @@ fn scroll_detail_back(app: &mut AppState, amount: u16) {
     }
 }
 
-/// Navigate within a Trigger detail view: when a section is focused, j/k moves
+/// Navigate within an inbox item detail view: when a section is focused, j/k moves
 /// the mini-list selection; when Body is focused, j/k scrolls the page.
-fn find_trigger_by_id<'a>(
+fn find_inbox_item_by_id<'a>(
     snapshot: &'a RuntimeSnapshot,
-    trigger_id: &str,
-) -> Option<&'a polyphony_core::VisibleTriggerRow> {
-    snapshot
-        .visible_triggers
-        .iter()
-        .find(|t| t.trigger_id == trigger_id)
+    item_id: &str,
+) -> Option<&'a polyphony_core::InboxItemRow> {
+    snapshot.inbox_items.iter().find(|t| t.item_id == item_id)
 }
 
-fn find_movement_by_id<'a>(
+fn find_run_by_id<'a>(
     snapshot: &'a RuntimeSnapshot,
-    movement_id: &str,
-) -> Option<&'a polyphony_core::MovementRow> {
-    snapshot.movements.iter().find(|m| m.id == movement_id)
+    run_id: &str,
+) -> Option<&'a polyphony_core::RunRow> {
+    snapshot.runs.iter().find(|m| m.id == run_id)
 }
 
 /// Return the issue_id of the currently selected running agent, if any.
@@ -1671,28 +1668,27 @@ fn selected_running_agent_issue_id(app: &AppState, snapshot: &RuntimeSnapshot) -
     }
 }
 
-fn selected_deliverable_movement<'a>(
+fn selected_deliverable_run<'a>(
     app: &AppState,
     snapshot: &'a RuntimeSnapshot,
-) -> Option<&'a polyphony_core::MovementRow> {
+) -> Option<&'a polyphony_core::RunRow> {
     match app.active_tab {
         app::ActiveTab::Deliverables => app.selected_deliverable(snapshot),
         app::ActiveTab::Orchestrator => {
-            // When a Movement row is selected directly.
+            // When a Run row is selected directly.
             if let Some(m) = app
-                .selected_movement(snapshot)
+                .selected_run(snapshot)
                 .filter(|m| m.deliverable.is_some())
             {
                 return Some(m);
             }
-            // When a child row (Outcome) is selected, find parent movement.
-            if let Some(app::OrchestratorTreeRow::Outcome {
-                movement_snapshot_index,
-            }) = app.selected_orchestrator_row()
+            // When a child row (Outcome) is selected, find parent run.
+            if let Some(app::OrchestratorTreeRow::Outcome { run_snapshot_index }) =
+                app.selected_orchestrator_row()
             {
                 return snapshot
-                    .movements
-                    .get(*movement_snapshot_index)
+                    .runs
+                    .get(*run_snapshot_index)
                     .filter(|m| m.deliverable.is_some());
             }
             None
@@ -1701,37 +1697,32 @@ fn selected_deliverable_movement<'a>(
     }
 }
 
-fn selected_resolvable_deliverable_movement<'a>(
+fn selected_resolvable_deliverable_run<'a>(
     app: &AppState,
     snapshot: &'a RuntimeSnapshot,
-) -> Option<&'a polyphony_core::MovementRow> {
-    selected_deliverable_movement(app, snapshot)
-        .filter(|movement| movement_can_resolve_deliverable(movement))
+) -> Option<&'a polyphony_core::RunRow> {
+    selected_deliverable_run(app, snapshot).filter(|run| run_can_resolve_deliverable(run))
 }
 
-fn movement_can_resolve_deliverable(movement: &polyphony_core::MovementRow) -> bool {
-    movement.deliverable.as_ref().is_some_and(|deliverable| {
+fn run_can_resolve_deliverable(run: &polyphony_core::RunRow) -> bool {
+    run.deliverable.as_ref().is_some_and(|deliverable| {
         deliverable.decision == polyphony_core::DeliverableDecision::Waiting
     })
 }
 
-fn movement_can_retry(snapshot: &RuntimeSnapshot, movement_id: &str) -> bool {
-    let Some(movement) = find_movement_by_id(snapshot, movement_id) else {
+fn run_can_retry(snapshot: &RuntimeSnapshot, run_id: &str) -> bool {
+    let Some(run) = find_run_by_id(snapshot, run_id) else {
         return false;
     };
-    if movement.status == polyphony_core::MovementStatus::Failed {
+    if run.status == polyphony_core::RunStatus::Failed {
         return true;
     }
-    if movement.status != polyphony_core::MovementStatus::InProgress {
+    if run.status != polyphony_core::RunStatus::InProgress {
         return false;
     }
 
     let mut has_retryable_task = false;
-    for task in snapshot
-        .tasks
-        .iter()
-        .filter(|task| task.movement_id == movement_id)
-    {
+    for task in snapshot.tasks.iter().filter(|task| task.run_id == run_id) {
         match task.status {
             polyphony_core::TaskStatus::Failed => return true,
             polyphony_core::TaskStatus::Pending | polyphony_core::TaskStatus::Cancelled => {
@@ -1744,22 +1735,22 @@ fn movement_can_retry(snapshot: &RuntimeSnapshot, movement_id: &str) -> bool {
     has_retryable_task
 }
 
-fn trigger_can_close_issue(
+fn inbox_item_can_close_issue(
     snapshot: &RuntimeSnapshot,
-    trigger: &polyphony_core::VisibleTriggerRow,
+    item: &polyphony_core::InboxItemRow,
 ) -> bool {
-    if trigger.kind != VisibleTriggerKind::Issue {
+    if item.kind != InboxItemKind::Issue {
         return false;
     }
     if snapshot
         .running
         .iter()
-        .any(|row| row.issue_id == trigger.trigger_id)
+        .any(|row| row.issue_id == item.item_id)
     {
         return false;
     }
     !matches!(
-        trigger.status.to_ascii_lowercase().as_str(),
+        item.status.to_ascii_lowercase().as_str(),
         "closed" | "done" | "completed" | "cancelled" | "canceled" | "reviewed" | "already_fixed"
     )
 }
@@ -1771,32 +1762,32 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
         return;
     }
     let new_detail = match app.active_tab {
-        app::ActiveTab::Triggers => {
-            app.selected_trigger(snapshot)
-                .map(|t| crate::app::DetailView::Trigger {
-                    trigger_id: t.trigger_id.clone(),
+        app::ActiveTab::Inbox => {
+            app.selected_inbox_item(snapshot)
+                .map(|t| crate::app::DetailView::InboxItem {
+                    item_id: t.item_id.clone(),
                     scroll: 0,
                     focus: Default::default(),
-                    movements_selected: 0,
+                    runs_selected: 0,
                     agents_selected: 0,
                 })
         },
         app::ActiveTab::Orchestrator => match app.selected_orchestrator_row().cloned() {
-            Some(app::OrchestratorTreeRow::Movement { snapshot_index }) => snapshot
-                .movements
+            Some(app::OrchestratorTreeRow::Run { snapshot_index }) => snapshot
+                .runs
                 .get(snapshot_index)
-                .map(|m| crate::app::DetailView::Movement {
-                    movement_id: m.id.clone(),
+                .map(|m| crate::app::DetailView::Run {
+                    run_id: m.id.clone(),
                     scroll: 0,
                 }),
-            Some(app::OrchestratorTreeRow::Trigger { trigger_index, .. }) => snapshot
-                .visible_triggers
-                .get(trigger_index)
-                .map(|t| crate::app::DetailView::Trigger {
-                    trigger_id: t.trigger_id.clone(),
+            Some(app::OrchestratorTreeRow::InboxItem { item_index, .. }) => snapshot
+                .inbox_items
+                .get(item_index)
+                .map(|t| crate::app::DetailView::InboxItem {
+                    item_id: t.item_id.clone(),
                     scroll: 0,
                     focus: Default::default(),
-                    movements_selected: 0,
+                    runs_selected: 0,
                     agents_selected: 0,
                 }),
             Some(app::OrchestratorTreeRow::Task { snapshot_index, .. }) => snapshot
@@ -1828,23 +1819,22 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     artifact_cache: Box::new(None),
                 })
             },
-            Some(app::OrchestratorTreeRow::Outcome {
-                movement_snapshot_index,
-            }) => snapshot.movements.get(movement_snapshot_index).map(|m| {
-                crate::app::DetailView::Deliverable {
-                    movement_id: m.id.clone(),
+            Some(app::OrchestratorTreeRow::Outcome { run_snapshot_index }) => snapshot
+                .runs
+                .get(run_snapshot_index)
+                .map(|m| crate::app::DetailView::Deliverable {
+                    run_id: m.id.clone(),
                     scroll: 0,
-                }
-            }),
+                }),
             Some(app::OrchestratorTreeRow::LogEntry {
-                movement_snapshot_index,
-                ..
-            }) => snapshot.movements.get(movement_snapshot_index).map(|m| {
-                crate::app::DetailView::Movement {
-                    movement_id: m.id.clone(),
+                run_snapshot_index, ..
+            }) => snapshot
+                .runs
+                .get(run_snapshot_index)
+                .map(|m| crate::app::DetailView::Run {
+                    run_id: m.id.clone(),
                     scroll: 0,
-                }
-            }),
+                }),
             Some(app::OrchestratorTreeRow::AgentLogLine { running_index, .. }) => {
                 let display_index = app
                     .sorted_agent_indices
@@ -1857,14 +1847,14 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                 })
             },
             Some(app::OrchestratorTreeRow::Progress {
-                movement_snapshot_index,
-                ..
-            }) => snapshot.movements.get(movement_snapshot_index).map(|m| {
-                crate::app::DetailView::Movement {
-                    movement_id: m.id.clone(),
+                run_snapshot_index, ..
+            }) => snapshot
+                .runs
+                .get(run_snapshot_index)
+                .map(|m| crate::app::DetailView::Run {
+                    run_id: m.id.clone(),
                     scroll: 0,
-                }
-            }),
+                }),
             None => None,
         },
         app::ActiveTab::Tasks => {
@@ -1877,7 +1867,7 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
         app::ActiveTab::Deliverables => {
             app.selected_deliverable(snapshot)
                 .map(|m| crate::app::DetailView::Deliverable {
-                    movement_id: m.id.clone(),
+                    run_id: m.id.clone(),
                     scroll: 0,
                 })
         },
@@ -2010,11 +2000,11 @@ fn cast_playback_target_for_task(
     task: &polyphony_core::TaskRow,
 ) -> Option<CastPlaybackTarget> {
     let agent_name = task.agent_name.clone()?;
-    let movement = find_movement_by_id(snapshot, &task.movement_id)?;
-    let issue_identifier = movement
+    let run = find_run_by_id(snapshot, &task.run_id)?;
+    let issue_identifier = run
         .issue_identifier
         .clone()
-        .unwrap_or_else(|| movement.id.clone());
+        .unwrap_or_else(|| run.id.clone());
 
     if let Some(running) = snapshot.running.iter().find(|running| {
         running.agent_name == agent_name && running.issue_identifier == issue_identifier
@@ -2030,7 +2020,7 @@ fn cast_playback_target_for_task(
 
     if task.status == polyphony_core::TaskStatus::InProgress {
         return Some(CastPlaybackTarget {
-            workspace_path: movement.workspace_path.clone(),
+            workspace_path: run.workspace_path.clone(),
             agent_name,
             issue_identifier,
             is_running: true,
@@ -2039,7 +2029,7 @@ fn cast_playback_target_for_task(
     }
 
     let latest_history = snapshot
-        .agent_history
+        .agent_run_history
         .iter()
         .filter(|history| {
             history.agent_name == agent_name && history.issue_identifier == issue_identifier
@@ -2056,7 +2046,7 @@ fn cast_playback_target_for_task(
     }
 
     Some(CastPlaybackTarget {
-        workspace_path: movement.workspace_path.clone(),
+        workspace_path: run.workspace_path.clone(),
         agent_name,
         issue_identifier,
         is_running: false,
@@ -2080,7 +2070,7 @@ fn request_cast_playback(app: &mut AppState, snapshot: &RuntimeSnapshot) {
         crate::app::ActiveTab::Agents => app.selected_agent(snapshot),
         crate::app::ActiveTab::Orchestrator => match app.selected_orchestrator_row().cloned() {
             Some(crate::app::OrchestratorTreeRow::AgentSession { history_index, .. }) => snapshot
-                .agent_history
+                .agent_run_history
                 .get(history_index)
                 .map(crate::app::SelectedAgentRow::History),
             Some(crate::app::OrchestratorTreeRow::RunningAgent { running_index, .. }) => snapshot
@@ -2600,16 +2590,16 @@ fn handle_mouse_scroll(
     }
 }
 
-fn start_dispatch_for_trigger(
+fn start_dispatch_for_inbox_item(
     app: &mut AppState,
-    trigger: &polyphony_core::VisibleTriggerRow,
+    item: &polyphony_core::InboxItemRow,
     agent_name: Option<String>,
 ) -> Option<RuntimeCommand> {
     app.dispatch_modal = Some(crate::app::DispatchModalState::new(
-        trigger.trigger_id.clone(),
-        trigger.identifier.clone(),
-        trigger.title.clone(),
-        trigger.kind,
+        item.item_id.clone(),
+        item.identifier.clone(),
+        item.title.clone(),
+        item.kind,
         agent_name,
     ));
     None
@@ -2656,21 +2646,21 @@ fn submit_dispatch_modal(app: &mut AppState) -> Option<RuntimeCommand> {
     let agent_label = modal.agent_name.as_deref().unwrap_or("default");
     let directives = modal.normalized_directives();
     app.show_toast(
-        format!("Dispatching {} to {agent_label}", modal.trigger_identifier),
+        format!("Dispatching {} to {agent_label}", modal.item_identifier),
         directives.clone(),
     );
-    app.dispatching_triggers.insert(modal.trigger_id.clone());
-    match modal.trigger_kind {
-        VisibleTriggerKind::Issue => Some(RuntimeCommand::DispatchIssue {
-            issue_id: modal.trigger_id,
+    app.dispatching_inbox_items.insert(modal.item_id.clone());
+    match modal.item_kind {
+        InboxItemKind::Issue => Some(RuntimeCommand::DispatchIssue {
+            issue_id: modal.item_id,
             agent_name: modal.agent_name,
             directives,
         }),
-        VisibleTriggerKind::PullRequestReview
-        | VisibleTriggerKind::PullRequestComment
-        | VisibleTriggerKind::PullRequestConflict => {
-            Some(RuntimeCommand::DispatchPullRequestTrigger {
-                trigger_id: modal.trigger_id,
+        InboxItemKind::PullRequestReview
+        | InboxItemKind::PullRequestComment
+        | InboxItemKind::PullRequestConflict => {
+            Some(RuntimeCommand::DispatchPullRequestInboxItem {
+                item_id: modal.item_id,
                 directives,
             })
         },
@@ -2802,8 +2792,8 @@ fn submit_feedback_modal(app: &mut AppState) -> Option<RuntimeCommand> {
         "Injecting feedback",
         Some(prompt.lines().next().unwrap_or("").to_string()),
     );
-    Some(RuntimeCommand::InjectMovementFeedback {
-        movement_id: modal.movement_id,
+    Some(RuntimeCommand::InjectRunFeedback {
+        run_id: modal.run_id,
         prompt,
         agent_name: modal.agent_name,
     })
@@ -2833,9 +2823,9 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use polyphony_core::{
         AgentContextEntry, AgentContextSnapshot, AgentEventKind, AttemptStatus, Deliverable,
-        DeliverableDecision, DeliverableKind, DeliverableStatus, IssueApprovalState,
-        PersistedRunRecord, RuntimeSnapshot, SnapshotCounts, TokenUsage, VisibleTriggerKind,
-        VisibleTriggerRow, workspace_run_history_artifact_path,
+        DeliverableDecision, DeliverableKind, DeliverableStatus, DispatchApprovalState,
+        InboxItemKind, InboxItemRow, PersistedAgentRunRecord, RuntimeSnapshot, SnapshotCounts,
+        TokenUsage, workspace_agent_run_history_artifact_path,
         workspace_saved_context_artifact_path,
     };
     use tokio::sync::mpsc;
@@ -2854,10 +2844,10 @@ mod tests {
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::ResolveMovementDeliverable {
-                movement_id,
+            Some(polyphony_orchestrator::RuntimeCommand::ResolveRunDeliverable {
+                run_id,
                 decision: polyphony_core::DeliverableDecision::Accepted,
-            }) if movement_id == "mov-1"
+            }) if run_id == "run-1"
         ));
     }
 
@@ -2866,7 +2856,7 @@ mod tests {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.movements[0]
+        snapshot.runs[0]
             .deliverable
             .as_mut()
             .expect("deliverable exists")
@@ -2891,10 +2881,10 @@ mod tests {
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::ResolveMovementDeliverable {
-                movement_id,
+            Some(polyphony_orchestrator::RuntimeCommand::ResolveRunDeliverable {
+                run_id,
                 decision: polyphony_core::DeliverableDecision::Rejected,
-            }) if movement_id == "mov-1"
+            }) if run_id == "run-1"
         ));
     }
 
@@ -2903,14 +2893,14 @@ mod tests {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.movements[0]
+        snapshot.runs[0]
             .deliverable
             .as_mut()
             .expect("deliverable exists")
             .decision = DeliverableDecision::Accepted;
         app.on_snapshot(&snapshot);
         app.push_detail(crate::app::DetailView::Deliverable {
-            movement_id: "mov-1".into(),
+            run_id: "run-1".into(),
             scroll: 0,
         });
 
@@ -2920,18 +2910,19 @@ mod tests {
     }
 
     #[test]
-    fn triggers_tab_approves_waiting_issue() {
+    fn inbox_tab_approves_waiting_issue() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.visible_triggers = vec![VisibleTriggerRow {
-            trigger_id: "7".into(),
-            kind: VisibleTriggerKind::Issue,
+        snapshot.inbox_items = vec![InboxItemRow {
+            repo_id: String::new(),
+            item_id: "7".into(),
+            kind: InboxItemKind::Issue,
             source: "github".into(),
             identifier: "#7".into(),
             title: "Untrusted issue".into(),
             status: "Todo".into(),
-            approval_state: IssueApprovalState::Waiting,
+            approval_state: DispatchApprovalState::Waiting,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -2943,32 +2934,33 @@ mod tests {
             has_workspace: false,
         }];
         app.on_snapshot(&snapshot);
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('a'), &snapshot);
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::ApproveIssueTrigger {
-                issue_id,
+            Some(polyphony_orchestrator::RuntimeCommand::ApproveInboxItem {
+                item_id,
                 source,
-            }) if issue_id == "7" && source == "github"
+            }) if item_id == "7" && source == "github"
         ));
     }
 
     #[test]
-    fn triggers_tab_approves_waiting_pull_request_trigger() {
+    fn inbox_tab_approves_waiting_pull_request_event() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.visible_triggers = vec![VisibleTriggerRow {
-            trigger_id: "pr_review:github:penso/polyphony:7:abc123".into(),
-            kind: VisibleTriggerKind::PullRequestReview,
+        snapshot.inbox_items = vec![InboxItemRow {
+            repo_id: String::new(),
+            item_id: "pr_review:github:penso/polyphony:7:abc123".into(),
+            kind: InboxItemKind::PullRequestReview,
             source: "github".into(),
             identifier: "penso/polyphony#7".into(),
             title: "Review me".into(),
             status: "waiting_approval".into(),
-            approval_state: IssueApprovalState::Waiting,
+            approval_state: DispatchApprovalState::Waiting,
             priority: None,
             labels: vec![],
             description: None,
@@ -2980,32 +2972,33 @@ mod tests {
             has_workspace: false,
         }];
         app.on_snapshot(&snapshot);
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('a'), &snapshot);
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::ApproveIssueTrigger {
-                issue_id,
+            Some(polyphony_orchestrator::RuntimeCommand::ApproveInboxItem {
+                item_id,
                 source,
-            }) if issue_id == "pr_review:github:penso/polyphony:7:abc123" && source == "github"
+            }) if item_id == "pr_review:github:penso/polyphony:7:abc123" && source == "github"
         ));
     }
 
     #[test]
-    fn triggers_tab_closes_selected_issue() {
+    fn inbox_tab_closes_selected_issue() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.visible_triggers = vec![VisibleTriggerRow {
-            trigger_id: "7".into(),
-            kind: VisibleTriggerKind::Issue,
+        snapshot.inbox_items = vec![InboxItemRow {
+            repo_id: String::new(),
+            item_id: "7".into(),
+            kind: InboxItemKind::Issue,
             source: "github".into(),
             identifier: "#7".into(),
             title: "Already done".into(),
             status: "Todo".into(),
-            approval_state: IssueApprovalState::Approved,
+            approval_state: DispatchApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -3017,30 +3010,31 @@ mod tests {
             has_workspace: false,
         }];
         app.on_snapshot(&snapshot);
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('x'), &snapshot);
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::CloseIssueTrigger { issue_id })
+            Some(polyphony_orchestrator::RuntimeCommand::CloseTrackerIssue { issue_id })
                 if issue_id == "7"
         ));
     }
 
     #[test]
-    fn triggers_tab_opens_dispatch_modal_for_issue() {
+    fn inbox_tab_opens_dispatch_modal_for_issue() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.visible_triggers = vec![VisibleTriggerRow {
-            trigger_id: "7".into(),
-            kind: VisibleTriggerKind::Issue,
+        snapshot.inbox_items = vec![InboxItemRow {
+            repo_id: String::new(),
+            item_id: "7".into(),
+            kind: InboxItemKind::Issue,
             source: "github".into(),
             identifier: "#7".into(),
             title: "Needs operator guidance".into(),
             status: "Todo".into(),
-            approval_state: IssueApprovalState::Approved,
+            approval_state: DispatchApprovalState::Approved,
             priority: Some(2),
             labels: vec![],
             description: None,
@@ -3052,7 +3046,7 @@ mod tests {
             has_workspace: false,
         }];
         app.on_snapshot(&snapshot);
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('d'), &snapshot);
 
@@ -3061,26 +3055,27 @@ mod tests {
             .dispatch_modal
             .as_ref()
             .expect("dispatch modal should open");
-        assert_eq!(modal.trigger_id, "7");
-        assert_eq!(modal.trigger_identifier, "#7");
-        assert_eq!(modal.trigger_title, "Needs operator guidance");
-        assert_eq!(modal.trigger_kind, VisibleTriggerKind::Issue);
+        assert_eq!(modal.item_id, "7");
+        assert_eq!(modal.item_identifier, "#7");
+        assert_eq!(modal.item_title, "Needs operator guidance");
+        assert_eq!(modal.item_kind, InboxItemKind::Issue);
         assert!(modal.agent_name.is_none());
     }
 
     #[test]
-    fn triggers_tab_opens_dispatch_modal_for_pull_request_review() {
+    fn inbox_tab_opens_dispatch_modal_for_pull_request_review() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.visible_triggers = vec![VisibleTriggerRow {
-            trigger_id: "pr-review-7".into(),
-            kind: VisibleTriggerKind::PullRequestReview,
+        snapshot.inbox_items = vec![InboxItemRow {
+            repo_id: String::new(),
+            item_id: "pr-review-7".into(),
+            kind: InboxItemKind::PullRequestReview,
             source: "github".into(),
             identifier: "penso/polyphony#7".into(),
             title: "Review me".into(),
             status: "ready".into(),
-            approval_state: IssueApprovalState::Approved,
+            approval_state: DispatchApprovalState::Approved,
             priority: None,
             labels: vec![],
             description: None,
@@ -3092,7 +3087,7 @@ mod tests {
             has_workspace: false,
         }];
         app.on_snapshot(&snapshot);
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('d'), &snapshot);
 
@@ -3101,8 +3096,8 @@ mod tests {
             .dispatch_modal
             .as_ref()
             .expect("dispatch modal should open");
-        assert_eq!(modal.trigger_id, "pr-review-7");
-        assert_eq!(modal.trigger_kind, VisibleTriggerKind::PullRequestReview);
+        assert_eq!(modal.item_id, "pr-review-7");
+        assert_eq!(modal.item_kind, InboxItemKind::PullRequestReview);
     }
 
     #[test]
@@ -3113,7 +3108,7 @@ mod tests {
             "7".into(),
             "#7".into(),
             "Needs operator guidance".into(),
-            VisibleTriggerKind::Issue,
+            InboxItemKind::Issue,
             Some("router".into()),
         ));
 
@@ -3153,18 +3148,18 @@ mod tests {
                 && directives.as_deref() == Some("Plan")
         ));
         assert!(app.dispatch_modal.is_none());
-        assert!(app.dispatching_triggers.contains("7"));
+        assert!(app.dispatching_inbox_items.contains("7"));
     }
 
     #[test]
-    fn dispatch_modal_submits_pull_request_trigger_with_directives() {
+    fn dispatch_modal_submits_pull_request_event_with_directives() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         app.dispatch_modal = Some(crate::app::DispatchModalState::new(
             "pr-review-7".into(),
             "penso/polyphony#7".into(),
             "Review me".into(),
-            VisibleTriggerKind::PullRequestReview,
+            InboxItemKind::PullRequestReview,
             None,
         ));
 
@@ -3195,13 +3190,13 @@ mod tests {
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::DispatchPullRequestTrigger {
-                trigger_id,
+            Some(polyphony_orchestrator::RuntimeCommand::DispatchPullRequestInboxItem {
+                item_id,
                 directives,
-            }) if trigger_id == "pr-review-7" && directives.as_deref() == Some("Check")
+            }) if item_id == "pr-review-7" && directives.as_deref() == Some("Check")
         ));
         assert!(app.dispatch_modal.is_none());
-        assert!(app.dispatching_triggers.contains("pr-review-7"));
+        assert!(app.dispatching_inbox_items.contains("pr-review-7"));
     }
 
     #[test]
@@ -3212,7 +3207,7 @@ mod tests {
             "7".into(),
             "#7".into(),
             "Needs operator guidance".into(),
-            VisibleTriggerKind::Issue,
+            InboxItemKind::Issue,
             None,
         ));
         let snapshot = test_snapshot_with_deliverable();
@@ -3241,7 +3236,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_search_consumes_typed_keys_before_global_keybinds() {
+    fn inbox_search_consumes_typed_keys_before_global_keybinds() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let snapshot = test_snapshot_with_deliverable();
@@ -3267,12 +3262,12 @@ mod tests {
     }
 
     #[test]
-    fn movement_search_consumes_typed_keys_before_global_keybinds() {
+    fn run_search_consumes_typed_keys_before_global_keybinds() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let snapshot = test_snapshot_with_deliverable();
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
-        app.movements_search_active = true;
+        app.runs_search_active = true;
 
         crate::event_loop::handle_key_event(
             &mut app,
@@ -3287,7 +3282,7 @@ mod tests {
             &command_tx,
         );
 
-        assert_eq!(app.movements_search_query, "oq");
+        assert_eq!(app.runs_search_query, "oq");
         assert!(!app.confirm_quit);
         assert!(command_rx.try_recv().is_err());
     }
@@ -3356,6 +3351,7 @@ mod tests {
         ));
         std::fs::create_dir_all(workspace.join(".polyphony/runtime")).unwrap();
         let context = AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "issue-1".into(),
             issue_identifier: "DOG-1".into(),
             updated_at: Utc::now(),
@@ -3404,6 +3400,7 @@ mod tests {
         std::fs::create_dir_all(workspace.join(".polyphony/runtime")).unwrap();
         let now = Utc::now();
         let context = AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "issue-2".into(),
             issue_identifier: "DOG-2".into(),
             updated_at: now,
@@ -3422,7 +3419,8 @@ mod tests {
                 message: "history artifact".into(),
             }],
         };
-        let record = PersistedRunRecord {
+        let record = PersistedAgentRunRecord {
+            repo_id: String::new(),
             issue_id: "issue-2".into(),
             issue_identifier: "DOG-2".into(),
             agent_name: "implementer".into(),
@@ -3446,7 +3444,7 @@ mod tests {
             saved_context: Some(context),
         };
         std::fs::write(
-            workspace_run_history_artifact_path(&workspace),
+            workspace_agent_run_history_artifact_path(&workspace),
             format!("{}\n", serde_json::to_string(&record).unwrap()),
         )
         .unwrap();
@@ -3469,14 +3467,15 @@ mod tests {
 
     fn test_snapshot_with_deliverable() -> RuntimeSnapshot {
         RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
-            visible_issues: vec![],
-            visible_triggers: vec![],
-            approved_issue_keys: vec![],
+            tracker_issues: vec![],
+            inbox_items: vec![],
+            approved_inbox_keys: vec![],
             running: vec![],
-            agent_history: vec![],
+            agent_run_history: vec![],
             retrying: vec![],
             codex_totals: Default::default(),
             rate_limits: None,
@@ -3486,12 +3485,13 @@ mod tests {
             saved_contexts: vec![],
             recent_events: vec![],
             pending_user_interactions: vec![],
-            movements: vec![polyphony_core::MovementRow {
-                id: "mov-1".into(),
-                kind: polyphony_core::MovementKind::IssueDelivery,
+            runs: vec![polyphony_core::RunRow {
+                repo_id: String::new(),
+                id: "run-1".into(),
+                kind: polyphony_core::RunKind::IssueDelivery,
                 issue_identifier: Some("#7".into()),
                 title: "Ship PR".into(),
-                status: polyphony_core::MovementStatus::Delivered,
+                status: polyphony_core::RunStatus::Delivered,
                 task_count: 1,
                 tasks_completed: 1,
                 deliverable: Some(Deliverable {
@@ -3527,14 +3527,15 @@ mod tests {
     fn test_snapshot_with_task(status: polyphony_core::TaskStatus) -> RuntimeSnapshot {
         let now = Utc::now();
         RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
-            visible_issues: vec![],
-            visible_triggers: vec![],
-            approved_issue_keys: vec![],
+            tracker_issues: vec![],
+            inbox_items: vec![],
+            approved_inbox_keys: vec![],
             running: vec![],
-            agent_history: vec![],
+            agent_run_history: vec![],
             retrying: vec![],
             codex_totals: Default::default(),
             rate_limits: None,
@@ -3544,12 +3545,13 @@ mod tests {
             saved_contexts: vec![],
             recent_events: vec![],
             pending_user_interactions: vec![],
-            movements: vec![polyphony_core::MovementRow {
-                id: "mov-task-1".into(),
-                kind: polyphony_core::MovementKind::PullRequestReview,
+            runs: vec![polyphony_core::RunRow {
+                repo_id: String::new(),
+                id: "run-task-1".into(),
+                kind: polyphony_core::RunKind::PullRequestReview,
                 issue_identifier: Some("penso/arbor#89".into()),
                 title: "Retry me".into(),
-                status: polyphony_core::MovementStatus::Failed,
+                status: polyphony_core::RunStatus::Failed,
                 task_count: 1,
                 tasks_completed: 0,
                 deliverable: None,
@@ -3563,8 +3565,9 @@ mod tests {
                 steps: Vec::new(),
             }],
             tasks: vec![polyphony_core::TaskRow {
+                repo_id: String::new(),
                 id: "task-1".into(),
-                movement_id: "mov-task-1".into(),
+                run_id: "run-task-1".into(),
                 title: "Creating worktree".into(),
                 description: None,
                 activity_log: vec![],
@@ -3597,14 +3600,15 @@ mod tests {
     ) -> RuntimeSnapshot {
         let now = Utc::now();
         RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
-            visible_issues: vec![],
-            visible_triggers: vec![],
-            approved_issue_keys: vec![],
+            tracker_issues: vec![],
+            inbox_items: vec![],
+            approved_inbox_keys: vec![],
             running: vec![],
-            agent_history: vec![],
+            agent_run_history: vec![],
             retrying: vec![],
             codex_totals: Default::default(),
             rate_limits: None,
@@ -3614,12 +3618,13 @@ mod tests {
             saved_contexts: vec![],
             recent_events: vec![],
             pending_user_interactions: vec![],
-            movements: vec![polyphony_core::MovementRow {
-                id: "mov-review-1".into(),
-                kind: polyphony_core::MovementKind::PullRequestReview,
+            runs: vec![polyphony_core::RunRow {
+                repo_id: String::new(),
+                id: "run-review-1".into(),
+                kind: polyphony_core::RunKind::PullRequestReview,
                 issue_identifier: Some("penso/arbor#89".into()),
                 title: "Review me".into(),
-                status: polyphony_core::MovementStatus::InProgress,
+                status: polyphony_core::RunStatus::InProgress,
                 task_count: 2,
                 tasks_completed: 1,
                 deliverable: None,
@@ -3633,8 +3638,9 @@ mod tests {
                 steps: Vec::new(),
             }],
             tasks: vec![polyphony_core::TaskRow {
+                repo_id: String::new(),
                 id: "task-review-1".into(),
-                movement_id: "mov-review-1".into(),
+                run_id: "run-review-1".into(),
                 title: "Run PR review".into(),
                 description: None,
                 activity_log: vec![],
@@ -3672,19 +3678,19 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_retry_key_retries_failed_movement() {
+    fn orchestrator_retry_key_retries_failed_run() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         app.active_tab = crate::app::ActiveTab::Orchestrator;
         let failed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Failed);
         app.on_snapshot(&failed_snapshot);
         app.rebuild_orchestrator_tree(&failed_snapshot);
-        let movement_index = app
+        let run_index = app
             .orchestrator_tree_rows
             .iter()
-            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Movement { .. }))
-            .expect("movement row");
-        app.movements_state.select(Some(movement_index));
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Run { .. }))
+            .expect("run row");
+        app.runs_state.select(Some(run_index));
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         crate::event_loop::handle_key_event(
@@ -3696,18 +3702,18 @@ mod tests {
 
         assert!(matches!(
             command_rx.try_recv().ok(),
-            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
-                if movement_id == "mov-task-1"
+            Some(polyphony_orchestrator::RuntimeCommand::RetryRun { run_id })
+                if run_id == "run-task-1"
         ));
 
-        app.toggle_movement_collapse("mov-task-1");
+        app.toggle_run_collapse("run-task-1");
         app.rebuild_orchestrator_tree(&failed_snapshot);
         let task_index = app
             .orchestrator_tree_rows
             .iter()
             .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Task { .. }))
             .expect("task row");
-        app.movements_state.select(Some(task_index));
+        app.runs_state.select(Some(task_index));
 
         crate::event_loop::handle_key_event(
             &mut app,
@@ -3718,8 +3724,8 @@ mod tests {
 
         assert!(matches!(
             command_rx.try_recv().ok(),
-            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
-                if movement_id == "mov-task-1"
+            Some(polyphony_orchestrator::RuntimeCommand::RetryRun { run_id })
+                if run_id == "run-task-1"
         ));
 
         let completed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Completed);
@@ -3729,7 +3735,7 @@ mod tests {
             .iter()
             .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Task { .. }))
             .expect("task row");
-        app.movements_state.select(Some(completed_index));
+        app.runs_state.select(Some(completed_index));
 
         crate::event_loop::handle_key_event(
             &mut app,
@@ -3742,7 +3748,7 @@ mod tests {
     }
 
     #[test]
-    fn task_detail_retry_key_retries_parent_movement() {
+    fn task_detail_retry_key_retries_parent_run() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let failed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Failed);
@@ -3762,8 +3768,8 @@ mod tests {
 
         assert!(matches!(
             command_rx.try_recv().ok(),
-            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
-                if movement_id == "mov-task-1"
+            Some(polyphony_orchestrator::RuntimeCommand::RetryRun { run_id })
+                if run_id == "run-task-1"
         ));
 
         let completed_snapshot = test_snapshot_with_task(polyphony_core::TaskStatus::Completed);
@@ -3778,17 +3784,18 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_retry_key_retries_stalled_movement_with_pending_task() {
+    fn orchestrator_retry_key_retries_stalled_run_with_pending_task() {
         let now = Utc::now();
         let stale_snapshot = RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
-            visible_issues: vec![],
-            visible_triggers: vec![],
-            approved_issue_keys: vec![],
+            tracker_issues: vec![],
+            inbox_items: vec![],
+            approved_inbox_keys: vec![],
             running: vec![],
-            agent_history: vec![],
+            agent_run_history: vec![],
             retrying: vec![],
             codex_totals: Default::default(),
             rate_limits: None,
@@ -3798,12 +3805,13 @@ mod tests {
             saved_contexts: vec![],
             recent_events: vec![],
             pending_user_interactions: vec![],
-            movements: vec![polyphony_core::MovementRow {
-                id: "mov-stalled-1".into(),
-                kind: polyphony_core::MovementKind::PullRequestReview,
+            runs: vec![polyphony_core::RunRow {
+                repo_id: String::new(),
+                id: "run-stalled-1".into(),
+                kind: polyphony_core::RunKind::PullRequestReview,
                 issue_identifier: Some("penso/arbor#89".into()),
-                title: "Retry stale movement".into(),
-                status: polyphony_core::MovementStatus::InProgress,
+                title: "Retry stale run".into(),
+                status: polyphony_core::RunStatus::InProgress,
                 task_count: 2,
                 tasks_completed: 0,
                 deliverable: None,
@@ -3818,8 +3826,9 @@ mod tests {
             }],
             tasks: vec![
                 polyphony_core::TaskRow {
+                    repo_id: String::new(),
                     id: "task-stalled-1".into(),
-                    movement_id: "mov-stalled-1".into(),
+                    run_id: "run-stalled-1".into(),
                     title: "Creating worktree".into(),
                     description: None,
                     activity_log: vec![],
@@ -3836,8 +3845,9 @@ mod tests {
                     updated_at: now,
                 },
                 polyphony_core::TaskRow {
+                    repo_id: String::new(),
                     id: "task-stalled-2".into(),
-                    movement_id: "mov-stalled-1".into(),
+                    run_id: "run-stalled-1".into(),
                     title: "Run PR review".into(),
                     description: None,
                     activity_log: vec![],
@@ -3868,12 +3878,12 @@ mod tests {
         app.active_tab = crate::app::ActiveTab::Orchestrator;
         app.on_snapshot(&stale_snapshot);
         app.rebuild_orchestrator_tree(&stale_snapshot);
-        let movement_index = app
+        let run_index = app
             .orchestrator_tree_rows
             .iter()
-            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Movement { .. }))
-            .expect("movement row");
-        app.movements_state.select(Some(movement_index));
+            .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Run { .. }))
+            .expect("run row");
+        app.runs_state.select(Some(run_index));
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
 
         crate::event_loop::handle_key_event(
@@ -3885,8 +3895,8 @@ mod tests {
 
         assert!(matches!(
             command_rx.try_recv().ok(),
-            Some(polyphony_orchestrator::RuntimeCommand::RetryMovement { movement_id })
-                if movement_id == "mov-stalled-1"
+            Some(polyphony_orchestrator::RuntimeCommand::RetryRun { run_id })
+                if run_id == "run-stalled-1"
         ));
     }
 
@@ -3911,7 +3921,7 @@ mod tests {
             .iter()
             .position(|row| matches!(row, crate::app::OrchestratorTreeRow::Task { .. }))
             .expect("task row");
-        app.movements_state.select(Some(task_index));
+        app.runs_state.select(Some(task_index));
         let (command_tx, _command_rx) = mpsc::unbounded_channel();
 
         crate::event_loop::handle_key_event(
@@ -3989,8 +3999,9 @@ mod tests {
             polyphony_core::TaskStatus::InProgress,
         );
         snapshot
-            .agent_history
-            .push(polyphony_core::AgentHistoryRow {
+            .agent_run_history
+            .push(polyphony_core::AgentRunHistoryRow {
+                repo_id: String::new(),
                 issue_id: "issue-89".into(),
                 issue_identifier: "penso/arbor#89".into(),
                 agent_name: "reviewer".into(),
@@ -4040,12 +4051,12 @@ mod tests {
     }
 
     #[test]
-    fn triggers_tab_opens_create_issue_modal() {
+    fn inbox_tab_opens_create_issue_modal() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let snapshot = test_snapshot_with_deliverable();
         app.on_snapshot(&snapshot);
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('n'), &snapshot);
 
@@ -4126,14 +4137,14 @@ mod tests {
     }
 
     #[test]
-    fn movement_detail_opens_feedback_modal() {
+    fn run_detail_opens_feedback_modal() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let mut snapshot = test_snapshot_with_deliverable();
-        snapshot.movements[0].workspace_path = Some(std::path::PathBuf::from("/tmp/ws"));
+        snapshot.runs[0].workspace_path = Some(std::path::PathBuf::from("/tmp/ws"));
         app.on_snapshot(&snapshot);
-        app.push_detail(crate::app::DetailView::Movement {
-            movement_id: "mov-1".into(),
+        app.push_detail(crate::app::DetailView::Run {
+            run_id: "run-1".into(),
             scroll: 0,
         });
 
@@ -4147,7 +4158,7 @@ mod tests {
 
         assert!(app.feedback_modal.is_some());
         let modal = app.feedback_modal.as_ref().unwrap();
-        assert_eq!(modal.movement_id, "mov-1");
+        assert_eq!(modal.run_id, "run-1");
     }
 
     #[test]
@@ -4156,7 +4167,7 @@ mod tests {
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let snapshot = test_snapshot_with_deliverable();
         app.feedback_modal = Some(crate::app::FeedbackModalState::new(
-            "mov-1".into(),
+            "run-1".into(),
             "Ship PR".into(),
         ));
 
@@ -4176,11 +4187,11 @@ mod tests {
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::InjectMovementFeedback {
-                movement_id,
+            Some(polyphony_orchestrator::RuntimeCommand::InjectRunFeedback {
+                run_id,
                 prompt,
                 agent_name,
-            }) if movement_id == "mov-1" && prompt == "add tests" && agent_name.is_none()
+            }) if run_id == "run-1" && prompt == "add tests" && agent_name.is_none()
         ));
         assert!(app.feedback_modal.is_none());
     }
@@ -4191,7 +4202,7 @@ mod tests {
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let snapshot = test_snapshot_with_deliverable();
         app.feedback_modal = Some(crate::app::FeedbackModalState::new(
-            "mov-1".into(),
+            "run-1".into(),
             "Ship PR".into(),
         ));
 
@@ -4211,7 +4222,7 @@ mod tests {
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         let snapshot = test_snapshot_with_deliverable();
         app.feedback_modal = Some(crate::app::FeedbackModalState::new(
-            "mov-1".into(),
+            "run-1".into(),
             "Ship PR".into(),
         ));
 
@@ -4245,7 +4256,7 @@ mod tests {
             },
         ];
         app.feedback_modal = Some(crate::app::FeedbackModalState::new(
-            "mov-1".into(),
+            "run-1".into(),
             "Ship PR".into(),
         ));
 
@@ -4285,7 +4296,7 @@ mod tests {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
         app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
-        app.active_tab = crate::app::ActiveTab::Triggers;
+        app.active_tab = crate::app::ActiveTab::Inbox;
 
         // Type 'q' which would normally quit — should be consumed by the modal
         let _ = crate::event_loop::handle_create_issue_modal_key(

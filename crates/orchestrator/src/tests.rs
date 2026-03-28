@@ -522,12 +522,12 @@ impl AgentRuntime for RecordingSessionAgent {
 }
 
 #[derive(Clone)]
-struct SequencedPullRequestTriggerSource {
-    batches: Arc<Mutex<VecDeque<Vec<PullRequestTrigger>>>>,
+struct SequencedPullRequestEventSource {
+    batches: Arc<Mutex<VecDeque<Vec<PullRequestEvent>>>>,
 }
 
-impl SequencedPullRequestTriggerSource {
-    fn new(batches: Vec<Vec<PullRequestTrigger>>) -> Self {
+impl SequencedPullRequestEventSource {
+    fn new(batches: Vec<Vec<PullRequestEvent>>) -> Self {
         Self {
             batches: Arc::new(Mutex::new(batches.into())),
         }
@@ -535,12 +535,12 @@ impl SequencedPullRequestTriggerSource {
 }
 
 #[async_trait]
-impl PullRequestTriggerSource for SequencedPullRequestTriggerSource {
+impl PullRequestEventSource for SequencedPullRequestEventSource {
     fn component_key(&self) -> String {
-        "github:test-pr-triggers".into()
+        "github:test-pr-events".into()
     }
 
-    async fn fetch_triggers(&self) -> Result<Vec<PullRequestTrigger>, polyphony_core::Error> {
+    async fn fetch_events(&self) -> Result<Vec<PullRequestEvent>, polyphony_core::Error> {
         Ok(self.batches.lock().unwrap().pop_front().unwrap_or_default())
     }
 }
@@ -933,9 +933,9 @@ fn sample_issue(issue_id: &str, identifier: &str, state: &str, title: &str) -> I
     }
 }
 
-fn sample_pull_request_comment_trigger() -> PullRequestCommentTrigger {
+fn sample_pull_request_comment_event() -> PullRequestCommentEvent {
     let now = Utc::now();
-    PullRequestCommentTrigger {
+    PullRequestCommentEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 42,
@@ -951,7 +951,7 @@ fn sample_pull_request_comment_trigger() -> PullRequestCommentTrigger {
         line: Some(42),
         body: "Please fix this branch.".into(),
         author_login: Some("greptileai".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(now - chrono::Duration::minutes(5)),
         updated_at: Some(now - chrono::Duration::minutes(2)),
@@ -959,9 +959,9 @@ fn sample_pull_request_comment_trigger() -> PullRequestCommentTrigger {
     }
 }
 
-fn sample_pull_request_conflict_trigger() -> PullRequestConflictTrigger {
+fn sample_pull_request_conflict_event() -> PullRequestConflictEvent {
     let now = Utc::now();
-    PullRequestConflictTrigger {
+    PullRequestConflictEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 43,
@@ -972,7 +972,7 @@ fn sample_pull_request_conflict_trigger() -> PullRequestConflictTrigger {
         head_sha: "def456".into(),
         checkout_ref: Some("refs/pull/43/head".into()),
         author_login: Some("alice".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(now - chrono::Duration::minutes(10)),
         updated_at: Some(now - chrono::Duration::minutes(3)),
@@ -1004,7 +1004,7 @@ fn make_running_task(issue: Issue, workspace_path: PathBuf) -> RunningTask {
         turn_count: 0,
         rate_limits: None,
         active_task_id: None,
-        movement_id: None,
+        run_id: None,
         review_target: None,
         review_comment_marker: None,
         recent_log: VecDeque::new(),
@@ -1127,13 +1127,13 @@ async fn reconcile_running_preserves_session_for_non_terminal_state() {
     );
     service.claim_issue(running_issue.id.clone(), IssueClaimState::Running);
 
-    service.state.movements.insert("mov-5".into(), Movement {
-        id: "mov-5".into(),
-        kind: MovementKind::IssueDelivery,
+    service.state.runs.insert("run-5".into(), Run {
+        id: "run-5".into(),
+        kind: RunKind::IssueDelivery,
         issue_id: Some("issue-5".into()),
         issue_identifier: Some("FAC-5".into()),
         title: "GitHub-style issue".into(),
-        status: MovementStatus::InProgress,
+        status: RunStatus::InProgress,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: None,
@@ -1155,11 +1155,11 @@ async fn reconcile_running_preserves_session_for_non_terminal_state() {
         "session with non-terminal state 'Open' must NOT be cancelled by reconciliation"
     );
     assert!(service.is_claimed(&running_issue.id));
-    // Movement must remain in progress.
-    let movement = service.state.movements.get("mov-5").unwrap();
-    assert_eq!(movement.status, MovementStatus::InProgress);
+    // Run must remain in progress.
+    let run = service.state.runs.get("run-5").unwrap();
+    assert_eq!(run.status, RunStatus::InProgress);
     assert!(
-        movement.cancel_reason.is_none(),
+        run.cancel_reason.is_none(),
         "cancel_reason must be None for non-terminal state"
     );
 }
@@ -1178,14 +1178,14 @@ async fn reconcile_running_sets_cancel_reason_for_missing_issue() {
     );
     service.claim_issue(issue.id.clone(), IssueClaimState::Running);
 
-    // Add a movement so stop_running can set cancel_reason on it.
-    service.state.movements.insert("mov-6".into(), Movement {
-        id: "mov-6".into(),
-        kind: MovementKind::IssueDelivery,
+    // Add a run so stop_running can set cancel_reason on it.
+    service.state.runs.insert("run-6".into(), Run {
+        id: "run-6".into(),
+        kind: RunKind::IssueDelivery,
         issue_id: Some("issue-6".into()),
         issue_identifier: Some("FAC-6".into()),
         title: "Vanished issue".into(),
-        status: MovementStatus::InProgress,
+        status: RunStatus::InProgress,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: None,
@@ -1202,13 +1202,13 @@ async fn reconcile_running_sets_cancel_reason_for_missing_issue() {
     service.reconcile_running().await;
 
     assert!(!service.state.running.contains_key(&issue.id));
-    let movement = service.state.movements.get("mov-6").unwrap();
-    assert_eq!(movement.status, MovementStatus::Cancelled);
+    let run = service.state.runs.get("run-6").unwrap();
+    assert_eq!(run.status, RunStatus::Cancelled);
     assert!(
-        movement.cancel_reason.is_some(),
+        run.cancel_reason.is_some(),
         "cancel_reason must be set for missing issues"
     );
-    let reason = movement.cancel_reason.as_deref().unwrap();
+    let reason = run.cancel_reason.as_deref().unwrap();
     assert!(
         reason.contains("no longer found"),
         "cancel_reason should explain the issue is missing, got: {reason}"
@@ -1234,13 +1234,13 @@ async fn reconcile_running_sets_cancel_reason_for_terminal_state() {
     );
     service.claim_issue(running_issue.id.clone(), IssueClaimState::Running);
 
-    service.state.movements.insert("mov-7".into(), Movement {
-        id: "mov-7".into(),
-        kind: MovementKind::IssueDelivery,
+    service.state.runs.insert("run-7".into(), Run {
+        id: "run-7".into(),
+        kind: RunKind::IssueDelivery,
         issue_id: Some("issue-7".into()),
         issue_identifier: Some("FAC-7".into()),
         title: "Finished issue".into(),
-        status: MovementStatus::InProgress,
+        status: RunStatus::InProgress,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: None,
@@ -1257,13 +1257,13 @@ async fn reconcile_running_sets_cancel_reason_for_terminal_state() {
     service.reconcile_running().await;
 
     assert!(!service.state.running.contains_key(&running_issue.id));
-    let movement = service.state.movements.get("mov-7").unwrap();
-    assert_eq!(movement.status, MovementStatus::Cancelled);
+    let run = service.state.runs.get("run-7").unwrap();
+    assert_eq!(run.status, RunStatus::Cancelled);
     assert!(
-        movement.cancel_reason.is_some(),
+        run.cancel_reason.is_some(),
         "cancel_reason must be set for terminal state"
     );
-    let reason = movement.cancel_reason.as_deref().unwrap();
+    let reason = run.cancel_reason.as_deref().unwrap();
     assert!(
         reason.contains("terminal"),
         "cancel_reason should mention terminal state, got: {reason}"
@@ -1302,7 +1302,7 @@ async fn tick_tracks_visible_issues_when_no_agents_are_configured() {
 
     let snapshot = service.snapshot();
     let visible = snapshot
-        .visible_issues
+        .tracker_issues
         .iter()
         .map(|issue| issue.issue_identifier.as_str())
         .collect::<Vec<_>>();
@@ -1312,7 +1312,7 @@ async fn tick_tracks_visible_issues_when_no_agents_are_configured() {
 }
 
 #[tokio::test]
-async fn disappearing_issues_become_already_fixed_triggers() {
+async fn disappearing_issues_become_already_fixed_events() {
     let workspace_root = unique_workspace_root("discarded-issue");
     let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
     let tracker_handle = tracker.clone();
@@ -1325,11 +1325,11 @@ async fn disappearing_issues_become_already_fixed_triggers() {
 
     let snapshot = service.snapshot();
     let discarded = snapshot
-        .visible_triggers
+        .inbox_items
         .iter()
-        .find(|trigger| trigger.trigger_id == "issue-1")
-        .expect("missing discarded issue trigger");
-    assert_eq!(discarded.kind, VisibleTriggerKind::Issue);
+        .find(|item| item.item_id == "issue-1")
+        .expect("missing discarded inbox item");
+    assert_eq!(discarded.kind, InboxItemKind::Issue);
     assert_eq!(discarded.status, "already_fixed");
 }
 
@@ -1429,10 +1429,10 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
     let workspace_root = unique_workspace_root("pr-review");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow.clone());
-    let trigger = PullRequestReviewTrigger {
+    let event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 42,
@@ -1443,7 +1443,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         head_sha: "abc123".into(),
         checkout_ref: Some("refs/pull/42/head".into()),
         author_login: Some("alice".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
@@ -1465,7 +1465,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         rx,
     )
     .0;
-    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let issue = synthetic_issue_for_pull_request_review(&event);
     let workspace_path = workspace_root.join(sanitize_workspace_key(&issue.identifier));
     tokio::fs::create_dir_all(workspace_path.join(".polyphony"))
         .await
@@ -1476,28 +1476,25 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
     )
     .await
     .unwrap();
-    service
-        .state
-        .movements
-        .insert("mov-review".into(), Movement {
-            id: "mov-review".into(),
-            kind: MovementKind::PullRequestReview,
-            issue_id: Some(issue.id.clone()),
-            issue_identifier: Some(issue.identifier.clone()),
-            title: trigger.title.clone(),
-            status: MovementStatus::InProgress,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
-            workspace_path: Some(workspace_path.clone()),
-            review_target: Some(trigger.review_target()),
-            deliverable: None,
-            created_at: Utc::now(),
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: Utc::now(),
-        });
+    service.state.runs.insert("run-review".into(), Run {
+        id: "run-review".into(),
+        kind: RunKind::PullRequestReview,
+        issue_id: Some(issue.id.clone()),
+        issue_identifier: Some(issue.identifier.clone()),
+        title: event.title.clone(),
+        status: RunStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: Some(sanitize_workspace_key(&issue.identifier)),
+        workspace_path: Some(workspace_path.clone()),
+        review_target: Some(event.review_target()),
+        deliverable: None,
+        created_at: Utc::now(),
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: Utc::now(),
+    });
     let running = RunningTask {
         issue: issue.clone(),
         agent_name: "reviewer".into(),
@@ -1519,9 +1516,9 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         turn_count: 0,
         rate_limits: None,
         active_task_id: None,
-        movement_id: Some("mov-review".into()),
-        review_target: Some(trigger.review_target()),
-        review_comment_marker: Some(pull_request_review_comment_marker(&trigger.review_target())),
+        run_id: Some("run-review".into()),
+        review_target: Some(event.review_target()),
+        review_comment_marker: Some(pull_request_review_comment_marker(&event.review_target())),
         recent_log: VecDeque::new(),
         handle: tokio::spawn(async {
             let _: () = std::future::pending().await;
@@ -1546,18 +1543,18 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
         service
             .state
             .reviewed_pull_request_heads
-            .contains_key(&trigger.dedupe_key())
+            .contains_key(&event.dedupe_key())
     );
     assert_eq!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &service.workflow(),
-            &PullRequestTrigger::Review(trigger.clone()),
+            &PullRequestEvent::Review(event.clone()),
         ),
-        Some(ReviewTriggerSuppression::AlreadyReviewed)
+        Some(ReviewEventSuppression::AlreadyReviewed)
     );
-    // Verify deliverable was created for the PR review movement.
-    let movement = service.state.movements.get("mov-review").unwrap();
-    let deliverable = movement
+    // Verify deliverable was created for the PR review run.
+    let run = service.state.runs.get("run-review").unwrap();
+    let deliverable = run
         .deliverable
         .as_ref()
         .expect("deliverable should be set for PR review");
@@ -1588,7 +1585,7 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
                 model: None,
                 attempt: None,
                 workspace_path: workspace_root
-                    .join(sanitize_workspace_key(&trigger.display_identifier())),
+                    .join(sanitize_workspace_key(&event.display_identifier())),
                 stall_timeout_ms: 300_000,
                 max_turns: 4,
                 started_at: Utc::now(),
@@ -1604,17 +1601,17 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
                 turn_count: 0,
                 rate_limits: None,
                 active_task_id: None,
-                movement_id: Some("mov-review".into()),
-                review_target: Some(trigger.review_target()),
+                run_id: Some("run-review".into()),
+                review_target: Some(event.review_target()),
                 review_comment_marker: Some(pull_request_review_comment_marker(
-                    &trigger.review_target(),
+                    &event.review_target(),
                 )),
                 recent_log: VecDeque::new(),
                 handle: tokio::spawn(async {
                     let _: () = std::future::pending().await;
                 }),
             },
-            &trigger.review_target(),
+            &event.review_target(),
         )
         .await
         .unwrap();
@@ -1624,11 +1621,11 @@ async fn completed_pull_request_reviews_are_marked_reviewed_and_not_redispatched
 }
 
 #[test]
-fn review_trigger_suppression_respects_authors_labels_and_bots() {
+fn review_event_suppression_respects_authors_labels_and_bots() {
     let workspace_root = unique_workspace_root("pr-review-suppression");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n    only_labels: [ready]\n    ignore_labels: [wip]\n    ignore_authors: [skip-me]\n    ignore_bot_authors: true\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n    only_labels: [ready]\n    ignore_labels: [wip]\n    ignore_authors: [skip-me]\n    ignore_bot_authors: true\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow);
     let service = RuntimeService::new(
@@ -1647,7 +1644,7 @@ fn review_trigger_suppression_respects_authors_labels_and_bots() {
     .0;
     let workflow = service.workflow();
 
-    let base_trigger = PullRequestReviewTrigger {
+    let base_event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 1,
@@ -1658,82 +1655,82 @@ fn review_trigger_suppression_respects_authors_labels_and_bots() {
         head_sha: "sha1".into(),
         checkout_ref: Some("refs/pull/1/head".into()),
         author_login: Some("skip-me".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
         is_draft: false,
     };
     assert_eq!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &workflow,
-            &PullRequestTrigger::Review(base_trigger.clone()),
+            &PullRequestEvent::Review(base_event.clone()),
         ),
-        Some(ReviewTriggerSuppression::IgnoredAuthor {
+        Some(ReviewEventSuppression::IgnoredAuthor {
             author: "skip-me".into()
         })
     );
 
-    let bot_trigger = PullRequestReviewTrigger {
+    let bot_event = PullRequestReviewEvent {
         number: 2,
         head_sha: "sha2".into(),
         checkout_ref: Some("refs/pull/2/head".into()),
         author_login: Some("dependabot[bot]".into()),
-        ..base_trigger.clone()
+        ..base_event.clone()
     };
     assert_eq!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &workflow,
-            &PullRequestTrigger::Review(bot_trigger.clone()),
+            &PullRequestEvent::Review(bot_event.clone()),
         ),
-        Some(ReviewTriggerSuppression::BotAuthor {
+        Some(ReviewEventSuppression::BotAuthor {
             author: "dependabot[bot]".into()
         })
     );
 
-    let ignored_label_trigger = PullRequestReviewTrigger {
+    let ignored_label_event = PullRequestReviewEvent {
         number: 3,
         head_sha: "sha3".into(),
         checkout_ref: Some("refs/pull/3/head".into()),
         author_login: Some("alice".into()),
         labels: vec!["wip".into()],
-        ..base_trigger.clone()
+        ..base_event.clone()
     };
     assert_eq!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &workflow,
-            &PullRequestTrigger::Review(ignored_label_trigger.clone()),
+            &PullRequestEvent::Review(ignored_label_event.clone()),
         ),
-        Some(ReviewTriggerSuppression::IgnoredLabel {
+        Some(ReviewEventSuppression::IgnoredLabel {
             label: "wip".into()
         })
     );
 
-    let missing_label_trigger = PullRequestReviewTrigger {
+    let missing_label_event = PullRequestReviewEvent {
         number: 4,
         head_sha: "sha4".into(),
         checkout_ref: Some("refs/pull/4/head".into()),
         author_login: Some("alice".into()),
         labels: vec!["backend".into()],
-        ..base_trigger
+        ..base_event
     };
     assert_eq!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &workflow,
-            &PullRequestTrigger::Review(missing_label_trigger),
+            &PullRequestEvent::Review(missing_label_event),
         ),
-        Some(ReviewTriggerSuppression::MissingLabels {
+        Some(ReviewEventSuppression::MissingLabels {
             labels: vec!["ready".into()]
         })
     );
 }
 
 #[tokio::test]
-async fn untrusted_pull_request_triggers_require_manual_approval() {
+async fn untrusted_pull_request_events_require_manual_approval() {
     let workspace_root = unique_workspace_root("pr-review-approval");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow);
     let mut service = RuntimeService::new(
@@ -1750,7 +1747,7 @@ async fn untrusted_pull_request_triggers_require_manual_approval() {
         rx,
     )
     .0;
-    let trigger = PullRequestReviewTrigger {
+    let event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 9,
@@ -1761,7 +1758,7 @@ async fn untrusted_pull_request_triggers_require_manual_approval() {
         head_sha: "sha9".into(),
         checkout_ref: Some("refs/pull/9/head".into()),
         author_login: Some("outsider".into()),
-        approval_state: IssueApprovalState::Waiting,
+        approval_state: DispatchApprovalState::Waiting,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
@@ -1769,37 +1766,37 @@ async fn untrusted_pull_request_triggers_require_manual_approval() {
     };
     service
         .state
-        .visible_review_triggers
-        .insert(trigger.dedupe_key(), trigger.clone());
+        .visible_review_events
+        .insert(event.dedupe_key(), event.clone());
 
     assert_eq!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &service.workflow(),
-            &PullRequestTrigger::Review(trigger.clone()),
+            &PullRequestEvent::Review(event.clone()),
         ),
-        Some(ReviewTriggerSuppression::AwaitingApproval)
+        Some(ReviewEventSuppression::AwaitingApproval)
     );
 
     service
-        .pending_issue_approvals
-        .push((trigger.dedupe_key(), "github".into()));
-    service.process_pending_issue_approvals().await;
+        .pending_inbox_approvals
+        .push((event.dedupe_key(), "github".into()));
+    service.process_pending_inbox_approvals().await;
 
     assert_eq!(
-        service.pull_request_trigger_approval_state(&PullRequestTrigger::Review(trigger.clone())),
-        IssueApprovalState::Approved
+        service.pull_request_event_approval_state(&PullRequestEvent::Review(event.clone())),
+        DispatchApprovalState::Approved
     );
     let approved = service
         .snapshot()
-        .visible_triggers
+        .inbox_items
         .into_iter()
-        .find(|row| row.trigger_id == trigger.dedupe_key())
-        .expect("missing visible trigger after approval");
-    assert_eq!(approved.approval_state, IssueApprovalState::Approved);
+        .find(|row| row.item_id == event.dedupe_key())
+        .expect("missing inbox item after approval");
+    assert_eq!(approved.approval_state, DispatchApprovalState::Approved);
 }
 
 #[test]
-fn pull_request_comment_triggers_are_suppressed_after_a_newer_review() {
+fn pull_request_comment_events_are_suppressed_after_a_newer_review() {
     let workspace_root = unique_workspace_root("pr-comment-suppression");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
@@ -1822,7 +1819,7 @@ fn pull_request_comment_triggers_are_suppressed_after_a_newer_review() {
     .0;
     let workflow = service.workflow();
     let now = Utc::now();
-    let trigger = PullRequestCommentTrigger {
+    let event = PullRequestCommentEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 42,
@@ -1838,61 +1835,59 @@ fn pull_request_comment_triggers_are_suppressed_after_a_newer_review() {
         line: Some(42),
         body: "Please fix this branch.".into(),
         author_login: Some("greptileai".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(now - chrono::Duration::minutes(5)),
         updated_at: Some(now - chrono::Duration::minutes(2)),
         is_draft: false,
     };
     service.state.reviewed_pull_request_heads.insert(
-        review_target_key(&trigger.review_target()),
+        review_target_key(&event.review_target()),
         ReviewedPullRequestHead {
-            key: review_target_key(&trigger.review_target()),
-            target: trigger.review_target(),
+            key: review_target_key(&event.review_target()),
+            target: event.review_target(),
             reviewed_at: now - chrono::Duration::minutes(1),
-            movement_id: None,
+            run_id: None,
         },
     );
 
     assert_eq!(
-        service.pull_request_trigger_suppression(
-            &workflow,
-            &PullRequestTrigger::Comment(trigger.clone()),
-        ),
-        Some(ReviewTriggerSuppression::AlreadyReviewed)
+        service
+            .pull_request_event_suppression(&workflow, &PullRequestEvent::Comment(event.clone()),),
+        Some(ReviewEventSuppression::AlreadyReviewed)
     );
 
     service.state.reviewed_pull_request_heads.insert(
-        review_target_key(&trigger.review_target()),
+        review_target_key(&event.review_target()),
         ReviewedPullRequestHead {
-            key: review_target_key(&trigger.review_target()),
-            target: trigger.review_target(),
+            key: review_target_key(&event.review_target()),
+            target: event.review_target(),
             reviewed_at: now - chrono::Duration::minutes(3),
-            movement_id: None,
+            run_id: None,
         },
     );
 
     assert!(matches!(
-        service.pull_request_trigger_suppression(
+        service.pull_request_event_suppression(
             &workflow,
-            &PullRequestTrigger::Comment(trigger),
+            &PullRequestEvent::Comment(event),
         ),
-        Some(ReviewTriggerSuppression::Debounced { remaining_seconds })
+        Some(ReviewEventSuppression::Debounced { remaining_seconds })
             if remaining_seconds > 0 && remaining_seconds <= 180
     ));
 }
 
 #[tokio::test]
-async fn disappearing_pr_comment_triggers_become_already_fixed() {
+async fn disappearing_pr_comment_events_become_already_fixed() {
     let workspace_root = unique_workspace_root("discarded-pr-comment");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow);
-    let source = SequencedPullRequestTriggerSource::new(vec![
-        vec![PullRequestTrigger::Comment(
-            sample_pull_request_comment_trigger(),
+    let source = SequencedPullRequestEventSource::new(vec![
+        vec![PullRequestEvent::Comment(
+            sample_pull_request_comment_event(),
         )],
         Vec::new(),
     ]);
@@ -1917,25 +1912,25 @@ async fn disappearing_pr_comment_triggers_become_already_fixed() {
 
     let snapshot = service.snapshot();
     let discarded = snapshot
-        .visible_triggers
+        .inbox_items
         .iter()
-        .find(|trigger| trigger.kind == VisibleTriggerKind::PullRequestComment)
-        .expect("missing discarded pr comment trigger");
+        .find(|item| item.kind == InboxItemKind::PullRequestComment)
+        .expect("missing discarded pr comment event");
     assert_eq!(discarded.identifier, "penso/polyphony#42");
     assert_eq!(discarded.status, "already_fixed");
 }
 
 #[tokio::test]
-async fn conflict_triggers_become_already_fixed_without_retry_churn() {
+async fn conflict_events_become_already_fixed_without_retry_churn() {
     let workspace_root = unique_workspace_root("pr-conflict-visible");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow);
-    let source = SequencedPullRequestTriggerSource::new(vec![
-        vec![PullRequestTrigger::Conflict(
-            sample_pull_request_conflict_trigger(),
+    let source = SequencedPullRequestEventSource::new(vec![
+        vec![PullRequestEvent::Conflict(
+            sample_pull_request_conflict_event(),
         )],
         Vec::new(),
     ]);
@@ -1958,10 +1953,10 @@ async fn conflict_triggers_become_already_fixed_without_retry_churn() {
 
     let snapshot = service.snapshot();
     let conflict = snapshot
-        .visible_triggers
+        .inbox_items
         .iter()
-        .find(|trigger| trigger.kind == VisibleTriggerKind::PullRequestConflict)
-        .expect("missing conflict trigger");
+        .find(|item| item.kind == InboxItemKind::PullRequestConflict)
+        .expect("missing conflict event");
     assert_eq!(conflict.status, "ready");
     assert!(service.state.retrying.is_empty());
     assert!(service.state.running.is_empty());
@@ -1970,10 +1965,10 @@ async fn conflict_triggers_become_already_fixed_without_retry_churn() {
 
     let snapshot = service.snapshot();
     let discarded = snapshot
-        .visible_triggers
+        .inbox_items
         .iter()
-        .find(|trigger| trigger.kind == VisibleTriggerKind::PullRequestConflict)
-        .expect("missing discarded conflict trigger");
+        .find(|item| item.kind == InboxItemKind::PullRequestConflict)
+        .expect("missing discarded conflict event");
     assert_eq!(discarded.status, "already_fixed");
     assert!(service.state.retrying.is_empty());
 }
@@ -1983,10 +1978,10 @@ async fn inline_pull_request_review_comments_are_submitted_when_requested() {
     let workspace_root = unique_workspace_root("pr-review-inline");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n    comment_mode: inline\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n    comment_mode: inline\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow);
-    let trigger = PullRequestReviewTrigger {
+    let event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 42,
@@ -1997,7 +1992,7 @@ async fn inline_pull_request_review_comments_are_submitted_when_requested() {
         head_sha: "abc123".into(),
         checkout_ref: Some("refs/pull/42/head".into()),
         author_login: Some("alice".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
@@ -2018,7 +2013,7 @@ async fn inline_pull_request_review_comments_are_submitted_when_requested() {
         rx,
     )
     .0;
-    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let issue = synthetic_issue_for_pull_request_review(&event);
     let workspace_path = workspace_root.join(sanitize_workspace_key(&issue.identifier));
     tokio::fs::create_dir_all(workspace_path.join(".polyphony"))
         .await
@@ -2061,17 +2056,17 @@ async fn inline_pull_request_review_comments_are_submitted_when_requested() {
                 turn_count: 0,
                 rate_limits: None,
                 active_task_id: None,
-                movement_id: Some("mov-inline".into()),
-                review_target: Some(trigger.review_target()),
+                run_id: Some("run-inline".into()),
+                review_target: Some(event.review_target()),
                 review_comment_marker: Some(pull_request_review_comment_marker(
-                    &trigger.review_target(),
+                    &event.review_target(),
                 )),
                 recent_log: VecDeque::new(),
                 handle: tokio::spawn(async {
                     let _: () = std::future::pending().await;
                 }),
             },
-            &trigger.review_target(),
+            &event.review_target(),
         )
         .await
         .unwrap();
@@ -2135,7 +2130,7 @@ async fn first_tick_shows_issues_before_startup_cleanup_finishes() {
         loop {
             let snapshot = snapshot_rx.borrow().clone();
             if snapshot
-                .visible_issues
+                .tracker_issues
                 .iter()
                 .any(|row| row.issue_id == issue.id)
             {
@@ -2156,8 +2151,8 @@ async fn first_tick_shows_issues_before_startup_cleanup_finishes() {
 }
 
 #[tokio::test]
-async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
-    let workspace_root = unique_workspace_root("startup-normalize-stale-movement");
+async fn run_normalizes_restored_stale_run_before_first_snapshot() {
+    let workspace_root = unique_workspace_root("startup-normalize-stale-run");
     let tracker = TestTracker::new(Vec::new());
     let workflow = test_workflow(&workspace_root);
     let (_tx, workflow_rx) = watch::channel(workflow);
@@ -2165,13 +2160,13 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
         workspace_root.join("state.json"),
     ));
     let now = Utc::now();
-    let movement = Movement {
-        id: "mov-startup-stale".into(),
-        kind: MovementKind::PullRequestReview,
+    let run = Run {
+        id: "run-startup-stale".into(),
+        kind: RunKind::PullRequestReview,
         issue_id: Some("issue-89".into()),
         issue_identifier: Some("penso/arbor#89".into()),
         title: "Review PR".into(),
-        status: MovementStatus::Cancelled,
+        status: RunStatus::Cancelled,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: Some("penso_arbor_89".into()),
@@ -2186,7 +2181,7 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
     };
     let task = Task {
         id: "task-startup-stale".into(),
-        movement_id: movement.id.clone(),
+        run_id: run.id.clone(),
         title: "Run PR review".into(),
         description: None,
         activity_log: Vec::new(),
@@ -2205,7 +2200,7 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
         created_at: now,
         updated_at: now,
     };
-    polyphony_core::StateStore::save_movement(store.as_ref(), &movement)
+    polyphony_core::StateStore::save_run(store.as_ref(), &run)
         .await
         .unwrap();
     polyphony_core::StateStore::save_task(store.as_ref(), &task)
@@ -2233,9 +2228,9 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
         loop {
             let snapshot = snapshot_rx.borrow().clone();
             if snapshot
-                .movements
+                .runs
                 .iter()
-                .any(|row| row.id == movement.id && row.status == MovementStatus::Failed)
+                .any(|row| row.id == run.id && row.status == RunStatus::Failed)
             {
                 break snapshot;
             }
@@ -2246,14 +2241,14 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
         }
     })
     .await
-    .expect("startup snapshot should include normalized stale movement");
+    .expect("startup snapshot should include normalized stale run");
 
-    let movement_row = snapshot
-        .movements
+    let run_row = snapshot
+        .runs
         .iter()
-        .find(|row| row.id == movement.id)
-        .expect("movement row");
-    assert_eq!(movement_row.status, MovementStatus::Failed);
+        .find(|row| row.id == run.id)
+        .expect("run row");
+    assert_eq!(run_row.status, RunStatus::Failed);
     let task_row = snapshot
         .tasks
         .iter()
@@ -2262,7 +2257,7 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
     assert_eq!(task_row.status, TaskStatus::Failed);
     assert_eq!(
         task_row.error.as_deref(),
-        Some("restored without an active agent session; retry the movement to continue")
+        Some("restored without an active agent session; retry the run to continue")
     );
 
     let _ = command_tx.send(RuntimeCommand::Shutdown);
@@ -2273,7 +2268,7 @@ async fn run_normalizes_restored_stale_movement_before_first_snapshot() {
 async fn automatic_dispatch_skips_waiting_issue_approval() {
     let workspace_root = unique_workspace_root("approval-waiting");
     let mut issue = sample_issue("issue-approval-1", "FAC-APPROVAL-1", "Todo", "Review input");
-    issue.approval_state = polyphony_core::IssueApprovalState::Waiting;
+    issue.approval_state = polyphony_core::DispatchApprovalState::Waiting;
     let tracker = TestTracker::new(vec![issue.clone()]);
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
@@ -2282,10 +2277,10 @@ async fn automatic_dispatch_skips_waiting_issue_approval() {
     service.tick().await;
 
     assert!(!service.state.running.contains_key(&issue.id));
-    assert_eq!(service.state.visible_issues.len(), 1);
+    assert_eq!(service.state.tracker_issues.len(), 1);
     assert_eq!(
-        service.state.visible_issues[0].approval_state,
-        polyphony_core::IssueApprovalState::Waiting
+        service.state.tracker_issues[0].approval_state,
+        polyphony_core::DispatchApprovalState::Waiting
     );
 }
 
@@ -2293,7 +2288,7 @@ async fn automatic_dispatch_skips_waiting_issue_approval() {
 async fn manual_dispatch_still_runs_waiting_issue_without_approval_override() {
     let workspace_root = unique_workspace_root("approval-manual-dispatch");
     let mut issue = sample_issue("issue-approval-2", "FAC-APPROVAL-2", "Todo", "Manual only");
-    issue.approval_state = polyphony_core::IssueApprovalState::Waiting;
+    issue.approval_state = polyphony_core::DispatchApprovalState::Waiting;
     let tracker = TestTracker::new(vec![issue.clone()]);
     let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
     service
@@ -2307,30 +2302,30 @@ async fn manual_dispatch_still_runs_waiting_issue_without_approval_override() {
     service.process_manual_dispatches().await;
 
     assert!(service.state.running.contains_key(&issue.id));
-    assert!(service.state.approved_issue_keys.is_empty());
+    assert!(service.state.approved_inbox_keys.is_empty());
 }
 
 #[tokio::test]
 async fn approving_waiting_issue_persists_and_allows_automatic_dispatch() {
     let workspace_root = unique_workspace_root("approval-approved");
     let mut issue = sample_issue("issue-approval-3", "FAC-APPROVAL-3", "Todo", "Approve me");
-    issue.approval_state = polyphony_core::IssueApprovalState::Waiting;
+    issue.approval_state = polyphony_core::DispatchApprovalState::Waiting;
     let tracker = TestTracker::new(vec![issue.clone()]);
     let mut service = test_service(tracker, RecordingProvisioner::default(), &workspace_root);
     service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
 
     service.tick().await;
     service
-        .pending_issue_approvals
+        .pending_inbox_approvals
         .push((issue.id.clone(), "mock".into()));
-    service.process_pending_issue_approvals().await;
+    service.process_pending_inbox_approvals().await;
 
     let snapshot = service.snapshot();
-    assert_eq!(snapshot.approved_issue_keys, vec!["mock:issue-approval-3"]);
-    assert_eq!(snapshot.visible_triggers.len(), 1);
+    assert_eq!(snapshot.approved_inbox_keys, vec!["mock:issue-approval-3"]);
+    assert_eq!(snapshot.inbox_items.len(), 1);
     assert_eq!(
-        snapshot.visible_triggers[0].approval_state,
-        polyphony_core::IssueApprovalState::Approved
+        snapshot.inbox_items[0].approval_state,
+        polyphony_core::DispatchApprovalState::Approved
     );
 
     service.tick().await;
@@ -2362,7 +2357,7 @@ async fn closing_visible_issue_updates_tracker_and_cleans_workspace() {
     assert!(
         service
             .state
-            .visible_issues
+            .tracker_issues
             .iter()
             .all(|row| row.issue_id != issue.id),
         "closed issue should be removed from active issue rows"
@@ -2748,6 +2743,7 @@ async fn retry_dispatch_rotates_to_fallback_agent_using_saved_context() {
         .state
         .saved_contexts
         .insert(issue.id.clone(), AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: issue.id.clone(),
             issue_identifier: issue.identifier.clone(),
             updated_at: Utc::now(),
@@ -2814,7 +2810,7 @@ async fn tick_defensively_reloads_workflow_and_rebuilds_components() {
                 format!("tracker:{}", workflow.config.tracker.kind),
                 Vec::new(),
             )),
-            pull_request_trigger_source: None,
+            pull_request_event_source: None,
             agent: Arc::new(NamedAgent::new(format!(
                 "agent:{}",
                 workflow.config.tracker.kind
@@ -2866,7 +2862,7 @@ async fn invalid_reloaded_workflow_blocks_dispatch_until_fixed() {
                 format!("tracker:{}", workflow.config.tracker.kind),
                 vec![issue_for_factory.clone()],
             )),
-            pull_request_trigger_source: None,
+            pull_request_event_source: None,
             agent: Arc::new(NamedAgent::new(format!(
                 "agent:{}",
                 workflow.config.tracker.kind
@@ -2899,6 +2895,7 @@ fn append_saved_context_includes_recent_transcript() {
     let prompt = append_saved_context(
         "Base prompt".into(),
         Some(&AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "issue-7".into(),
             issue_identifier: "FAC-7".into(),
             updated_at: Utc::now(),
@@ -2927,7 +2924,7 @@ fn append_saved_context_includes_recent_transcript() {
 }
 
 #[tokio::test]
-async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github() {
+async fn pipeline_issue_event_creates_pull_request_deliverable_without_github() {
     let workspace_root = unique_workspace_root("pipeline-issue-pr");
     let workflow = pipeline_workflow_with_automation(&workspace_root);
     let (_tx, rx) = watch::channel(workflow.clone());
@@ -2981,17 +2978,17 @@ async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github(
     handle_next_worker_message(&mut service).await;
     handle_next_worker_message(&mut service).await;
 
-    let movement = service
+    let run = service
         .state
-        .movements
+        .runs
         .values()
-        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
+        .find(|run| run.issue_id.as_deref() == Some(issue.id.as_str()))
         .cloned()
-        .expect("issue movement missing after pipeline completion");
-    assert_eq!(movement.status, MovementStatus::Delivered);
-    let deliverable = movement
+        .expect("issue run missing after pipeline completion");
+    assert_eq!(run.status, RunStatus::Delivered);
+    let deliverable = run
         .deliverable
-        .expect("movement should record the pull request deliverable");
+        .expect("run should record the pull request deliverable");
     assert_eq!(deliverable.kind, DeliverableKind::GithubPullRequest);
     assert_eq!(deliverable.status, DeliverableStatus::Open);
     assert_eq!(
@@ -3029,17 +3026,17 @@ async fn pipeline_issue_trigger_creates_pull_request_deliverable_without_github(
     );
 
     let snapshot = service.snapshot();
-    let movement_row = snapshot
-        .movements
+    let run_row = snapshot
+        .runs
         .iter()
-        .find(|movement| movement.issue_identifier.as_deref() == Some("DOG-101"))
-        .expect("movement row missing from runtime snapshot");
-    assert_eq!(movement_row.status, MovementStatus::Delivered);
-    assert!(movement_row.has_deliverable);
+        .find(|run| run.issue_identifier.as_deref() == Some("DOG-101"))
+        .expect("run row missing from runtime snapshot");
+    assert_eq!(run_row.status, RunStatus::Delivered);
+    assert!(run_row.has_deliverable);
 }
 
 #[tokio::test]
-async fn pipeline_issue_trigger_writes_workspace_artifacts_and_runs_after_outcome_hook() {
+async fn pipeline_issue_event_writes_workspace_artifacts_and_runs_after_outcome_hook() {
     let workspace_root = unique_workspace_root("pipeline-issue-artifacts");
     let mut workflow = pipeline_workflow_with_automation(&workspace_root);
     workflow.config.hooks.after_outcome = Some("printf cleaned > .after_outcome".into());
@@ -3098,7 +3095,7 @@ async fn pipeline_issue_trigger_writes_workspace_artifacts_and_runs_after_outcom
     let saved_context = tokio::fs::read_to_string(artifact_dir.join("saved-context.json"))
         .await
         .unwrap();
-    let runs = tokio::fs::read_to_string(artifact_dir.join("run-history.jsonl"))
+    let runs = tokio::fs::read_to_string(artifact_dir.join("agent-run-history.jsonl"))
         .await
         .unwrap();
     assert!(saved_context.contains("\"issue_identifier\": \"DOG-103\""));
@@ -3115,6 +3112,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
     std::fs::create_dir_all(workspace_path.join(".polyphony/runtime")).unwrap();
     let now = Utc::now();
     let context = AgentContextSnapshot {
+        repo_id: String::new(),
         issue_id: "issue-restore".into(),
         issue_identifier: "DOG-104".into(),
         updated_at: now,
@@ -3141,14 +3139,15 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
 
     service.restore_bootstrap(StoreBootstrap {
         snapshot: Some(RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
-            visible_issues: Vec::new(),
-            visible_triggers: Vec::new(),
-            approved_issue_keys: Vec::new(),
+            tracker_issues: Vec::new(),
+            inbox_items: Vec::new(),
+            approved_inbox_keys: Vec::new(),
             running: Vec::new(),
-            agent_history: Vec::new(),
+            agent_run_history: Vec::new(),
             retrying: Vec::new(),
             codex_totals: CodexTotals::default(),
             rate_limits: None,
@@ -3161,7 +3160,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
             })],
             recent_events: Vec::new(),
             pending_user_interactions: Vec::new(),
-            movements: Vec::new(),
+            runs: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),
             dispatch_mode: DispatchMode::default(),
@@ -3177,10 +3176,11 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
         budgets: std::collections::HashMap::new(),
         saved_contexts: std::collections::HashMap::new(),
         recent_events: Vec::new(),
-        movements: std::collections::HashMap::new(),
+        runs: std::collections::HashMap::new(),
         tasks: std::collections::HashMap::new(),
         reviewed_pull_request_heads: std::collections::HashMap::new(),
-        run_history: vec![PersistedRunRecord {
+        agent_run_history: vec![PersistedAgentRunRecord {
+            repo_id: String::new(),
             issue_id: "issue-restore".into(),
             issue_identifier: "DOG-104".into(),
             agent_name: "implementer".into(),
@@ -3211,7 +3211,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
 }
 
 #[tokio::test]
-async fn pipeline_issue_trigger_can_finish_without_opening_a_pull_request() {
+async fn pipeline_issue_event_can_finish_without_opening_a_pull_request() {
     let workspace_root = unique_workspace_root("pipeline-issue-no-pr");
     let workflow = pipeline_workflow_with_automation(&workspace_root);
     let (_tx, rx) = watch::channel(workflow.clone());
@@ -3255,15 +3255,15 @@ async fn pipeline_issue_trigger_can_finish_without_opening_a_pull_request() {
     handle_next_worker_message(&mut service).await;
     handle_next_worker_message(&mut service).await;
 
-    let movement = service
+    let run = service
         .state
-        .movements
+        .runs
         .values()
-        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
+        .find(|run| run.issue_id.as_deref() == Some(issue.id.as_str()))
         .cloned()
-        .expect("issue movement missing after clean pipeline completion");
-    assert_eq!(movement.status, MovementStatus::Review);
-    assert!(movement.deliverable.is_none());
+        .expect("issue run missing after clean pipeline completion");
+    assert_eq!(run.status, RunStatus::Review);
+    assert!(run.deliverable.is_none());
     assert_eq!(tracker_handle.recorded_workflow_updates(), vec![
         "In Progress",
         "Done"
@@ -3276,29 +3276,29 @@ async fn pipeline_issue_trigger_can_finish_without_opening_a_pull_request() {
     ]);
 
     let snapshot = service.snapshot();
-    let movement_row = snapshot
-        .movements
+    let run_row = snapshot
+        .runs
         .iter()
-        .find(|movement| movement.issue_identifier.as_deref() == Some("DOG-102"))
-        .expect("movement row missing from runtime snapshot");
-    assert_eq!(movement_row.status, MovementStatus::Review);
-    assert!(!movement_row.has_deliverable);
+        .find(|run| run.issue_identifier.as_deref() == Some("DOG-102"))
+        .expect("run row missing from runtime snapshot");
+    assert_eq!(run_row.status, RunStatus::Review);
+    assert!(!run_row.has_deliverable);
 }
 
 #[tokio::test]
-async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
+async fn resolving_run_deliverable_updates_decision_and_snapshot() {
     let workspace_root = unique_workspace_root("deliverable-decision");
     let tracker = TestTracker::new(vec![sample_issue("github:7", "#7", "Todo", "Need a PR")]);
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     let now = Utc::now();
-    service.state.movements.insert("mov-1".into(), Movement {
-        id: "mov-1".into(),
-        kind: MovementKind::IssueDelivery,
+    service.state.runs.insert("run-1".into(), Run {
+        id: "run-1".into(),
+        kind: RunKind::IssueDelivery,
         issue_id: Some("github:7".into()),
         issue_identifier: Some("#7".into()),
         title: "Need a PR".into(),
-        status: MovementStatus::Delivered,
+        status: RunStatus::Delivered,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: Some("_7".into()),
@@ -3322,22 +3322,18 @@ async fn resolving_movement_deliverable_updates_decision_and_snapshot() {
 
     service
         .pending_deliverable_resolutions
-        .push(("mov-1".into(), DeliverableDecision::Accepted));
+        .push(("run-1".into(), DeliverableDecision::Accepted));
     service.process_pending_deliverable_resolutions().await;
 
-    let movement = service
-        .state
-        .movements
-        .get("mov-1")
-        .expect("movement exists");
-    let deliverable = movement
+    let run = service.state.runs.get("run-1").expect("run exists");
+    let deliverable = run
         .deliverable
         .as_ref()
         .expect("deliverable exists after resolution");
     assert_eq!(deliverable.decision, DeliverableDecision::Accepted);
 
     let snapshot = service.snapshot();
-    let row = snapshot.movements.first().expect("movement row exists");
+    let row = snapshot.runs.first().expect("run row exists");
     assert_eq!(
         row.deliverable
             .as_ref()
@@ -3354,13 +3350,13 @@ async fn resolving_already_accepted_deliverable_is_ignored() {
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     let now = Utc::now();
-    service.state.movements.insert("mov-1".into(), Movement {
-        id: "mov-1".into(),
-        kind: MovementKind::IssueDelivery,
+    service.state.runs.insert("run-1".into(), Run {
+        id: "run-1".into(),
+        kind: RunKind::IssueDelivery,
         issue_id: Some("github:7".into()),
         issue_identifier: Some("#7".into()),
         title: "Need a PR".into(),
-        status: MovementStatus::Delivered,
+        status: RunStatus::Delivered,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: Some("_7".into()),
@@ -3384,15 +3380,11 @@ async fn resolving_already_accepted_deliverable_is_ignored() {
 
     service
         .pending_deliverable_resolutions
-        .push(("mov-1".into(), DeliverableDecision::Accepted));
+        .push(("run-1".into(), DeliverableDecision::Accepted));
     service.process_pending_deliverable_resolutions().await;
 
-    let movement = service
-        .state
-        .movements
-        .get("mov-1")
-        .expect("movement exists");
-    let deliverable = movement
+    let run = service.state.runs.get("run-1").expect("run exists");
+    let deliverable = run
         .deliverable
         .as_ref()
         .expect("deliverable exists after ignored resolution");
@@ -3409,7 +3401,7 @@ async fn resolving_already_accepted_deliverable_is_ignored() {
 }
 
 #[tokio::test]
-async fn startup_cleanup_finalizes_merged_accepted_movements() {
+async fn startup_cleanup_finalizes_merged_accepted_runs() {
     let workspace_root = unique_workspace_root("startup-finalize-accepted");
     let tracker = TestTracker::new(vec![sample_issue("github:7", "#7", "Todo", "Need a PR")]);
     let tracker_for_assertions = tracker.clone();
@@ -3417,13 +3409,13 @@ async fn startup_cleanup_finalizes_merged_accepted_movements() {
     let provisioner_for_assertions = provisioner.clone();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     let now = Utc::now();
-    service.state.movements.insert("mov-1".into(), Movement {
-        id: "mov-1".into(),
-        kind: MovementKind::IssueDelivery,
+    service.state.runs.insert("run-1".into(), Run {
+        id: "run-1".into(),
+        kind: RunKind::IssueDelivery,
         issue_id: Some("github:7".into()),
         issue_identifier: Some("#7".into()),
         title: "Need a PR".into(),
-        status: MovementStatus::Delivered,
+        status: RunStatus::Delivered,
         pipeline_stage: None,
         manual_dispatch_directives: None,
         workspace_key: Some("_7".into()),
@@ -3563,14 +3555,14 @@ async fn manual_dispatch_is_processed_on_next_tick() {
 }
 
 #[tokio::test]
-async fn manual_pull_request_dispatch_failure_creates_visible_failed_movement() {
+async fn manual_pull_request_dispatch_failure_creates_visible_failed_run() {
     let workspace_root = unique_workspace_root("manual-pr-dispatch-failure");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow.clone());
-    let trigger = PullRequestReviewTrigger {
+    let event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 89,
@@ -3581,13 +3573,13 @@ async fn manual_pull_request_dispatch_failure_creates_visible_failed_movement() 
         head_sha: "abc123".into(),
         checkout_ref: Some("refs/pull/89/head".into()),
         author_login: Some("alice".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::seconds(10)),
         is_draft: false,
     };
-    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let issue = synthetic_issue_for_pull_request_review(&event);
     let mut service = RuntimeService::new(
         Arc::new(TestTracker::new(Vec::new())),
         None,
@@ -3605,29 +3597,29 @@ async fn manual_pull_request_dispatch_failure_creates_visible_failed_movement() 
     )
     .0;
     let dispatch = service
-        .dispatch_pull_request_review(workflow, trigger, None, Some("Check auth"))
+        .dispatch_pull_request_review(workflow, event, None, Some("Check auth"))
         .await;
     assert!(
         dispatch.is_err(),
         "workspace setup should fail in this test"
     );
 
-    let (movement_id, movement) = service
+    let (run_id, run) = service
         .state
-        .movements
+        .runs
         .iter()
         .next()
-        .expect("movement should be created before workspace setup succeeds");
-    assert_eq!(movement.issue_id.as_deref(), Some(issue.id.as_str()));
-    assert_eq!(movement.status, MovementStatus::Failed);
+        .expect("run should be created before workspace setup succeeds");
+    assert_eq!(run.issue_id.as_deref(), Some(issue.id.as_str()));
+    assert_eq!(run.status, RunStatus::Failed);
     assert_eq!(
-        movement.manual_dispatch_directives.as_deref(),
+        run.manual_dispatch_directives.as_deref(),
         Some("Check auth")
     );
     let tasks = service
         .state
         .tasks
-        .get(movement_id)
+        .get(run_id)
         .expect("tasks should exist for PR dispatch");
     assert_eq!(tasks.len(), 2);
     assert_eq!(tasks[0].title, "Creating worktree");
@@ -3646,36 +3638,33 @@ async fn workspace_progress_updates_are_appended_to_worktree_task() {
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
     let now = Utc::now();
-    let movement_id = "mov-progress-1".to_string();
+    let run_id = "run-progress-1".to_string();
     let task_id = "task-progress-1".to_string();
     let issue_identifier = "penso/polyphony#89".to_string();
     let workspace_key = "penso_polyphony_89".to_string();
 
-    service
-        .state
-        .movements
-        .insert(movement_id.clone(), Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::PullRequestReview,
-            issue_id: Some("pr_review:github:penso/polyphony:89:head".into()),
-            issue_identifier: Some(issue_identifier.clone()),
-            title: "Review me".into(),
-            status: MovementStatus::InProgress,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: Some(workspace_key.clone()),
-            workspace_path: None,
-            review_target: None,
-            deliverable: None,
-            created_at: now,
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: now,
-        });
-    service.state.tasks.insert(movement_id.clone(), vec![Task {
+    service.state.runs.insert(run_id.clone(), Run {
+        id: run_id.clone(),
+        kind: RunKind::PullRequestReview,
+        issue_id: Some("pr_review:github:penso/polyphony:89:head".into()),
+        issue_identifier: Some(issue_identifier.clone()),
+        title: "Review me".into(),
+        status: RunStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: Some(workspace_key.clone()),
+        workspace_path: None,
+        review_target: None,
+        deliverable: None,
+        created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: now,
+    });
+    service.state.tasks.insert(run_id.clone(), vec![Task {
         id: task_id.clone(),
-        movement_id: movement_id.clone(),
+        run_id: run_id.clone(),
         title: "Creating worktree".into(),
         description: None,
         activity_log: Vec::new(),
@@ -3697,14 +3686,11 @@ async fn workspace_progress_updates_are_appended_to_worktree_task() {
     service
         .state
         .workspace_setup_tasks_by_issue_identifier
-        .insert(
-            issue_identifier.clone(),
-            (movement_id.clone(), task_id.clone()),
-        );
-    service.state.workspace_setup_tasks_by_key.insert(
-        workspace_key.clone(),
-        (movement_id.clone(), task_id.clone()),
-    );
+        .insert(issue_identifier.clone(), (run_id.clone(), task_id.clone()));
+    service
+        .state
+        .workspace_setup_tasks_by_key
+        .insert(workspace_key.clone(), (run_id.clone(), task_id.clone()));
 
     let update = WorkspaceProgressUpdate {
         issue_identifier: issue_identifier.clone(),
@@ -3736,7 +3722,7 @@ async fn workspace_progress_updates_are_appended_to_worktree_task() {
         .await
         .unwrap();
 
-    let tasks = service.state.tasks.get(&movement_id).unwrap();
+    let tasks = service.state.tasks.get(&run_id).unwrap();
     assert_eq!(tasks[0].activity_log.len(), 2);
     assert!(tasks[0].activity_log[0].ends_with("Fetching origin"));
     assert!(tasks[0].activity_log[1].ends_with("Waiting for SSH key touch on github.com"));
@@ -3757,34 +3743,31 @@ async fn task_retry_ignores_non_failed_tasks() {
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(TestTracker::new(Vec::new()), provisioner, &workspace_root);
     let now = Utc::now();
-    let movement_id = "mov-retry-1".to_string();
+    let run_id = "run-retry-1".to_string();
     let task_id = "task-retry-1".to_string();
 
-    service
-        .state
-        .movements
-        .insert(movement_id.clone(), Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::PullRequestReview,
-            issue_id: Some("pr_review:github:penso/polyphony:89:head".into()),
-            issue_identifier: Some("penso/polyphony#89".into()),
-            title: "Retry me".into(),
-            status: MovementStatus::Failed,
-            pipeline_stage: Some(PipelineStage::Executing),
-            manual_dispatch_directives: None,
-            workspace_key: Some("penso_polyphony_89".into()),
-            workspace_path: Some(workspace_root.join("penso_polyphony_89")),
-            review_target: None,
-            deliverable: None,
-            created_at: now,
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: now,
-        });
-    service.state.tasks.insert(movement_id.clone(), vec![Task {
+    service.state.runs.insert(run_id.clone(), Run {
+        id: run_id.clone(),
+        kind: RunKind::PullRequestReview,
+        issue_id: Some("pr_review:github:penso/polyphony:89:head".into()),
+        issue_identifier: Some("penso/polyphony#89".into()),
+        title: "Retry me".into(),
+        status: RunStatus::Failed,
+        pipeline_stage: Some(PipelineStage::Executing),
+        manual_dispatch_directives: None,
+        workspace_key: Some("penso_polyphony_89".into()),
+        workspace_path: Some(workspace_root.join("penso_polyphony_89")),
+        review_target: None,
+        deliverable: None,
+        created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: now,
+    });
+    service.state.tasks.insert(run_id.clone(), vec![Task {
         id: task_id.clone(),
-        movement_id: movement_id.clone(),
+        run_id: run_id.clone(),
         title: "Creating worktree".into(),
         description: None,
         activity_log: Vec::new(),
@@ -3805,14 +3788,14 @@ async fn task_retry_ignores_non_failed_tasks() {
     }]);
     service
         .pending_task_retries
-        .push((movement_id.clone(), task_id.clone()));
+        .push((run_id.clone(), task_id.clone()));
 
     service.process_pending_task_retries().await;
 
     let task = service
         .state
         .tasks
-        .get(&movement_id)
+        .get(&run_id)
         .and_then(|tasks| tasks.iter().find(|task| task.id == task_id))
         .expect("task should remain present");
     assert_eq!(task.status, TaskStatus::Completed);
@@ -3828,14 +3811,14 @@ async fn task_retry_ignores_non_failed_tasks() {
 }
 
 #[tokio::test]
-async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() {
-    let workspace_root = unique_workspace_root("retry-pr-movement");
+async fn run_retry_relaunches_pull_request_review_from_first_failed_task() {
+    let workspace_root = unique_workspace_root("retry-pr-run");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow.clone());
-    let trigger = PullRequestReviewTrigger {
+    let event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 89,
@@ -3846,16 +3829,16 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
         head_sha: "abc123".into(),
         checkout_ref: Some("refs/pull/89/head".into()),
         author_login: Some("alice".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::minutes(1)),
         is_draft: false,
     };
-    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let issue = synthetic_issue_for_pull_request_review(&event);
     let workspace_key = sanitize_workspace_key(&issue.identifier);
     let workspace_path = workspace_root.join(&workspace_key);
-    let movement_id = "mov-retry-pr-1".to_string();
+    let run_id = "run-retry-pr-1".to_string();
     let workspace_task_id = "task-retry-pr-setup".to_string();
     let review_task_id = "task-retry-pr-review".to_string();
     let now = Utc::now();
@@ -3875,32 +3858,29 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
     )
     .0;
 
-    service
-        .state
-        .movements
-        .insert(movement_id.clone(), Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::PullRequestReview,
-            issue_id: Some(issue.id.clone()),
-            issue_identifier: Some(issue.identifier.clone()),
-            title: issue.title.clone(),
-            status: MovementStatus::Failed,
-            pipeline_stage: None,
-            manual_dispatch_directives: Some("Check auth".into()),
-            workspace_key: Some(workspace_key.clone()),
-            workspace_path: Some(workspace_path.clone()),
-            review_target: Some(trigger.review_target()),
-            deliverable: None,
-            created_at: now,
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: now,
-        });
-    service.state.tasks.insert(movement_id.clone(), vec![
+    service.state.runs.insert(run_id.clone(), Run {
+        id: run_id.clone(),
+        kind: RunKind::PullRequestReview,
+        issue_id: Some(issue.id.clone()),
+        issue_identifier: Some(issue.identifier.clone()),
+        title: issue.title.clone(),
+        status: RunStatus::Failed,
+        pipeline_stage: None,
+        manual_dispatch_directives: Some("Check auth".into()),
+        workspace_key: Some(workspace_key.clone()),
+        workspace_path: Some(workspace_path.clone()),
+        review_target: Some(event.review_target()),
+        deliverable: None,
+        created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: now,
+    });
+    service.state.tasks.insert(run_id.clone(), vec![
         Task {
             id: workspace_task_id.clone(),
-            movement_id: movement_id.clone(),
+            run_id: run_id.clone(),
             title: "Creating worktree".into(),
             description: None,
             activity_log: Vec::new(),
@@ -3921,7 +3901,7 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
         },
         Task {
             id: review_task_id.clone(),
-            movement_id: movement_id.clone(),
+            run_id: run_id.clone(),
             title: "Run PR review".into(),
             description: None,
             activity_log: Vec::new(),
@@ -3941,25 +3921,25 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
             updated_at: now,
         },
     ]);
-    service.state.pull_request_retry_triggers.insert(
-        issue.id.clone(),
-        PullRequestTrigger::Review(trigger.clone()),
-    );
-    service.pending_movement_retries.push(movement_id.clone());
-
-    service.process_pending_movement_retries().await;
-
-    let movement = service
+    service
         .state
-        .movements
-        .get(&movement_id)
-        .expect("movement should remain present");
-    assert_eq!(movement.status, MovementStatus::InProgress);
+        .pull_request_retry_events
+        .insert(issue.id.clone(), PullRequestEvent::Review(event.clone()));
+    service.pending_run_retries.push(run_id.clone());
+
+    service.process_pending_run_retries().await;
+
+    let run = service
+        .state
+        .runs
+        .get(&run_id)
+        .expect("run should remain present");
+    assert_eq!(run.status, RunStatus::InProgress);
 
     let tasks = service
         .state
         .tasks
-        .get(&movement_id)
+        .get(&run_id)
         .expect("tasks should remain present");
     assert_eq!(tasks[0].status, TaskStatus::Completed);
     assert_eq!(tasks[0].error, None);
@@ -3975,19 +3955,19 @@ async fn movement_retry_relaunches_pull_request_review_from_first_failed_task() 
         running.active_task_id.as_deref(),
         Some(review_task_id.as_str())
     );
-    assert_eq!(running.movement_id.as_deref(), Some(movement_id.as_str()));
+    assert_eq!(running.run_id.as_deref(), Some(run_id.as_str()));
     assert_eq!(running.issue.identifier, issue.identifier);
 }
 
 #[tokio::test]
-async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
+async fn run_retry_recovers_stalled_pull_request_review_after_restart() {
     let workspace_root = unique_workspace_root("retry-pr-stalled");
     let workflow = test_workflow_with_front_matter(
         &workspace_root,
-        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_triggers:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
+        "---\ntracker:\n  kind: github\n  repository: penso/polyphony\n  api_key: token\npolling:\n  interval_ms: 1000\nworkspace:\n  root: __ROOT__\nagents:\n  default: reviewer\n  profiles:\n    reviewer:\n      kind: claude\n      transport: local_cli\n      command: claude -p --verbose --dangerously-skip-permissions\nreview_events:\n  pr_reviews:\n    enabled: true\n    agent: reviewer\n    debounce_seconds: 1\n---\nPrompt\n",
     );
     let (_tx, rx) = watch::channel(workflow.clone());
-    let trigger = PullRequestReviewTrigger {
+    let event = PullRequestReviewEvent {
         provider: polyphony_core::ReviewProviderKind::Github,
         repository: "penso/polyphony".into(),
         number: 90,
@@ -3998,16 +3978,16 @@ async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
         head_sha: "def456".into(),
         checkout_ref: Some("refs/pull/90/head".into()),
         author_login: Some("alice".into()),
-        approval_state: IssueApprovalState::Approved,
+        approval_state: DispatchApprovalState::Approved,
         labels: vec!["ready".into()],
         created_at: Some(Utc::now() - chrono::Duration::minutes(5)),
         updated_at: Some(Utc::now() - chrono::Duration::minutes(1)),
         is_draft: false,
     };
-    let issue = synthetic_issue_for_pull_request_review(&trigger);
+    let issue = synthetic_issue_for_pull_request_review(&event);
     let workspace_key = sanitize_workspace_key(&issue.identifier);
     let workspace_path = workspace_root.join(&workspace_key);
-    let movement_id = "mov-retry-pr-stalled".to_string();
+    let run_id = "run-retry-pr-stalled".to_string();
     let workspace_task_id = "task-retry-pr-stalled-setup".to_string();
     let review_task_id = "task-retry-pr-stalled-review".to_string();
     let now = Utc::now();
@@ -4027,32 +4007,29 @@ async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
     )
     .0;
 
-    service
-        .state
-        .movements
-        .insert(movement_id.clone(), Movement {
-            id: movement_id.clone(),
-            kind: MovementKind::PullRequestReview,
-            issue_id: Some(issue.id.clone()),
-            issue_identifier: Some(issue.identifier.clone()),
-            title: issue.title.clone(),
-            status: MovementStatus::InProgress,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: Some(workspace_key.clone()),
-            workspace_path: Some(workspace_path.clone()),
-            review_target: Some(trigger.review_target()),
-            deliverable: None,
-            created_at: now,
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: now,
-        });
-    service.state.tasks.insert(movement_id.clone(), vec![
+    service.state.runs.insert(run_id.clone(), Run {
+        id: run_id.clone(),
+        kind: RunKind::PullRequestReview,
+        issue_id: Some(issue.id.clone()),
+        issue_identifier: Some(issue.identifier.clone()),
+        title: issue.title.clone(),
+        status: RunStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: Some(workspace_key.clone()),
+        workspace_path: Some(workspace_path.clone()),
+        review_target: Some(event.review_target()),
+        deliverable: None,
+        created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: now,
+    });
+    service.state.tasks.insert(run_id.clone(), vec![
         Task {
             id: workspace_task_id.clone(),
-            movement_id: movement_id.clone(),
+            run_id: run_id.clone(),
             title: "Creating worktree".into(),
             description: None,
             activity_log: Vec::new(),
@@ -4073,7 +4050,7 @@ async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
         },
         Task {
             id: review_task_id.clone(),
-            movement_id: movement_id.clone(),
+            run_id: run_id.clone(),
             title: "Run PR review".into(),
             description: None,
             activity_log: Vec::new(),
@@ -4095,22 +4072,22 @@ async fn movement_retry_recovers_stalled_pull_request_review_after_restart() {
     ]);
     service
         .state
-        .visible_review_triggers
-        .insert(trigger.dedupe_key(), trigger.clone());
-    service.pending_movement_retries.push(movement_id.clone());
+        .visible_review_events
+        .insert(event.dedupe_key(), event.clone());
+    service.pending_run_retries.push(run_id.clone());
 
-    service.process_pending_movement_retries().await;
+    service.process_pending_run_retries().await;
 
     let tasks = service
         .state
         .tasks
-        .get(&movement_id)
+        .get(&run_id)
         .expect("tasks should remain present");
     assert_eq!(tasks[0].status, TaskStatus::Completed);
     assert_eq!(tasks[1].status, TaskStatus::InProgress);
     assert!(
         service.state.running.contains_key(&issue.id),
-        "stalled movement retry should relaunch the review worker"
+        "stalled run retry should relaunch the review worker"
     );
 }
 
@@ -4191,16 +4168,13 @@ async fn manual_dispatch_directives_are_prepended_to_direct_issue_prompt() {
     assert!(prompts[0].starts_with("## Operator Directives (Highest Priority)"));
     assert!(prompts[0].contains(directives));
     assert!(prompts[0].contains("Test prompt"));
-    let movement = service
+    let run = service
         .state
-        .movements
+        .runs
         .values()
-        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
-        .expect("movement should be created for direct dispatch");
-    assert_eq!(
-        movement.manual_dispatch_directives.as_deref(),
-        Some(directives)
-    );
+        .find(|run| run.issue_id.as_deref() == Some(issue.id.as_str()))
+        .expect("run should be created for direct dispatch");
+    assert_eq!(run.manual_dispatch_directives.as_deref(), Some(directives));
 }
 
 #[tokio::test]
@@ -4270,16 +4244,13 @@ async fn manual_dispatch_directives_reach_pipeline_router_and_worker_prompts() {
         .expect("pipeline worker prompt should be recorded");
     assert!(worker_prompt.contains(directives));
 
-    let movement = service
+    let run = service
         .state
-        .movements
+        .runs
         .values()
-        .find(|movement| movement.issue_id.as_deref() == Some(issue.id.as_str()))
-        .expect("movement should be created for pipeline dispatch");
-    assert_eq!(
-        movement.manual_dispatch_directives.as_deref(),
-        Some(directives)
-    );
+        .find(|run| run.issue_id.as_deref() == Some(issue.id.as_str()))
+        .expect("run should be created for pipeline dispatch");
+    assert_eq!(run.manual_dispatch_directives.as_deref(), Some(directives));
 }
 
 #[tokio::test]
@@ -4292,6 +4263,7 @@ async fn stop_mode_blocks_retries() {
     // Manually insert a due retry.
     service.state.retrying.insert("issue-1".into(), RetryEntry {
         row: RetryRow {
+            repo_id: String::new(),
             issue_id: "issue-1".into(),
             issue_identifier: "FAC-1".into(),
             attempt: 1,
@@ -4322,6 +4294,7 @@ async fn abort_all_drains_retry_queue() {
     service.claim_issue("issue-1".to_string(), IssueClaimState::RetryQueued);
     service.state.retrying.insert("issue-1".into(), RetryEntry {
         row: RetryRow {
+            repo_id: String::new(),
             issue_id: "issue-1".into(),
             issue_identifier: "FAC-1".into(),
             attempt: 2,
@@ -4428,30 +4401,30 @@ async fn finish_running_in_stop_mode_does_not_schedule_retry_on_failure() {
 }
 
 // ---------------------------------------------------------------------------
-// Movement deduplication tests
+// Run deduplication tests
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn dispatch_reuses_active_movement_for_same_issue() {
-    let workspace_root = unique_workspace_root("movement-reuse");
+async fn dispatch_reuses_active_run_for_same_issue() {
+    let workspace_root = unique_workspace_root("run-reuse");
     let tracker = TestTracker::new(vec![sample_issue("issue-1", "FAC-1", "Todo", "First")]);
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     service.state.dispatch_mode = polyphony_core::DispatchMode::Automatic;
 
-    // First dispatch creates a movement.
+    // First dispatch creates a run.
     service.tick().await;
     assert!(service.state.running.contains_key("issue-1"));
-    let movement_count_after_first = service.state.movements.len();
+    let run_count_after_first = service.state.runs.len();
     assert_eq!(
-        movement_count_after_first, 1,
-        "first dispatch should create one movement"
+        run_count_after_first, 1,
+        "first dispatch should create one run"
     );
 
     // Simulate the task finishing with success so it gets a continuation retry.
     handle_next_worker_message(&mut service).await;
 
-    // The issue should now be in the retry queue with a movement still present.
+    // The issue should now be in the retry queue with a run still present.
     assert!(
         service.state.retrying.contains_key("issue-1"),
         "successful finish should schedule a continuation retry"
@@ -4462,16 +4435,16 @@ async fn dispatch_reuses_active_movement_for_same_issue() {
         Instant::now() - Duration::from_secs(1);
     service.process_due_retries().await;
 
-    // After the retry dispatch, there should still be only one movement.
-    let movement_count_after_retry = service
+    // After the retry dispatch, there should still be only one run.
+    let run_count_after_retry = service
         .state
-        .movements
+        .runs
         .values()
         .filter(|m| m.issue_id.as_deref() == Some("issue-1"))
         .count();
     assert_eq!(
-        movement_count_after_retry, 1,
-        "retry dispatch should reuse the existing movement, not create a duplicate"
+        run_count_after_retry, 1,
+        "retry dispatch should reuse the existing run, not create a duplicate"
     );
 }
 
@@ -4523,82 +4496,74 @@ async fn dispatch_does_not_acknowledge_on_retry() {
 }
 
 #[test]
-fn find_existing_movement_prefers_active_over_terminal() {
-    let workspace_root = unique_workspace_root("movement-find-existing");
+fn find_existing_run_prefers_active_over_terminal() {
+    let workspace_root = unique_workspace_root("run-find-existing");
     let tracker = TestTracker::new(Vec::new());
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
 
     let now = Utc::now();
 
-    // Insert a delivered (terminal) movement for the issue.
-    service
-        .state
-        .movements
-        .insert("mov-delivered".into(), Movement {
-            id: "mov-delivered".into(),
-            kind: MovementKind::IssueDelivery,
-            issue_id: Some("issue-1".into()),
-            issue_identifier: Some("FAC-1".into()),
-            title: "Delivered work".into(),
-            status: MovementStatus::Delivered,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: None,
-            workspace_path: None,
-            review_target: None,
-            deliverable: None,
-            created_at: now,
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: now,
-        });
+    // Insert a delivered (terminal) run for the issue.
+    service.state.runs.insert("run-delivered".into(), Run {
+        id: "run-delivered".into(),
+        kind: RunKind::IssueDelivery,
+        issue_id: Some("issue-1".into()),
+        issue_identifier: Some("FAC-1".into()),
+        title: "Delivered work".into(),
+        status: RunStatus::Delivered,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: None,
+        workspace_path: None,
+        review_target: None,
+        deliverable: None,
+        created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: now,
+    });
 
-    // Even a terminal movement should be found — prevents duplicate movements
+    // Even a terminal run should be found — prevents duplicate runs
     // when an issue is re-dispatched via continuation retry.
     assert_eq!(
-        service.find_existing_movement_for_issue("issue-1"),
-        Some("mov-delivered".into()),
-        "delivered movement should be found when no active one exists"
+        service.find_existing_run_for_issue("issue-1"),
+        Some("run-delivered".into()),
+        "delivered run should be found when no active one exists"
     );
 
-    // Insert an in-progress (active) movement — should be preferred.
-    service
-        .state
-        .movements
-        .insert("mov-active".into(), Movement {
-            id: "mov-active".into(),
-            kind: MovementKind::IssueDelivery,
-            issue_id: Some("issue-1".into()),
-            issue_identifier: Some("FAC-1".into()),
-            title: "Active work".into(),
-            status: MovementStatus::InProgress,
-            pipeline_stage: None,
-            manual_dispatch_directives: None,
-            workspace_key: None,
-            workspace_path: None,
-            review_target: None,
-            deliverable: None,
-            created_at: now,
-            activity_log: Vec::new(),
-            cancel_reason: None,
-            steps: Vec::new(),
-            updated_at: now,
-        });
+    // Insert an in-progress (active) run — should be preferred.
+    service.state.runs.insert("run-active".into(), Run {
+        id: "run-active".into(),
+        kind: RunKind::IssueDelivery,
+        issue_id: Some("issue-1".into()),
+        issue_identifier: Some("FAC-1".into()),
+        title: "Active work".into(),
+        status: RunStatus::InProgress,
+        pipeline_stage: None,
+        manual_dispatch_directives: None,
+        workspace_key: None,
+        workspace_path: None,
+        review_target: None,
+        deliverable: None,
+        created_at: now,
+        activity_log: Vec::new(),
+        cancel_reason: None,
+        steps: Vec::new(),
+        updated_at: now,
+    });
 
     assert_eq!(
-        service.find_existing_movement_for_issue("issue-1"),
-        Some("mov-active".into()),
-        "active movement should be preferred over terminal one"
+        service.find_existing_run_for_issue("issue-1"),
+        Some("run-active".into()),
+        "active run should be preferred over terminal one"
     );
 
-    // No movement for a different issue.
+    // No run for a different issue.
     assert!(
-        service
-            .find_existing_movement_for_issue("issue-999")
-            .is_none(),
-        "should return None for an issue with no movements"
+        service.find_existing_run_for_issue("issue-999").is_none(),
+        "should return None for an issue with no runs"
     );
 }
 
@@ -4620,14 +4585,15 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
     let now = Utc::now();
     service.restore_bootstrap(StoreBootstrap {
         snapshot: Some(RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
-            visible_issues: Vec::new(),
-            visible_triggers: Vec::new(),
-            approved_issue_keys: Vec::new(),
+            tracker_issues: Vec::new(),
+            inbox_items: Vec::new(),
+            approved_inbox_keys: Vec::new(),
             running: Vec::new(),
-            agent_history: Vec::new(),
+            agent_run_history: Vec::new(),
             retrying: Vec::new(),
             codex_totals: CodexTotals::default(),
             rate_limits: None,
@@ -4637,7 +4603,7 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
             saved_contexts: Vec::new(),
             recent_events: Vec::new(),
             pending_user_interactions: Vec::new(),
-            movements: Vec::new(),
+            runs: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),
             dispatch_mode: DispatchMode::Stop,
@@ -4653,10 +4619,10 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
         budgets: std::collections::HashMap::new(),
         saved_contexts: std::collections::HashMap::new(),
         recent_events: Vec::new(),
-        movements: std::collections::HashMap::new(),
+        runs: std::collections::HashMap::new(),
         tasks: std::collections::HashMap::new(),
         reviewed_pull_request_heads: std::collections::HashMap::new(),
-        run_history: Vec::new(),
+        agent_run_history: Vec::new(),
     });
 
     assert!(service.state.bootstrap_restored);
@@ -4668,13 +4634,13 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
 }
 
 #[tokio::test]
-async fn normalize_restored_in_progress_movements_marks_stale_running_task_failed() {
+async fn normalize_restored_in_progress_runs_marks_stale_running_task_failed() {
     let workspace_root = unique_workspace_root("normalize-stale-running-task");
     let tracker = TestTracker::new(Vec::new());
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     let now = Utc::now();
-    let movement_id = "mov-stale-running".to_string();
+    let run_id = "run-stale-running".to_string();
     let task_id = "task-stale-running".to_string();
 
     service.restore_bootstrap(StoreBootstrap {
@@ -4684,31 +4650,28 @@ async fn normalize_restored_in_progress_movements_marks_stale_running_task_faile
         budgets: std::collections::HashMap::new(),
         saved_contexts: std::collections::HashMap::new(),
         recent_events: Vec::new(),
-        movements: std::collections::HashMap::from([(
-            movement_id.clone(),
-            polyphony_core::Movement {
-                id: movement_id.clone(),
-                kind: polyphony_core::MovementKind::PullRequestReview,
-                issue_id: Some("issue-89".into()),
-                issue_identifier: Some("penso/arbor#89".into()),
-                title: "Review PR".into(),
-                status: polyphony_core::MovementStatus::Cancelled,
-                pipeline_stage: None,
-                manual_dispatch_directives: None,
-                workspace_key: Some("penso_arbor_89".into()),
-                workspace_path: Some(workspace_root.join("penso_arbor_89")),
-                review_target: None,
-                deliverable: None,
-                created_at: now,
-                activity_log: Vec::new(),
-                cancel_reason: None,
-                steps: Vec::new(),
-                updated_at: now,
-            },
-        )]),
+        runs: std::collections::HashMap::from([(run_id.clone(), polyphony_core::Run {
+            id: run_id.clone(),
+            kind: polyphony_core::RunKind::PullRequestReview,
+            issue_id: Some("issue-89".into()),
+            issue_identifier: Some("penso/arbor#89".into()),
+            title: "Review PR".into(),
+            status: polyphony_core::RunStatus::Cancelled,
+            pipeline_stage: None,
+            manual_dispatch_directives: None,
+            workspace_key: Some("penso_arbor_89".into()),
+            workspace_path: Some(workspace_root.join("penso_arbor_89")),
+            review_target: None,
+            deliverable: None,
+            created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
+            steps: Vec::new(),
+            updated_at: now,
+        })]),
         tasks: std::collections::HashMap::from([(task_id.clone(), polyphony_core::Task {
             id: task_id.clone(),
-            movement_id: movement_id.clone(),
+            run_id: run_id.clone(),
             title: "Run PR review".into(),
             description: None,
             activity_log: Vec::new(),
@@ -4728,39 +4691,30 @@ async fn normalize_restored_in_progress_movements_marks_stale_running_task_faile
             updated_at: now,
         })]),
         reviewed_pull_request_heads: std::collections::HashMap::new(),
-        run_history: Vec::new(),
+        agent_run_history: Vec::new(),
     });
 
-    service
-        .normalize_restored_in_progress_movements()
-        .await
-        .unwrap();
+    service.normalize_restored_in_progress_runs().await.unwrap();
 
-    let movement = service.state.movements.get(&movement_id).unwrap();
-    assert_eq!(movement.status, polyphony_core::MovementStatus::Failed);
-    let task = service
-        .state
-        .tasks
-        .get(&movement_id)
-        .unwrap()
-        .first()
-        .unwrap();
+    let run = service.state.runs.get(&run_id).unwrap();
+    assert_eq!(run.status, polyphony_core::RunStatus::Failed);
+    let task = service.state.tasks.get(&run_id).unwrap().first().unwrap();
     assert_eq!(task.status, polyphony_core::TaskStatus::Failed);
     assert_eq!(
         task.error.as_deref(),
-        Some("restored without an active agent session; retry the movement to continue")
+        Some("restored without an active agent session; retry the run to continue")
     );
     assert!(task.finished_at.is_some());
 }
 
 #[tokio::test]
-async fn normalize_restored_in_progress_movements_marks_first_pending_task_failed() {
+async fn normalize_restored_in_progress_runs_marks_first_pending_task_failed() {
     let workspace_root = unique_workspace_root("normalize-stale-pending-task");
     let tracker = TestTracker::new(Vec::new());
     let provisioner = RecordingProvisioner::default();
     let mut service = test_service(tracker, provisioner, &workspace_root);
     let now = Utc::now();
-    let movement_id = "mov-stale-pending".to_string();
+    let run_id = "run-stale-pending".to_string();
     let workspace_task_id = "task-worktree".to_string();
     let review_task_id = "task-review".to_string();
 
@@ -4771,32 +4725,29 @@ async fn normalize_restored_in_progress_movements_marks_first_pending_task_faile
         budgets: std::collections::HashMap::new(),
         saved_contexts: std::collections::HashMap::new(),
         recent_events: Vec::new(),
-        movements: std::collections::HashMap::from([(
-            movement_id.clone(),
-            polyphony_core::Movement {
-                id: movement_id.clone(),
-                kind: polyphony_core::MovementKind::PullRequestReview,
-                issue_id: Some("issue-89".into()),
-                issue_identifier: Some("penso/arbor#89".into()),
-                title: "Review PR".into(),
-                status: polyphony_core::MovementStatus::InProgress,
-                pipeline_stage: None,
-                manual_dispatch_directives: None,
-                workspace_key: Some("penso_arbor_89".into()),
-                workspace_path: Some(workspace_root.join("penso_arbor_89")),
-                review_target: None,
-                deliverable: None,
-                created_at: now,
-                activity_log: Vec::new(),
-                cancel_reason: None,
-                steps: Vec::new(),
-                updated_at: now,
-            },
-        )]),
+        runs: std::collections::HashMap::from([(run_id.clone(), polyphony_core::Run {
+            id: run_id.clone(),
+            kind: polyphony_core::RunKind::PullRequestReview,
+            issue_id: Some("issue-89".into()),
+            issue_identifier: Some("penso/arbor#89".into()),
+            title: "Review PR".into(),
+            status: polyphony_core::RunStatus::InProgress,
+            pipeline_stage: None,
+            manual_dispatch_directives: None,
+            workspace_key: Some("penso_arbor_89".into()),
+            workspace_path: Some(workspace_root.join("penso_arbor_89")),
+            review_target: None,
+            deliverable: None,
+            created_at: now,
+            activity_log: Vec::new(),
+            cancel_reason: None,
+            steps: Vec::new(),
+            updated_at: now,
+        })]),
         tasks: std::collections::HashMap::from([
             (workspace_task_id.clone(), polyphony_core::Task {
                 id: workspace_task_id.clone(),
-                movement_id: movement_id.clone(),
+                run_id: run_id.clone(),
                 title: "Creating worktree".into(),
                 description: None,
                 activity_log: Vec::new(),
@@ -4817,7 +4768,7 @@ async fn normalize_restored_in_progress_movements_marks_first_pending_task_faile
             }),
             (review_task_id.clone(), polyphony_core::Task {
                 id: review_task_id.clone(),
-                movement_id: movement_id.clone(),
+                run_id: run_id.clone(),
                 title: "Run PR review".into(),
                 description: None,
                 activity_log: Vec::new(),
@@ -4838,17 +4789,14 @@ async fn normalize_restored_in_progress_movements_marks_first_pending_task_faile
             }),
         ]),
         reviewed_pull_request_heads: std::collections::HashMap::new(),
-        run_history: Vec::new(),
+        agent_run_history: Vec::new(),
     });
 
-    service
-        .normalize_restored_in_progress_movements()
-        .await
-        .unwrap();
+    service.normalize_restored_in_progress_runs().await.unwrap();
 
-    let movement = service.state.movements.get(&movement_id).unwrap();
-    assert_eq!(movement.status, polyphony_core::MovementStatus::Failed);
-    let tasks = service.state.tasks.get(&movement_id).unwrap();
+    let run = service.state.runs.get(&run_id).unwrap();
+    assert_eq!(run.status, polyphony_core::RunStatus::Failed);
+    let tasks = service.state.tasks.get(&run_id).unwrap();
     let workspace_task = tasks
         .iter()
         .find(|task| task.id == workspace_task_id)
@@ -4858,6 +4806,6 @@ async fn normalize_restored_in_progress_movements_marks_first_pending_task_faile
     assert_eq!(review_task.status, polyphony_core::TaskStatus::Failed);
     assert_eq!(
         review_task.error.as_deref(),
-        Some("restored without an active agent session; retry the movement to continue")
+        Some("restored without an active agent session; retry the run to continue")
     );
 }

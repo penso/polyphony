@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    BudgetSnapshot, Error, Movement, PersistedRunRecord, ReviewedPullRequestHead, RuntimeSnapshot,
+    BudgetSnapshot, Error, PersistedAgentRunRecord, ReviewedPullRequestHead, Run, RuntimeSnapshot,
     StateStore, StoreBootstrap, Task,
 };
 
@@ -57,9 +57,9 @@ struct JsonStateStoreData {
     #[serde(default)]
     snapshot: Option<RuntimeSnapshot>,
     #[serde(default)]
-    run_history: Vec<PersistedRunRecord>,
+    agent_run_history: Vec<PersistedAgentRunRecord>,
     #[serde(default)]
-    movements: HashMap<String, Movement>,
+    runs: HashMap<String, Run>,
     #[serde(default)]
     tasks: HashMap<String, Task>,
     #[serde(default)]
@@ -77,10 +77,10 @@ impl StateStore for JsonStateStore {
             budgets: HashMap::new(),
             saved_contexts: HashMap::new(),
             recent_events: Vec::new(),
-            movements: data.movements,
+            runs: data.runs,
             tasks: data.tasks,
             reviewed_pull_request_heads: data.reviewed_pull_request_heads,
-            run_history: data.run_history,
+            agent_run_history: data.agent_run_history,
         };
 
         if let Some(snapshot) = data.snapshot {
@@ -118,10 +118,10 @@ impl StateStore for JsonStateStore {
         .await
     }
 
-    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), Error> {
+    async fn record_agent_run(&self, run: &PersistedAgentRunRecord) -> Result<(), Error> {
         let run = run.clone();
         self.update_data(move |data| {
-            data.run_history.insert(0, run.clone());
+            data.agent_run_history.insert(0, run.clone());
         })
         .await
     }
@@ -139,10 +139,10 @@ impl StateStore for JsonStateStore {
         .await
     }
 
-    async fn save_movement(&self, movement: &Movement) -> Result<(), Error> {
-        let movement = movement.clone();
+    async fn save_run(&self, run: &Run) -> Result<(), Error> {
+        let run = run.clone();
         self.update_data(move |data| {
-            data.movements.insert(movement.id.clone(), movement.clone());
+            data.runs.insert(run.id.clone(), run.clone());
         })
         .await
     }
@@ -155,22 +155,22 @@ impl StateStore for JsonStateStore {
         .await
     }
 
-    async fn load_movements(&self) -> Result<Vec<Movement>, Error> {
+    async fn load_runs(&self) -> Result<Vec<Run>, Error> {
         Ok(self
             .load_data()
             .await?
-            .movements
+            .runs
             .into_values()
             .collect::<Vec<_>>())
     }
 
-    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, Error> {
+    async fn load_tasks_for_run(&self, run_id: &str) -> Result<Vec<Task>, Error> {
         Ok(self
             .load_data()
             .await?
             .tasks
             .into_values()
-            .filter(|task| task.movement_id == movement_id)
+            .filter(|task| task.run_id == run_id)
             .collect::<Vec<_>>())
     }
 
@@ -214,8 +214,8 @@ fn load_data_blocking(path: &PathBuf) -> Result<JsonStateStoreData, Error> {
 
 fn compact_snapshot_for_store(mut snapshot: RuntimeSnapshot) -> RuntimeSnapshot {
     snapshot.running.clear();
-    snapshot.agent_history.clear();
-    snapshot.movements.clear();
+    snapshot.agent_run_history.clear();
+    snapshot.runs.clear();
     snapshot.tasks.clear();
     snapshot.recent_events = compact_recent_events(snapshot.recent_events);
     snapshot.saved_contexts = snapshot
@@ -248,15 +248,15 @@ fn compact_state_store_data(data: &mut JsonStateStoreData) {
     if let Some(snapshot) = data.snapshot.take() {
         data.snapshot = Some(compact_snapshot_for_store(snapshot));
     }
-    data.run_history = data
-        .run_history
+    data.agent_run_history = data
+        .agent_run_history
         .drain(..)
         .take(MAX_RUN_HISTORY)
-        .map(compact_persisted_run_record)
+        .map(compact_persisted_agent_run_record)
         .collect();
 }
 
-fn compact_persisted_run_record(mut run: PersistedRunRecord) -> PersistedRunRecord {
+fn compact_persisted_agent_run_record(mut run: PersistedAgentRunRecord) -> PersistedAgentRunRecord {
     run.last_message = run
         .last_message
         .as_deref()
@@ -317,7 +317,7 @@ mod tests {
 
     use super::JsonStateStore;
     use crate::{
-        AgentContextSnapshot, AgentHistoryRow, AgentModelCatalog, AttemptStatus, BudgetSnapshot,
+        AgentContextSnapshot, AgentModelCatalog, AgentRunHistoryRow, AttemptStatus, BudgetSnapshot,
         CodexTotals, DispatchMode, LoadingState, RuntimeCadence, RuntimeEvent, RuntimeSnapshot,
         SnapshotCounts, StateStore, TokenUsage, TrackerKind,
     };
@@ -328,14 +328,16 @@ mod tests {
         let path = dir.path().join("state.json");
         let store = JsonStateStore::new(path);
         let snapshot = RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: chrono::Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
-            visible_issues: Vec::new(),
-            visible_triggers: Vec::new(),
-            approved_issue_keys: Vec::new(),
+            tracker_issues: Vec::new(),
+            inbox_items: Vec::new(),
+            approved_inbox_keys: Vec::new(),
             running: Vec::new(),
-            agent_history: vec![AgentHistoryRow {
+            agent_run_history: vec![AgentRunHistoryRow {
+                repo_id: String::new(),
                 issue_id: "1".into(),
                 issue_identifier: "ISSUE-1".into(),
                 agent_name: "codex".into(),
@@ -375,6 +377,7 @@ mod tests {
             }],
             agent_catalogs: vec![AgentModelCatalog::default()],
             saved_contexts: vec![AgentContextSnapshot {
+                repo_id: String::new(),
                 issue_id: "1".into(),
                 issue_identifier: "ISSUE-1".into(),
                 updated_at: chrono::Utc::now(),
@@ -395,7 +398,7 @@ mod tests {
                 message: "done".into(),
             }],
             pending_user_interactions: Vec::new(),
-            movements: Vec::new(),
+            runs: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),
             dispatch_mode: DispatchMode::default(),
@@ -406,7 +409,8 @@ mod tests {
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
         };
-        let run = crate::PersistedRunRecord {
+        let run = crate::PersistedAgentRunRecord {
+            repo_id: String::new(),
             issue_id: "1".into(),
             issue_identifier: "ISSUE-1".into(),
             agent_name: "codex".into(),
@@ -431,18 +435,18 @@ mod tests {
         };
 
         store.save_snapshot(&snapshot).await.unwrap();
-        store.record_run(&run).await.unwrap();
+        store.record_agent_run(&run).await.unwrap();
 
         let stored = super::load_data_blocking(&dir.path().join("state.json")).unwrap();
         let stored_snapshot = stored.snapshot.unwrap();
         assert!(stored_snapshot.running.is_empty());
-        assert!(stored_snapshot.agent_history.is_empty());
-        assert!(stored_snapshot.movements.is_empty());
+        assert!(stored_snapshot.agent_run_history.is_empty());
+        assert!(stored_snapshot.runs.is_empty());
         assert!(stored_snapshot.tasks.is_empty());
 
         let bootstrap = store.bootstrap().await.unwrap();
         assert!(bootstrap.snapshot.is_some());
-        assert_eq!(bootstrap.run_history.len(), 1);
+        assert_eq!(bootstrap.agent_run_history.len(), 1);
         assert_eq!(bootstrap.budgets.len(), 1);
         assert_eq!(bootstrap.saved_contexts.len(), 1);
     }
@@ -453,6 +457,7 @@ mod tests {
         let path = dir.path().join("state.json");
         let now = chrono::Utc::now();
         let context = AgentContextSnapshot {
+            repo_id: String::new(),
             issue_id: "1".into(),
             issue_identifier: "ISSUE-1".into(),
             updated_at: now,
@@ -475,14 +480,15 @@ mod tests {
         };
         let data = super::JsonStateStoreData {
             snapshot: Some(RuntimeSnapshot {
+                repo_ids: Vec::new(),
                 generated_at: now,
                 counts: SnapshotCounts::default(),
                 cadence: RuntimeCadence::default(),
-                visible_issues: Vec::new(),
-                visible_triggers: Vec::new(),
-                approved_issue_keys: Vec::new(),
+                tracker_issues: Vec::new(),
+                inbox_items: Vec::new(),
+                approved_inbox_keys: Vec::new(),
                 running: Vec::new(),
-                agent_history: Vec::new(),
+                agent_run_history: Vec::new(),
                 retrying: Vec::new(),
                 codex_totals: CodexTotals::default(),
                 rate_limits: None,
@@ -498,7 +504,7 @@ mod tests {
                     })
                     .collect(),
                 pending_user_interactions: Vec::new(),
-                movements: Vec::new(),
+                runs: Vec::new(),
                 tasks: Vec::new(),
                 loading: LoadingState::default(),
                 dispatch_mode: DispatchMode::default(),
@@ -509,8 +515,9 @@ mod tests {
                 agent_profile_names: Vec::new(),
                 agent_profiles: Vec::new(),
             }),
-            run_history: (0..300)
-                .map(|index| crate::PersistedRunRecord {
+            agent_run_history: (0..300)
+                .map(|index| crate::PersistedAgentRunRecord {
+                    repo_id: String::new(),
                     issue_id: index.to_string(),
                     issue_identifier: format!("ISSUE-{index}"),
                     agent_name: "codex".into(),
@@ -534,7 +541,7 @@ mod tests {
                     saved_context: Some(context.clone()),
                 })
                 .collect(),
-            movements: HashMap::new(),
+            runs: HashMap::new(),
             tasks: HashMap::new(),
             reviewed_pull_request_heads: HashMap::new(),
         };
@@ -542,7 +549,7 @@ mod tests {
         super::save_data_blocking(&path, &data).unwrap();
         let loaded = super::load_data_blocking(&path).unwrap();
 
-        assert_eq!(loaded.run_history.len(), super::MAX_RUN_HISTORY);
+        assert_eq!(loaded.agent_run_history.len(), super::MAX_RUN_HISTORY);
         assert_eq!(
             loaded.snapshot.as_ref().unwrap().recent_events.len(),
             super::MAX_RECENT_EVENTS
@@ -553,6 +560,6 @@ mod tests {
                 .len(),
             super::MAX_SAVED_CONTEXT_TRANSCRIPT_ENTRIES
         );
-        assert!(loaded.run_history[0].saved_context.is_none());
+        assert!(loaded.agent_run_history[0].saved_context.is_none());
     }
 }

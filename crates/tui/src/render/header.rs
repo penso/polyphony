@@ -16,15 +16,11 @@ pub fn draw_header(
 ) {
     let theme = app.theme;
     let status_summary = header_summary_line(snapshot, theme);
-    let titlebar_badges = titlebar_badges(snapshot, theme);
-    let titlebar_width = u16::try_from(titlebar_badges.width())
+    let titlebar_badges = titlebar_badges(snapshot, app, theme);
+    let combined_right_width = u16::try_from(status_summary.width() + 2 + titlebar_badges.width())
         .unwrap_or(u16::MAX)
         .saturating_add(1)
-        .min(area.width.saturating_sub(6));
-    let summary_width = u16::try_from(status_summary.width())
-        .unwrap_or(u16::MAX)
-        .saturating_add(1)
-        .min(area.width.saturating_sub(12));
+        .min(area.width.saturating_sub(20));
 
     let mut shell = Block::default()
         .borders(ratatui::widgets::Borders::ALL)
@@ -50,28 +46,14 @@ pub fn draw_header(
     let inner = shell.inner(area);
     frame.render_widget(shell, area);
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
-        .split(inner);
-
-    let titlebar_sections = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Length(titlebar_width)])
-        .split(rows[0]);
-    frame.render_widget(
-        Paragraph::new(titlebar_line(theme)).alignment(Alignment::Left),
-        titlebar_sections[0],
-    );
-    frame.render_widget(
-        Paragraph::new(titlebar_badges).alignment(Alignment::Right),
-        titlebar_sections[1],
-    );
-
+    // Single row: tabs on the left, badges + summary on the right
     let tab_sections = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Fill(1), Constraint::Length(summary_width)])
-        .split(rows[1]);
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(combined_right_width),
+        ])
+        .split(inner);
 
     let tabs = Tabs::new(
         ActiveTab::ALL
@@ -85,14 +67,17 @@ pub fn draw_header(
     .style(Style::default().bg(theme.panel))
     .highlight_style(
         Style::default()
-            .fg(theme.foreground)
-            .bg(theme.selection)
-            .add_modifier(Modifier::BOLD),
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::UNDERLINED),
     );
     app.tab_inner_area = tab_sections[0];
     frame.render_widget(tabs, tab_sections[0]);
+    // Combine badges and summary into a single right-aligned line
+    let mut right_spans = status_summary.spans;
+    right_spans.push(Span::styled("  ", Style::default()));
+    right_spans.extend(titlebar_badges.spans);
     frame.render_widget(
-        Paragraph::new(status_summary).alignment(Alignment::Right),
+        Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
         tab_sections[1],
     );
 }
@@ -121,9 +106,9 @@ fn github_connection_label(
 
 fn header_summary_line(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled("triggers ", Style::default().fg(theme.muted)),
+        Span::styled("inbox ", Style::default().fg(theme.muted)),
         Span::styled(
-            snapshot.visible_triggers.len().to_string(),
+            snapshot.inbox_items.len().to_string(),
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
@@ -166,16 +151,11 @@ fn header_summary_line(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -
     ])
 }
 
-fn titlebar_line(theme: crate::theme::Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled("● ", Style::default().fg(Color::Rgb(239, 83, 80))),
-        Span::styled("● ", Style::default().fg(Color::Rgb(251, 191, 36))),
-        Span::styled("●  ", Style::default().fg(Color::Rgb(134, 239, 172))),
-        Span::styled("polyphony - tui", Style::default().fg(theme.muted)),
-    ])
-}
-
-fn titlebar_badges(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Line<'static> {
+fn titlebar_badges(
+    snapshot: &RuntimeSnapshot,
+    app: &AppState,
+    theme: crate::theme::Theme,
+) -> Line<'static> {
     let (mode_label, mode_color) = match snapshot.dispatch_mode {
         DispatchMode::Manual => ("manual", theme.info),
         DispatchMode::Automatic => ("auto", theme.success),
@@ -201,6 +181,21 @@ fn titlebar_badges(snapshot: &RuntimeSnapshot, theme: crate::theme::Theme) -> Li
 
     if snapshot.from_cache {
         spans.push(Span::styled("  cached", Style::default().fg(theme.warning)));
+    }
+
+    // Show repo filter badge when filtering to a single repo
+    if let Some(repo) = &app.selected_repo {
+        spans.push(Span::styled("  ", Style::default()));
+        spans.push(Span::styled(
+            format!("⊙ {repo}"),
+            Style::default().fg(theme.info),
+        ));
+    } else if snapshot.repo_ids.len() > 1 {
+        spans.push(Span::styled("  ", Style::default()));
+        spans.push(Span::styled(
+            format!("⊙ {} repos", snapshot.repo_ids.len()),
+            Style::default().fg(theme.muted),
+        ));
     }
 
     Line::from(spans)

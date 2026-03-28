@@ -9,7 +9,9 @@ pub struct CodexTotals {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunningRow {
+pub struct RunningAgentRow {
+    #[serde(default)]
+    pub repo_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub agent_name: String,
@@ -34,6 +36,8 @@ pub struct RunningRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryRow {
+    #[serde(default)]
+    pub repo_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub attempt: u32,
@@ -118,13 +122,15 @@ pub struct RuntimeCadence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct VisibleIssueRow {
+pub struct TrackerIssueRow {
+    #[serde(default)]
+    pub repo_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub title: String,
     pub state: String,
     #[serde(default)]
-    pub approval_state: IssueApprovalState,
+    pub approval_state: DispatchApprovalState,
     pub priority: Option<i32>,
     pub labels: Vec<String>,
     #[serde(default)]
@@ -145,7 +151,7 @@ pub struct VisibleIssueRow {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum VisibleTriggerKind {
+pub enum InboxItemKind {
     #[default]
     Issue,
     PullRequestReview,
@@ -153,7 +159,7 @@ pub enum VisibleTriggerKind {
     PullRequestConflict,
 }
 
-impl fmt::Display for VisibleTriggerKind {
+impl fmt::Display for InboxItemKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
             Self::Issue => "issue",
@@ -166,15 +172,17 @@ impl fmt::Display for VisibleTriggerKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct VisibleTriggerRow {
-    pub trigger_id: String,
-    pub kind: VisibleTriggerKind,
+pub struct InboxItemRow {
+    #[serde(default)]
+    pub repo_id: String,
+    pub item_id: String,
+    pub kind: InboxItemKind,
     pub source: String,
     pub identifier: String,
     pub title: String,
     pub status: String,
     #[serde(default)]
-    pub approval_state: IssueApprovalState,
+    pub approval_state: DispatchApprovalState,
     pub priority: Option<i32>,
     pub labels: Vec<String>,
     #[serde(default)]
@@ -195,19 +203,21 @@ pub struct VisibleTriggerRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeSnapshot {
+    #[serde(default)]
+    pub repo_ids: Vec<String>,
     pub generated_at: DateTime<Utc>,
     pub counts: SnapshotCounts,
     #[serde(default)]
     pub cadence: RuntimeCadence,
     #[serde(default)]
-    pub visible_issues: Vec<VisibleIssueRow>,
+    pub tracker_issues: Vec<TrackerIssueRow>,
     #[serde(default)]
-    pub visible_triggers: Vec<VisibleTriggerRow>,
+    pub inbox_items: Vec<InboxItemRow>,
     #[serde(default)]
-    pub approved_issue_keys: Vec<String>,
-    pub running: Vec<RunningRow>,
+    pub approved_inbox_keys: Vec<String>,
+    pub running: Vec<RunningAgentRow>,
     #[serde(default)]
-    pub agent_history: Vec<AgentHistoryRow>,
+    pub agent_run_history: Vec<AgentRunHistoryRow>,
     pub retrying: Vec<RetryRow>,
     pub codex_totals: CodexTotals,
     pub rate_limits: Option<Value>,
@@ -219,7 +229,7 @@ pub struct RuntimeSnapshot {
     #[serde(default)]
     pub pending_user_interactions: Vec<UserInteractionRequest>,
     #[serde(default)]
-    pub movements: Vec<MovementRow>,
+    pub runs: Vec<RunRow>,
     #[serde(default)]
     pub tasks: Vec<TaskRow>,
     #[serde(default)]
@@ -253,7 +263,7 @@ pub struct SnapshotCounts {
     pub running: usize,
     pub retrying: usize,
     #[serde(default)]
-    pub movements: usize,
+    pub runs: usize,
     #[serde(default)]
     pub tasks_pending: usize,
     #[serde(default)]
@@ -324,7 +334,9 @@ pub struct IssueStateUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentHistoryRow {
+pub struct AgentRunHistoryRow {
+    #[serde(default)]
+    pub repo_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub agent_name: String,
@@ -352,7 +364,9 @@ pub struct AgentHistoryRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedRunRecord {
+pub struct PersistedAgentRunRecord {
+    #[serde(default)]
+    pub repo_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub agent_name: String,
@@ -379,10 +393,11 @@ pub struct PersistedRunRecord {
     pub saved_context: Option<AgentContextSnapshot>,
 }
 
-impl PersistedRunRecord {
+impl PersistedAgentRunRecord {
     #[must_use]
-    pub fn to_history_row(&self) -> AgentHistoryRow {
-        AgentHistoryRow {
+    pub fn to_agent_run_history_row(&self) -> AgentRunHistoryRow {
+        AgentRunHistoryRow {
+            repo_id: self.repo_id.clone(),
             issue_id: self.issue_id.clone(),
             issue_identifier: self.issue_identifier.clone(),
             agent_name: self.agent_name.clone(),
@@ -418,13 +433,13 @@ pub struct StoreBootstrap {
     pub saved_contexts: HashMap<String, AgentContextSnapshot>,
     pub recent_events: Vec<RuntimeEvent>,
     #[serde(default)]
-    pub movements: HashMap<String, Movement>,
+    pub runs: HashMap<String, Run>,
     #[serde(default)]
     pub tasks: HashMap<String, Task>,
     #[serde(default)]
     pub reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
     #[serde(default)]
-    pub run_history: Vec<PersistedRunRecord>,
+    pub agent_run_history: Vec<PersistedAgentRunRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,6 +451,8 @@ pub struct AgentContextEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentContextSnapshot {
+    #[serde(default)]
+    pub repo_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub updated_at: DateTime<Utc>,
@@ -612,11 +629,11 @@ pub struct WorkspaceCommitResult {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CachedSnapshot {
     pub saved_at: Option<DateTime<Utc>>,
-    pub visible_issues: Vec<VisibleIssueRow>,
+    pub tracker_issues: Vec<TrackerIssueRow>,
     #[serde(default)]
-    pub visible_triggers: Vec<VisibleTriggerRow>,
+    pub inbox_items: Vec<InboxItemRow>,
     #[serde(default)]
-    pub approved_issue_keys: Vec<String>,
+    pub approved_inbox_keys: Vec<String>,
     pub budgets: Vec<BudgetSnapshot>,
     pub agent_catalogs: Vec<AgentModelCatalog>,
     #[serde(default)]
@@ -643,8 +660,8 @@ impl LoadingState {
     }
 }
 
-pub fn new_movement_id() -> MovementId {
-    format!("mov-{}", Uuid::new_v4())
+pub fn new_run_id() -> RunId {
+    format!("run-{}", Uuid::new_v4())
 }
 
 pub fn sanitize_workspace_key(identifier: &str) -> String {

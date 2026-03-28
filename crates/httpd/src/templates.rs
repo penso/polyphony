@@ -24,12 +24,14 @@ mod tests {
         let env = build_env(&template_dir);
         for name in [
             "index.html",
-            "movements.html",
-            "triggers.html",
+            "runs.html",
+            "inbox.html",
             "agents.html",
             "tasks.html",
+            "repos.html",
             "logs.html",
             "layout.html",
+            "login.html",
         ] {
             env.get_template(name)
                 .unwrap_or_else(|e| panic!("template {name} failed to parse: {e}"));

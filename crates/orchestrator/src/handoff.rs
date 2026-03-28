@@ -7,82 +7,82 @@ impl RuntimeService {
     // Step tracking helpers
     // -----------------------------------------------------------------------
 
-    async fn mark_step_running(&mut self, movement_id: &Option<String>, kind: StepKind) {
-        let Some(id) = movement_id.as_deref() else {
+    async fn mark_step_running(&mut self, run_id: &Option<String>, kind: StepKind) {
+        let Some(id) = run_id.as_deref() else {
             return;
         };
-        if let Some(movement) = self.state.movements.get_mut(id)
-            && let Some(step) = movement
+        if let Some(run) = self.state.runs.get_mut(id)
+            && let Some(step) = run
                 .steps
                 .iter_mut()
                 .find(|s| s.kind == kind && !s.is_complete())
         {
             step.mark_running();
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
     }
 
-    async fn complete_step(&mut self, movement_id: &Option<String>, kind: StepKind) {
-        let Some(id) = movement_id.as_deref() else {
+    async fn complete_step(&mut self, run_id: &Option<String>, kind: StepKind) {
+        let Some(id) = run_id.as_deref() else {
             return;
         };
-        if let Some(movement) = self.state.movements.get_mut(id)
-            && let Some(step) = movement
+        if let Some(run) = self.state.runs.get_mut(id)
+            && let Some(step) = run
                 .steps
                 .iter_mut()
                 .find(|s| s.kind == kind && s.status == polyphony_core::StepStatus::Running)
         {
             step.mark_succeeded();
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
     }
 
-    async fn fail_step(&mut self, movement_id: &Option<String>, kind: StepKind, error: &str) {
-        let Some(id) = movement_id.as_deref() else {
+    async fn fail_step(&mut self, run_id: &Option<String>, kind: StepKind, error: &str) {
+        let Some(id) = run_id.as_deref() else {
             return;
         };
-        if let Some(movement) = self.state.movements.get_mut(id)
-            && let Some(step) = movement
+        if let Some(run) = self.state.runs.get_mut(id)
+            && let Some(step) = run
                 .steps
                 .iter_mut()
                 .find(|s| s.kind == kind && s.status == polyphony_core::StepStatus::Running)
         {
             step.mark_failed(error);
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
     }
 
-    async fn skip_step(&mut self, movement_id: &Option<String>, kind: StepKind) {
-        let Some(id) = movement_id.as_deref() else {
+    async fn skip_step(&mut self, run_id: &Option<String>, kind: StepKind) {
+        let Some(id) = run_id.as_deref() else {
             return;
         };
-        if let Some(movement) = self.state.movements.get_mut(id)
-            && let Some(step) = movement
+        if let Some(run) = self.state.runs.get_mut(id)
+            && let Some(step) = run
                 .steps
                 .iter_mut()
                 .find(|s| s.kind == kind && !s.is_complete())
         {
             step.mark_skipped();
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
     }
 
     /// Skip all remaining handoff steps (Commit, Push, CreatePR, etc.)
     /// when the workspace is clean.
-    async fn skip_handoff_steps(&mut self, movement_id: &Option<String>) {
-        let Some(id) = movement_id.as_deref() else {
+    async fn skip_handoff_steps(&mut self, run_id: &Option<String>) {
+        let Some(id) = run_id.as_deref() else {
             return;
         };
         let handoff_kinds = [
@@ -94,15 +94,15 @@ impl RuntimeService {
             StepKind::SendFeedback,
             StepKind::AfterOutcomeHooks,
         ];
-        if let Some(movement) = self.state.movements.get_mut(id) {
-            for step in &mut movement.steps {
+        if let Some(run) = self.state.runs.get_mut(id) {
+            for step in &mut run.steps {
                 if handoff_kinds.contains(&step.kind) && !step.is_complete() {
                     step.mark_skipped();
                 }
             }
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
     }
@@ -119,6 +119,7 @@ impl RuntimeService {
             .saved_contexts
             .entry(event.issue_id.clone())
             .or_insert_with(|| AgentContextSnapshot {
+                repo_id: String::new(),
                 issue_id: event.issue_id.clone(),
                 issue_identifier: event.issue_identifier.clone(),
                 updated_at: event.at,
@@ -178,6 +179,7 @@ impl RuntimeService {
             .saved_contexts
             .entry(issue_id.to_string())
             .or_insert_with(|| AgentContextSnapshot {
+                repo_id: String::new(),
                 issue_id: issue_id.to_string(),
                 issue_identifier: issue_identifier.to_string(),
                 updated_at: Utc::now(),
@@ -251,7 +253,7 @@ impl RuntimeService {
         let branch_name = running.issue.branch_name.clone().unwrap_or_else(|| {
             format!("task/{}", sanitize_workspace_key(&running.issue.identifier))
         });
-        let commit_message = render_issue_template_with_strings(
+        let mut commit_message = render_issue_template_with_strings(
             workflow
                 .config
                 .automation
@@ -265,9 +267,12 @@ impl RuntimeService {
                 ("head_branch", branch_name.clone()),
             ],
         )?;
+        if workflow.config.automation.co_authored_by {
+            commit_message.push_str("\n\nCo-Authored-By: Polyphony <noreply@polyphony.to>");
+        }
         // --- Commit + Push step ---
-        let movement_id = running.movement_id.clone();
-        self.mark_step_running(&movement_id, polyphony_core::StepKind::Commit)
+        let run_id = running.run_id.clone();
+        self.mark_step_running(&run_id, polyphony_core::StepKind::Commit)
             .await;
         let commit_result = committer
             .commit_and_push(&WorkspaceCommitRequest {
@@ -285,7 +290,7 @@ impl RuntimeService {
             Ok(result) => result,
             Err(error) => {
                 self.fail_step(
-                    &movement_id,
+                    &run_id,
                     polyphony_core::StepKind::Commit,
                     &error.to_string(),
                 )
@@ -295,7 +300,7 @@ impl RuntimeService {
         };
         let Some(commit_result) = commit_result else {
             // Workspace is clean — skip commit/push/PR steps.
-            self.skip_handoff_steps(&movement_id).await;
+            self.skip_handoff_steps(&run_id).await;
             self.push_event(
                 EventScope::Handoff,
                 format!(
@@ -305,12 +310,12 @@ impl RuntimeService {
             );
             return Ok(());
         };
-        self.complete_step(&movement_id, polyphony_core::StepKind::Commit)
+        self.complete_step(&run_id, polyphony_core::StepKind::Commit)
             .await;
         // Push is bundled with commit_and_push — auto-complete the Push step.
-        self.mark_step_running(&movement_id, polyphony_core::StepKind::Push)
+        self.mark_step_running(&run_id, polyphony_core::StepKind::Push)
             .await;
-        self.complete_step(&movement_id, polyphony_core::StepKind::Push)
+        self.complete_step(&run_id, polyphony_core::StepKind::Push)
             .await;
         info!(
             issue_identifier = %running.issue.identifier,
@@ -358,7 +363,7 @@ impl RuntimeService {
             ],
         )?;
         // --- CreatePullRequest step ---
-        self.mark_step_running(&movement_id, polyphony_core::StepKind::CreatePullRequest)
+        self.mark_step_running(&run_id, polyphony_core::StepKind::CreatePullRequest)
             .await;
         let pr_title_copy = pr_title.clone();
         let pr_body_copy = pr_body.clone();
@@ -376,7 +381,7 @@ impl RuntimeService {
             Ok(pr) => pr,
             Err(error) => {
                 self.fail_step(
-                    &movement_id,
+                    &run_id,
                     polyphony_core::StepKind::CreatePullRequest,
                     &error.to_string(),
                 )
@@ -384,7 +389,7 @@ impl RuntimeService {
                 return Err(Error::Core(error));
             },
         };
-        self.complete_step(&movement_id, polyphony_core::StepKind::CreatePullRequest)
+        self.complete_step(&run_id, polyphony_core::StepKind::CreatePullRequest)
             .await;
         info!(
             issue_identifier = %running.issue.identifier,
@@ -392,10 +397,10 @@ impl RuntimeService {
             pull_request_url = pull_request.url.as_deref().unwrap_or(""),
             "pull request ensured for handoff"
         );
-        if let Some(movement_id) = running.movement_id.as_ref()
-            && let Some(movement) = self.state.movements.get_mut(movement_id)
+        if let Some(run_id) = running.run_id.as_ref()
+            && let Some(run) = self.state.runs.get_mut(run_id)
         {
-            movement.status = MovementStatus::Delivered;
+            run.status = RunStatus::Delivered;
             let mut metadata = std::collections::HashMap::new();
             metadata.insert(
                 "changed_files".into(),
@@ -417,7 +422,7 @@ impl RuntimeService {
                 "head_sha".into(),
                 serde_json::Value::String(commit_result.head_sha.clone()),
             );
-            movement.deliverable = Some(polyphony_core::Deliverable {
+            run.deliverable = Some(polyphony_core::Deliverable {
                 kind: polyphony_core::DeliverableKind::GithubPullRequest,
                 status: polyphony_core::DeliverableStatus::Open,
                 url: pull_request.url.clone(),
@@ -426,43 +431,43 @@ impl RuntimeService {
                 description: Some(pr_body_copy),
                 metadata,
             });
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                store.save_movement(movement).await?;
+                store.save_run(run).await?;
             }
         }
 
         // --- ReviewPass + PostReviewComment steps (best-effort) ---
-        self.mark_step_running(&movement_id, polyphony_core::StepKind::ReviewPass)
+        self.mark_step_running(&run_id, polyphony_core::StepKind::ReviewPass)
             .await;
         let review_body = self
             .run_review_pass(workflow, running, &pull_request)
             .await?;
         if let Some(review_body) = review_body {
-            self.complete_step(&movement_id, polyphony_core::StepKind::ReviewPass)
+            self.complete_step(&run_id, polyphony_core::StepKind::ReviewPass)
                 .await;
-            self.mark_step_running(&movement_id, polyphony_core::StepKind::PostReviewComment)
+            self.mark_step_running(&run_id, polyphony_core::StepKind::PostReviewComment)
                 .await;
             if let Some(commenter) = &self.pull_request_commenter.clone() {
                 let _ = commenter
                     .comment_on_pull_request(&pull_request, &review_body)
                     .await;
             }
-            self.complete_step(&movement_id, polyphony_core::StepKind::PostReviewComment)
+            self.complete_step(&run_id, polyphony_core::StepKind::PostReviewComment)
                 .await;
         } else {
-            self.skip_step(&movement_id, polyphony_core::StepKind::ReviewPass)
+            self.skip_step(&run_id, polyphony_core::StepKind::ReviewPass)
                 .await;
-            self.skip_step(&movement_id, polyphony_core::StepKind::PostReviewComment)
+            self.skip_step(&run_id, polyphony_core::StepKind::PostReviewComment)
                 .await;
         }
 
         // --- SendFeedback step (best-effort) ---
-        self.mark_step_running(&movement_id, polyphony_core::StepKind::SendFeedback)
+        self.mark_step_running(&run_id, polyphony_core::StepKind::SendFeedback)
             .await;
         self.send_handoff_feedback(workflow, running, &pull_request, &commit_result)
             .await;
-        self.complete_step(&movement_id, polyphony_core::StepKind::SendFeedback)
+        self.complete_step(&run_id, polyphony_core::StepKind::SendFeedback)
             .await;
 
         self.push_event(
@@ -474,13 +479,13 @@ impl RuntimeService {
         );
 
         // --- AfterOutcomeHooks step ---
-        self.mark_step_running(&movement_id, polyphony_core::StepKind::AfterOutcomeHooks)
+        self.mark_step_running(&run_id, polyphony_core::StepKind::AfterOutcomeHooks)
             .await;
         let manager = self.build_workspace_manager(workflow);
         manager
             .run_after_outcome_best_effort(&workflow.config.hooks, &running.workspace_path)
             .await;
-        self.complete_step(&movement_id, polyphony_core::StepKind::AfterOutcomeHooks)
+        self.complete_step(&run_id, polyphony_core::StepKind::AfterOutcomeHooks)
             .await;
         Ok(())
     }
@@ -674,23 +679,23 @@ impl RuntimeService {
         }
     }
 
-    /// Create a local branch deliverable for movements without GitHub automation.
+    /// Create a local branch deliverable for runs without GitHub automation.
     async fn create_local_branch_deliverable(&mut self, running: &RunningTask) {
-        let Some(movement_id) = running.movement_id.clone() else {
+        let Some(run_id) = running.run_id.clone() else {
             return;
         };
 
-        // Check if the movement exists and has no deliverable yet
+        // Check if the run exists and has no deliverable yet
         let has_deliverable = self
             .state
-            .movements
-            .get(&movement_id)
+            .runs
+            .get(&run_id)
             .is_some_and(|m| m.deliverable.is_some());
         if has_deliverable {
             return;
         }
-        let movement_exists = self.state.movements.contains_key(&movement_id);
-        if !movement_exists {
+        let run_exists = self.state.runs.contains_key(&run_id);
+        if !run_exists {
             return;
         }
 
@@ -726,16 +731,16 @@ impl RuntimeService {
             metadata,
         };
 
-        if let Some(movement) = self.state.movements.get_mut(&movement_id) {
-            movement.deliverable = Some(deliverable);
-            movement.updated_at = Utc::now();
+        if let Some(run) = self.state.runs.get_mut(&run_id) {
+            run.deliverable = Some(deliverable);
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
         self.push_event(
             EventScope::Handoff,
-            format!("{movement_id} local branch deliverable created: {branch_name}"),
+            format!("{run_id} local branch deliverable created: {branch_name}"),
         );
     }
 
@@ -743,13 +748,13 @@ impl RuntimeService {
     /// Used on restart when the pipeline completed but the deliverable wasn't created.
     pub(crate) async fn create_local_branch_deliverable_from_workspace(
         &mut self,
-        movement_id: &str,
+        run_id: &str,
         workspace_path: &Path,
     ) {
         let has_deliverable = self
             .state
-            .movements
-            .get(movement_id)
+            .runs
+            .get(run_id)
             .is_some_and(|m| m.deliverable.is_some());
         if has_deliverable {
             return;
@@ -785,31 +790,31 @@ impl RuntimeService {
             metadata,
         };
 
-        if let Some(movement) = self.state.movements.get_mut(movement_id) {
-            movement.deliverable = Some(deliverable);
-            movement.updated_at = Utc::now();
+        if let Some(run) = self.state.runs.get_mut(run_id) {
+            run.deliverable = Some(deliverable);
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
         self.push_event(
             EventScope::Handoff,
-            format!("{movement_id} local branch deliverable created on resume: {branch_name}"),
+            format!("{run_id} local branch deliverable created on resume: {branch_name}"),
         );
     }
 
-    pub(crate) async fn finalize_accepted_movement(&mut self, movement_id: &str) {
-        self.close_movement_issue(movement_id).await;
-        self.cleanup_movement_workspace(movement_id).await;
+    pub(crate) async fn finalize_accepted_run(&mut self, run_id: &str) {
+        self.close_run_issue(run_id).await;
+        self.cleanup_run_workspace(run_id).await;
     }
 
-    async fn close_movement_issue(&mut self, movement_id: &str) {
-        let Some((issue_id, movement_label, terminal_state)) =
-            self.state.movements.get(movement_id).and_then(|movement| {
-                movement.issue_id.as_ref().map(|issue_id| {
+    async fn close_run_issue(&mut self, run_id: &str) {
+        let Some((issue_id, run_label, terminal_state)) =
+            self.state.runs.get(run_id).and_then(|run| {
+                run.issue_id.as_ref().map(|issue_id| {
                     (
                         issue_id.clone(),
-                        Self::movement_target_label(movement),
+                        Self::run_target_label(run),
                         self.workflow()
                             .config
                             .tracker
@@ -833,24 +838,24 @@ impl RuntimeService {
             Ok(_) => {
                 self.push_event(
                     EventScope::Handoff,
-                    format!("{movement_label} issue marked {terminal_state}"),
+                    format!("{run_label} issue marked {terminal_state}"),
                 );
             },
             Err(error) => {
                 warn!(%error, issue_id, "failed to close issue after merge");
                 self.push_event(
                     EventScope::Handoff,
-                    format!("{movement_label} merged but failed to close issue: {error}"),
+                    format!("{run_label} merged but failed to close issue: {error}"),
                 );
             },
         }
     }
 
-    async fn cleanup_movement_workspace(&mut self, movement_id: &str) {
-        let Some((issue_identifier, branch_name, workspace_key, movement_label)) =
-            self.state.movements.get(movement_id).and_then(|movement| {
-                movement.issue_identifier.as_ref().map(|issue_identifier| {
-                    let branch_name = movement.deliverable.as_ref().and_then(|deliverable| {
+    async fn cleanup_run_workspace(&mut self, run_id: &str) {
+        let Some((issue_identifier, branch_name, workspace_key, run_label)) =
+            self.state.runs.get(run_id).and_then(|run| {
+                run.issue_identifier.as_ref().map(|issue_identifier| {
+                    let branch_name = run.deliverable.as_ref().and_then(|deliverable| {
                         deliverable
                             .metadata
                             .get("branch")
@@ -860,11 +865,10 @@ impl RuntimeService {
                     (
                         issue_identifier.clone(),
                         branch_name,
-                        movement
-                            .workspace_key
+                        run.workspace_key
                             .clone()
                             .unwrap_or_else(|| sanitize_workspace_key(issue_identifier)),
-                        Self::movement_target_label(movement),
+                        Self::run_target_label(run),
                     )
                 })
             })
@@ -882,35 +886,35 @@ impl RuntimeService {
                 self.state.worktree_keys.remove(&workspace_key);
                 self.push_event(
                     EventScope::Handoff,
-                    format!("{movement_label} workspace cleaned up"),
+                    format!("{run_label} workspace cleaned up"),
                 );
             },
             Err(error) => {
                 warn!(%error, issue_identifier, "failed to clean up workspace after merge");
                 self.push_event(
                     EventScope::Handoff,
-                    format!("{movement_label} merged but failed to clean up workspace: {error}"),
+                    format!("{run_label} merged but failed to clean up workspace: {error}"),
                 );
             },
         }
     }
 
     /// Merge a deliverable — either a GitHub PR or a local branch.
-    pub(crate) async fn merge_deliverable(&mut self, movement_id: &str) {
+    pub(crate) async fn merge_deliverable(&mut self, run_id: &str) {
         // Extract info needed for the merge before borrowing mutably.
         let merge_info = {
-            let Some(movement) = self.state.movements.get(movement_id) else {
+            let Some(run) = self.state.runs.get(run_id) else {
                 self.push_event(
                     EventScope::Handoff,
-                    format!("merge failed: movement {movement_id} not found"),
+                    format!("merge failed: run {run_id} not found"),
                 );
                 return;
             };
-            let movement_label = Self::movement_target_label(movement);
-            let Some(deliverable) = &movement.deliverable else {
+            let run_label = Self::run_target_label(run);
+            let Some(deliverable) = &run.deliverable else {
                 self.push_event(
                     EventScope::Handoff,
-                    format!("{movement_label} merge failed: no deliverable"),
+                    format!("{run_label} merge failed: no deliverable"),
                 );
                 return;
             };
@@ -930,17 +934,14 @@ impl RuntimeService {
                     .unwrap_or("")
                     .to_string(),
                 deliverable.url.clone().unwrap_or_default(),
-                movement_label,
+                run_label,
             )
         };
-        let (already_merged, kind, branch, workspace, url, movement_label) = merge_info;
+        let (already_merged, kind, branch, workspace, url, run_label) = merge_info;
 
         if already_merged {
-            self.push_event(
-                EventScope::Handoff,
-                format!("{movement_label} already merged"),
-            );
-            self.finalize_accepted_movement(movement_id).await;
+            self.push_event(EventScope::Handoff, format!("{run_label} already merged"));
+            self.finalize_accepted_run(run_id).await;
             return;
         }
 
@@ -966,31 +967,31 @@ impl RuntimeService {
             },
         };
 
-        // Now mutate the movement with the result
-        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+        // Now mutate the run with the result
+        if let Some(run) = self.state.runs.get_mut(run_id) {
             if result.success {
-                if let Some(deliverable) = movement.deliverable.as_mut() {
+                if let Some(deliverable) = run.deliverable.as_mut() {
                     deliverable.status = polyphony_core::DeliverableStatus::Merged;
                     deliverable.decision = polyphony_core::DeliverableDecision::Accepted;
                 }
-                movement.status = polyphony_core::MovementStatus::Delivered;
-                movement.updated_at = Utc::now();
+                run.status = polyphony_core::RunStatus::Delivered;
+                run.updated_at = Utc::now();
             }
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
 
         if result.success {
             self.push_event(
                 EventScope::Handoff,
-                format!("{movement_label} merged: {}", result.message),
+                format!("{run_label} merged: {}", result.message),
             );
-            self.finalize_accepted_movement(movement_id).await;
+            self.finalize_accepted_run(run_id).await;
         } else {
             self.push_event(
                 EventScope::Handoff,
-                format!("{movement_label} merge failed: {}", result.message),
+                format!("{run_label} merge failed: {}", result.message),
             );
         }
     }

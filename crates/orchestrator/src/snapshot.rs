@@ -33,18 +33,18 @@ impl RuntimeService {
         true
     }
 
-    /// Find an existing movement for the given issue, preferring active ones.
-    /// Returns the movement ID if one exists, preventing duplicate movements
+    /// Find an existing run for the given issue, preferring active ones.
+    /// Returns the run ID if one exists, preventing duplicate runs
     /// when the same issue is re-dispatched (e.g. via retry or continuation).
-    pub(crate) fn find_existing_movement_for_issue(&self, issue_id: &str) -> Option<String> {
+    pub(crate) fn find_existing_run_for_issue(&self, issue_id: &str) -> Option<String> {
         let mut best: Option<(&str, bool)> = None;
-        for (id, m) in &self.state.movements {
+        for (id, m) in &self.state.runs {
             if m.issue_id.as_deref() != Some(issue_id) {
                 continue;
             }
             let is_active = !matches!(
                 m.status,
-                MovementStatus::Delivered | MovementStatus::Failed | MovementStatus::Cancelled
+                RunStatus::Delivered | RunStatus::Failed | RunStatus::Cancelled
             );
             match best {
                 None => best = Some((id, is_active)),
@@ -93,6 +93,7 @@ impl RuntimeService {
         self.claim_issue(issue_id.clone(), IssueClaimState::RetryQueued);
         self.state.retrying.insert(issue_id.clone(), RetryEntry {
             row: RetryRow {
+                repo_id: String::new(),
                 issue_id,
                 issue_identifier: issue_identifier.clone(),
                 attempt,
@@ -166,82 +167,83 @@ impl RuntimeService {
         totals.seconds_running = self.state.ended_runtime_seconds + live_seconds;
         let tracker_kind = self.workflow_rx.borrow().config.tracker.kind;
         let issue_rows =
-            if self.state.issue_snapshot_loaded || !self.state.visible_issues.is_empty() {
-                &self.state.visible_issues
+            if self.state.tracker_issue_snapshot_loaded || !self.state.tracker_issues.is_empty() {
+                &self.state.tracker_issues
             } else {
-                &self.state.bootstrapped_visible_issues
+                &self.state.bootstrapped_tracker_issues
             };
-        let visible_issues = issue_rows
+        let tracker_issues = issue_rows
             .iter()
             .map(|row| {
-                let mut row = self.resolved_issue_row(tracker_kind, row);
+                let mut row = self.resolved_tracker_issue_row(tracker_kind, row);
                 let key = sanitize_workspace_key(&row.issue_identifier);
                 row.has_workspace = self.state.worktree_keys.contains(&key);
                 row
             })
             .collect::<Vec<_>>();
-        let mut visible_triggers = visible_issues
+        let mut inbox_items = tracker_issues
             .iter()
-            .map(|row| self.issue_trigger_row(tracker_kind, row))
+            .map(|row| self.issue_inbox_item_row(tracker_kind, row))
             .collect::<Vec<_>>();
-        let mut approved_issue_keys = self
+        let mut approved_inbox_keys = self
             .state
-            .approved_issue_keys
+            .approved_inbox_keys
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        approved_issue_keys.sort();
+        approved_inbox_keys.sort();
         if self.state.pull_request_snapshot_loaded
-            || !self.state.visible_review_triggers.is_empty()
-            || !self.state.visible_comment_triggers.is_empty()
-            || !self.state.visible_conflict_triggers.is_empty()
-            || !self.state.discarded_triggers.is_empty()
+            || !self.state.visible_review_events.is_empty()
+            || !self.state.visible_comment_events.is_empty()
+            || !self.state.visible_conflict_events.is_empty()
+            || !self.state.discarded_inbox_items.is_empty()
         {
-            visible_triggers.extend(
+            inbox_items.extend(
                 self.state
-                    .visible_review_triggers
+                    .visible_review_events
                     .values()
                     .cloned()
-                    .map(PullRequestTrigger::Review)
-                    .map(|trigger| self.pull_request_trigger_row(&trigger)),
+                    .map(PullRequestEvent::Review)
+                    .map(|event| self.pull_request_inbox_item_row(&event)),
             );
-            visible_triggers.extend(
+            inbox_items.extend(
                 self.state
-                    .visible_comment_triggers
+                    .visible_comment_events
                     .values()
                     .cloned()
-                    .map(PullRequestTrigger::Comment)
-                    .map(|trigger| self.pull_request_trigger_row(&trigger)),
+                    .map(PullRequestEvent::Comment)
+                    .map(|event| self.pull_request_inbox_item_row(&event)),
             );
-            visible_triggers.extend(
+            inbox_items.extend(
                 self.state
-                    .visible_conflict_triggers
+                    .visible_conflict_events
                     .values()
                     .cloned()
-                    .map(PullRequestTrigger::Conflict)
-                    .map(|trigger| self.pull_request_trigger_row(&trigger)),
+                    .map(PullRequestEvent::Conflict)
+                    .map(|event| self.pull_request_inbox_item_row(&event)),
             );
-            visible_triggers.extend(
+            inbox_items.extend(
                 self.state
-                    .discarded_triggers
+                    .discarded_inbox_items
                     .values()
                     .map(|entry| entry.row.clone()),
             );
         } else {
-            visible_triggers.extend(
+            inbox_items.extend(
                 self.state
-                    .bootstrapped_visible_triggers
+                    .bootstrapped_inbox_items
                     .iter()
-                    .filter(|trigger| trigger.kind != VisibleTriggerKind::Issue)
+                    .filter(|item| item.kind != InboxItemKind::Issue)
                     .cloned(),
             );
         }
         RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts {
                 running: self.state.running.len(),
                 retrying: self.state.retrying.len(),
-                movements: self.state.movements.len(),
+                runs: self.state.runs.len(),
                 tasks_pending: self
                     .state
                     .tasks
@@ -273,14 +275,15 @@ impl RuntimeService {
                 last_budget_poll_at: self.state.last_budget_poll_at,
                 last_model_discovery_at: self.state.last_model_discovery_at,
             },
-            visible_issues,
-            visible_triggers,
-            approved_issue_keys,
+            tracker_issues,
+            inbox_items,
+            approved_inbox_keys,
             running: self
                 .state
                 .running
                 .values()
-                .map(|running| RunningRow {
+                .map(|running| RunningAgentRow {
+                    repo_id: String::new(),
                     issue_id: running.issue.id.clone(),
                     issue_identifier: running.issue.identifier.clone(),
                     agent_name: running.agent_name.clone(),
@@ -302,13 +305,13 @@ impl RuntimeService {
                     recent_log: running.recent_log.iter().cloned().collect(),
                 })
                 .collect(),
-            agent_history: self
+            agent_run_history: self
                 .state
-                .run_history
+                .agent_run_history
                 .iter()
                 .cloned()
-                .map(persisted_run_metadata)
-                .map(|run| run.to_history_row())
+                .map(persisted_agent_run_metadata)
+                .map(|run| run.to_agent_run_history_row())
                 .collect(),
             retrying: self
                 .state
@@ -335,9 +338,9 @@ impl RuntimeService {
                 .collect(),
             recent_events: self.state.recent_events.iter().cloned().collect(),
             pending_user_interactions,
-            movements: self
+            runs: self
                 .state
-                .movements
+                .runs
                 .values()
                 .map(|m| {
                     let tasks = self.state.tasks.get(&m.id);
@@ -349,7 +352,8 @@ impl RuntimeService {
                                 .count()
                         })
                         .unwrap_or(0);
-                    MovementRow {
+                    RunRow {
+                        repo_id: String::new(),
                         id: m.id.clone(),
                         kind: m.kind,
                         issue_identifier: m.issue_identifier.clone(),
@@ -375,8 +379,9 @@ impl RuntimeService {
                 .values()
                 .flat_map(|tasks| {
                     tasks.iter().map(|t| TaskRow {
+                        repo_id: String::new(),
                         id: t.id.clone(),
-                        movement_id: t.movement_id.clone(),
+                        run_id: t.run_id.clone(),
                         title: t.title.clone(),
                         description: t.description.clone(),
                         activity_log: t.activity_log.clone(),
@@ -430,29 +435,30 @@ impl RuntimeService {
     }
 
     pub(crate) fn restore_cache(&mut self, cached: CachedSnapshot) {
-        if self.state.visible_issues.is_empty() {
-            self.state.visible_issues = cached.visible_issues;
+        if self.state.tracker_issues.is_empty() {
+            self.state.tracker_issues = cached.tracker_issues;
         }
-        if self.state.visible_issues.is_empty() && !cached.visible_triggers.is_empty() {
-            self.state.visible_issues = cached
-                .visible_triggers
+        if self.state.tracker_issues.is_empty() && !cached.inbox_items.is_empty() {
+            self.state.tracker_issues = cached
+                .inbox_items
                 .iter()
-                .filter(|trigger| trigger.kind == VisibleTriggerKind::Issue)
-                .map(|trigger| VisibleIssueRow {
-                    issue_id: trigger.trigger_id.clone(),
-                    issue_identifier: trigger.identifier.clone(),
-                    title: trigger.title.clone(),
-                    state: trigger.status.clone(),
-                    approval_state: trigger.approval_state,
-                    priority: trigger.priority,
-                    labels: trigger.labels.clone(),
-                    description: trigger.description.clone(),
-                    url: trigger.url.clone(),
-                    author: trigger.author.clone(),
-                    parent_id: trigger.parent_id.clone(),
-                    updated_at: trigger.updated_at,
-                    created_at: trigger.created_at,
-                    has_workspace: trigger.has_workspace,
+                .filter(|item| item.kind == InboxItemKind::Issue)
+                .map(|item| TrackerIssueRow {
+                    repo_id: item.repo_id.clone(),
+                    issue_id: item.item_id.clone(),
+                    issue_identifier: item.identifier.clone(),
+                    title: item.title.clone(),
+                    state: item.status.clone(),
+                    approval_state: item.approval_state,
+                    priority: item.priority,
+                    labels: item.labels.clone(),
+                    description: item.description.clone(),
+                    url: item.url.clone(),
+                    author: item.author.clone(),
+                    parent_id: item.parent_id.clone(),
+                    updated_at: item.updated_at,
+                    created_at: item.created_at,
+                    has_workspace: item.has_workspace,
                 })
                 .collect();
         }
@@ -464,8 +470,8 @@ impl RuntimeService {
         if self.state.tracker_connection.is_none() {
             self.state.tracker_connection = cached.tracker_connection;
         }
-        if self.state.approved_issue_keys.is_empty() {
-            self.state.approved_issue_keys = cached.approved_issue_keys.into_iter().collect();
+        if self.state.approved_inbox_keys.is_empty() {
+            self.state.approved_inbox_keys = cached.approved_inbox_keys.into_iter().collect();
         }
         if self.state.agent_catalogs.is_empty() {
             for catalog in cached.agent_catalogs {
@@ -480,18 +486,18 @@ impl RuntimeService {
 
     pub(crate) async fn save_cache(&self) {
         if let Some(cache) = &self.cache {
-            let mut approved_issue_keys = self
+            let mut approved_inbox_keys = self
                 .state
-                .approved_issue_keys
+                .approved_inbox_keys
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            approved_issue_keys.sort();
+            approved_inbox_keys.sort();
             let cached = CachedSnapshot {
                 saved_at: Some(Utc::now()),
-                visible_issues: self.state.visible_issues.clone(),
-                visible_triggers: self.snapshot().visible_triggers,
-                approved_issue_keys,
+                tracker_issues: self.state.tracker_issues.clone(),
+                inbox_items: self.snapshot().inbox_items,
+                approved_inbox_keys,
                 budgets: self.state.budgets.values().cloned().collect(),
                 agent_catalogs: self.state.agent_catalogs.values().cloned().collect(),
                 tracker_connection: self.state.tracker_connection.clone(),
@@ -504,8 +510,8 @@ impl RuntimeService {
 
     pub(crate) fn restore_bootstrap(&mut self, bootstrap: polyphony_core::StoreBootstrap) {
         if let Some(snapshot) = bootstrap.snapshot {
-            self.state.bootstrapped_visible_issues = snapshot.visible_issues;
-            self.state.bootstrapped_visible_triggers = snapshot.visible_triggers;
+            self.state.bootstrapped_tracker_issues = snapshot.tracker_issues;
+            self.state.bootstrapped_inbox_items = snapshot.inbox_items;
             self.state.agent_catalogs = snapshot
                 .agent_catalogs
                 .into_iter()
@@ -513,7 +519,7 @@ impl RuntimeService {
                 .collect();
             self.state.tracker_connection = snapshot.tracker_connection;
             self.state.dispatch_mode = snapshot.dispatch_mode;
-            self.state.approved_issue_keys = snapshot.approved_issue_keys.into_iter().collect();
+            self.state.approved_inbox_keys = snapshot.approved_inbox_keys.into_iter().collect();
             self.state.totals = snapshot.codex_totals;
             self.state.rate_limits = snapshot.rate_limits;
             self.state.ended_runtime_seconds = self.state.totals.seconds_running;
@@ -553,11 +559,11 @@ impl RuntimeService {
                 .retrying
                 .insert(issue_id, RetryEntry { row, due_at });
         }
-        self.state.movements = bootstrap.movements;
+        self.state.runs = bootstrap.runs;
         for (_task_id, task) in bootstrap.tasks {
             self.state
                 .tasks
-                .entry(task.movement_id.clone())
+                .entry(task.run_id.clone())
                 .or_default()
                 .push(task);
         }
@@ -565,11 +571,11 @@ impl RuntimeService {
             tasks.sort_by_key(|task| task.ordinal);
         }
         self.state.reviewed_pull_request_heads = bootstrap.reviewed_pull_request_heads;
-        self.state.run_history = bootstrap.run_history.into_iter().collect();
-        while self.state.run_history.len() > MAX_RUN_HISTORY {
-            self.state.run_history.pop_back();
+        self.state.agent_run_history = bootstrap.agent_run_history.into_iter().collect();
+        while self.state.agent_run_history.len() > MAX_RUN_HISTORY {
+            self.state.agent_run_history.pop_back();
         }
-        for run in &self.state.run_history {
+        for run in &self.state.agent_run_history {
             let Some(workspace_path) = run.workspace_path.as_deref() else {
                 continue;
             };

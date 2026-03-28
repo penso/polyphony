@@ -115,21 +115,21 @@ fn apply_workspace_progress_to_snapshot(
     snapshot: &mut RuntimeSnapshot,
     update: &WorkspaceProgressUpdate,
 ) {
-    let movement_id = snapshot
-        .movements
+    let run_id = snapshot
+        .runs
         .iter()
-        .find(|movement| {
-            movement.workspace_key.as_deref() == Some(update.workspace_key.as_str())
-                || movement.issue_identifier.as_deref() == Some(update.issue_identifier.as_str())
+        .find(|run| {
+            run.workspace_key.as_deref() == Some(update.workspace_key.as_str())
+                || run.issue_identifier.as_deref() == Some(update.issue_identifier.as_str())
         })
-        .map(|movement| movement.id.clone());
-    let Some(movement_id) = movement_id else {
+        .map(|run| run.id.clone());
+    let Some(run_id) = run_id else {
         return;
     };
     let Some(task) = snapshot
         .tasks
         .iter_mut()
-        .find(|task| task.movement_id == movement_id && task.ordinal == 0)
+        .find(|task| task.run_id == run_id && task.ordinal == 0)
     else {
         return;
     };
@@ -157,7 +157,7 @@ fn activity_log_ends_with_message(activity_log: &[String], message: &str) -> boo
 impl RuntimeService {
     pub fn new(
         tracker: Arc<dyn IssueTracker>,
-        pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>>,
+        pull_request_event_source: Option<Arc<dyn PullRequestEventSource>>,
         agent: Arc<dyn AgentRuntime>,
         provisioner: Arc<dyn WorkspaceProvisioner>,
         committer: Option<Arc<dyn WorkspaceCommitter>>,
@@ -197,7 +197,7 @@ impl RuntimeService {
         (
             Self {
                 tracker,
-                pull_request_trigger_source,
+                pull_request_event_source,
                 agent,
                 provisioner,
                 committer,
@@ -212,13 +212,13 @@ impl RuntimeService {
                 command_rx,
                 external_command_rx,
                 pending_refresh: false,
-                pending_issue_approvals: Vec::new(),
+                pending_inbox_approvals: Vec::new(),
                 pending_issue_closures: Vec::new(),
                 pending_deliverable_resolutions: Vec::new(),
                 pending_manual_dispatches: Vec::new(),
-                pending_manual_pull_request_trigger_dispatches: Vec::new(),
+                pending_manual_pull_request_inbox_dispatches: Vec::new(),
                 pending_merge_deliverables: Vec::new(),
-                pending_movement_retries: Vec::new(),
+                pending_run_retries: Vec::new(),
                 pending_task_resolutions: Vec::new(),
                 pending_task_retries: Vec::new(),
                 pending_agent_stops: Vec::new(),
@@ -273,7 +273,7 @@ impl RuntimeService {
         if !self.state.bootstrap_restored {
             self.state.dispatch_mode = self.workflow_rx.borrow().config.startup_dispatch_mode();
         }
-        self.normalize_restored_in_progress_movements().await?;
+        self.normalize_restored_in_progress_runs().await?;
         self.refresh_tracker_connection(true).await;
         self.emit_snapshot().await?;
         // startup_cleanup is deferred to the first tick so the select loop
@@ -328,24 +328,24 @@ impl RuntimeService {
                             }
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::ApproveIssueTrigger { issue_id, source } => {
-                            info!(%issue_id, %source, "issue approval queued (event loop)");
-                            self.pending_issue_approvals.push((issue_id, source));
-                            self.process_pending_issue_approvals().await;
+                        RuntimeCommand::ApproveInboxItem { item_id, source } => {
+                            info!(%item_id, %source, "inbox item approval queued (event loop)");
+                            self.pending_inbox_approvals.push((item_id, source));
+                            self.process_pending_inbox_approvals().await;
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::CloseIssueTrigger { issue_id } => {
+                        RuntimeCommand::CloseTrackerIssue { issue_id } => {
                             info!(%issue_id, "issue closure queued (event loop)");
                             self.pending_issue_closures.push(issue_id);
                             self.process_pending_issue_closures().await;
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::ResolveMovementDeliverable {
-                            movement_id,
+                        RuntimeCommand::ResolveRunDeliverable {
+                            run_id,
                             decision,
                         } => {
                             self.pending_deliverable_resolutions
-                                .push((movement_id, decision));
+                                .push((run_id, decision));
                             self.process_pending_deliverable_resolutions().await;
                             let _ = self.emit_snapshot().await;
                         }
@@ -362,48 +362,48 @@ impl RuntimeService {
                             });
                             next_tick = Instant::now();
                         }
-                        RuntimeCommand::DispatchPullRequestTrigger {
-                            trigger_id,
+                        RuntimeCommand::DispatchPullRequestInboxItem {
+                            item_id,
                             directives,
                         } => {
-                            info!(%trigger_id, has_directives = directives.is_some(), "manual pull request trigger dispatch queued (event loop)");
-                            self.pending_manual_pull_request_trigger_dispatches.push(
-                                ManualPullRequestDispatchRequest {
-                                    trigger_id,
+                            info!(%item_id, has_directives = directives.is_some(), "manual pull request inbox dispatch queued (event loop)");
+                            self.pending_manual_pull_request_inbox_dispatches.push(
+                                ManualPullRequestInboxDispatchRequest {
+                                    item_id,
                                     directives,
                                 },
                             );
                             next_tick = Instant::now();
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::MergeDeliverable { movement_id } => {
-                            info!(%movement_id, "merge deliverable requested (event loop)");
-                            self.merge_deliverable(&movement_id).await;
+                        RuntimeCommand::MergeDeliverable { run_id } => {
+                            info!(%run_id, "merge deliverable requested (event loop)");
+                            self.merge_deliverable(&run_id).await;
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::RetryMovement { movement_id } => {
-                            info!(%movement_id, "movement retry requested");
-                            self.pending_movement_retries.push(movement_id);
-                            self.process_pending_movement_retries().await;
+                        RuntimeCommand::RetryRun { run_id } => {
+                            info!(%run_id, "run retry requested");
+                            self.pending_run_retries.push(run_id);
+                            self.process_pending_run_retries().await;
                             let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::ResolveTask {
-                            movement_id,
+                            run_id,
                             task_id,
                         } => {
-                            info!(%movement_id, %task_id, "manual task resolution requested");
+                            info!(%run_id, %task_id, "manual task resolution requested");
                             self.pending_task_resolutions
-                                .push((movement_id, task_id));
+                                .push((run_id, task_id));
                             self.process_pending_task_resolutions().await;
                             let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::RetryTask {
-                            movement_id,
+                            run_id,
                             task_id,
                         } => {
-                            info!(%movement_id, %task_id, "task retry requested");
+                            info!(%run_id, %task_id, "task retry requested");
                             self.pending_task_retries
-                                .push((movement_id, task_id));
+                                .push((run_id, task_id));
                             self.process_pending_task_retries().await;
                             let _ = self.emit_snapshot().await;
                         }
@@ -421,19 +421,28 @@ impl RuntimeService {
                             self.process_pending_create_issues().await;
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::InjectMovementFeedback {
-                            movement_id,
+                        RuntimeCommand::InjectRunFeedback {
+                            run_id,
                             prompt,
                             agent_name,
                         } => {
-                            info!(%movement_id, "feedback injection requested");
+                            info!(%run_id, "feedback injection requested");
                             self.pending_feedback_injections.push(FeedbackInjectionRequest {
-                                movement_id,
+                                run_id,
                                 prompt,
                                 agent_name,
                             });
                             self.process_pending_feedback_injections().await;
                             let _ = self.emit_snapshot().await;
+                        }
+                        RuntimeCommand::RefreshRepo { repo_id } => {
+                            info!(%repo_id, "repo refresh requested (not yet implemented)");
+                        }
+                        RuntimeCommand::AddRepo(_registration) => {
+                            info!("add repo requested (not yet implemented)");
+                        }
+                        RuntimeCommand::RemoveRepo { repo_id } => {
+                            info!(%repo_id, "remove repo requested (not yet implemented)");
                         }
                     }
                 }
@@ -545,20 +554,17 @@ impl RuntimeService {
                     self.push_event(EventScope::Dispatch, format!("dispatch mode set to {mode}"));
                     self.state.dispatch_mode = mode;
                 },
-                Ok(RuntimeCommand::ApproveIssueTrigger { issue_id, source }) => {
-                    info!(%issue_id, %source, "issue approval queued");
-                    self.pending_issue_approvals.push((issue_id, source));
+                Ok(RuntimeCommand::ApproveInboxItem { item_id, source }) => {
+                    info!(%item_id, %source, "inbox item approval queued");
+                    self.pending_inbox_approvals.push((item_id, source));
                 },
-                Ok(RuntimeCommand::CloseIssueTrigger { issue_id }) => {
+                Ok(RuntimeCommand::CloseTrackerIssue { issue_id }) => {
                     info!(%issue_id, "issue closure queued");
                     self.pending_issue_closures.push(issue_id);
                 },
-                Ok(RuntimeCommand::ResolveMovementDeliverable {
-                    movement_id,
-                    decision,
-                }) => {
+                Ok(RuntimeCommand::ResolveRunDeliverable { run_id, decision }) => {
                     self.pending_deliverable_resolutions
-                        .push((movement_id, decision));
+                        .push((run_id, decision));
                 },
                 Ok(RuntimeCommand::DispatchIssue {
                     issue_id,
@@ -572,39 +578,33 @@ impl RuntimeService {
                         directives,
                     });
                 },
-                Ok(RuntimeCommand::DispatchPullRequestTrigger {
-                    trigger_id,
+                Ok(RuntimeCommand::DispatchPullRequestInboxItem {
+                    item_id,
                     directives,
                 }) => {
-                    info!(%trigger_id, has_directives = directives.is_some(), "manual pull request trigger dispatch queued");
-                    self.pending_manual_pull_request_trigger_dispatches.push(
-                        ManualPullRequestDispatchRequest {
-                            trigger_id,
+                    info!(%item_id, has_directives = directives.is_some(), "manual pull request inbox dispatch queued");
+                    self.pending_manual_pull_request_inbox_dispatches.push(
+                        ManualPullRequestInboxDispatchRequest {
+                            item_id,
                             directives,
                         },
                     );
                 },
-                Ok(RuntimeCommand::MergeDeliverable { movement_id }) => {
-                    info!(%movement_id, "merge deliverable queued");
-                    self.pending_merge_deliverables.push(movement_id);
+                Ok(RuntimeCommand::MergeDeliverable { run_id }) => {
+                    info!(%run_id, "merge deliverable queued");
+                    self.pending_merge_deliverables.push(run_id);
                 },
-                Ok(RuntimeCommand::RetryMovement { movement_id }) => {
-                    info!(%movement_id, "movement retry queued");
-                    self.pending_movement_retries.push(movement_id);
+                Ok(RuntimeCommand::RetryRun { run_id }) => {
+                    info!(%run_id, "run retry queued");
+                    self.pending_run_retries.push(run_id);
                 },
-                Ok(RuntimeCommand::ResolveTask {
-                    movement_id,
-                    task_id,
-                }) => {
-                    info!(%movement_id, %task_id, "manual task resolution queued");
-                    self.pending_task_resolutions.push((movement_id, task_id));
+                Ok(RuntimeCommand::ResolveTask { run_id, task_id }) => {
+                    info!(%run_id, %task_id, "manual task resolution queued");
+                    self.pending_task_resolutions.push((run_id, task_id));
                 },
-                Ok(RuntimeCommand::RetryTask {
-                    movement_id,
-                    task_id,
-                }) => {
-                    info!(%movement_id, %task_id, "task retry queued");
-                    self.pending_task_retries.push((movement_id, task_id));
+                Ok(RuntimeCommand::RetryTask { run_id, task_id }) => {
+                    info!(%run_id, %task_id, "task retry queued");
+                    self.pending_task_retries.push((run_id, task_id));
                 },
                 Ok(RuntimeCommand::StopAgent { issue_id }) => {
                     info!(%issue_id, "user-initiated agent stop queued");
@@ -615,42 +615,51 @@ impl RuntimeService {
                     self.pending_create_issues
                         .push(CreateIssueCommandRequest { title, description });
                 },
-                Ok(RuntimeCommand::InjectMovementFeedback {
-                    movement_id,
+                Ok(RuntimeCommand::InjectRunFeedback {
+                    run_id,
                     prompt,
                     agent_name,
                 }) => {
-                    info!(%movement_id, "feedback injection queued");
+                    info!(%run_id, "feedback injection queued");
                     self.pending_feedback_injections
                         .push(FeedbackInjectionRequest {
-                            movement_id,
+                            run_id,
                             prompt,
                             agent_name,
                         });
+                },
+                Ok(RuntimeCommand::RefreshRepo { repo_id }) => {
+                    info!(%repo_id, "repo refresh queued (not yet implemented)");
+                },
+                Ok(RuntimeCommand::AddRepo(_)) => {
+                    info!("add repo queued (not yet implemented)");
+                },
+                Ok(RuntimeCommand::RemoveRepo { repo_id }) => {
+                    info!(%repo_id, "remove repo queued (not yet implemented)");
                 },
                 Err(_) => return false,
             }
         }
     }
 
-    pub(crate) async fn process_pending_issue_approvals(&mut self) {
-        let approvals = std::mem::take(&mut self.pending_issue_approvals);
+    pub(crate) async fn process_pending_inbox_approvals(&mut self) {
+        let approvals = std::mem::take(&mut self.pending_inbox_approvals);
         if approvals.is_empty() {
             return;
         }
         let workflow = self.workflow();
-        for (issue_id, source) in approvals {
-            let approval_key = issue_key_for_source(&source, &issue_id);
-            if !self.state.approved_issue_keys.insert(approval_key.clone()) {
+        for (item_id, source) in approvals {
+            let approval_key = issue_key_for_source(&source, &item_id);
+            if !self.state.approved_inbox_keys.insert(approval_key.clone()) {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("{source} issue {issue_id} is already approved"),
+                    format!("{source} inbox item {item_id} is already approved"),
                 );
                 continue;
             }
             self.push_event(
                 EventScope::Dispatch,
-                format!("{source} issue {issue_id} approved for dispatch"),
+                format!("{source} inbox item {item_id} approved for dispatch"),
             );
             if let Some(store) = &self.store {
                 let snapshot = self.snapshot();
@@ -658,7 +667,7 @@ impl RuntimeService {
                     self.push_event(
                         EventScope::Dispatch,
                         format!(
-                            "{source} issue {issue_id} approved but failed to persist: {error}"
+                            "{source} inbox item {item_id} approved but failed to persist: {error}"
                         ),
                     );
                 }
@@ -668,11 +677,11 @@ impl RuntimeService {
             }
             if let Some(row) = self
                 .state
-                .visible_issues
+                .tracker_issues
                 .iter()
                 .find(|row| approval_key_for_row(workflow.config.tracker.kind, row) == approval_key)
-                .map(|row| self.resolved_issue_row(workflow.config.tracker.kind, row))
-                && self.should_dispatch_visible_row(&row)
+                .map(|row| self.resolved_tracker_issue_row(workflow.config.tracker.kind, row))
+                && self.should_dispatch_tracker_issue(&row)
             {
                 let issue_identifier = row.issue_identifier.clone();
                 self.push_event(
@@ -681,15 +690,14 @@ impl RuntimeService {
                 );
                 continue;
             }
-            if let Some(trigger) = self.visible_pull_request_trigger(&issue_id)
-                && self.pull_request_trigger_approval_state(&trigger)
-                    == IssueApprovalState::Approved
+            if let Some(event) = self.visible_pull_request_event(&item_id)
+                && self.pull_request_event_approval_state(&event) == DispatchApprovalState::Approved
             {
                 self.push_event(
                     EventScope::Dispatch,
                     format!(
                         "{} approved and ready for manual dispatch",
-                        trigger.display_identifier()
+                        event.display_identifier()
                     ),
                 );
             }
@@ -738,14 +746,14 @@ impl RuntimeService {
             };
 
             let approval_key = approval_key_for_issue(tracker_kind, &issue);
-            self.state.approved_issue_keys.remove(&approval_key);
+            self.state.approved_inbox_keys.remove(&approval_key);
             self.state
-                .visible_issues
+                .tracker_issues
                 .retain(|row| row.issue_id != issue_id);
             self.state
-                .bootstrapped_visible_issues
+                .bootstrapped_tracker_issues
                 .retain(|row| row.issue_id != issue_id);
-            self.state.discarded_triggers.remove(&issue_id);
+            self.state.discarded_inbox_items.remove(&issue_id);
 
             let workspace_key = sanitize_workspace_key(&issue.identifier);
             if self.state.worktree_keys.contains(&workspace_key) {
@@ -838,19 +846,18 @@ impl RuntimeService {
 
         let mut merge_after = Vec::new();
 
-        for (movement_id, decision) in resolutions {
-            let Some(movement) = self.state.movements.get(&movement_id) else {
+        for (run_id, decision) in resolutions {
+            let Some(run) = self.state.runs.get(&run_id) else {
                 self.push_event(
                     EventScope::Handoff,
-                    format!("deliverable decision ignored: movement {movement_id} not found"),
+                    format!("deliverable decision ignored: run {run_id} not found"),
                 );
                 continue;
             };
-            let movement_label = Self::movement_target_label(movement);
-            let Some(deliverable) = movement.deliverable.as_ref() else {
-                let message = format!(
-                    "deliverable decision ignored: movement {movement_label} has no deliverable"
-                );
+            let run_label = Self::run_target_label(run);
+            let Some(deliverable) = run.deliverable.as_ref() else {
+                let message =
+                    format!("deliverable decision ignored: run {run_label} has no deliverable");
                 self.push_event(EventScope::Handoff, message);
                 continue;
             };
@@ -858,32 +865,31 @@ impl RuntimeService {
                 self.push_event(
                     EventScope::Handoff,
                     format!(
-                        "deliverable decision ignored: {movement_label} already {}",
+                        "deliverable decision ignored: {run_label} already {}",
                         deliverable.decision
                     ),
                 );
                 continue;
             }
 
-            let Some(movement) = self.state.movements.get_mut(&movement_id) else {
+            let Some(run) = self.state.runs.get_mut(&run_id) else {
                 self.push_event(
                     EventScope::Handoff,
-                    format!("deliverable decision ignored: movement {movement_id} not found"),
+                    format!("deliverable decision ignored: run {run_id} not found"),
                 );
                 continue;
             };
-            let Some(deliverable) = movement.deliverable.as_mut() else {
-                let message = format!(
-                    "deliverable decision ignored: movement {movement_label} has no deliverable"
-                );
+            let Some(deliverable) = run.deliverable.as_mut() else {
+                let message =
+                    format!("deliverable decision ignored: run {run_label} has no deliverable");
                 self.push_event(EventScope::Handoff, message);
                 continue;
             };
             deliverable.decision = decision;
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             let persist_error = if let Some(store) = &self.store {
                 store
-                    .save_movement(movement)
+                    .save_run(run)
                     .await
                     .err()
                     .map(|error| error.to_string())
@@ -891,23 +897,21 @@ impl RuntimeService {
                 None
             };
             let message = if let Some(error) = persist_error {
-                format!(
-                    "{movement_label} deliverable marked {decision} but failed to persist: {error}"
-                )
+                format!("{run_label} deliverable marked {decision} but failed to persist: {error}")
             } else {
-                format!("{movement_label} deliverable marked {decision}")
+                format!("{run_label} deliverable marked {decision}")
             };
             self.push_event(EventScope::Handoff, message);
 
             // Auto-merge on accept: queue a merge so the user doesn't have to
             // press a separate key.
             if decision == polyphony_core::DeliverableDecision::Accepted {
-                merge_after.push(movement_id);
+                merge_after.push(run_id);
             }
         }
 
-        for movement_id in merge_after {
-            self.merge_deliverable(&movement_id).await;
+        for run_id in merge_after {
+            self.merge_deliverable(&run_id).await;
         }
     }
 
@@ -917,9 +921,9 @@ impl RuntimeService {
             return;
         }
 
-        for (movement_id, task_id) in resolutions {
+        for (run_id, task_id) in resolutions {
             // Mark the task as completed
-            let task_found = if let Some(tasks) = self.state.tasks.get_mut(&movement_id) {
+            let task_found = if let Some(tasks) = self.state.tasks.get_mut(&run_id) {
                 if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
                     task.status = polyphony_core::TaskStatus::Completed;
                     task.finished_at = Some(Utc::now());
@@ -938,23 +942,23 @@ impl RuntimeService {
             if !task_found {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("task resolution ignored: task {task_id} not found in {movement_id}"),
+                    format!("task resolution ignored: task {task_id} not found in {run_id}"),
                 );
                 continue;
             }
 
-            // Reset the movement from Failed back to Executing so the pipeline continues
-            if let Some(movement) = self.state.movements.get_mut(&movement_id) {
-                movement.status = MovementStatus::InProgress;
-                movement.pipeline_stage = Some(PipelineStage::Executing);
-                movement.updated_at = Utc::now();
+            // Reset the run from Failed back to Executing so the pipeline continues
+            if let Some(run) = self.state.runs.get_mut(&run_id) {
+                run.status = RunStatus::InProgress;
+                run.pipeline_stage = Some(PipelineStage::Executing);
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    let _ = store.save_movement(movement).await;
+                    let _ = store.save_run(run).await;
                 }
             }
 
             info!(
-                movement_id,
+                run_id,
                 task_id, "task manually resolved — resuming pipeline"
             );
             self.push_event(
@@ -962,8 +966,8 @@ impl RuntimeService {
                 format!("task {task_id} manually resolved, pipeline resuming"),
             );
 
-            // Build a minimal Issue from the movement and dispatch next task
-            let movement_info = self.state.movements.get(&movement_id).map(|m| {
+            // Build a minimal Issue from the run and dispatch next task
+            let run_info = self.state.runs.get(&run_id).map(|m| {
                 (
                     m.issue_id.clone().unwrap_or_default(),
                     m.issue_identifier.clone().unwrap_or_default(),
@@ -971,7 +975,7 @@ impl RuntimeService {
                     m.workspace_path.clone(),
                 )
             });
-            if let Some((issue_id, identifier, title, Some(ws))) = movement_info {
+            if let Some((issue_id, identifier, title, Some(ws))) = run_info {
                 let issue = polyphony_core::Issue {
                     id: issue_id,
                     identifier,
@@ -985,16 +989,16 @@ impl RuntimeService {
                     labels: Vec::new(),
                     comments: Vec::new(),
                     blocked_by: Vec::new(),
-                    approval_state: polyphony_core::IssueApprovalState::Approved,
+                    approval_state: polyphony_core::DispatchApprovalState::Approved,
                     parent_id: None,
                     created_at: None,
                     updated_at: None,
                 };
                 if let Err(error) = self
-                    .dispatch_next_task(self.workflow(), issue, None, false, &movement_id, &ws)
+                    .dispatch_next_task(self.workflow(), issue, None, false, &run_id, &ws)
                     .await
                 {
-                    warn!(%error, movement_id, "failed to dispatch next task after manual resolution");
+                    warn!(%error, run_id, "failed to dispatch next task after manual resolution");
                 }
             }
         }
@@ -1006,17 +1010,17 @@ impl RuntimeService {
             return;
         }
 
-        for (movement_id, task_id) in retries {
+        for (run_id, task_id) in retries {
             let Some(task) = self
                 .state
                 .tasks
-                .get(&movement_id)
+                .get(&run_id)
                 .and_then(|tasks| tasks.iter().find(|task| task.id == task_id))
                 .cloned()
             else {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("task retry ignored: task {task_id} not found in {movement_id}"),
+                    format!("task retry ignored: task {task_id} not found in {run_id}"),
                 );
                 continue;
             };
@@ -1024,33 +1028,30 @@ impl RuntimeService {
                 self.push_event(
                     EventScope::Dispatch,
                     format!(
-                        "task retry ignored: task {task_id} in {movement_id} is {}, only failed tasks can retry",
+                        "task retry ignored: task {task_id} in {run_id} is {}, only failed tasks can retry",
                         task.status
                     ),
                 );
                 continue;
             }
             if let Err(error) = self
-                .retry_failed_movement_from_task(&movement_id, Some(task.id.clone()))
+                .retry_failed_run_from_task(&run_id, Some(task.id.clone()))
                 .await
             {
-                warn!(%error, movement_id, task_id, "failed to dispatch task retry");
+                warn!(%error, run_id, task_id, "failed to dispatch task retry");
             }
         }
     }
 
-    pub(crate) async fn process_pending_movement_retries(&mut self) {
-        let retries = std::mem::take(&mut self.pending_movement_retries);
+    pub(crate) async fn process_pending_run_retries(&mut self) {
+        let retries = std::mem::take(&mut self.pending_run_retries);
         if retries.is_empty() {
             return;
         }
 
-        for movement_id in retries {
-            if let Err(error) = self
-                .retry_failed_movement_from_task(&movement_id, None)
-                .await
-            {
-                warn!(%error, movement_id, "failed to dispatch movement retry");
+        for run_id in retries {
+            if let Err(error) = self.retry_failed_run_from_task(&run_id, None).await {
+                warn!(%error, run_id, "failed to dispatch run retry");
             }
         }
     }
@@ -1094,91 +1095,88 @@ impl RuntimeService {
 
         for request in requests {
             if let Err(error) = self.inject_feedback_task(&request).await {
-                warn!(%error, movement_id = %request.movement_id, "failed to inject feedback");
+                warn!(%error, run_id = %request.run_id, "failed to inject feedback");
                 self.push_event(
                     EventScope::Dispatch,
-                    format!(
-                        "failed to inject feedback into {}: {error}",
-                        request.movement_id
-                    ),
+                    format!("failed to inject feedback into {}: {error}", request.run_id),
                 );
             }
         }
     }
 
-    async fn retry_failed_movement_from_task(
+    async fn retry_failed_run_from_task(
         &mut self,
-        movement_id: &str,
+        run_id: &str,
         requested_task_id: Option<TaskId>,
     ) -> Result<(), Error> {
-        let Some(movement) = self.state.movements.get(movement_id).cloned() else {
+        let Some(run) = self.state.runs.get(run_id).cloned() else {
             self.push_event(
                 EventScope::Dispatch,
-                format!("movement retry ignored: movement {movement_id} not found"),
+                format!("run retry ignored: run {run_id} not found"),
             );
             return Ok(());
         };
-        // If movement is Delivered but the workspace has unpushed commits, re-run
+        // If run is Delivered but the workspace has unpushed commits, re-run
         // the handoff (push + PR) instead of re-dispatching the agent.
-        if movement.status == MovementStatus::Delivered {
-            let needs_push = movement
+        if run.status == RunStatus::Delivered {
+            let needs_push = run
                 .workspace_path
                 .as_ref()
                 .is_some_and(|path| polyphony_git::has_unpushed_commits(path));
             if needs_push {
                 info!(
-                    %movement_id,
-                    "retrying delivered movement with unpushed commits"
+                    %run_id,
+                    "retrying delivered run with unpushed commits"
                 );
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("retrying push for delivered movement {movement_id}"),
+                    format!("retrying push for delivered run {run_id}"),
                 );
-                // Reset failed steps to Pending and mark movement as Failed so the
+                // Reset failed steps to Pending and mark run as Failed so the
                 // dispatch path re-enters completing and re-runs the handoff.
-                if let Some(movement) = self.state.movements.get_mut(movement_id) {
-                    movement.reset_failed_steps();
-                    movement.status = MovementStatus::Failed;
-                    movement.pipeline_stage = Some(polyphony_core::PipelineStage::Completing);
-                    movement.updated_at = Utc::now();
+                if let Some(run) = self.state.runs.get_mut(run_id) {
+                    run.reset_failed_steps();
+                    run.status = RunStatus::Failed;
+                    run.pipeline_stage = Some(polyphony_core::PipelineStage::Completing);
+                    run.updated_at = Utc::now();
                     if let Some(store) = &self.store {
-                        let _ = store.save_movement(movement).await;
+                        let _ = store.save_run(run).await;
                     }
                 }
                 // Fall through to the normal retry logic below
             } else {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("movement retry ignored: movement {movement_id} is delivered with no pending changes"),
+                    format!("run retry ignored: run {run_id} is delivered with no pending changes"),
                 );
                 return Ok(());
             }
         }
 
-        let movement_has_running_worker = self
+        let run_has_running_worker = self
             .state
             .running
             .values()
-            .any(|running| running.movement_id.as_deref() == Some(movement_id));
-        let can_retry_stalled_movement = requested_task_id.is_none()
-            && movement.status == MovementStatus::InProgress
-            && !movement_has_running_worker;
-        if movement.status != MovementStatus::Failed && !can_retry_stalled_movement {
+            .any(|running| running.run_id.as_deref() == Some(run_id));
+        let can_retry_stalled_run = requested_task_id.is_none()
+            && run.status == RunStatus::InProgress
+            && !run_has_running_worker;
+        if run.status != RunStatus::Failed && !can_retry_stalled_run {
             self.push_event(
                 EventScope::Dispatch,
                 format!(
-                    "movement retry ignored: movement {movement_id} is {}, only failed or stalled movements can retry",
-                    movement.status
+                    "run retry ignored: run {run_id} is {}, only failed or stalled runs can retry",
+                    run.status
                 ),
             );
             return Ok(());
         }
 
         let failed_task = {
-            let Some(tasks) = self.state.tasks.get(movement_id) else {
+            let Some(tasks) = self.state.tasks.get(run_id) else {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("movement retry ignored: movement {movement_id} has no tasks"),
+                    format!("run retry ignored: run {run_id} has no tasks"),
                 );
                 return Ok(());
             };
@@ -1186,7 +1184,7 @@ impl RuntimeService {
                 let Some(task) = tasks.iter().find(|task| &task.id == task_id).cloned() else {
                     self.push_event(
                         EventScope::Dispatch,
-                        format!("task retry ignored: task {task_id} not found in {movement_id}"),
+                        format!("task retry ignored: task {task_id} not found in {run_id}"),
                     );
                     return Ok(());
                 };
@@ -1210,9 +1208,7 @@ impl RuntimeService {
                 let Some(task) = first_failed_task.or(next_retryable_task) else {
                     self.push_event(
                         EventScope::Dispatch,
-                        format!(
-                            "movement retry ignored: movement {movement_id} has no retryable tasks"
-                        ),
+                        format!("run retry ignored: run {run_id} has no retryable tasks"),
                     );
                     return Ok(());
                 };
@@ -1224,7 +1220,7 @@ impl RuntimeService {
             self.push_event(
                 EventScope::Dispatch,
                 format!(
-                    "task retry ignored: task {} in {movement_id} is {}, only failed tasks can retry",
+                    "task retry ignored: task {} in {run_id} is {}, only failed tasks can retry",
                     failed_task.id, failed_task.status
                 ),
             );
@@ -1232,30 +1228,30 @@ impl RuntimeService {
         }
 
         // Reset failed steps so the handoff can re-run from the failure point.
-        if let Some(movement) = self.state.movements.get_mut(movement_id) {
-            movement.reset_failed_steps();
+        if let Some(run) = self.state.runs.get_mut(run_id) {
+            run.reset_failed_steps();
             if let Some(store) = &self.store {
-                let _ = store.save_movement(movement).await;
+                let _ = store.save_run(run).await;
             }
         }
 
         info!(
-            movement_id,
+            run_id,
             task_id = %failed_task.id,
             task_ordinal = failed_task.ordinal,
-            "retrying movement from first failed task"
+            "retrying run from first failed task"
         );
         self.push_event(
             EventScope::Dispatch,
-            format!("movement {movement_id} retrying from {}", failed_task.title),
+            format!("run {run_id} retrying from {}", failed_task.title),
         );
 
-        match movement.kind {
-            MovementKind::IssueDelivery => {
-                self.retry_pipeline_task(&movement, &failed_task).await?;
+        match run.kind {
+            RunKind::IssueDelivery => {
+                self.retry_pipeline_task(&run, &failed_task).await?;
             },
-            MovementKind::PullRequestReview | MovementKind::PullRequestCommentReview => {
-                self.retry_pull_request_movement(self.workflow(), movement_id, failed_task.ordinal)
+            RunKind::PullRequestReview | RunKind::PullRequestCommentReview => {
+                self.retry_pull_request_run(self.workflow(), run_id, failed_task.ordinal)
                     .await?;
             },
         }
@@ -1263,31 +1259,31 @@ impl RuntimeService {
         Ok(())
     }
 
-    pub(crate) async fn normalize_restored_in_progress_movements(&mut self) -> Result<(), Error> {
+    pub(crate) async fn normalize_restored_in_progress_runs(&mut self) -> Result<(), Error> {
         let now = Utc::now();
-        let stale_error =
-            "restored without an active agent session; retry the movement to continue";
-        let movement_ids = self.state.movements.keys().cloned().collect::<Vec<_>>();
+        let stale_error = "restored without an active agent session; retry the run to continue";
+        let run_ids = self.state.runs.keys().cloned().collect::<Vec<_>>();
 
-        for movement_id in movement_ids {
-            let Some(movement_snapshot) = self.state.movements.get(&movement_id).cloned() else {
+        for run_id in run_ids {
+            let Some(run_snapshot) = self.state.runs.get(&run_id).cloned() else {
                 continue;
             };
-            let has_active_running = self.state.running.values().any(|running| {
-                running.movement_id.as_deref() == Some(movement_id.as_str())
-                    || movement_snapshot
-                        .issue_id
-                        .as_deref()
-                        .is_some_and(|issue_id| running.issue.id == issue_id)
-                    || movement_snapshot.issue_identifier.as_deref().is_some_and(
-                        |issue_identifier| running.issue.identifier == issue_identifier,
-                    )
-            });
+            let has_active_running =
+                self.state.running.values().any(|running| {
+                    running.run_id.as_deref() == Some(run_id.as_str())
+                        || run_snapshot
+                            .issue_id
+                            .as_deref()
+                            .is_some_and(|issue_id| running.issue.id == issue_id)
+                        || run_snapshot.issue_identifier.as_deref().is_some_and(
+                            |issue_identifier| running.issue.identifier == issue_identifier,
+                        )
+                });
             if has_active_running {
                 continue;
             }
 
-            let Some(tasks) = self.state.tasks.get_mut(&movement_id) else {
+            let Some(tasks) = self.state.tasks.get_mut(&run_id) else {
                 continue;
             };
             let has_stale_in_progress_task = tasks
@@ -1295,8 +1291,8 @@ impl RuntimeService {
                 .any(|task| task.status == TaskStatus::InProgress);
             let needs_retryable_failure = has_stale_in_progress_task
                 || matches!(
-                    movement_snapshot.status,
-                    MovementStatus::InProgress | MovementStatus::Planning | MovementStatus::Review
+                    run_snapshot.status,
+                    RunStatus::InProgress | RunStatus::Planning | RunStatus::Review
                 ) && tasks
                     .iter()
                     .any(|task| matches!(task.status, TaskStatus::Pending | TaskStatus::Cancelled));
@@ -1340,25 +1336,25 @@ impl RuntimeService {
                 }
             }
 
-            let Some(movement) = self.state.movements.get_mut(&movement_id) else {
+            let Some(run) = self.state.runs.get_mut(&run_id) else {
                 continue;
             };
-            movement.status = MovementStatus::Failed;
-            movement.updated_at = now;
+            run.status = RunStatus::Failed;
+            run.updated_at = now;
             if let Some(store) = &self.store {
-                store.save_movement(movement).await?;
+                store.save_run(run).await?;
             }
 
             let normalized_count = normalized_task_ids.len();
             let reason = if selected_fallback {
-                "movement was restored active without an agent session"
+                "run was restored active without an agent session"
             } else {
                 "restored in-progress task had no active agent session"
             };
             self.push_event(
                 EventScope::Startup,
                 format!(
-                    "marked stale movement {movement_id} as failed, {reason} ({normalized_count} task(s))"
+                    "marked stale run {run_id} as failed, {reason} ({normalized_count} task(s))"
                 ),
             );
         }
@@ -1366,12 +1362,8 @@ impl RuntimeService {
         Ok(())
     }
 
-    async fn retry_pipeline_task(
-        &mut self,
-        movement: &Movement,
-        failed_task: &Task,
-    ) -> Result<(), Error> {
-        if let Some(tasks) = self.state.tasks.get_mut(&movement.id)
+    async fn retry_pipeline_task(&mut self, run: &Run, failed_task: &Task) -> Result<(), Error> {
+        if let Some(tasks) = self.state.tasks.get_mut(&run.id)
             && let Some(task) = tasks.iter_mut().find(|task| task.id == failed_task.id)
         {
             task.status = TaskStatus::Pending;
@@ -1387,25 +1379,25 @@ impl RuntimeService {
                 store.save_task(task).await?;
             }
         }
-        if let Some(movement_row) = self.state.movements.get_mut(&movement.id) {
-            movement_row.status = MovementStatus::InProgress;
-            movement_row.pipeline_stage = Some(PipelineStage::Executing);
-            movement_row.updated_at = Utc::now();
+        if let Some(run_row) = self.state.runs.get_mut(&run.id) {
+            run_row.status = RunStatus::InProgress;
+            run_row.pipeline_stage = Some(PipelineStage::Executing);
+            run_row.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                store.save_movement(movement_row).await?;
+                store.save_run(run_row).await?;
             }
         }
 
-        let Some(workspace_path) = movement.workspace_path.clone() else {
+        let Some(workspace_path) = run.workspace_path.clone() else {
             return Err(Error::Core(CoreError::Adapter(format!(
-                "movement {} has no workspace path for retry",
-                movement.id
+                "run {} has no workspace path for retry",
+                run.id
             ))));
         };
         let issue = polyphony_core::Issue {
-            id: movement.issue_id.clone().unwrap_or_default(),
-            identifier: movement.issue_identifier.clone().unwrap_or_default(),
-            title: movement.title.clone(),
+            id: run.issue_id.clone().unwrap_or_default(),
+            identifier: run.issue_identifier.clone().unwrap_or_default(),
+            title: run.title.clone(),
             description: None,
             priority: None,
             state: "In Progress".into(),
@@ -1415,7 +1407,7 @@ impl RuntimeService {
             labels: Vec::new(),
             comments: Vec::new(),
             blocked_by: Vec::new(),
-            approval_state: polyphony_core::IssueApprovalState::Approved,
+            approval_state: polyphony_core::DispatchApprovalState::Approved,
             parent_id: None,
             created_at: None,
             updated_at: None,
@@ -1425,7 +1417,7 @@ impl RuntimeService {
             issue,
             None,
             false,
-            &movement.id,
+            &run.id,
             &workspace_path,
         )
         .await
@@ -1438,32 +1430,29 @@ impl RuntimeService {
         }
     }
 
-    pub(crate) fn visible_pull_request_trigger(
-        &self,
-        trigger_id: &str,
-    ) -> Option<PullRequestTrigger> {
+    pub(crate) fn visible_pull_request_event(&self, event_id: &str) -> Option<PullRequestEvent> {
         self.state
-            .visible_review_triggers
-            .get(trigger_id)
+            .visible_review_events
+            .get(event_id)
             .cloned()
-            .map(PullRequestTrigger::Review)
+            .map(PullRequestEvent::Review)
             .or_else(|| {
                 self.state
-                    .visible_comment_triggers
-                    .get(trigger_id)
+                    .visible_comment_events
+                    .get(event_id)
                     .cloned()
-                    .map(PullRequestTrigger::Comment)
+                    .map(PullRequestEvent::Comment)
             })
             .or_else(|| {
                 self.state
-                    .visible_conflict_triggers
-                    .get(trigger_id)
+                    .visible_conflict_events
+                    .get(event_id)
                     .cloned()
-                    .map(PullRequestTrigger::Conflict)
+                    .map(PullRequestEvent::Conflict)
             })
     }
 
-    pub(crate) fn discarded_trigger_ttl(&self) -> chrono::Duration {
+    pub(crate) fn discarded_inbox_item_ttl(&self) -> chrono::Duration {
         let poll_interval_ms = self.workflow_rx.borrow().config.polling.interval_ms;
         let clamped_ms = (poll_interval_ms.saturating_mul(3)).clamp(30_000, 300_000);
         chrono::Duration::milliseconds(clamped_ms as i64)
@@ -1474,87 +1463,88 @@ impl RuntimeService {
         tracker_kind: polyphony_core::TrackerKind,
         issue: &Issue,
     ) -> bool {
-        self.issue_approval_state(tracker_kind, issue) == IssueApprovalState::Approved
+        self.issue_approval_state(tracker_kind, issue) == DispatchApprovalState::Approved
     }
 
     pub(crate) fn issue_approval_state(
         &self,
         tracker_kind: polyphony_core::TrackerKind,
         issue: &Issue,
-    ) -> IssueApprovalState {
+    ) -> DispatchApprovalState {
         let approval_key = approval_key_for_issue(tracker_kind, issue);
-        if self.state.approved_issue_keys.contains(&approval_key) {
-            IssueApprovalState::Approved
+        if self.state.approved_inbox_keys.contains(&approval_key) {
+            DispatchApprovalState::Approved
         } else {
             issue.approval_state
         }
     }
 
-    pub(crate) fn visible_issue_approval_state(
+    pub(crate) fn tracker_issue_approval_state(
         &self,
         tracker_kind: polyphony_core::TrackerKind,
-        row: &VisibleIssueRow,
-    ) -> IssueApprovalState {
+        row: &TrackerIssueRow,
+    ) -> DispatchApprovalState {
         let approval_key = approval_key_for_row(tracker_kind, row);
-        if self.state.approved_issue_keys.contains(&approval_key) {
-            IssueApprovalState::Approved
+        if self.state.approved_inbox_keys.contains(&approval_key) {
+            DispatchApprovalState::Approved
         } else {
             row.approval_state
         }
     }
 
-    pub(crate) fn resolved_issue_row(
+    pub(crate) fn resolved_tracker_issue_row(
         &self,
         tracker_kind: polyphony_core::TrackerKind,
-        row: &VisibleIssueRow,
-    ) -> VisibleIssueRow {
+        row: &TrackerIssueRow,
+    ) -> TrackerIssueRow {
         let mut row = row.clone();
-        row.approval_state = self.visible_issue_approval_state(tracker_kind, &row);
+        row.approval_state = self.tracker_issue_approval_state(tracker_kind, &row);
         row
     }
 
-    pub(crate) fn should_dispatch_visible_row(&self, row: &VisibleIssueRow) -> bool {
-        row.approval_state == IssueApprovalState::Approved
+    pub(crate) fn should_dispatch_tracker_issue(&self, row: &TrackerIssueRow) -> bool {
+        row.approval_state == DispatchApprovalState::Approved
     }
 
-    pub(crate) fn pull_request_trigger_approval_state(
+    pub(crate) fn pull_request_event_approval_state(
         &self,
-        trigger: &PullRequestTrigger,
-    ) -> IssueApprovalState {
-        let approval_key = match trigger {
-            PullRequestTrigger::Review(trigger) => {
-                issue_key_for_source(&trigger.provider.to_string(), &trigger.dedupe_key())
+        event: &PullRequestEvent,
+    ) -> DispatchApprovalState {
+        let approval_key = match event {
+            PullRequestEvent::Review(event) => {
+                issue_key_for_source(&event.provider.to_string(), &event.dedupe_key())
             },
-            PullRequestTrigger::Comment(trigger) => {
-                issue_key_for_source(&trigger.provider.to_string(), &trigger.dedupe_key())
+            PullRequestEvent::Comment(event) => {
+                issue_key_for_source(&event.provider.to_string(), &event.dedupe_key())
             },
-            PullRequestTrigger::Conflict(trigger) => {
-                issue_key_for_source(&trigger.provider.to_string(), &trigger.dedupe_key())
+            PullRequestEvent::Conflict(event) => {
+                issue_key_for_source(&event.provider.to_string(), &event.dedupe_key())
             },
         };
-        if self.state.approved_issue_keys.contains(&approval_key) {
-            IssueApprovalState::Approved
+        if self.state.approved_inbox_keys.contains(&approval_key) {
+            DispatchApprovalState::Approved
         } else {
-            match trigger {
-                PullRequestTrigger::Review(trigger) => trigger.approval_state,
-                PullRequestTrigger::Comment(trigger) => trigger.approval_state,
-                PullRequestTrigger::Conflict(trigger) => trigger.approval_state,
+            match event {
+                PullRequestEvent::Review(event) => event.approval_state,
+                PullRequestEvent::Comment(event) => event.approval_state,
+                PullRequestEvent::Conflict(event) => event.approval_state,
             }
         }
     }
 
-    pub(crate) fn issue_trigger_row(
+    pub(crate) fn issue_inbox_item_row(
         &self,
         tracker_kind: polyphony_core::TrackerKind,
-        row: &VisibleIssueRow,
-    ) -> VisibleTriggerRow {
-        let mut row = self.resolved_issue_row(tracker_kind, row);
+        row: &TrackerIssueRow,
+    ) -> InboxItemRow {
+        let mut row = self.resolved_tracker_issue_row(tracker_kind, row);
         let key = sanitize_workspace_key(&row.issue_identifier);
         row.has_workspace = self.state.worktree_keys.contains(&key);
-        VisibleTriggerRow {
-            trigger_id: row.issue_id.clone(),
-            kind: VisibleTriggerKind::Issue,
-            source: issue_trigger_source(tracker_kind, &row),
+        InboxItemRow {
+            repo_id: row.repo_id.clone(),
+            item_id: row.issue_id.clone(),
+            kind: InboxItemKind::Issue,
+            source: issue_event_source(tracker_kind, &row),
             identifier: row.issue_identifier.clone(),
             title: row.title.clone(),
             status: row.state.clone(),
@@ -1571,146 +1561,139 @@ impl RuntimeService {
         }
     }
 
-    pub(crate) fn movement_target_label(movement: &Movement) -> String {
-        movement
-            .review_target
+    pub(crate) fn run_target_label(run: &Run) -> String {
+        run.review_target
             .as_ref()
             .map(|target| format!("{}#{}", target.repository, target.number))
-            .or_else(|| movement.issue_identifier.clone())
-            .unwrap_or_else(|| movement.id.clone())
+            .or_else(|| run.issue_identifier.clone())
+            .unwrap_or_else(|| run.id.clone())
     }
 
-    pub(crate) fn pull_request_trigger_row(
-        &self,
-        trigger: &PullRequestTrigger,
-    ) -> VisibleTriggerRow {
-        match trigger {
-            PullRequestTrigger::Review(trigger) => VisibleTriggerRow {
-                trigger_id: trigger.dedupe_key(),
-                kind: VisibleTriggerKind::PullRequestReview,
-                source: trigger.provider.to_string(),
-                identifier: trigger.display_identifier(),
-                title: trigger.title.clone(),
-                status: self
-                    .pull_request_trigger_status(&PullRequestTrigger::Review(trigger.clone())),
-                approval_state: self.pull_request_trigger_approval_state(
-                    &PullRequestTrigger::Review(trigger.clone()),
-                ),
+    pub(crate) fn pull_request_inbox_item_row(&self, event: &PullRequestEvent) -> InboxItemRow {
+        match event {
+            PullRequestEvent::Review(event) => InboxItemRow {
+                repo_id: String::new(),
+                item_id: event.dedupe_key(),
+                kind: InboxItemKind::PullRequestReview,
+                source: event.provider.to_string(),
+                identifier: event.display_identifier(),
+                title: event.title.clone(),
+                status: self.pull_request_event_status(&PullRequestEvent::Review(event.clone())),
+                approval_state: self
+                    .pull_request_event_approval_state(&PullRequestEvent::Review(event.clone())),
                 priority: None,
-                labels: trigger.labels.clone(),
+                labels: event.labels.clone(),
                 description: Some(format!(
                     "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nCheckout ref: {}",
-                    trigger.repository,
-                    trigger.base_branch,
-                    trigger.head_branch,
-                    trigger.head_sha,
-                    trigger.checkout_ref.as_deref().unwrap_or("<none>"),
+                    event.repository,
+                    event.base_branch,
+                    event.head_branch,
+                    event.head_sha,
+                    event.checkout_ref.as_deref().unwrap_or("<none>"),
                 )),
-                url: trigger.url.clone(),
-                author: trigger.author_login.clone(),
+                url: event.url.clone(),
+                author: event.author_login.clone(),
                 parent_id: None,
-                updated_at: trigger.updated_at,
-                created_at: trigger.created_at.or(trigger.updated_at),
+                updated_at: event.updated_at,
+                created_at: event.created_at.or(event.updated_at),
                 has_workspace: self
                     .state
                     .worktree_keys
-                    .contains(&sanitize_workspace_key(&trigger.display_identifier())),
+                    .contains(&sanitize_workspace_key(&event.display_identifier())),
             },
-            PullRequestTrigger::Comment(trigger) => VisibleTriggerRow {
-                trigger_id: trigger.dedupe_key(),
-                kind: VisibleTriggerKind::PullRequestComment,
-                source: trigger.provider.to_string(),
-                identifier: trigger.display_identifier(),
+            PullRequestEvent::Comment(event) => InboxItemRow {
+                repo_id: String::new(),
+                item_id: event.dedupe_key(),
+                kind: InboxItemKind::PullRequestComment,
+                source: event.provider.to_string(),
+                identifier: event.display_identifier(),
                 title: format!(
                     "{}{}: {}",
-                    trigger.path,
-                    trigger
+                    event.path,
+                    event
                         .line
                         .map(|line| format!(":{line}"))
                         .unwrap_or_default(),
-                    truncate_for_trigger_title(&trigger.body, 72),
+                    truncate_for_inbox_title(&event.body, 72),
                 ),
-                status: self
-                    .pull_request_trigger_status(&PullRequestTrigger::Comment(trigger.clone())),
-                approval_state: self.pull_request_trigger_approval_state(
-                    &PullRequestTrigger::Comment(trigger.clone()),
-                ),
+                status: self.pull_request_event_status(&PullRequestEvent::Comment(event.clone())),
+                approval_state: self
+                    .pull_request_event_approval_state(&PullRequestEvent::Comment(event.clone())),
                 priority: None,
-                labels: trigger.labels.clone(),
+                labels: event.labels.clone(),
                 description: Some(format!(
                     "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nPath: {}\nLine: {}\nComment author: {}\n\n{}",
-                    trigger.repository,
-                    trigger.base_branch,
-                    trigger.head_branch,
-                    trigger.head_sha,
-                    trigger.path,
-                    trigger
+                    event.repository,
+                    event.base_branch,
+                    event.head_branch,
+                    event.head_sha,
+                    event.path,
+                    event
                         .line
                         .map(|line| line.to_string())
                         .unwrap_or_else(|| "<none>".into()),
-                    trigger
+                    event
                         .author_login
                         .clone()
                         .unwrap_or_else(|| "<unknown>".into()),
-                    trigger.body,
+                    event.body,
                 )),
-                url: trigger.url.clone(),
-                author: trigger.author_login.clone(),
+                url: event.url.clone(),
+                author: event.author_login.clone(),
                 parent_id: None,
-                updated_at: trigger.updated_at.or(trigger.created_at),
-                created_at: trigger.created_at.or(trigger.updated_at),
+                updated_at: event.updated_at.or(event.created_at),
+                created_at: event.created_at.or(event.updated_at),
                 has_workspace: self
                     .state
                     .worktree_keys
-                    .contains(&sanitize_workspace_key(&trigger.display_identifier())),
+                    .contains(&sanitize_workspace_key(&event.display_identifier())),
             },
-            PullRequestTrigger::Conflict(trigger) => VisibleTriggerRow {
-                trigger_id: trigger.dedupe_key(),
-                kind: VisibleTriggerKind::PullRequestConflict,
-                source: trigger.provider.to_string(),
-                identifier: trigger.display_identifier(),
+            PullRequestEvent::Conflict(event) => InboxItemRow {
+                repo_id: String::new(),
+                item_id: event.dedupe_key(),
+                kind: InboxItemKind::PullRequestConflict,
+                source: event.provider.to_string(),
+                identifier: event.display_identifier(),
                 title: format!(
                     "conflicts with {}: {}",
-                    trigger.base_branch, trigger.pull_request_title
+                    event.base_branch, event.pull_request_title
                 ),
-                status: self
-                    .pull_request_trigger_status(&PullRequestTrigger::Conflict(trigger.clone())),
-                approval_state: self.pull_request_trigger_approval_state(
-                    &PullRequestTrigger::Conflict(trigger.clone()),
-                ),
+                status: self.pull_request_event_status(&PullRequestEvent::Conflict(event.clone())),
+                approval_state: self
+                    .pull_request_event_approval_state(&PullRequestEvent::Conflict(event.clone())),
                 priority: None,
-                labels: trigger.labels.clone(),
+                labels: event.labels.clone(),
                 description: Some(format!(
                     "Repository: {}\nBase branch: {}\nHead branch: {}\nHead SHA: {}\nMergeable: {}\nMerge state: {}",
-                    trigger.repository,
-                    trigger.base_branch,
-                    trigger.head_branch,
-                    trigger.head_sha,
-                    trigger.mergeable_state,
-                    trigger.merge_state_status,
+                    event.repository,
+                    event.base_branch,
+                    event.head_branch,
+                    event.head_sha,
+                    event.mergeable_state,
+                    event.merge_state_status,
                 )),
-                url: trigger.url.clone(),
-                author: trigger.author_login.clone(),
+                url: event.url.clone(),
+                author: event.author_login.clone(),
                 parent_id: None,
-                updated_at: trigger.updated_at.or(trigger.created_at),
-                created_at: trigger.created_at.or(trigger.updated_at),
+                updated_at: event.updated_at.or(event.created_at),
+                created_at: event.created_at.or(event.updated_at),
                 has_workspace: self
                     .state
                     .worktree_keys
-                    .contains(&sanitize_workspace_key(&trigger.display_identifier())),
+                    .contains(&sanitize_workspace_key(&event.display_identifier())),
             },
         }
     }
 
-    pub(crate) fn record_discarded_trigger(&mut self, mut row: VisibleTriggerRow) {
-        let became_discarded = !self.state.discarded_triggers.contains_key(&row.trigger_id);
+    pub(crate) fn record_discarded_inbox_item(&mut self, mut row: InboxItemRow) {
+        let became_discarded = !self.state.discarded_inbox_items.contains_key(&row.item_id);
         let identifier = row.identifier.clone();
         let kind = row.kind;
         row.status = "already_fixed".into();
         row.updated_at = Some(Utc::now());
         self.state
-            .discarded_triggers
-            .insert(row.trigger_id.clone(), DiscardedTriggerEntry {
+            .discarded_inbox_items
+            .insert(row.item_id.clone(), DiscardedInboxItemEntry {
                 row,
                 discarded_at: Utc::now(),
             });
@@ -1722,11 +1705,11 @@ impl RuntimeService {
         }
     }
 
-    pub(crate) fn prune_discarded_triggers(&mut self) {
-        let ttl = self.discarded_trigger_ttl();
+    pub(crate) fn prune_discarded_inbox_items(&mut self) {
+        let ttl = self.discarded_inbox_item_ttl();
         let now = Utc::now();
         self.state
-            .discarded_triggers
+            .discarded_inbox_items
             .retain(|_, entry| now.signed_duration_since(entry.discarded_at) < ttl);
     }
 
@@ -1736,49 +1719,49 @@ impl RuntimeService {
             || self.is_claimed(issue_id)
     }
 
-    pub(crate) async fn process_manual_pull_request_trigger_dispatches(&mut self) {
-        let dispatches = std::mem::take(&mut self.pending_manual_pull_request_trigger_dispatches);
+    pub(crate) async fn process_manual_pull_request_inbox_dispatches(&mut self) {
+        let dispatches = std::mem::take(&mut self.pending_manual_pull_request_inbox_dispatches);
         if dispatches.is_empty() {
             return;
         }
         if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
-            info!("manual PR trigger dispatches dropped (stop mode)");
+            info!("manual PR inbox dispatches dropped (stop mode)");
             self.push_event(
                 EventScope::Dispatch,
-                "manual PR trigger dispatch blocked: orchestrator is in stop mode".into(),
+                "manual PR inbox dispatch blocked: orchestrator is in stop mode".into(),
             );
             return;
         }
         info!(
             count = dispatches.len(),
-            "processing manual pull request trigger dispatches"
+            "processing manual pull request inbox dispatches"
         );
         let workflow = self.workflow();
         for request in dispatches {
-            let trigger_id = request.trigger_id;
-            let Some(trigger) = self.visible_pull_request_trigger(&trigger_id) else {
+            let item_id = request.item_id;
+            let Some(event) = self.visible_pull_request_event(&item_id) else {
                 self.push_event(
                     EventScope::Dispatch,
-                    format!("manual dispatch: pull request trigger {trigger_id} not found"),
+                    format!("manual dispatch: pull request inbox item {item_id} not found"),
                 );
-                warn!(%trigger_id, "pull request trigger not found for manual dispatch");
+                warn!(%item_id, "pull request inbox item not found for manual dispatch");
                 continue;
             };
-            if let Some(reason) = self.pull_request_trigger_suppression(&workflow, &trigger) {
-                let status = self.pull_request_trigger_status(&trigger);
+            if let Some(reason) = self.pull_request_event_suppression(&workflow, &event) {
+                let status = self.pull_request_event_status(&event);
                 self.push_event(
                     EventScope::Dispatch,
                     format!(
                         "manual dispatch skipped: {} is {status} ({reason:?})",
-                        trigger.display_identifier()
+                        event.display_identifier()
                     ),
                 );
                 continue;
             }
             if let Err(error) = self
-                .dispatch_pull_request_trigger(
+                .dispatch_pull_request_event(
                     workflow.clone(),
-                    trigger.clone(),
+                    event.clone(),
                     None,
                     request.directives.as_deref(),
                 )
@@ -1788,13 +1771,13 @@ impl RuntimeService {
                     EventScope::Dispatch,
                     format!(
                         "manual dispatch failed: {} ({error})",
-                        trigger.display_identifier()
+                        event.display_identifier()
                     ),
                 );
                 error!(
                     %error,
-                    trigger_id = %trigger.dedupe_key(),
-                    "manual pull request trigger dispatch failed"
+                    item_id = %event.dedupe_key(),
+                    "manual pull request inbox dispatch failed"
                 );
             }
         }
@@ -1909,22 +1892,22 @@ impl RuntimeService {
             return true;
         }
 
-        self.process_pending_issue_approvals().await;
+        self.process_pending_inbox_approvals().await;
         self.process_pending_issue_closures().await;
         self.process_pending_deliverable_resolutions().await;
         // Process merge requests
         let merge_ids = std::mem::take(&mut self.pending_merge_deliverables);
-        for movement_id in merge_ids {
-            self.merge_deliverable(&movement_id).await;
+        for run_id in merge_ids {
+            self.merge_deliverable(&run_id).await;
         }
 
-        self.process_pending_movement_retries().await;
+        self.process_pending_run_retries().await;
         self.process_pending_task_resolutions().await;
         self.process_pending_task_retries().await;
         self.process_pending_agent_stops().await;
         self.process_manual_dispatches().await;
-        self.process_manual_pull_request_trigger_dispatches().await;
-        // Emit snapshot immediately after dispatches so movements appear in the TUI
+        self.process_manual_pull_request_inbox_dispatches().await;
+        // Emit snapshot immediately after dispatches so runs appear in the TUI
         let _ = self.emit_snapshot().await;
 
         debug!("tick: reconciling running sessions");
@@ -2046,33 +2029,33 @@ impl RuntimeService {
             );
         }
 
-        let previous_issue_rows = self.state.visible_issues.clone();
+        let previous_issue_rows = self.state.tracker_issues.clone();
         let mut issues = issues;
         issues.sort_by(dispatch_order);
-        self.state.issue_snapshot_loaded = true;
+        self.state.tracker_issue_snapshot_loaded = true;
         let tracker_kind = workflow.config.tracker.kind;
-        self.state.visible_issues = issues
+        self.state.tracker_issues = issues
             .iter()
             .map(summarize_issue)
-            .map(|row| self.resolved_issue_row(tracker_kind, &row))
+            .map(|row| self.resolved_tracker_issue_row(tracker_kind, &row))
             .collect();
         let current_issue_ids = self
             .state
-            .visible_issues
+            .tracker_issues
             .iter()
             .map(|issue| issue.issue_id.clone())
             .collect::<HashSet<_>>();
         for issue_row in previous_issue_rows {
             if current_issue_ids.contains(&issue_row.issue_id) {
-                self.state.discarded_triggers.remove(&issue_row.issue_id);
+                self.state.discarded_inbox_items.remove(&issue_row.issue_id);
                 continue;
             }
             if self.issue_is_actionable(&issue_row.issue_id) {
                 continue;
             }
-            self.record_discarded_trigger(self.issue_trigger_row(tracker_kind, &issue_row));
+            self.record_discarded_inbox_item(self.issue_inbox_item_row(tracker_kind, &issue_row));
         }
-        self.prune_discarded_triggers();
+        self.prune_discarded_inbox_items();
         self.save_cache().await;
 
         // Auto-dispatch issues whose orphaned workspaces were found at startup.
@@ -2113,7 +2096,7 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
         }
 
-        if self.pull_request_trigger_source.is_some() {
+        if self.pull_request_event_source.is_some() {
             let allow_pull_request_dispatch = match self.state.dispatch_mode {
                 polyphony_core::DispatchMode::Manual | polyphony_core::DispatchMode::Stop => false,
                 polyphony_core::DispatchMode::Automatic
@@ -2131,7 +2114,7 @@ impl RuntimeService {
                     }
                 },
             };
-            self.poll_pull_request_triggers(workflow.clone(), allow_pull_request_dispatch)
+            self.poll_pull_request_events(workflow.clone(), allow_pull_request_dispatch)
                 .await;
         }
         if !workflow.config.has_dispatch_agents() {
@@ -2191,8 +2174,8 @@ mod tests {
 
     use chrono::Utc;
     use polyphony_core::{
-        MovementKind, MovementRow, MovementStatus, RuntimeCadence, RuntimeSnapshot, SnapshotCounts,
-        TaskCategory, TaskRow, TaskStatus, WorkspaceProgressUpdate,
+        RunKind, RunRow, RunStatus, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, TaskCategory,
+        TaskRow, TaskStatus, WorkspaceProgressUpdate,
     };
 
     use super::apply_workspace_progress_to_snapshot;
@@ -2201,14 +2184,15 @@ mod tests {
     fn workspace_progress_updates_current_snapshot_immediately() {
         let now = Utc::now();
         let mut snapshot = RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
-            visible_issues: Vec::new(),
-            visible_triggers: Vec::new(),
-            approved_issue_keys: Vec::new(),
+            tracker_issues: Vec::new(),
+            inbox_items: Vec::new(),
+            approved_inbox_keys: Vec::new(),
             running: Vec::new(),
-            agent_history: Vec::new(),
+            agent_run_history: Vec::new(),
             retrying: Vec::new(),
             codex_totals: Default::default(),
             rate_limits: None,
@@ -2218,12 +2202,13 @@ mod tests {
             saved_contexts: Vec::new(),
             recent_events: Vec::new(),
             pending_user_interactions: Vec::new(),
-            movements: vec![MovementRow {
-                id: "mov-1".into(),
-                kind: MovementKind::PullRequestReview,
+            runs: vec![RunRow {
+                repo_id: String::new(),
+                id: "run-1".into(),
+                kind: RunKind::PullRequestReview,
                 issue_identifier: Some("penso/arbor#89".into()),
                 title: "Review me".into(),
-                status: MovementStatus::InProgress,
+                status: RunStatus::InProgress,
                 task_count: 2,
                 tasks_completed: 0,
                 deliverable: None,
@@ -2237,8 +2222,9 @@ mod tests {
                 steps: Vec::new(),
             }],
             tasks: vec![TaskRow {
+                repo_id: String::new(),
                 id: "task-1".into(),
-                movement_id: "mov-1".into(),
+                run_id: "run-1".into(),
                 title: "Creating worktree".into(),
                 description: None,
                 activity_log: Vec::new(),

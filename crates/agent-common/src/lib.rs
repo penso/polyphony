@@ -641,6 +641,7 @@ mod tests {
                 ..AgentDefinition::default()
             },
             prior_context: Some(AgentContextSnapshot {
+                repo_id: String::new(),
                 issue_id: "issue-1".into(),
                 issue_identifier: "FAC-1".into(),
                 updated_at: chrono::Utc::now(),

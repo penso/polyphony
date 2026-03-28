@@ -1,0 +1,62 @@
+query FetchPullRequestEvents($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(
+      states: OPEN
+      first: 50
+      after: $after
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        number
+        title
+        url
+        createdAt
+        updatedAt
+        isDraft
+        author {
+          __typename
+          login
+        }
+        authorAssociation
+        labels(first: 20) {
+          nodes {
+            name
+          }
+        }
+        baseRefName
+        headRefName
+        headRefOid
+        mergeable
+        mergeStateStatus
+        reviewThreads(first: 50) {
+          nodes {
+            id
+            isResolved
+            isOutdated
+            path
+            line
+            originalLine
+            comments(first: 20) {
+              nodes {
+                id
+                body
+                url
+                createdAt
+                updatedAt
+                author {
+                  __typename
+                  login
+                }
+                authorAssociation
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

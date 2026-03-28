@@ -61,56 +61,56 @@ impl RuntimeService {
 
         let has_planner = workflow.config.router_agent_name().is_some();
         let initial_status = if has_planner {
-            MovementStatus::Planning
+            RunStatus::Planning
         } else {
-            MovementStatus::InProgress
+            RunStatus::InProgress
         };
-        // Reuse an existing active movement for this issue if one exists,
+        // Reuse an existing active run for this issue if one exists,
         // otherwise create a new one.
-        let (movement_id, existing_stage) =
-            if let Some(existing_id) = self.find_existing_movement_for_issue(&issue.id) {
+        let (run_id, existing_stage) =
+            if let Some(existing_id) = self.find_existing_run_for_issue(&issue.id) {
                 let stage = self
                     .state
-                    .movements
+                    .runs
                     .get(&existing_id)
                     .and_then(|m| m.pipeline_stage);
-                // Determine what status this movement should have on reuse.
+                // Determine what status this run should have on reuse.
                 let reuse_status = match stage {
-                    Some(PipelineStage::Completing) => MovementStatus::Delivered,
-                    Some(PipelineStage::Executing) => MovementStatus::InProgress,
+                    Some(PipelineStage::Completing) => RunStatus::Delivered,
+                    Some(PipelineStage::Executing) => RunStatus::InProgress,
                     _ => initial_status,
                 };
                 let past_planning = matches!(
                     stage,
                     Some(PipelineStage::Executing) | Some(PipelineStage::Completing)
                 );
-                if let Some(movement) = self.state.movements.get_mut(&existing_id) {
-                    movement.status = reuse_status;
-                    movement.manual_dispatch_directives = manual_dispatch_directives.clone();
-                    movement.updated_at = Utc::now();
+                if let Some(run) = self.state.runs.get_mut(&existing_id) {
+                    run.status = reuse_status;
+                    run.manual_dispatch_directives = manual_dispatch_directives.clone();
+                    run.updated_at = Utc::now();
                     if !past_planning {
-                        movement.pipeline_stage = if has_planner {
+                        run.pipeline_stage = if has_planner {
                             Some(PipelineStage::Planning)
                         } else {
                             Some(PipelineStage::Executing)
                         };
                     }
                     if let Some(store) = &self.store {
-                        store.save_movement(movement).await?;
+                        store.save_run(run).await?;
                     }
                 }
                 info!(
                     issue_identifier = %issue.identifier,
-                    movement_id = %existing_id,
+                    run_id = %existing_id,
                     workspace_path = %workspace.path.display(),
                     has_planner,
                     existing_stage = ?stage,
                     reuse_status = ?reuse_status,
-                    "pipeline movement reused"
+                    "pipeline run reused"
                 );
                 (existing_id, stage)
             } else {
-                let movement_id = new_movement_id();
+                let run_id = new_run_id();
                 let now = Utc::now();
                 let pipeline_stage = if has_planner {
                     Some(PipelineStage::Planning)
@@ -122,9 +122,9 @@ impl RuntimeService {
                 } else {
                     Vec::new()
                 };
-                let movement = Movement {
-                    id: movement_id.clone(),
-                    kind: MovementKind::IssueDelivery,
+                let run = Run {
+                    id: run_id.clone(),
+                    kind: RunKind::IssueDelivery,
                     issue_id: Some(issue.id.clone()),
                     issue_identifier: Some(issue.identifier.clone()),
                     title: issue.title.clone(),
@@ -142,37 +142,37 @@ impl RuntimeService {
                     activity_log: Vec::new(),
                 };
                 if let Some(store) = &self.store {
-                    store.save_movement(&movement).await?;
+                    store.save_run(&run).await?;
                 }
-                self.state.movements.insert(movement_id.clone(), movement);
+                self.state.runs.insert(run_id.clone(), run);
                 info!(
                     issue_identifier = %issue.identifier,
-                    movement_id,
+                    run_id,
                     workspace_path = %workspace.path.display(),
                     has_planner,
                     initial_status = ?initial_status,
-                    "pipeline movement created"
+                    "pipeline run created"
                 );
-                (movement_id, None)
+                (run_id, None)
             };
 
         // Pipeline already completed — check for deliverable, mark failed if no output.
         if matches!(existing_stage, Some(PipelineStage::Completing)) {
             let has_deliverable = self
                 .state
-                .movements
-                .get(&movement_id)
+                .runs
+                .get(&run_id)
                 .is_some_and(|m| m.deliverable.is_some());
             if !has_deliverable {
                 // Try to detect any changes in the workspace
-                self.create_local_branch_deliverable_from_workspace(&movement_id, &workspace.path)
+                self.create_local_branch_deliverable_from_workspace(&run_id, &workspace.path)
                     .await;
             }
             // Check if the deliverable has actual changes
             let deliverable = self
                 .state
-                .movements
-                .get(&movement_id)
+                .runs
+                .get(&run_id)
                 .and_then(|m| m.deliverable.as_ref());
             let confirmed_no_changes = deliverable.is_some_and(|d| {
                 d.metadata
@@ -184,14 +184,14 @@ impl RuntimeService {
             if no_output {
                 warn!(
                     issue_identifier = %issue.identifier,
-                    movement_id,
+                    run_id,
                     "pipeline completed with no code changes — marking as failed"
                 );
-                if let Some(movement) = self.state.movements.get_mut(&movement_id) {
-                    movement.status = MovementStatus::Failed;
-                    movement.updated_at = Utc::now();
+                if let Some(run) = self.state.runs.get_mut(&run_id) {
+                    run.status = RunStatus::Failed;
+                    run.updated_at = Utc::now();
                     if let Some(store) = &self.store {
-                        store.save_movement(movement).await?;
+                        store.save_run(run).await?;
                     }
                 }
                 self.push_event(
@@ -204,7 +204,7 @@ impl RuntimeService {
             } else {
                 info!(
                     issue_identifier = %issue.identifier,
-                    movement_id,
+                    run_id,
                     "pipeline already completed, skipping re-dispatch"
                 );
             }
@@ -215,7 +215,7 @@ impl RuntimeService {
         if matches!(existing_stage, Some(PipelineStage::Executing)) {
             info!(
                 issue_identifier = %issue.identifier,
-                movement_id,
+                run_id,
                 "skipping planner — resuming from next pending task"
             );
             return self
@@ -224,7 +224,7 @@ impl RuntimeService {
                     issue,
                     attempt,
                     prefer_alternate_agent,
-                    &movement_id,
+                    &run_id,
                     &workspace.path,
                 )
                 .await;
@@ -236,13 +236,12 @@ impl RuntimeService {
                 &issue,
                 attempt,
                 prefer_alternate_agent,
-                &movement_id,
+                &run_id,
                 &workspace.path,
             )
             .await
         } else {
-            let tasks =
-                self.create_tasks_from_stages(&workflow.config.pipeline.stages, &movement_id);
+            let tasks = self.create_tasks_from_stages(&workflow.config.pipeline.stages, &run_id);
             if let Some(store) = &self.store {
                 for task in &tasks {
                     store.save_task(task).await?;
@@ -250,30 +249,30 @@ impl RuntimeService {
             }
             info!(
                 issue_identifier = %issue.identifier,
-                movement_id,
+                run_id,
                 stage_tasks = tasks.len(),
                 "pipeline stages expanded without planner"
             );
             // Populate delivery steps from the created tasks.
             let task_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
-            if let Some(movement) = self.state.movements.get_mut(&movement_id) {
-                movement.steps = polyphony_core::build_delivery_steps(
+            if let Some(run) = self.state.runs.get_mut(&run_id) {
+                run.steps = polyphony_core::build_delivery_steps(
                     &task_ids,
                     workflow.config.automation.enabled,
                     workflow.config.pr_review_agent().ok().flatten().is_some(),
                 );
-                movement.updated_at = Utc::now();
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    store.save_movement(movement).await?;
+                    store.save_run(run).await?;
                 }
             }
-            self.state.tasks.insert(movement_id.clone(), tasks);
+            self.state.tasks.insert(run_id.clone(), tasks);
             self.dispatch_next_task(
                 workflow,
                 issue,
                 attempt,
                 prefer_alternate_agent,
-                &movement_id,
+                &run_id,
                 &workspace.path,
             )
             .await
@@ -283,7 +282,7 @@ impl RuntimeService {
     pub(crate) fn create_tasks_from_stages(
         &self,
         stages: &[polyphony_workflow::PipelineStageConfig],
-        movement_id: &str,
+        run_id: &str,
     ) -> Vec<Task> {
         let now = Utc::now();
         stages
@@ -300,7 +299,7 @@ impl RuntimeService {
                 };
                 Task {
                     id: format!("task-{}", uuid::Uuid::new_v4()),
-                    movement_id: movement_id.to_string(),
+                    run_id: run_id.to_string(),
                     title: format!("{} stage", stage.category),
                     description: None,
                     activity_log: Vec::new(),
@@ -329,7 +328,7 @@ impl RuntimeService {
         issue: &Issue,
         attempt: Option<u32>,
         _prefer_alternate_agent: bool,
-        movement_id: &str,
+        run_id: &str,
         workspace_path: &Path,
     ) -> Result<(), Error> {
         let planner_agent_name = workflow.config.router_agent_name().ok_or_else(|| {
@@ -354,7 +353,7 @@ impl RuntimeService {
         );
         info!(
             issue_identifier = %issue.identifier,
-            movement_id,
+            run_id,
             planner_agent = %selected_agent.name,
             attempt = attempt.unwrap_or(0),
             "dispatching pipeline planner"
@@ -378,14 +377,12 @@ impl RuntimeService {
             1,
             workflow.config.agent.max_turns,
         )?;
-        let prompt = prepend_manual_dispatch_directives(
-            prompt,
-            self.manual_dispatch_directives(movement_id),
-        );
+        let prompt =
+            prepend_manual_dispatch_directives(prompt, self.manual_dispatch_directives(run_id));
 
         // Mark the PlannerRun step as running.
-        if let Some(movement) = self.state.movements.get_mut(movement_id)
-            && let Some(step) = movement
+        if let Some(run) = self.state.runs.get_mut(run_id)
+            && let Some(step) = run
                 .steps
                 .iter_mut()
                 .find(|s| s.kind == polyphony_core::StepKind::PlannerRun && !s.is_complete())
@@ -401,7 +398,7 @@ impl RuntimeService {
             prompt,
             selected_agent,
             None,
-            Some(movement_id.to_string()),
+            Some(run_id.to_string()),
             None,
         )
         .await
@@ -413,10 +410,10 @@ impl RuntimeService {
         issue: Issue,
         attempt: Option<u32>,
         _prefer_alternate_agent: bool,
-        movement_id: &str,
+        run_id: &str,
         workspace_path: &Path,
     ) -> Result<(), Error> {
-        let next_task = self.state.tasks.get(movement_id).and_then(|tasks| {
+        let next_task = self.state.tasks.get(run_id).and_then(|tasks| {
             tasks
                 .iter()
                 .filter(|task| task.status == TaskStatus::Pending)
@@ -425,8 +422,7 @@ impl RuntimeService {
         });
 
         let Some(task) = next_task else {
-            self.complete_pipeline(&workflow, &issue, movement_id)
-                .await?;
+            self.complete_pipeline(&workflow, &issue, run_id).await?;
             return Ok(());
         };
 
@@ -464,12 +460,12 @@ impl RuntimeService {
             agent_definition_with_pty(&agent_name, profile, workflow.config.agent.pty_backend);
         info!(
             issue_identifier = %issue.identifier,
-            movement_id,
+            run_id,
             task_id = %task.id,
             task_title = %task.title,
             task_category = %task.category,
             task_ordinal = task.ordinal,
-            task_count = self.state.tasks.get(movement_id).map(|tasks| tasks.len()).unwrap_or(0),
+            task_count = self.state.tasks.get(run_id).map(|tasks| tasks.len()).unwrap_or(0),
             selected_agent = %selected_agent.name,
             "dispatching next pipeline task"
         );
@@ -480,13 +476,13 @@ impl RuntimeService {
             &selected_agent.name,
             &issue,
             &task,
-            movement_id,
+            run_id,
             attempt,
             workflow.config.agent.max_turns,
         )?;
 
         // Mark task in progress
-        if let Some(tasks) = self.state.tasks.get_mut(movement_id)
+        if let Some(tasks) = self.state.tasks.get_mut(run_id)
             && let Some(t) = tasks.iter_mut().find(|t| t.id == task.id)
         {
             t.status = TaskStatus::InProgress;
@@ -500,6 +496,7 @@ impl RuntimeService {
         // Build prior context from the task's stored session info for resume.
         let prior_context = if task.session_id.is_some() || task.thread_id.is_some() {
             Some(AgentContextSnapshot {
+                repo_id: String::new(),
                 issue_id: issue.id.clone(),
                 issue_identifier: issue.identifier.clone(),
                 updated_at: Utc::now(),
@@ -519,8 +516,8 @@ impl RuntimeService {
         };
 
         // Mark the AgentRun step as running.
-        if let Some(movement) = self.state.movements.get_mut(movement_id)
-            && let Some(step) = movement.steps.iter_mut().find(|s| {
+        if let Some(run) = self.state.runs.get_mut(run_id)
+            && let Some(step) = run.steps.iter_mut().find(|s| {
                 s.kind == polyphony_core::StepKind::AgentRun
                     && s.task_id.as_deref() == Some(&task.id)
                     && !s.is_complete()
@@ -537,7 +534,7 @@ impl RuntimeService {
             prompt,
             selected_agent,
             Some(task.id.clone()),
-            Some(movement_id.to_string()),
+            Some(run_id.to_string()),
             prior_context,
         )
         .await
@@ -549,11 +546,11 @@ impl RuntimeService {
         agent_name: &str,
         issue: &Issue,
         task: &Task,
-        movement_id: &str,
+        run_id: &str,
         attempt: Option<u32>,
         max_turns: u32,
     ) -> Result<String, Error> {
-        let tasks = self.state.tasks.get(movement_id);
+        let tasks = self.state.tasks.get(run_id);
         let completed_tasks: Vec<String> = tasks
             .map(|ts| {
                 ts.iter()
@@ -575,8 +572,8 @@ impl RuntimeService {
         // Read plan.json if it exists
         let has_plan = self
             .state
-            .movements
-            .get(movement_id)
+            .runs
+            .get(run_id)
             .and_then(|m| m.workspace_path.as_ref())
             .is_some_and(|path| path.join(".polyphony").join("plan.json").exists());
 
@@ -593,7 +590,7 @@ impl RuntimeService {
 
         let mut prompt = prepend_manual_dispatch_directives(
             base_prompt,
-            self.manual_dispatch_directives(movement_id),
+            self.manual_dispatch_directives(run_id),
         );
         prompt.push_str(&format!(
             "\n\n## Pipeline Task {}/{}\n\
@@ -619,11 +616,11 @@ impl RuntimeService {
         Ok(prompt)
     }
 
-    fn manual_dispatch_directives(&self, movement_id: &str) -> Option<&str> {
+    fn manual_dispatch_directives(&self, run_id: &str) -> Option<&str> {
         self.state
-            .movements
-            .get(movement_id)
-            .and_then(|movement| movement.manual_dispatch_directives.as_deref())
+            .runs
+            .get(run_id)
+            .and_then(|run| run.manual_dispatch_directives.as_deref())
     }
 
     pub(crate) async fn spawn_pipeline_worker(
@@ -635,7 +632,7 @@ impl RuntimeService {
         prompt: String,
         selected_agent: polyphony_core::AgentDefinition,
         active_task_id: Option<TaskId>,
-        movement_id: Option<MovementId>,
+        run_id: Option<RunId>,
         prior_context: Option<AgentContextSnapshot>,
     ) -> Result<(), Error> {
         let issue_id = issue.id.clone();
@@ -657,7 +654,7 @@ impl RuntimeService {
             issue_identifier = %issue.identifier,
             agent = %selected_agent.name,
             task_id = ?active_task_id,
-            movement_id = ?movement_id,
+            run_id = ?run_id,
             "dispatching pipeline worker"
         );
 
@@ -743,7 +740,7 @@ impl RuntimeService {
             rate_limits: None,
             handle,
             active_task_id,
-            movement_id,
+            run_id,
             review_target: None,
             review_comment_marker: None,
             recent_log: VecDeque::new(),
@@ -759,7 +756,7 @@ impl RuntimeService {
         &mut self,
         workflow: &LoadedWorkflow,
         issue: &Issue,
-        movement_id: &str,
+        run_id: &str,
         workspace_path: &Path,
         outcome: &AgentRunResult,
         attempt: Option<u32>,
@@ -767,14 +764,14 @@ impl RuntimeService {
         if !matches!(outcome.status, AttemptStatus::Succeeded) {
             warn!(
                 issue_identifier = %issue.identifier,
-                movement_id,
-                "planner failed, marking movement as failed"
+                run_id,
+                "planner failed, marking run as failed"
             );
-            if let Some(movement) = self.state.movements.get_mut(movement_id) {
-                movement.status = MovementStatus::Failed;
-                movement.updated_at = Utc::now();
+            if let Some(run) = self.state.runs.get_mut(run_id) {
+                run.status = RunStatus::Failed;
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    store.save_movement(movement).await?;
+                    store.save_run(run).await?;
                 }
             }
             return Ok(());
@@ -795,7 +792,7 @@ impl RuntimeService {
         })?;
         info!(
             issue_identifier = %issue.identifier,
-            movement_id,
+            run_id,
             plan_path = %plan_path.display(),
             planned_tasks = plan.tasks.len(),
             "planner output loaded"
@@ -806,11 +803,11 @@ impl RuntimeService {
                 issue_identifier = %issue.identifier,
                 "planner produced empty plan"
             );
-            if let Some(movement) = self.state.movements.get_mut(movement_id) {
-                movement.status = MovementStatus::Failed;
-                movement.updated_at = Utc::now();
+            if let Some(run) = self.state.runs.get_mut(run_id) {
+                run.status = RunStatus::Failed;
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    store.save_movement(movement).await?;
+                    store.save_run(run).await?;
                 }
             }
             return Ok(());
@@ -838,7 +835,7 @@ impl RuntimeService {
         let tasks: Vec<Task> = planned_tasks
             .iter()
             .enumerate()
-            .map(|(index, planned)| planned.to_task(movement_id, (index + 1) as u32))
+            .map(|(index, planned)| planned.to_task(run_id, (index + 1) as u32))
             .collect();
 
         if let Some(store) = &self.store {
@@ -849,7 +846,7 @@ impl RuntimeService {
         for task in &tasks {
             info!(
                 issue_identifier = %issue.identifier,
-                movement_id,
+                run_id,
                 task_id = %task.id,
                 task_title = %task.title,
                 task_category = %task.category,
@@ -860,11 +857,11 @@ impl RuntimeService {
         }
         // Build delivery steps from the tasks the planner created.
         let task_ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
-        self.state.tasks.insert(movement_id.to_string(), tasks);
+        self.state.tasks.insert(run_id.to_string(), tasks);
 
-        if let Some(movement) = self.state.movements.get_mut(movement_id) {
+        if let Some(run) = self.state.runs.get_mut(run_id) {
             // Mark the PlannerRun step as succeeded.
-            if let Some(planner_step) = movement
+            if let Some(planner_step) = run
                 .steps
                 .iter_mut()
                 .find(|s| s.kind == polyphony_core::StepKind::PlannerRun)
@@ -872,7 +869,7 @@ impl RuntimeService {
                 planner_step.mark_succeeded();
             }
             // Append the delivery steps (AgentRun per task + handoff steps).
-            let next_ordinal = movement.steps.last().map(|s| s.ordinal + 1).unwrap_or(0);
+            let next_ordinal = run.steps.last().map(|s| s.ordinal + 1).unwrap_or(0);
             let mut delivery_steps = polyphony_core::build_delivery_steps(
                 &task_ids,
                 workflow.config.automation.enabled,
@@ -881,24 +878,20 @@ impl RuntimeService {
             for (i, step) in delivery_steps.iter_mut().enumerate() {
                 step.ordinal = next_ordinal + i as u32;
             }
-            movement.steps.extend(delivery_steps);
+            run.steps.extend(delivery_steps);
 
-            movement.status = MovementStatus::InProgress;
-            movement.pipeline_stage = Some(PipelineStage::Executing);
-            movement.push_log(
-                polyphony_core::MovementLogScope::Pipeline,
+            run.status = RunStatus::InProgress;
+            run.pipeline_stage = Some(PipelineStage::Executing);
+            run.push_log(
+                polyphony_core::RunLogScope::Pipeline,
                 format!(
                     "planning → executing: {} tasks created",
-                    self.state
-                        .tasks
-                        .get(movement_id)
-                        .map(|t| t.len())
-                        .unwrap_or(0)
+                    self.state.tasks.get(run_id).map(|t| t.len()).unwrap_or(0)
                 ),
             );
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                store.save_movement(movement).await?;
+                store.save_run(run).await?;
             }
         }
 
@@ -907,11 +900,7 @@ impl RuntimeService {
             format!(
                 "{} planner created {} tasks",
                 issue.identifier,
-                self.state
-                    .tasks
-                    .get(movement_id)
-                    .map(|t| t.len())
-                    .unwrap_or(0)
+                self.state.tasks.get(run_id).map(|t| t.len()).unwrap_or(0)
             ),
         );
 
@@ -920,7 +909,7 @@ impl RuntimeService {
             issue.clone(),
             attempt,
             false,
-            movement_id,
+            run_id,
             workspace_path,
         )
         .await
@@ -930,7 +919,7 @@ impl RuntimeService {
         &mut self,
         workflow: &LoadedWorkflow,
         issue: &Issue,
-        movement_id: &str,
+        run_id: &str,
         task_id: &str,
         workspace_path: &Path,
         outcome: &AgentRunResult,
@@ -940,12 +929,12 @@ impl RuntimeService {
         let task_snapshot = self
             .state
             .tasks
-            .get(movement_id)
+            .get(run_id)
             .and_then(|tasks| tasks.iter().find(|t| t.id == task_id))
             .cloned();
         info!(
             issue_identifier = %issue.identifier,
-            movement_id,
+            run_id,
             task_id,
             task_title = task_snapshot.as_ref().map(|task| task.title.as_str()).unwrap_or("unknown"),
             task_category = task_snapshot.as_ref().map(|task| task.category.to_string()).unwrap_or_else(|| "unknown".into()),
@@ -954,7 +943,7 @@ impl RuntimeService {
             error = outcome.error.as_deref().unwrap_or("none"),
             "pipeline task finished"
         );
-        if let Some(tasks) = self.state.tasks.get_mut(movement_id)
+        if let Some(tasks) = self.state.tasks.get_mut(run_id)
             && let Some(task) = tasks.iter_mut().find(|t| t.id == task_id)
         {
             task.status = if matches!(outcome.status, AttemptStatus::Succeeded) {
@@ -972,8 +961,8 @@ impl RuntimeService {
         }
 
         // Mark the corresponding AgentRun step.
-        if let Some(movement) = self.state.movements.get_mut(movement_id) {
-            if let Some(step) = movement.steps.iter_mut().find(|s| {
+        if let Some(run) = self.state.runs.get_mut(run_id) {
+            if let Some(step) = run.steps.iter_mut().find(|s| {
                 s.kind == polyphony_core::StepKind::AgentRun
                     && s.task_id.as_deref() == Some(task_id)
             }) {
@@ -983,9 +972,9 @@ impl RuntimeService {
                     step.mark_failed(outcome.error.as_deref().unwrap_or("task failed"));
                 }
             }
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                store.save_movement(movement).await?;
+                store.save_run(run).await?;
             }
         }
 
@@ -995,7 +984,7 @@ impl RuntimeService {
                 issue.clone(),
                 attempt,
                 false,
-                movement_id,
+                run_id,
                 workspace_path,
             )
             .await
@@ -1014,7 +1003,7 @@ impl RuntimeService {
                     ),
                 );
                 // Reset tasks and re-plan
-                if let Some(tasks) = self.state.tasks.get_mut(movement_id) {
+                if let Some(tasks) = self.state.tasks.get_mut(run_id) {
                     for task in tasks.iter_mut() {
                         if task.status == TaskStatus::Pending {
                             task.status = TaskStatus::Cancelled;
@@ -1022,30 +1011,23 @@ impl RuntimeService {
                         }
                     }
                 }
-                if let Some(movement) = self.state.movements.get_mut(movement_id) {
-                    movement.status = MovementStatus::Planning;
-                    movement.updated_at = Utc::now();
+                if let Some(run) = self.state.runs.get_mut(run_id) {
+                    run.status = RunStatus::Planning;
+                    run.updated_at = Utc::now();
                     if let Some(store) = &self.store {
-                        store.save_movement(movement).await?;
+                        store.save_run(run).await?;
                     }
                 }
                 return self
-                    .dispatch_planner_task(
-                        workflow,
-                        issue,
-                        attempt,
-                        false,
-                        movement_id,
-                        workspace_path,
-                    )
+                    .dispatch_planner_task(workflow, issue, attempt, false, run_id, workspace_path)
                     .await;
             }
-            // Mark movement as failed
-            if let Some(movement) = self.state.movements.get_mut(movement_id) {
-                movement.status = MovementStatus::Failed;
-                movement.updated_at = Utc::now();
+            // Mark run as failed
+            if let Some(run) = self.state.runs.get_mut(run_id) {
+                run.status = RunStatus::Failed;
+                run.updated_at = Utc::now();
                 if let Some(store) = &self.store {
-                    store.save_movement(movement).await?;
+                    store.save_run(run).await?;
                 }
             }
             Ok(())
@@ -1056,30 +1038,30 @@ impl RuntimeService {
         &mut self,
         workflow: &LoadedWorkflow,
         issue: &Issue,
-        movement_id: &str,
+        run_id: &str,
     ) -> Result<(), Error> {
         let status = if workflow.config.automation.enabled {
-            MovementStatus::Review
+            RunStatus::Review
         } else {
-            MovementStatus::Delivered
+            RunStatus::Delivered
         };
         info!(
             issue_identifier = %issue.identifier,
-            movement_id,
+            run_id,
             automation_enabled = workflow.config.automation.enabled,
-            movement_status = ?status,
+            run_status = ?status,
             "pipeline completed"
         );
-        if let Some(movement) = self.state.movements.get_mut(movement_id) {
-            movement.status = status;
-            movement.pipeline_stage = Some(PipelineStage::Completing);
-            movement.push_log(
-                polyphony_core::MovementLogScope::Pipeline,
+        if let Some(run) = self.state.runs.get_mut(run_id) {
+            run.status = status;
+            run.pipeline_stage = Some(PipelineStage::Completing);
+            run.push_log(
+                polyphony_core::RunLogScope::Pipeline,
                 format!("executing → completing ({status})"),
             );
-            movement.updated_at = Utc::now();
+            run.updated_at = Utc::now();
             if let Some(store) = &self.store {
-                store.save_movement(movement).await?;
+                store.save_run(run).await?;
             }
         }
         self.push_event(
@@ -1093,22 +1075,22 @@ impl RuntimeService {
         &mut self,
         request: &FeedbackInjectionRequest,
     ) -> Result<(), Error> {
-        let movement_id = &request.movement_id;
-        let Some(movement) = self.state.movements.get(movement_id).cloned() else {
+        let run_id = &request.run_id;
+        let Some(run) = self.state.runs.get(run_id).cloned() else {
             return Err(Error::Core(CoreError::Adapter(format!(
-                "movement {movement_id} not found"
+                "run {run_id} not found"
             ))));
         };
-        let Some(issue_id) = &movement.issue_id else {
+        let Some(issue_id) = &run.issue_id else {
             return Err(Error::Core(CoreError::Adapter(format!(
-                "movement {movement_id} has no associated issue"
+                "run {run_id} has no associated issue"
             ))));
         };
 
-        // Resolve the issue from visible_issues
+        // Resolve the issue from tracker_issues
         let issue = self
             .state
-            .visible_issues
+            .tracker_issues
             .iter()
             .find(|row| row.issue_id == *issue_id)
             .map(|row| Issue {
@@ -1131,7 +1113,7 @@ impl RuntimeService {
             })
             .ok_or_else(|| {
                 Error::Core(CoreError::Adapter(format!(
-                    "issue {issue_id} not found for movement {movement_id}"
+                    "issue {issue_id} not found for run {run_id}"
                 )))
             })?;
 
@@ -1139,7 +1121,7 @@ impl RuntimeService {
         let next_ordinal = self
             .state
             .tasks
-            .get(movement_id)
+            .get(run_id)
             .map(|tasks| tasks.iter().map(|t| t.ordinal).max().unwrap_or(0) + 1)
             .unwrap_or(1);
 
@@ -1155,7 +1137,7 @@ impl RuntimeService {
             .collect::<String>();
         let task = Task {
             id: format!("task-{}", uuid::Uuid::new_v4()),
-            movement_id: movement_id.clone(),
+            run_id: run_id.clone(),
             title: feedback_title.clone(),
             description: Some(request.prompt.clone()),
             activity_log: Vec::new(),
@@ -1181,32 +1163,32 @@ impl RuntimeService {
         }
         self.state
             .tasks
-            .entry(movement_id.clone())
+            .entry(run_id.clone())
             .or_default()
             .push(task.clone());
 
         // Add an AgentRun step for this task
-        let step_ordinal = movement.steps.last().map(|s| s.ordinal + 1).unwrap_or(0);
+        let step_ordinal = run.steps.last().map(|s| s.ordinal + 1).unwrap_or(0);
         let step =
             polyphony_core::StepRecord::new(polyphony_core::StepKind::AgentRun, step_ordinal)
                 .with_task_id(task.id.clone());
 
-        if let Some(m) = self.state.movements.get_mut(movement_id) {
+        if let Some(m) = self.state.runs.get_mut(run_id) {
             m.steps.push(step);
-            // Reset movement status if delivered/failed so the pipeline resumes
-            if matches!(m.status, MovementStatus::Delivered | MovementStatus::Failed) {
-                m.status = MovementStatus::InProgress;
+            // Reset run status if delivered/failed so the pipeline resumes
+            if matches!(m.status, RunStatus::Delivered | RunStatus::Failed) {
+                m.status = RunStatus::InProgress;
                 m.pipeline_stage = Some(PipelineStage::Executing);
             }
             // Store user feedback as manual_dispatch_directives for prompt injection
             m.manual_dispatch_directives = Some(request.prompt.clone());
             m.updated_at = now;
             m.push_log(
-                polyphony_core::MovementLogScope::Pipeline,
+                polyphony_core::RunLogScope::Pipeline,
                 format!("feedback injected: {feedback_title}"),
             );
             if let Some(store) = &self.store {
-                store.save_movement(m).await?;
+                store.save_run(m).await?;
             }
         }
 
@@ -1220,17 +1202,15 @@ impl RuntimeService {
 
         // Dispatch the next pending task (which will be this feedback task)
         let workflow = self.workflow();
-        let workspace_path = movement
+        let workspace_path = run
             .workspace_path
             .as_deref()
             .ok_or_else(|| {
-                Error::Core(CoreError::Adapter(format!(
-                    "movement {movement_id} has no workspace"
-                )))
+                Error::Core(CoreError::Adapter(format!("run {run_id} has no workspace")))
             })?
             .to_path_buf();
 
-        self.dispatch_next_task(workflow, issue, None, false, movement_id, &workspace_path)
+        self.dispatch_next_task(workflow, issue, None, false, run_id, &workspace_path)
             .await?;
 
         Ok(())

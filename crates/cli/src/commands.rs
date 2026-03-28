@@ -1,4 +1,4 @@
-use crate::{prelude::*, tracker_factory::EmptyTracker, *};
+use crate::{prelude::*, store_support::build_store, tracker_factory::EmptyTracker, *};
 
 const SNAPSHOT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -154,6 +154,49 @@ pub(crate) async fn handle_issue_command(
     Ok(())
 }
 
+pub(crate) async fn handle_repo_command(action: crate::RepoAction) -> Result<(), Error> {
+    match action {
+        crate::RepoAction::Add { source, branch } => {
+            let registration = crate::repo_manager::add_repo(&source, branch.as_deref())?;
+            eprintln!(
+                "Added repository: {} ({})",
+                registration.repo_id, registration.tracker_kind
+            );
+            if registration.clone_url.is_some() {
+                eprintln!(
+                    "Worktree path: {} (clone pending on daemon start)",
+                    registration.worktree_path.display()
+                );
+            } else {
+                eprintln!("Path: {}", registration.worktree_path.display());
+            }
+            print_json(&registration)?;
+        },
+        crate::RepoAction::Remove { repo_id } => {
+            let removed = crate::repo_manager::remove_repo(&repo_id)?;
+            eprintln!("Removed repository: {}", removed.repo_id);
+            print_json(&removed)?;
+        },
+        crate::RepoAction::List => {
+            let registry = crate::repo_manager::list_repos()?;
+            if registry.repos.is_empty() {
+                eprintln!("No repositories registered. Use 'polyphony repo add' to register one.");
+            } else {
+                for repo in &registry.repos {
+                    eprintln!(
+                        "  {} ({}) — {}",
+                        repo.repo_id,
+                        repo.tracker_kind,
+                        repo.worktree_path.display()
+                    );
+                }
+            }
+            print_json(&registry)?;
+        },
+    }
+    Ok(())
+}
+
 pub(crate) async fn handle_data_command(
     action: DataAction,
     workflow: &polyphony_workflow::LoadedWorkflow,
@@ -175,17 +218,17 @@ pub(crate) async fn handle_data_command(
         DataAction::Cadence => {
             print_json(&snapshot.cadence)?;
         },
-        DataAction::Issues => {
-            print_json(&snapshot.visible_issues)?;
+        DataAction::TrackerIssues => {
+            print_json(&snapshot.tracker_issues)?;
         },
-        DataAction::Triggers => {
-            print_json(&snapshot.visible_triggers)?;
+        DataAction::Inbox => {
+            print_json(&snapshot.inbox_items)?;
         },
         DataAction::Running => {
             print_json(&snapshot.running)?;
         },
         DataAction::History => {
-            print_json(&snapshot.agent_history)?;
+            print_json(&snapshot.agent_run_history)?;
         },
         DataAction::Retrying => {
             print_json(&snapshot.retrying)?;
@@ -208,7 +251,7 @@ pub(crate) async fn handle_data_command(
         DataAction::Agents => {
             let value = serde_json::json!({
                 "running": snapshot.running,
-                "history": snapshot.agent_history,
+                "history": snapshot.agent_run_history,
                 "retrying": snapshot.retrying,
                 "catalogs": snapshot.agent_catalogs,
             });
@@ -217,8 +260,8 @@ pub(crate) async fn handle_data_command(
         DataAction::Tasks => {
             print_json(&snapshot.tasks)?;
         },
-        DataAction::Movements => {
-            print_json(&snapshot.movements)?;
+        DataAction::Runs => {
+            print_json(&snapshot.runs)?;
         },
         DataAction::Budgets => {
             print_json(&snapshot.budgets)?;
@@ -618,7 +661,7 @@ async fn load_runtime_snapshot(
     let (_workflow_tx, workflow_rx) = watch::channel(workflow.clone());
     let (service, handle) = RuntimeService::new(
         components.tracker,
-        components.pull_request_trigger_source,
+        components.pull_request_event_source,
         components.agent,
         provisioner,
         components.committer,
@@ -699,15 +742,10 @@ async fn list_workspace_entries(
     let mut known = manager.list_workspaces().await;
     known.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let movement_by_workspace = snapshot
-        .movements
+    let run_by_workspace = snapshot
+        .runs
         .iter()
-        .filter_map(|movement| {
-            movement
-                .workspace_key
-                .as_ref()
-                .map(|key| (key.clone(), movement))
-        })
+        .filter_map(|run| run.workspace_key.as_ref().map(|key| (key.clone(), run)))
         .collect::<std::collections::HashMap<_, _>>();
     let running_by_workspace = snapshot
         .running
@@ -728,15 +766,15 @@ async fn list_workspace_entries(
         known
             .into_iter()
             .map(|(workspace_key, path)| {
-                let movement = movement_by_workspace.get(&workspace_key);
+                let run = run_by_workspace.get(&workspace_key);
                 serde_json::json!({
                     "workspace_key": workspace_key,
                     "path": path,
-                    "movement": movement.map(|movement| serde_json::json!({
-                        "id": movement.id,
-                        "title": movement.title,
-                        "status": movement.status,
-                        "issue_identifier": movement.issue_identifier,
+                    "run": run.map(|run| serde_json::json!({
+                        "id": run.id,
+                        "title": run.title,
+                        "status": run.status,
+                        "issue_identifier": run.issue_identifier,
                     })),
                     "running": running_by_workspace.get(&path).cloned(),
                 })
@@ -767,4 +805,45 @@ fn which_binary(name: &str) -> Option<PathBuf> {
 
 fn run_shell_command(cmd: &str) -> Result<std::process::Output, std::io::Error> {
     Command::new("bash").arg("-c").arg(cmd).output()
+}
+
+pub(crate) async fn handle_webhook_command(
+    action: super::WebhookAction,
+    workflow: &polyphony_workflow::LoadedWorkflow,
+) -> Result<(), Error> {
+    match action {
+        super::WebhookAction::Setup { url } => {
+            let tracker_kind = workflow.config.tracker.kind;
+            let supported = crate::webhook_setup::supported_trackers();
+            if !supported.contains(&tracker_kind) {
+                return Err(Error::Config(format!(
+                    "webhook auto-provisioning is not supported for tracker: {tracker_kind}"
+                )));
+            }
+
+            println!(
+                "Registering webhook on {tracker_kind:?} tracker pointing to {url}/webhooks/..."
+            );
+            let result = crate::webhook_setup::provision_webhook(workflow, &url).await?;
+
+            println!();
+            println!("Webhook registered successfully.");
+            println!();
+            println!("Add this to your WORKFLOW.md config (or config.toml):");
+            println!();
+            println!("[daemon.webhooks]");
+            println!("enabled = true");
+            println!();
+            println!("[daemon.webhooks.providers.{}]", result.provider_name);
+            println!("auth = \"{}\"", result.config.auth);
+            println!("secret = \"{}\"", result.config.secret);
+            if let Some(header) = &result.config.header {
+                println!("header = \"{header}\"");
+            }
+            println!();
+            println!("Keep the secret safe — it's used to verify incoming webhook payloads.");
+
+            Ok(())
+        },
+    }
 }

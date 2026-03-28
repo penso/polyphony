@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use polyphony_core::{NetworkCache, RuntimeSnapshot, StateStore, WorkspaceProvisioner};
+use polyphony_core::{NetworkCache, RuntimeSnapshot, WorkspaceProvisioner};
 use polyphony_orchestrator::{
     RuntimeCommand, RuntimeComponentFactory, RuntimeService, spawn_workflow_watcher,
 };
@@ -50,6 +50,11 @@ enum Commands {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Manage tracked repositories
+    Repo {
+        #[command(subcommand)]
+        action: RepoAction,
+    },
     /// Manage tracker issues
     Issue {
         #[command(subcommand)]
@@ -60,6 +65,8 @@ enum Commands {
         #[command(subcommand)]
         action: DataAction,
     },
+    /// Reset repository state so Polyphony starts fresh on the next run
+    Reset,
     /// Show and validate the merged configuration
     Config {
         /// Output full config as JSON
@@ -68,6 +75,40 @@ enum Commands {
     },
     /// Check agent commands, models_command, and configuration health
     Doctor,
+    /// Register a webhook on the tracker for near-instant processing
+    Webhook {
+        #[command(subcommand)]
+        action: WebhookAction,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum RepoAction {
+    /// Add a repository (clone from URL or register a local path)
+    Add {
+        /// Repository URL (https://github.com/owner/repo) or local path
+        source: String,
+        /// Branch to check out (defaults to main)
+        #[arg(long)]
+        branch: Option<String>,
+    },
+    /// Remove a managed repository
+    Remove {
+        /// Repository identifier (e.g. owner/repo)
+        repo_id: String,
+    },
+    /// List all managed repositories
+    List,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum WebhookAction {
+    /// Auto-provision a webhook on the configured tracker
+    Setup {
+        /// Public URL where Polyphony is reachable (e.g. https://polyphony.example.com)
+        #[arg(long)]
+        url: String,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -97,14 +138,14 @@ enum DaemonAction {
         #[arg(long)]
         agent: Option<String>,
     },
-    /// Approve a waiting issue trigger so automatic pickup can use it
+    /// Approve a waiting inbox item so automatic pickup can use it
     Approve {
-        issue_id: String,
+        item_id: String,
         #[arg(long)]
         source: Option<String>,
     },
-    /// Manually dispatch a pull request trigger
-    Trigger { trigger_id: String },
+    /// Manually dispatch a pull request inbox item
+    DispatchPullRequest { item_id: String },
     /// Emit the live daemon snapshot
     Snapshot,
 }
@@ -187,10 +228,10 @@ enum DataAction {
     Counts,
     /// Emit runtime cadence information
     Cadence,
-    /// Emit visible issues
-    Issues,
-    /// Emit visible triggers
-    Triggers,
+    /// Emit tracker issues
+    TrackerIssues,
+    /// Emit inbox items
+    Inbox,
     /// Emit running agents
     Running,
     /// Emit historical agent runs
@@ -208,8 +249,8 @@ enum DataAction {
     Agents,
     /// Emit pipeline tasks
     Tasks,
-    /// Emit movements
-    Movements,
+    /// Emit runs
+    Runs,
     /// Emit workspace directories with runtime annotations
     Workspaces,
     /// Emit budget snapshots
@@ -265,9 +306,12 @@ mod commands;
 mod daemon;
 mod errors;
 mod prelude;
+mod repo_manager;
+mod store_support;
 mod tracing_support;
 mod tracker_factory;
 mod ui_support;
+mod webhook_setup;
 
 #[cfg(test)]
 mod tests;
@@ -280,6 +324,7 @@ use crate::{
     commands::{handle_config_command, handle_doctor_command, handle_issue_command},
     daemon::{DaemonRequest, send_control_request, start_daemon_process},
     errors::format_fatal_error,
+    store_support::{build_store, reset_repository_state},
     tracing_support::{
         TelemetryGuard, TracingOutput, init_run_log_sink, init_tracing, load_historical_log_lines,
         run_operator_surface,
@@ -312,6 +357,11 @@ async fn try_main() -> Result<(), Error> {
         .clone()
         .unwrap_or_else(|| PathBuf::from("WORKFLOW.md"));
 
+    if matches!(cli.command, Some(Commands::Reset)) {
+        let report = reset_repository_state(&workflow_path, cli.sqlite_url.as_deref()).await?;
+        return print_json(&report);
+    }
+
     // For issue/config subcommands, skip TUI/tracing setup — just load the workflow and dispatch.
     if let Some(Commands::Config { json }) = &cli.command {
         let user_config_path = user_config_path()?;
@@ -334,6 +384,9 @@ async fn try_main() -> Result<(), Error> {
         )
         .await;
     }
+    if let Some(Commands::Repo { action }) = &cli.command {
+        return commands::handle_repo_command(action.clone()).await;
+    }
     if let Some(Commands::Issue { action }) = &cli.command {
         let user_config_path = user_config_path()?;
         let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
@@ -341,6 +394,11 @@ async fn try_main() -> Result<(), Error> {
     }
     if let Some(Commands::Daemon { action }) = &cli.command {
         return handle_daemon_command(action.clone(), &cli, &workflow_path).await;
+    }
+    if let Some(Commands::Webhook { action }) = &cli.command {
+        let user_config_path = user_config_path()?;
+        let workflow = load_workflow_with_user_config(&workflow_path, Some(&user_config_path))?;
+        return commands::handle_webhook_command(action.clone(), &workflow).await;
     }
 
     let Some(runtime) = start_runtime(&cli, &workflow_path, tui_mode).await? else {
@@ -436,21 +494,21 @@ async fn handle_daemon_command(
             )?;
             Ok(())
         },
-        DaemonAction::Approve { issue_id, source } => {
-            let source = source.unwrap_or_else(|| infer_issue_source(&issue_id).to_string());
+        DaemonAction::Approve { item_id, source } => {
+            let source = source.unwrap_or_else(|| infer_item_source(&item_id).to_string());
             print_json(
-                &send_control_request(workflow_path, DaemonRequest::ApproveIssueTrigger {
-                    issue_id,
+                &send_control_request(workflow_path, DaemonRequest::ApproveInboxItem {
+                    item_id,
                     source,
                 })
                 .await?,
             )?;
             Ok(())
         },
-        DaemonAction::Trigger { trigger_id } => {
+        DaemonAction::DispatchPullRequest { item_id } => {
             print_json(
-                &send_control_request(workflow_path, DaemonRequest::DispatchPullRequestTrigger {
-                    trigger_id,
+                &send_control_request(workflow_path, DaemonRequest::DispatchPullRequestInboxItem {
+                    item_id,
                     directives: None,
                 })
                 .await?,
@@ -464,8 +522,8 @@ async fn handle_daemon_command(
     }
 }
 
-fn infer_issue_source(issue_id: &str) -> &'static str {
-    match issue_id.split(':').next() {
+fn infer_item_source(item_id: &str) -> &'static str {
+    match item_id.split(':').next() {
         Some("github") => "github",
         Some("gitlab") => "gitlab",
         Some("beads") => "beads",
@@ -532,6 +590,8 @@ async fn run_daemon(cli: &Cli, workflow_path: &Path) -> Result<(), Error> {
             daemon::control_socket_path(workflow_path)?,
             daemon::daemon_pid_path(workflow_path)?,
             daemon::latest_log_path(workflow_path)?,
+            #[cfg(feature = "httpd")]
+            &daemon_config,
         );
         tracing::info!(
             http_address = %bound_addr,
@@ -623,6 +683,8 @@ async fn start_http_alongside_tui(
         socket_path,
         pid_path,
         log_path,
+        #[cfg(feature = "httpd")]
+        &daemon_config,
     );
 
     tracing::info!(url = %format_args!("http://{bound_addr}"), "httpd server ready");
@@ -741,7 +803,7 @@ async fn start_runtime(
     let (workflow_tx, workflow_rx) = tokio::sync::watch::channel(workflow.clone());
     let (service, handle) = RuntimeService::new(
         components.tracker,
-        components.pull_request_trigger_source,
+        components.pull_request_event_source,
         components.agent,
         provisioner,
         components.committer,
@@ -772,33 +834,6 @@ async fn start_runtime(
         tui_logs,
         _telemetry: telemetry,
     }))
-}
-
-async fn build_store(
-    workflow_path: &Path,
-    sqlite_url: Option<&str>,
-) -> Result<Option<Arc<dyn StateStore>>, Error> {
-    #[cfg(feature = "sqlite")]
-    if let Some(url) = sqlite_url {
-        let store = polyphony_sqlite::SqliteStateStore::connect(url)
-            .await
-            .map_err(|error| Error::Config(error.to_string()))?;
-        return Ok(Some(Arc::new(store)));
-    }
-
-    #[cfg(not(feature = "sqlite"))]
-    if sqlite_url.is_some() {
-        return Err(Error::Config(
-            "sqlite support is disabled for this build".into(),
-        ));
-    }
-
-    let state_path = workflow_root_dir(workflow_path)?
-        .join(".polyphony")
-        .join("state.json");
-    Ok(Some(Arc::new(
-        polyphony_core::file_store::JsonStateStore::new(state_path),
-    )))
 }
 
 fn print_json(value: &impl serde::Serialize) -> Result<(), Error> {

@@ -16,29 +16,25 @@ fn is_noise_event_message(message: &str) -> bool {
     lower == "usage updated" || lower.starts_with("turn ") && lower.ends_with(" usage updated")
 }
 
-fn movement_total_tokens(snapshot: &polyphony_core::RuntimeSnapshot, movement_id: &str) -> u64 {
+fn run_total_tokens(snapshot: &polyphony_core::RuntimeSnapshot, run_id: &str) -> u64 {
     let task_tokens: u64 = snapshot
         .tasks
         .iter()
-        .filter(|t| t.movement_id == movement_id)
+        .filter(|t| t.run_id == run_id)
         .map(|t| t.total_tokens)
         .sum();
-    // Also include tokens from currently running agents for this movement's issue
-    let issue_id = snapshot
-        .movements
-        .iter()
-        .find(|m| m.id == movement_id)
-        .and_then(|m| {
-            m.issue_identifier
-                .as_ref()
-                .and_then(|ident| {
-                    snapshot
-                        .visible_issues
-                        .iter()
-                        .find(|i| i.issue_identifier == *ident)
-                })
-                .map(|i| i.issue_id.as_str())
-        });
+    // Also include tokens from currently running agents for this run's issue
+    let issue_id = snapshot.runs.iter().find(|m| m.id == run_id).and_then(|m| {
+        m.issue_identifier
+            .as_ref()
+            .and_then(|ident| {
+                snapshot
+                    .tracker_issues
+                    .iter()
+                    .find(|i| i.issue_identifier == *ident)
+            })
+            .map(|i| i.issue_id.as_str())
+    });
     let running_tokens: u64 = issue_id
         .map(|id| {
             snapshot
@@ -62,8 +58,19 @@ fn format_token_count(tokens: u64) -> String {
     }
 }
 
-fn child_row(title: Line<'_>) -> Row<'_> {
-    Row::new(vec![Cell::from(Span::raw("")), Cell::from(title)])
+fn child_row<'a>(
+    indent: usize,
+    connector: &str,
+    theme: crate::theme::Theme,
+    title: Line<'a>,
+) -> Row<'a> {
+    let pad = " ".repeat(indent);
+    let mut spans = vec![Span::styled(
+        format!("{pad}{connector} "),
+        Style::default().fg(theme.border),
+    )];
+    spans.extend(title.spans);
+    Row::new(vec![Cell::from(Line::from(spans))])
 }
 
 use crate::app::AppState;
@@ -78,12 +85,12 @@ pub fn draw_orchestrator_tab(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(6), // Status panel
-            Constraint::Min(8),    // Movements table (fills remaining space)
+            Constraint::Min(8),    // Runs table (fills remaining space)
         ])
         .split(area);
 
     draw_status_panel(frame, sections[0], snapshot, app);
-    draw_movements_table(frame, sections[1], snapshot, app);
+    draw_runs_table(frame, sections[1], snapshot, app);
 }
 
 fn draw_status_panel(
@@ -153,9 +160,9 @@ fn draw_status_panel(
             Span::styled(next_poll, Style::default().fg(theme.foreground)),
         ]),
         Line::from(vec![
-            Span::styled("Movements ", Style::default().fg(theme.muted)),
+            Span::styled("Runs     ", Style::default().fg(theme.muted)),
             Span::styled(
-                snapshot.counts.movements.to_string(),
+                snapshot.counts.runs.to_string(),
                 Style::default().fg(theme.foreground),
             ),
             Span::styled("  tasks ", Style::default().fg(theme.muted)),
@@ -258,7 +265,7 @@ fn compact_duration(duration: chrono::Duration) -> String {
     }
 }
 
-fn draw_movements_table(
+fn draw_runs_table(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     snapshot: &RuntimeSnapshot,
@@ -268,36 +275,32 @@ fn draw_movements_table(
 
     let theme = app.theme;
     let compact = area.width < 80;
+    // Indent child rows to align under the date in run rows.
+    // Run row: "{collapse_icon}{time_label} {status_icon} {title}"
+    // collapse_icon is 2 chars ("▶ " or "  "), so children indent by 2.
+    let child_indent: usize = 2;
+    // Dynamic truncation: leave room for border (2), indent, connector (3), padding.
+    // For inline excerpts (appended after other text), use ~half the available width.
+    let available_width = (area.width as usize).saturating_sub(4); // borders
+    let excerpt_width = available_width.saturating_sub(child_indent + 25); // connector + label overhead
+    let inline_excerpt_width = available_width / 2;
 
     // Build task lookup for collapse indicator
-    let has_tasks: std::collections::HashSet<&str> = snapshot
-        .tasks
-        .iter()
-        .map(|t| t.movement_id.as_str())
-        .collect();
+    let has_tasks: std::collections::HashSet<&str> =
+        snapshot.tasks.iter().map(|t| t.run_id.as_str()).collect();
 
-    let header = Row::new(vec![
-        Cell::from(Span::styled("", Style::default().fg(theme.muted))),
-        Cell::from(Line::from(vec![Span::styled(
-            "Title",
-            Style::default().fg(theme.muted),
-        )])),
-    ])
-    .height(1)
-    .style(Style::default().add_modifier(Modifier::BOLD));
-
-    // Filter tree rows by search query (movement-level matching).
-    let search_q = app.movements_search_query.to_lowercase();
+    // Filter tree rows by search query (run-level matching).
+    let search_q = app.runs_search_query.to_lowercase();
     let filtered_rows: Vec<&OrchestratorTreeRow> = if search_q.is_empty() {
         app.orchestrator_tree_rows.iter().collect()
     } else {
-        // Find matching movement snapshot indices
-        let matching_movements: std::collections::HashSet<usize> = app
+        // Find matching run snapshot indices
+        let matching_runs: std::collections::HashSet<usize> = app
             .orchestrator_tree_rows
             .iter()
             .filter_map(|row| match row {
-                OrchestratorTreeRow::Movement { snapshot_index } => {
-                    let m = &snapshot.movements[*snapshot_index];
+                OrchestratorTreeRow::Run { snapshot_index } => {
+                    let m = &snapshot.runs[*snapshot_index];
                     if m.title.to_lowercase().contains(&search_q)
                         || m.issue_identifier
                             .as_deref()
@@ -315,56 +318,54 @@ fn draw_movements_table(
         app.orchestrator_tree_rows
             .iter()
             .filter(|row| match row {
-                OrchestratorTreeRow::Movement { snapshot_index } => {
-                    matching_movements.contains(snapshot_index)
+                OrchestratorTreeRow::Run { snapshot_index } => {
+                    matching_runs.contains(snapshot_index)
                 },
-                OrchestratorTreeRow::Trigger { .. }
+                OrchestratorTreeRow::InboxItem { .. }
                 | OrchestratorTreeRow::Progress { .. }
                 | OrchestratorTreeRow::AgentSession { .. }
                 | OrchestratorTreeRow::RunningAgent { .. }
                 | OrchestratorTreeRow::AgentLogLine { .. } => {
-                    // Child rows follow their movement; include if parent matches
+                    // Child rows follow their run; include if parent matches
                     true
                 },
                 OrchestratorTreeRow::Task { snapshot_index, .. } => {
                     let task = &snapshot.tasks[*snapshot_index];
-                    app.sorted_movement_indices.iter().any(|&mi| {
-                        matching_movements.contains(&mi)
-                            && snapshot.movements[mi].id == task.movement_id
+                    app.sorted_run_indices.iter().any(|&mi| {
+                        matching_runs.contains(&mi) && snapshot.runs[mi].id == task.run_id
                     })
                 },
                 OrchestratorTreeRow::LogEntry {
-                    movement_snapshot_index,
-                    ..
+                    run_snapshot_index, ..
                 }
-                | OrchestratorTreeRow::Outcome {
-                    movement_snapshot_index,
-                } => matching_movements.contains(movement_snapshot_index),
+                | OrchestratorTreeRow::Outcome { run_snapshot_index } => {
+                    matching_runs.contains(run_snapshot_index)
+                },
             })
             .collect()
     };
 
     let count = filtered_rows.len();
     if count == 0 {
-        app.movements_state.select(None);
-    } else if app.movements_state.selected().is_none_or(|i| i >= count) {
-        app.movements_state.select(Some(count - 1));
+        app.runs_state.select(None);
+    } else if app.runs_state.selected().is_none_or(|i| i >= count) {
+        app.runs_state.select(Some(count - 1));
     }
 
     let rows: Vec<Row> = filtered_rows
         .iter()
         .map(|row| match row {
-            OrchestratorTreeRow::Movement { snapshot_index } => {
-                let m = &snapshot.movements[*snapshot_index];
-                let (status_icon, status_icon_color) = movement_status_emoji(&m.status, theme);
+            OrchestratorTreeRow::Run { snapshot_index } => {
+                let m = &snapshot.runs[*snapshot_index];
+                let (status_icon, status_icon_color) = run_status_emoji(&m.status, theme);
                 let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
-                let (output_icon, output_icon_color) = movement_output_emoji(m, theme);
+                let (output_icon, output_icon_color) = run_output_emoji(m, theme);
 
-                // Aggregate total tokens across all tasks and running agents for this movement
-                let movement_tokens = movement_total_tokens(snapshot, &m.id);
+                // Aggregate total tokens across all tasks and running agents for this run
+                let run_tokens = run_total_tokens(snapshot, &m.id);
 
                 let collapse_icon = if has_tasks.contains(m.id.as_str()) {
-                    if app.collapsed_movements.contains(&m.id) {
+                    if app.collapsed_runs.contains(&m.id) {
                         "▶ "
                     } else {
                         "▼ "
@@ -399,63 +400,68 @@ fn draw_movements_table(
                     format!("  {task_info}"),
                     Style::default().fg(theme.muted),
                 ));
-                if movement_tokens > 0 {
+                if run_tokens > 0 {
                     title_spans.push(Span::styled(
-                        format!(" {}", format_token_count(movement_tokens)),
+                        format!(" {}", format_token_count(run_tokens)),
                         Style::default().fg(theme.muted),
                     ));
                 }
-                // Show cancel reason inline for cancelled movements
-                if m.status == polyphony_core::MovementStatus::Cancelled
+                // Show cancel reason inline for cancelled runs
+                if m.status == polyphony_core::RunStatus::Cancelled
                     && let Some(reason) = &m.cancel_reason
                 {
-                    let excerpt = if reason.len() > 60 {
-                        format!(" — {}…", &reason[..57])
+                    let excerpt = if reason.len() > inline_excerpt_width {
+                        let end =
+                            reason.floor_char_boundary(inline_excerpt_width.saturating_sub(5));
+                        format!(" — {}…", &reason[..end])
                     } else {
                         format!(" — {reason}")
                     };
                     title_spans.push(Span::styled(excerpt, Style::default().fg(theme.warning)));
                 }
-                Row::new(vec![
-                    Cell::from(Span::styled(
-                        format!("{collapse_icon}{time_label}"),
-                        Style::default().fg(theme.muted),
-                    )),
-                    Cell::from(Line::from(title_spans)),
-                ])
+                let mut spans = vec![Span::styled(
+                    format!("{collapse_icon}{time_label} "),
+                    Style::default().fg(theme.muted),
+                )];
+                spans.extend(title_spans);
+                Row::new(vec![Cell::from(Line::from(spans))])
             },
-            OrchestratorTreeRow::Trigger {
-                trigger_index,
-                movement_snapshot_index,
+            OrchestratorTreeRow::InboxItem {
+                item_index,
+                run_snapshot_index,
                 is_last_child,
             } => {
-                let trigger = &snapshot.visible_triggers[*trigger_index];
-                let movement = &snapshot.movements[*movement_snapshot_index];
+                let item = &snapshot.inbox_items[*item_index];
+                let run = &snapshot.runs[*run_snapshot_index];
                 let connector = if *is_last_child {
                     "└─ "
                 } else {
                     "├─ "
                 };
                 let (status_icon, status_color) =
-                    super::triggers::status_emoji_pub(&trigger.status, theme);
-                // Show "trigger" when the title matches the movement, full title otherwise
-                let display_title = if trigger.title == movement.title {
-                    trigger.identifier.clone()
+                    super::inbox::status_emoji_pub(&item.status, theme);
+                // Show identifier when the title matches the run, full title otherwise
+                let display_title = if item.title == run.title {
+                    item.identifier.clone()
                 } else {
-                    trigger.title.clone()
+                    item.title.clone()
                 };
-                child_row(Line::from(vec![
-                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
-                    Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
-                    Span::styled("trigger ", Style::default().fg(theme.muted)),
-                    Span::styled(display_title, Style::default().fg(theme.highlight)),
-                ]))
+                child_row(
+                    child_indent,
+                    connector,
+                    theme,
+                    Line::from(vec![
+                        Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
+                        Span::styled("inbox ", Style::default().fg(theme.muted)),
+                        Span::styled(display_title, Style::default().fg(theme.highlight)),
+                    ]),
+                )
             },
             OrchestratorTreeRow::Progress {
-                movement_snapshot_index,
+                run_snapshot_index,
                 is_last_child,
             } => {
-                let m = &snapshot.movements[*movement_snapshot_index];
+                let m = &snapshot.runs[*run_snapshot_index];
                 let connector = if *is_last_child {
                     "└─ "
                 } else {
@@ -475,13 +481,17 @@ fn draw_movements_table(
                 let bar_filled: String = "█".repeat(filled);
                 let bar_empty: String = "░".repeat(empty);
                 let label = format!("{completed}/{total}");
-                let status_color = movement_status_color_pub(&m.status, theme);
-                child_row(Line::from(vec![
-                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
-                    Span::styled(bar_filled, Style::default().fg(status_color)),
-                    Span::styled(bar_empty, Style::default().fg(theme.border)),
-                    Span::styled(format!(" {label}"), Style::default().fg(theme.muted)),
-                ]))
+                let status_color = run_status_color_pub(&m.status, theme);
+                child_row(
+                    child_indent,
+                    connector,
+                    theme,
+                    Line::from(vec![
+                        Span::styled(bar_filled, Style::default().fg(status_color)),
+                        Span::styled(bar_empty, Style::default().fg(theme.border)),
+                        Span::styled(format!(" {label}"), Style::default().fg(theme.muted)),
+                    ]),
+                )
             },
             OrchestratorTreeRow::Task {
                 snapshot_index,
@@ -497,7 +507,6 @@ fn draw_movements_table(
                 let status_color = super::tasks::task_status_color(&task.status, theme);
 
                 let mut title_spans = vec![
-                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
                     Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                     Span::styled("task ", Style::default().fg(theme.muted)),
                     Span::styled(task.title.clone(), Style::default().fg(theme.foreground)),
@@ -540,13 +549,13 @@ fn draw_movements_table(
                     _ => {},
                 }
 
-                child_row(Line::from(title_spans))
+                child_row(child_indent, connector, theme, Line::from(title_spans))
             },
             OrchestratorTreeRow::AgentSession {
                 history_index,
                 is_last_child,
             } => {
-                let session = &snapshot.agent_history[*history_index];
+                let session = &snapshot.agent_run_history[*history_index];
                 let connector = if *is_last_child {
                     "└─ "
                 } else {
@@ -572,7 +581,6 @@ fn draw_movements_table(
                 );
 
                 let mut title_spans = vec![
-                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
                     Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
                     Span::styled("agent ", Style::default().fg(theme.muted)),
                     Span::styled(session.agent_name.clone(), Style::default().fg(theme.info)),
@@ -600,8 +608,9 @@ fn draw_movements_table(
                 if session.status == polyphony_core::AttemptStatus::Failed
                     && let Some(error) = &session.error
                 {
-                    let excerpt = if error.len() > 50 {
-                        format!(" — {}…", &error[..47])
+                    let excerpt = if error.len() > inline_excerpt_width {
+                        let end = error.floor_char_boundary(inline_excerpt_width.saturating_sub(5));
+                        format!(" — {}…", &error[..end])
                     } else {
                         format!(" — {error}")
                     };
@@ -611,8 +620,9 @@ fn draw_movements_table(
                 if session.status == polyphony_core::AttemptStatus::CancelledByReconciliation
                     && let Some(error) = &session.error
                 {
-                    let excerpt = if error.len() > 50 {
-                        format!(" — {}…", &error[..47])
+                    let excerpt = if error.len() > inline_excerpt_width {
+                        let end = error.floor_char_boundary(inline_excerpt_width.saturating_sub(5));
+                        format!(" — {}…", &error[..end])
                     } else {
                         format!(" — {error}")
                     };
@@ -622,15 +632,16 @@ fn draw_movements_table(
                 if session.status == polyphony_core::AttemptStatus::Succeeded
                     && let Some(msg) = &session.last_message
                 {
-                    let excerpt = if msg.len() > 60 {
-                        format!(" — {}…", &msg[..57])
+                    let excerpt = if msg.len() > inline_excerpt_width {
+                        let end = msg.floor_char_boundary(inline_excerpt_width.saturating_sub(5));
+                        format!(" — {}…", &msg[..end])
                     } else {
                         format!(" — {msg}")
                     };
                     title_spans.push(Span::styled(excerpt, Style::default().fg(theme.muted)));
                 }
 
-                child_row(Line::from(title_spans))
+                child_row(child_indent, connector, theme, Line::from(title_spans))
             },
             OrchestratorTreeRow::RunningAgent {
                 running_index,
@@ -649,7 +660,6 @@ fn draw_movements_table(
                 );
 
                 let mut title_spans = vec![
-                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
                     Span::styled(format!("{spinner} "), Style::default().fg(theme.info)),
                     Span::styled("agent ", Style::default().fg(theme.muted)),
                     Span::styled(running.agent_name.clone(), Style::default().fg(theme.info)),
@@ -691,8 +701,9 @@ fn draw_movements_table(
                     .filter(|m| !is_noise_event_message(m))
                     .or(running.last_event.as_deref())
                 {
-                    let excerpt = if msg.len() > 50 {
-                        format!(" — {}…", &msg[..47])
+                    let excerpt = if msg.len() > inline_excerpt_width {
+                        let end = msg.floor_char_boundary(inline_excerpt_width.saturating_sub(5));
+                        format!(" — {}…", &msg[..end])
                     } else {
                         format!(" — {msg}")
                     };
@@ -703,7 +714,7 @@ fn draw_movements_table(
                     Style::default().fg(theme.muted),
                 ));
 
-                child_row(Line::from(title_spans))
+                child_row(child_indent, connector, theme, Line::from(title_spans))
             },
             OrchestratorTreeRow::AgentLogLine {
                 running_index,
@@ -713,29 +724,32 @@ fn draw_movements_table(
                 let running = &snapshot.running[*running_index];
                 let line = &running.recent_log[*line_index];
                 let connector = if *is_last_child {
-                    " └─ "
+                    " └─"
                 } else {
-                    " ├─ "
+                    " ├─"
                 };
-                let excerpt = if line.len() > 60 {
-                    format!("{}…", &line[..57])
+                let excerpt = if line.len() > excerpt_width {
+                    let end = line.floor_char_boundary(excerpt_width.saturating_sub(1));
+                    format!("{}…", &line[..end])
                 } else {
                     line.clone()
                 };
-                child_row(Line::from(vec![
-                    Span::styled(
-                        format!("    {connector}"),
-                        Style::default().fg(theme.border),
-                    ),
-                    Span::styled(excerpt, Style::default().fg(theme.muted)),
-                ]))
+                child_row(
+                    child_indent + 2,
+                    connector,
+                    theme,
+                    Line::from(vec![Span::styled(
+                        excerpt,
+                        Style::default().fg(theme.muted),
+                    )]),
+                )
             },
             OrchestratorTreeRow::LogEntry {
                 log_index,
-                movement_snapshot_index,
+                run_snapshot_index,
                 is_last_child,
             } => {
-                let m = &snapshot.movements[*movement_snapshot_index];
+                let m = &snapshot.runs[*run_snapshot_index];
                 let entry = &m.activity_log[*log_index];
                 let connector = if *is_last_child {
                     "└─ "
@@ -748,26 +762,31 @@ fn draw_movements_table(
                     .format("%H:%M")
                     .to_string();
                 let scope_color = match entry.scope {
-                    polyphony_core::MovementLogScope::Trigger => theme.info,
-                    polyphony_core::MovementLogScope::Agent => theme.success,
-                    polyphony_core::MovementLogScope::Reconciliation => theme.warning,
-                    polyphony_core::MovementLogScope::Pipeline => theme.muted,
+                    polyphony_core::RunLogScope::Inbox => theme.info,
+                    polyphony_core::RunLogScope::Agent => theme.success,
+                    polyphony_core::RunLogScope::Reconciliation => theme.warning,
+                    polyphony_core::RunLogScope::Pipeline => theme.muted,
                 };
-                let excerpt = if entry.message.len() > 60 {
-                    format!("{}…", &entry.message[..57])
+                let excerpt = if entry.message.len() > excerpt_width {
+                    let end = entry
+                        .message
+                        .floor_char_boundary(excerpt_width.saturating_sub(1));
+                    format!("{}…", &entry.message[..end])
                 } else {
                     entry.message.clone()
                 };
-                child_row(Line::from(vec![
-                    Span::styled(format!(" {connector}"), Style::default().fg(theme.border)),
-                    Span::styled(format!("{time_label} "), Style::default().fg(theme.muted)),
-                    Span::styled(excerpt, Style::default().fg(scope_color)),
-                ]))
+                child_row(
+                    child_indent,
+                    connector,
+                    theme,
+                    Line::from(vec![
+                        Span::styled(format!("{time_label} "), Style::default().fg(theme.muted)),
+                        Span::styled(excerpt, Style::default().fg(scope_color)),
+                    ]),
+                )
             },
-            OrchestratorTreeRow::Outcome {
-                movement_snapshot_index,
-            } => {
-                let m = &snapshot.movements[*movement_snapshot_index];
+            OrchestratorTreeRow::Outcome { run_snapshot_index } => {
+                let m = &snapshot.runs[*run_snapshot_index];
                 if let Some(deliverable) = &m.deliverable {
                     let (decision_icon, decision_color) = match deliverable.decision {
                         polyphony_core::DeliverableDecision::Waiting => ("◷", theme.warning),
@@ -808,7 +827,6 @@ fn draw_movements_table(
                         ));
                     }
                     let mut spans = vec![
-                        Span::styled(" └─ ", Style::default().fg(theme.border)),
                         Span::styled(
                             format!("{decision_icon} "),
                             Style::default().fg(decision_color),
@@ -843,18 +861,17 @@ fn draw_movements_table(
                             ));
                         }
                     }
-                    child_row(Line::from(spans))
+                    child_row(child_indent, "└─", theme, Line::from(spans))
                 } else {
                     // No deliverable — show terminal status with workspace path
                     let (icon, color, label) = match m.status {
-                        polyphony_core::MovementStatus::Delivered => {
+                        polyphony_core::RunStatus::Delivered => {
                             ("✓", theme.success, "delivered (no changes)")
                         },
-                        polyphony_core::MovementStatus::Failed => ("✕", theme.danger, "failed"),
+                        polyphony_core::RunStatus::Failed => ("✕", theme.danger, "failed"),
                         _ => ("●", theme.muted, "unknown"),
                     };
                     let mut spans = vec![
-                        Span::styled(" └─ ", Style::default().fg(theme.border)),
                         Span::styled(format!("{icon} "), Style::default().fg(color)),
                         Span::styled(label.to_string(), Style::default().fg(theme.muted)),
                     ];
@@ -864,65 +881,124 @@ fn draw_movements_table(
                             Style::default().fg(theme.muted),
                         ));
                     }
-                    child_row(Line::from(spans))
+                    child_row(child_indent, "└─", theme, Line::from(spans))
                 }
             },
         })
         .collect();
 
-    let selected_style = Style::default()
-        .bg(theme.selection)
-        .fg(theme.foreground)
-        .add_modifier(Modifier::BOLD);
+    let selected_style = Style::default().add_modifier(Modifier::BOLD);
 
-    let sort_label = app.movement_sort.label();
+    // Sticky header: when the first visible row is a child, pin its parent
+    // run title at the top so the user always knows which run they're in.
+    //
+    // We compute the effective scroll offset ourselves because ratatui only
+    // updates `TableState::offset()` during rendering (so reading it before
+    // render returns the *previous* frame's value, causing a 1-frame lag).
+    let viewport_height = area.height.saturating_sub(3) as usize; // borders + footer
+    let selected = app.runs_state.selected().unwrap_or(0);
+    let prev_offset = app.runs_state.offset();
+    let effective_offset = if selected < prev_offset {
+        selected
+    } else if viewport_height > 0 && selected >= prev_offset + viewport_height {
+        selected + 1 - viewport_height
+    } else {
+        prev_offset
+    };
+
+    let sticky_header: Option<Row> = if effective_offset > 0 {
+        let first_visible = filtered_rows.get(effective_offset);
+        let is_child = first_visible.is_some_and(|r| !matches!(r, OrchestratorTreeRow::Run { .. }));
+        if is_child {
+            // Walk backwards to find the parent Run row
+            let parent_idx = (0..effective_offset)
+                .rev()
+                .find(|&i| matches!(filtered_rows[i], OrchestratorTreeRow::Run { .. }));
+            parent_idx.and_then(|idx| {
+                if let OrchestratorTreeRow::Run { snapshot_index } = filtered_rows[idx] {
+                    let m = &snapshot.runs[*snapshot_index];
+                    let (status_icon, status_icon_color) = run_status_emoji(&m.status, theme);
+                    let task_info = format!("{}/{}", m.tasks_completed, m.task_count);
+                    let time_label = if compact {
+                        m.created_at
+                            .with_timezone(&chrono::Local)
+                            .format("%H:%M")
+                            .to_string()
+                    } else {
+                        super::format_listing_time(m.created_at)
+                    };
+                    Some(
+                        Row::new(vec![Cell::from(Line::from(vec![
+                            Span::styled(
+                                format!("  {time_label} "),
+                                Style::default().fg(theme.muted),
+                            ),
+                            Span::styled(
+                                format!("{status_icon} "),
+                                Style::default().fg(status_icon_color),
+                            ),
+                            Span::styled(m.title.clone(), Style::default().fg(theme.foreground)),
+                            Span::styled(
+                                format!("  {task_info}"),
+                                Style::default().fg(theme.muted),
+                            ),
+                        ]))])
+                        .style(Style::default().fg(theme.muted)),
+                    )
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let sort_label = app.run_sort.label();
     let footer_info = if count == 0 {
-        "no movements".into()
+        "no runs".into()
     } else {
         format!(
             "{} of {count}",
-            app.movements_state.selected().unwrap_or_default() + 1
+            app.runs_state.selected().unwrap_or_default() + 1
         )
     };
 
-    let title = if app.movements_search_active {
+    let title = if app.runs_search_active {
         Line::from(vec![
-            Span::styled(" Movements ", Style::default().fg(theme.highlight)),
+            Span::styled(" Runs ", Style::default().fg(theme.highlight)),
             Span::styled(
-                format!("/{}\u{258F}", app.movements_search_query),
+                format!("/{}\u{258F}", app.runs_search_query),
                 Style::default().fg(theme.foreground),
             ),
         ])
-    } else if !app.movements_search_query.is_empty() {
+    } else if !app.runs_search_query.is_empty() {
         Line::from(vec![
-            Span::styled(" Movements ", Style::default().fg(theme.highlight)),
+            Span::styled(" Runs ", Style::default().fg(theme.highlight)),
             Span::styled(
-                format!("[{}] ", app.movements_search_query),
+                format!("[{}] ", app.runs_search_query),
                 Style::default().fg(theme.info),
             ),
         ])
     } else {
         Line::from(Span::styled(
-            " Movements ",
+            " Runs ",
             Style::default()
                 .fg(theme.foreground)
                 .add_modifier(Modifier::BOLD),
         ))
     };
 
-    let time_col_width: u16 = if compact {
-        7
-    } else {
-        18
-    }; // "▶ 6d" vs "▶ 2026-03-16 02:15"
-    let table = Table::new(rows, [
-        Constraint::Length(time_col_width), // collapse icon + time
-        Constraint::Fill(1),                // title (full width)
-    ])
-    .header(header)
-    .row_highlight_style(selected_style)
-    .highlight_spacing(HighlightSpacing::Always)
-    .block(
+    let mut table = Table::new(rows, [Constraint::Fill(1)])
+        .row_highlight_style(selected_style)
+        .highlight_symbol("▶ ")
+        .highlight_spacing(HighlightSpacing::WhenSelected);
+    if let Some(header_row) = sticky_header {
+        table = table.header(header_row);
+    }
+    let table = table.block(
         Block::default()
             .title(title)
             .title_bottom(
@@ -947,13 +1023,13 @@ fn draw_movements_table(
             .style(Style::default().bg(theme.panel)),
     );
 
-    frame.render_stateful_widget(table, area, &mut app.movements_state);
+    frame.render_stateful_widget(table, area, &mut app.runs_state);
 
     if count > 0 {
         let content_height = area.height.saturating_sub(3) as usize;
         if count > content_height {
             let mut scrollbar_state = ScrollbarState::new(count)
-                .position(app.movements_state.selected().unwrap_or(0))
+                .position(app.runs_state.selected().unwrap_or(0))
                 .viewport_content_length(content_height);
             let scrollbar_area = Rect {
                 x: area.x,
@@ -970,52 +1046,49 @@ fn draw_movements_table(
     }
 }
 
-pub(crate) fn movement_kind_label(kind: polyphony_core::MovementKind) -> &'static str {
+pub(crate) fn run_kind_label(kind: polyphony_core::RunKind) -> &'static str {
     match kind {
-        polyphony_core::MovementKind::IssueDelivery => "issue",
-        polyphony_core::MovementKind::PullRequestReview => "pr_review",
-        polyphony_core::MovementKind::PullRequestCommentReview => "pr_comment",
+        polyphony_core::RunKind::IssueDelivery => "issue",
+        polyphony_core::RunKind::PullRequestReview => "pr_review",
+        polyphony_core::RunKind::PullRequestCommentReview => "pr_comment",
     }
 }
 
-pub(crate) fn movement_target_label(movement: &polyphony_core::MovementRow) -> String {
-    if let Some(target) = &movement.review_target {
+pub(crate) fn run_target_label(run: &polyphony_core::RunRow) -> String {
+    if let Some(target) = &run.review_target {
         format!("{}#{}", target.repository, target.number)
     } else {
-        movement.issue_identifier.clone().unwrap_or_default()
+        run.issue_identifier.clone().unwrap_or_default()
     }
 }
 
-fn movement_status_emoji(
-    status: &polyphony_core::MovementStatus,
+fn run_status_emoji(
+    status: &polyphony_core::RunStatus,
     theme: crate::theme::Theme,
 ) -> (&'static str, ratatui::style::Color) {
-    use polyphony_core::MovementStatus;
+    use polyphony_core::RunStatus;
     match status {
-        MovementStatus::Pending => ("…", theme.info),
-        MovementStatus::Planning => ("◌", theme.info),
-        MovementStatus::InProgress => ("◐", theme.success),
-        MovementStatus::Review => ("◑", theme.highlight),
-        MovementStatus::Delivered => ("✓", theme.success),
-        MovementStatus::Failed => ("✕", theme.danger),
-        MovementStatus::Cancelled => ("⊘", theme.muted),
+        RunStatus::Pending => ("…", theme.info),
+        RunStatus::Planning => ("◌", theme.info),
+        RunStatus::InProgress => ("◐", theme.success),
+        RunStatus::Review => ("◑", theme.highlight),
+        RunStatus::Delivered => ("✓", theme.success),
+        RunStatus::Failed => ("✕", theme.danger),
+        RunStatus::Cancelled => ("⊘", theme.muted),
     }
 }
 
-fn movement_output_emoji(
-    movement: &polyphony_core::MovementRow,
+fn run_output_emoji(
+    run: &polyphony_core::RunRow,
     theme: crate::theme::Theme,
 ) -> (&'static str, ratatui::style::Color) {
-    if let Some(deliverable) = &movement.deliverable {
+    if let Some(deliverable) = &run.deliverable {
         match deliverable.decision {
             polyphony_core::DeliverableDecision::Waiting => ("◷", theme.warning),
             polyphony_core::DeliverableDecision::Accepted => ("✓", theme.success),
             polyphony_core::DeliverableDecision::Rejected => ("✕", theme.danger),
         }
-    } else if matches!(
-        movement.kind,
-        polyphony_core::MovementKind::PullRequestReview
-    ) {
+    } else if matches!(run.kind, polyphony_core::RunKind::PullRequestReview) {
         ("⟐", theme.highlight)
     } else {
         ("—", theme.muted)
@@ -1064,45 +1137,45 @@ pub(crate) fn wrapped_line_count(lines: &[Line<'_>], width: u16) -> usize {
         .sum()
 }
 
-pub(crate) fn movement_status_emoji_pub(
-    status: &polyphony_core::MovementStatus,
+pub(crate) fn run_status_emoji_pub(
+    status: &polyphony_core::RunStatus,
     theme: crate::theme::Theme,
 ) -> (&'static str, ratatui::style::Color) {
-    movement_status_emoji(status, theme)
+    run_status_emoji(status, theme)
 }
 
-pub(crate) fn movement_status_color_pub(
-    status: &polyphony_core::MovementStatus,
+pub(crate) fn run_status_color_pub(
+    status: &polyphony_core::RunStatus,
     theme: crate::theme::Theme,
 ) -> ratatui::style::Color {
-    movement_status_color(status, theme)
+    run_status_color(status, theme)
 }
 
-pub(crate) fn movement_status_label(status: &polyphony_core::MovementStatus) -> &'static str {
-    use polyphony_core::MovementStatus;
+pub(crate) fn run_status_label(status: &polyphony_core::RunStatus) -> &'static str {
+    use polyphony_core::RunStatus;
     match status {
-        MovementStatus::Pending => "pending",
-        MovementStatus::Planning => "planning",
-        MovementStatus::InProgress => "in progress",
-        MovementStatus::Review => "review",
-        MovementStatus::Delivered => "delivered",
-        MovementStatus::Failed => "failed",
-        MovementStatus::Cancelled => "cancelled",
+        RunStatus::Pending => "pending",
+        RunStatus::Planning => "planning",
+        RunStatus::InProgress => "in progress",
+        RunStatus::Review => "review",
+        RunStatus::Delivered => "delivered",
+        RunStatus::Failed => "failed",
+        RunStatus::Cancelled => "cancelled",
     }
 }
 
-fn movement_status_color(
-    status: &polyphony_core::MovementStatus,
+fn run_status_color(
+    status: &polyphony_core::RunStatus,
     theme: crate::theme::Theme,
 ) -> ratatui::style::Color {
-    use polyphony_core::MovementStatus;
+    use polyphony_core::RunStatus;
     match status {
-        MovementStatus::Pending | MovementStatus::Planning => theme.info,
-        MovementStatus::InProgress => theme.success,
-        MovementStatus::Review => theme.highlight,
-        MovementStatus::Delivered => theme.success,
-        MovementStatus::Failed => theme.danger,
-        MovementStatus::Cancelled => theme.muted,
+        RunStatus::Pending | RunStatus::Planning => theme.info,
+        RunStatus::InProgress => theme.success,
+        RunStatus::Review => theme.highlight,
+        RunStatus::Delivered => theme.success,
+        RunStatus::Failed => theme.danger,
+        RunStatus::Cancelled => theme.muted,
     }
 }
 
@@ -1319,23 +1392,22 @@ pub(crate) fn draw_filtered_events(
 
 #[cfg(test)]
 mod tests {
-    use polyphony_core::{
-        MovementKind, MovementRow, MovementStatus, ReviewProviderKind, ReviewTarget,
-    };
+    use polyphony_core::{ReviewProviderKind, ReviewTarget, RunKind, RunRow, RunStatus};
 
     use crate::{
-        render::orchestrator::{movement_output_emoji, movement_target_label, render_event_line},
+        render::orchestrator::{render_event_line, run_output_emoji, run_target_label},
         theme::default_theme,
     };
 
     #[test]
-    fn movement_target_label_prefers_review_target() {
-        let movement = MovementRow {
-            id: "movement-1".to_string(),
-            kind: MovementKind::PullRequestReview,
+    fn run_target_label_prefers_review_target() {
+        let run = RunRow {
+            repo_id: String::new(),
+            id: "run-1".to_string(),
+            kind: RunKind::PullRequestReview,
             issue_identifier: Some("xm7".to_string()),
             title: "Review PR".to_string(),
-            status: MovementStatus::InProgress,
+            status: RunStatus::InProgress,
             task_count: 0,
             tasks_completed: 0,
             deliverable: None,
@@ -1358,17 +1430,18 @@ mod tests {
             steps: Vec::new(),
         };
 
-        assert_eq!(movement_target_label(&movement), "penso/polyphony#123");
+        assert_eq!(run_target_label(&run), "penso/polyphony#123");
     }
 
     #[test]
-    fn pull_request_review_movements_use_compact_review_icon() {
-        let movement = MovementRow {
-            id: "movement-1".to_string(),
-            kind: MovementKind::PullRequestReview,
+    fn pull_request_review_runs_use_compact_review_icon() {
+        let run = RunRow {
+            repo_id: String::new(),
+            id: "run-1".to_string(),
+            kind: RunKind::PullRequestReview,
             issue_identifier: Some("penso/polyphony#123".to_string()),
             title: "Review PR".to_string(),
-            status: MovementStatus::InProgress,
+            status: RunStatus::InProgress,
             task_count: 0,
             tasks_completed: 0,
             deliverable: None,
@@ -1382,7 +1455,7 @@ mod tests {
             steps: Vec::new(),
         };
 
-        let (icon, _) = movement_output_emoji(&movement, default_theme());
+        let (icon, _) = run_output_emoji(&run, default_theme());
         assert_eq!(icon, "⟐");
     }
 

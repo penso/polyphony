@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use crate::{AgentContextSnapshot, Error, PersistedRunRecord};
+use crate::{AgentContextSnapshot, Error, PersistedAgentRunRecord};
 
 const WORKSPACE_RUNTIME_DIR: &str = "runtime";
 const WORKSPACE_SAVED_CONTEXT_FILE: &str = "saved-context.json";
-const WORKSPACE_RUN_HISTORY_FILE: &str = "run-history.jsonl";
+const WORKSPACE_AGENT_RUN_HISTORY_FILE: &str = "agent-run-history.jsonl";
 const WORKSPACE_AGENT_EVENTS_FILE: &str = "agent-events.jsonl";
 
 pub fn workspace_runtime_artifact_dir(workspace_path: &Path) -> PathBuf {
@@ -17,8 +17,8 @@ pub fn workspace_saved_context_artifact_path(workspace_path: &Path) -> PathBuf {
     workspace_runtime_artifact_dir(workspace_path).join(WORKSPACE_SAVED_CONTEXT_FILE)
 }
 
-pub fn workspace_run_history_artifact_path(workspace_path: &Path) -> PathBuf {
-    workspace_runtime_artifact_dir(workspace_path).join(WORKSPACE_RUN_HISTORY_FILE)
+pub fn workspace_agent_run_history_artifact_path(workspace_path: &Path) -> PathBuf {
+    workspace_runtime_artifact_dir(workspace_path).join(WORKSPACE_AGENT_RUN_HISTORY_FILE)
 }
 
 pub fn workspace_agent_events_artifact_path(workspace_path: &Path) -> PathBuf {
@@ -50,14 +50,14 @@ pub fn load_workspace_saved_context_artifact(
     Ok(Some(context))
 }
 
-pub fn load_workspace_run_history_record(
+pub fn load_workspace_agent_run_history_record(
     workspace_path: &Path,
     issue_id: &str,
     started_at: chrono::DateTime<chrono::Utc>,
     agent_name: &str,
     attempt: Option<u32>,
-) -> Result<Option<PersistedRunRecord>, Error> {
-    let path = workspace_run_history_artifact_path(workspace_path);
+) -> Result<Option<PersistedAgentRunRecord>, Error> {
+    let path = workspace_agent_run_history_artifact_path(workspace_path);
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -66,7 +66,7 @@ pub fn load_workspace_run_history_record(
 
     let mut matched = None;
     for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        let record = serde_json::from_str::<PersistedRunRecord>(line)
+        let record = serde_json::from_str::<PersistedAgentRunRecord>(line)
             .map_err(|error| Error::Adapter(error.to_string()))?;
         if record.issue_id == issue_id
             && record.started_at == started_at
@@ -94,8 +94,8 @@ mod tests {
             PathBuf::from("/tmp/example/.polyphony/runtime/saved-context.json")
         );
         assert_eq!(
-            workspace_run_history_artifact_path(&workspace),
-            PathBuf::from("/tmp/example/.polyphony/runtime/run-history.jsonl")
+            workspace_agent_run_history_artifact_path(&workspace),
+            PathBuf::from("/tmp/example/.polyphony/runtime/agent-run-history.jsonl")
         );
         assert_eq!(
             workspace_agent_events_artifact_path(&workspace),
@@ -104,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn load_workspace_run_history_record_matches_latest_line() {
+    fn load_workspace_agent_run_history_record_matches_latest_line() {
         let root = std::env::temp_dir().join(format!(
             "polyphony-core-artifacts-{}",
             std::time::SystemTime::now()
@@ -114,7 +114,8 @@ mod tests {
         ));
         std::fs::create_dir_all(workspace_runtime_artifact_dir(&root)).unwrap();
         let now = chrono::Utc::now();
-        let record = PersistedRunRecord {
+        let record = PersistedAgentRunRecord {
+            repo_id: String::new(),
             issue_id: "issue-1".into(),
             issue_identifier: "DOG-1".into(),
             agent_name: "implementer".into(),
@@ -137,7 +138,7 @@ mod tests {
             error: None,
             saved_context: None,
         };
-        let path = workspace_run_history_artifact_path(&root);
+        let path = workspace_agent_run_history_artifact_path(&root);
         std::fs::write(
             &path,
             format!(
@@ -149,7 +150,7 @@ mod tests {
         .unwrap();
 
         let loaded =
-            load_workspace_run_history_record(&root, "issue-1", now, "implementer", Some(1))
+            load_workspace_agent_run_history_record(&root, "issue-1", now, "implementer", Some(1))
                 .unwrap()
                 .unwrap();
         assert_eq!(loaded.issue_identifier, "DOG-1");

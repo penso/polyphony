@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Repos{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 1rem;">Repositories</h1>
+
+{% if repo_ids %}
+<div class="card">
+  <h2>Managed Repositories ({{ repo_ids | length }})</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Repository</th>
+        <th>Issues</th>
+        <th>Running</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for repo_id in repo_ids %}
+    <tr>
+      <td>{{ repo_id }}</td>
+      <td style="color: var(--muted);">&mdash;</td>
+      <td style="color: var(--muted);">&mdash;</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card">
+  <p style="color: var(--muted);">No repositories registered. Use <code>polyphony repo add</code> to add one.</p>
+</div>
+{% endif %}
+{% endblock %}

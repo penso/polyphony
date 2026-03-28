@@ -1,8 +1,9 @@
 use crate::{prelude::*, *};
 
 pub type IssueId = String;
-pub type MovementId = String;
+pub type RunId = String;
 pub type TaskId = String;
+pub type RepoId = String;
 
 #[derive(Debug, Clone, Default)]
 pub struct CreateIssueRequest {
@@ -70,13 +71,13 @@ pub struct IssueComment {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum IssueApprovalState {
+pub enum DispatchApprovalState {
     #[default]
     Approved,
     Waiting,
 }
 
-impl fmt::Display for IssueApprovalState {
+impl fmt::Display for DispatchApprovalState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
             Self::Approved => "approved",
@@ -101,7 +102,7 @@ pub struct Issue {
     pub comments: Vec<IssueComment>,
     pub blocked_by: Vec<BlockerRef>,
     #[serde(default)]
-    pub approval_state: IssueApprovalState,
+    pub approval_state: DispatchApprovalState,
     #[serde(default)]
     pub parent_id: Option<String>,
     pub created_at: Option<DateTime<Utc>>,

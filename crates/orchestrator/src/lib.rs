@@ -8,13 +8,13 @@ use std::{
 use chrono::{DateTime, Utc};
 use polyphony_core::{
     AgentContextSnapshot, AgentEvent, AgentModelCatalog, AgentRunResult, AgentRuntime,
-    BudgetSnapshot, CodexTotals, Error as CoreError, Issue, IssueTracker, LoadingState, Movement,
-    MovementId, NetworkCache, PersistedRunRecord, PullRequestCommentTrigger, PullRequestCommenter,
-    PullRequestConflictTrigger, PullRequestManager, PullRequestReviewTrigger, PullRequestTrigger,
-    PullRequestTriggerSource, RateLimitSignal, RetryRow, ReviewTarget, ReviewedPullRequestHead,
-    RuntimeEvent, RuntimeSnapshot, StateStore, Task, TaskId, ThrottleWindow, TokenUsage,
-    TrackerConnectionStatus, UserInteractionRequest, VisibleIssueRow, VisibleTriggerRow,
-    WorkspaceCommitter, WorkspaceProgressUpdate, WorkspaceProvisioner,
+    BudgetSnapshot, CodexTotals, Error as CoreError, InboxItemRow, Issue, IssueTracker,
+    LoadingState, NetworkCache, PersistedAgentRunRecord, PullRequestCommentEvent,
+    PullRequestCommenter, PullRequestConflictEvent, PullRequestEvent, PullRequestEventSource,
+    PullRequestManager, PullRequestReviewEvent, RateLimitSignal, RepoId, RepoRegistration,
+    RetryRow, ReviewTarget, ReviewedPullRequestHead, Run, RunId, RuntimeEvent, RuntimeSnapshot,
+    StateStore, Task, TaskId, ThrottleWindow, TokenUsage, TrackerConnectionStatus, TrackerIssueRow,
+    UserInteractionRequest, WorkspaceCommitter, WorkspaceProgressUpdate, WorkspaceProvisioner,
 };
 use polyphony_feedback::FeedbackRegistry;
 use polyphony_workflow::LoadedWorkflow;
@@ -54,20 +54,45 @@ struct GithubViewerIdentity {
     login: String,
 }
 
+/// Per-repository context holding tracker, poll state, and PR event state.
+/// Each registered repo gets its own `RepoContext`; shared resources
+/// (agent runtime, provisioner, store, feedback) live on `RuntimeService`.
+#[allow(dead_code)]
+pub struct RepoContext {
+    pub repo_id: RepoId,
+    pub label: String,
+    pub tracker: Arc<dyn IssueTracker>,
+    pub pull_request_event_source: Option<Arc<dyn PullRequestEventSource>>,
+    pub committer: Option<Arc<dyn WorkspaceCommitter>>,
+    pub pull_request_manager: Option<Arc<dyn PullRequestManager>>,
+    pub pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
+    pub tracker_kind: polyphony_core::TrackerKind,
+}
+
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
     Refresh,
+    /// Refresh a single repo's tracker data.
+    RefreshRepo {
+        repo_id: RepoId,
+    },
+    /// Register a new repository with the orchestrator at runtime.
+    AddRepo(RepoRegistration),
+    /// Remove a repository from the orchestrator at runtime.
+    RemoveRepo {
+        repo_id: RepoId,
+    },
     Shutdown,
     SetMode(polyphony_core::DispatchMode),
-    ApproveIssueTrigger {
-        issue_id: polyphony_core::IssueId,
+    ApproveInboxItem {
+        item_id: String,
         source: String,
     },
-    CloseIssueTrigger {
+    CloseTrackerIssue {
         issue_id: polyphony_core::IssueId,
     },
-    ResolveMovementDeliverable {
-        movement_id: polyphony_core::MovementId,
+    ResolveRunDeliverable {
+        run_id: polyphony_core::RunId,
         decision: polyphony_core::DeliverableDecision,
     },
     DispatchIssue {
@@ -75,24 +100,24 @@ pub enum RuntimeCommand {
         agent_name: Option<String>,
         directives: Option<String>,
     },
-    DispatchPullRequestTrigger {
-        trigger_id: String,
+    DispatchPullRequestInboxItem {
+        item_id: String,
         directives: Option<String>,
     },
     MergeDeliverable {
-        movement_id: polyphony_core::MovementId,
+        run_id: polyphony_core::RunId,
     },
-    RetryMovement {
-        movement_id: polyphony_core::MovementId,
+    RetryRun {
+        run_id: polyphony_core::RunId,
     },
     /// Mark a pipeline task as completed (manual override) and resume the pipeline.
     ResolveTask {
-        movement_id: polyphony_core::MovementId,
+        run_id: polyphony_core::RunId,
         task_id: polyphony_core::TaskId,
     },
     /// Re-run a failed pipeline task (reset to Pending and dispatch again).
     RetryTask {
-        movement_id: polyphony_core::MovementId,
+        run_id: polyphony_core::RunId,
         task_id: polyphony_core::TaskId,
     },
     /// Stop a running agent by issue ID (user-initiated).
@@ -104,9 +129,9 @@ pub enum RuntimeCommand {
         title: String,
         description: String,
     },
-    /// Inject feedback into a movement as a new task, resuming the pipeline.
-    InjectMovementFeedback {
-        movement_id: polyphony_core::MovementId,
+    /// Inject feedback into a run as a new task, resuming the pipeline.
+    InjectRunFeedback {
+        run_id: polyphony_core::RunId,
         prompt: String,
         agent_name: Option<String>,
     },
@@ -120,7 +145,7 @@ pub struct RuntimeHandle {
 
 pub struct RuntimeComponents {
     pub tracker: Arc<dyn IssueTracker>,
-    pub pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>>,
+    pub pull_request_event_source: Option<Arc<dyn PullRequestEventSource>>,
     pub agent: Arc<dyn AgentRuntime>,
     pub committer: Option<Arc<dyn WorkspaceCommitter>>,
     pub pull_request_manager: Option<Arc<dyn PullRequestManager>>,
@@ -133,7 +158,7 @@ pub type RuntimeComponentFactory =
 
 pub struct RuntimeService {
     tracker: Arc<dyn IssueTracker>,
-    pull_request_trigger_source: Option<Arc<dyn PullRequestTriggerSource>>,
+    pull_request_event_source: Option<Arc<dyn PullRequestEventSource>>,
     agent: Arc<dyn AgentRuntime>,
     provisioner: Arc<dyn WorkspaceProvisioner>,
     committer: Option<Arc<dyn WorkspaceCommitter>>,
@@ -148,18 +173,16 @@ pub struct RuntimeService {
     command_rx: mpsc::UnboundedReceiver<OrchestratorMessage>,
     external_command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     pending_refresh: bool,
-    pending_issue_approvals: Vec<(polyphony_core::IssueId, String)>,
+    pending_inbox_approvals: Vec<(String, String)>,
     pending_issue_closures: Vec<polyphony_core::IssueId>,
-    pending_deliverable_resolutions: Vec<(
-        polyphony_core::MovementId,
-        polyphony_core::DeliverableDecision,
-    )>,
+    pending_deliverable_resolutions:
+        Vec<(polyphony_core::RunId, polyphony_core::DeliverableDecision)>,
     pending_manual_dispatches: Vec<ManualDispatchRequest>,
-    pending_manual_pull_request_trigger_dispatches: Vec<ManualPullRequestDispatchRequest>,
-    pending_merge_deliverables: Vec<polyphony_core::MovementId>,
-    pending_movement_retries: Vec<polyphony_core::MovementId>,
-    pending_task_resolutions: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
-    pending_task_retries: Vec<(polyphony_core::MovementId, polyphony_core::TaskId)>,
+    pending_manual_pull_request_inbox_dispatches: Vec<ManualPullRequestInboxDispatchRequest>,
+    pending_merge_deliverables: Vec<polyphony_core::RunId>,
+    pending_run_retries: Vec<polyphony_core::RunId>,
+    pending_task_resolutions: Vec<(polyphony_core::RunId, polyphony_core::TaskId)>,
+    pending_task_retries: Vec<(polyphony_core::RunId, polyphony_core::TaskId)>,
     pending_agent_stops: Vec<polyphony_core::IssueId>,
     pending_create_issues: Vec<CreateIssueCommandRequest>,
     pending_feedback_injections: Vec<FeedbackInjectionRequest>,
@@ -190,8 +213,8 @@ struct ManualDispatchRequest {
 }
 
 #[derive(Debug, Clone)]
-struct ManualPullRequestDispatchRequest {
-    trigger_id: String,
+struct ManualPullRequestInboxDispatchRequest {
+    item_id: String,
     directives: Option<String>,
 }
 
@@ -203,7 +226,7 @@ struct CreateIssueCommandRequest {
 
 #[derive(Debug, Clone)]
 struct FeedbackInjectionRequest {
-    movement_id: polyphony_core::MovementId,
+    run_id: polyphony_core::RunId,
     prompt: String,
     agent_name: Option<String>,
 }
@@ -233,7 +256,7 @@ struct RunningTask {
     /// Set when this running task is part of a pipeline.
     active_task_id: Option<TaskId>,
     /// Set when this running task is part of a pipeline.
-    movement_id: Option<MovementId>,
+    run_id: Option<RunId>,
     review_target: Option<ReviewTarget>,
     review_comment_marker: Option<String>,
     recent_log: VecDeque<String>,
@@ -246,8 +269,8 @@ struct RetryEntry {
 }
 
 #[derive(Debug, Clone)]
-struct DiscardedTriggerEntry {
-    row: VisibleTriggerRow,
+struct DiscardedInboxItemEntry {
+    row: InboxItemRow,
     discarded_at: DateTime<Utc>,
 }
 
@@ -264,7 +287,7 @@ enum IssueClaimState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ReviewTriggerSuppression {
+enum ReviewEventSuppression {
     AwaitingApproval,
     Draft,
     AlreadyRunning,
@@ -285,19 +308,19 @@ struct RuntimeState {
     throttles: HashMap<String, ActiveThrottle>,
     budgets: HashMap<String, BudgetSnapshot>,
     agent_catalogs: HashMap<String, AgentModelCatalog>,
-    visible_issues: Vec<VisibleIssueRow>,
-    bootstrapped_visible_issues: Vec<VisibleIssueRow>,
-    bootstrapped_visible_triggers: Vec<VisibleTriggerRow>,
-    approved_issue_keys: HashSet<String>,
-    issue_snapshot_loaded: bool,
+    tracker_issues: Vec<TrackerIssueRow>,
+    bootstrapped_tracker_issues: Vec<TrackerIssueRow>,
+    bootstrapped_inbox_items: Vec<InboxItemRow>,
+    approved_inbox_keys: HashSet<String>,
+    tracker_issue_snapshot_loaded: bool,
     pull_request_snapshot_loaded: bool,
-    visible_review_triggers: HashMap<String, PullRequestReviewTrigger>,
-    visible_comment_triggers: HashMap<String, PullRequestCommentTrigger>,
-    visible_conflict_triggers: HashMap<String, PullRequestConflictTrigger>,
-    discarded_triggers: HashMap<String, DiscardedTriggerEntry>,
+    visible_review_events: HashMap<String, PullRequestReviewEvent>,
+    visible_comment_events: HashMap<String, PullRequestCommentEvent>,
+    visible_conflict_events: HashMap<String, PullRequestConflictEvent>,
+    discarded_inbox_items: HashMap<String, DiscardedInboxItemEntry>,
     saved_contexts: HashMap<String, AgentContextSnapshot>,
     recent_events: VecDeque<RuntimeEvent>,
-    run_history: VecDeque<PersistedRunRecord>,
+    agent_run_history: VecDeque<PersistedAgentRunRecord>,
     ended_runtime_seconds: f64,
     totals: CodexTotals,
     rate_limits: Option<Value>,
@@ -310,16 +333,16 @@ struct RuntimeState {
     from_cache: bool,
     cached_at: Option<DateTime<Utc>>,
     dispatch_mode: polyphony_core::DispatchMode,
-    movements: HashMap<MovementId, Movement>,
-    tasks: HashMap<MovementId, Vec<Task>>,
-    workspace_setup_tasks_by_issue_identifier: HashMap<String, (MovementId, TaskId)>,
-    workspace_setup_tasks_by_key: HashMap<String, (MovementId, TaskId)>,
+    runs: HashMap<RunId, Run>,
+    tasks: HashMap<RunId, Vec<Task>>,
+    workspace_setup_tasks_by_issue_identifier: HashMap<String, (RunId, TaskId)>,
+    workspace_setup_tasks_by_key: HashMap<String, (RunId, TaskId)>,
     worktree_keys: HashSet<String>,
     /// Workspace keys from orphaned workspaces detected at startup, pending dispatch.
     orphan_dispatch_keys: HashSet<String>,
     reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
-    pull_request_retry_triggers: HashMap<String, PullRequestTrigger>,
-    review_trigger_suppressions: HashMap<String, ReviewTriggerSuppression>,
+    pull_request_retry_events: HashMap<String, PullRequestEvent>,
+    review_event_suppressions: HashMap<String, ReviewEventSuppression>,
     /// Set to `true` after `restore_bootstrap` loads a persisted snapshot,
     /// so that `run()` preserves the restored dispatch mode instead of
     /// overwriting it with the config default.
@@ -336,19 +359,19 @@ impl Default for RuntimeState {
             throttles: HashMap::new(),
             budgets: HashMap::new(),
             agent_catalogs: HashMap::new(),
-            visible_issues: Vec::new(),
-            bootstrapped_visible_issues: Vec::new(),
-            bootstrapped_visible_triggers: Vec::new(),
-            approved_issue_keys: HashSet::new(),
-            issue_snapshot_loaded: false,
+            tracker_issues: Vec::new(),
+            bootstrapped_tracker_issues: Vec::new(),
+            bootstrapped_inbox_items: Vec::new(),
+            approved_inbox_keys: HashSet::new(),
+            tracker_issue_snapshot_loaded: false,
             pull_request_snapshot_loaded: false,
-            visible_review_triggers: HashMap::new(),
-            visible_comment_triggers: HashMap::new(),
-            visible_conflict_triggers: HashMap::new(),
-            discarded_triggers: HashMap::new(),
+            visible_review_events: HashMap::new(),
+            visible_comment_events: HashMap::new(),
+            visible_conflict_events: HashMap::new(),
+            discarded_inbox_items: HashMap::new(),
             saved_contexts: HashMap::new(),
             recent_events: VecDeque::with_capacity(128),
-            run_history: VecDeque::with_capacity(256),
+            agent_run_history: VecDeque::with_capacity(256),
             ended_runtime_seconds: 0.0,
             totals: CodexTotals::default(),
             rate_limits: None,
@@ -361,15 +384,15 @@ impl Default for RuntimeState {
             from_cache: false,
             cached_at: None,
             dispatch_mode: polyphony_core::DispatchMode::default(),
-            movements: HashMap::new(),
+            runs: HashMap::new(),
             tasks: HashMap::new(),
             workspace_setup_tasks_by_issue_identifier: HashMap::new(),
             workspace_setup_tasks_by_key: HashMap::new(),
             worktree_keys: HashSet::new(),
             orphan_dispatch_keys: HashSet::new(),
             reviewed_pull_request_heads: HashMap::new(),
-            pull_request_retry_triggers: HashMap::new(),
-            review_trigger_suppressions: HashMap::new(),
+            pull_request_retry_events: HashMap::new(),
+            review_event_suppressions: HashMap::new(),
             bootstrap_restored: false,
         }
     }
@@ -404,8 +427,8 @@ mod helpers;
 mod lifecycle;
 mod pipeline;
 mod prelude;
+mod pull_request_events;
 mod pull_request_reviews;
-mod pull_request_triggers;
 mod reload;
 mod retry;
 mod runtime;

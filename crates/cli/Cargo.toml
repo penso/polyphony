@@ -29,7 +29,7 @@ default = [
 ]
 mock = ["dep:polyphony-issue-mock", "polyphony-issue-mock/mock"]
 linear = ["dep:polyphony-linear"]
-github = ["dep:polyphony-github"]
+github = ["dep:polyphony-github", "dep:octocrab"]
 gitlab = ["dep:polyphony-gitlab"]
 beads = ["dep:polyphony-beads"]
 sqlite = ["dep:polyphony-sqlite"]
@@ -62,7 +62,9 @@ agent-pi = ["pi"]
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+chrono.workspace = true
 clap.workspace = true
+dirs.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -74,6 +76,9 @@ opentelemetry_sdk = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-opentelemetry = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
+octocrab = { workspace = true, optional = true }
+reqwest.workspace = true
+urlencoding.workspace = true
 polyphony-core = { path = "../core" }
 polyphony-agents = { path = "../agents", default-features = false }
 polyphony-git = { path = "../git" }

@@ -1,6 +1,11 @@
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
 use async_trait::async_trait;
 use polyphony_core::{
-    BudgetSnapshot, Error as CoreError, Movement, PersistedRunRecord, ReviewedPullRequestHead,
+    BudgetSnapshot, Error as CoreError, PersistedAgentRunRecord, ReviewedPullRequestHead, Run,
     RuntimeSnapshot, StateStore, StoreBootstrap, Task,
 };
 use thiserror::Error;
@@ -11,6 +16,10 @@ pub enum Error {
     Sqlite(#[from] sqlx::Error),
     #[error("sqlite migration error: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
+    #[error("sqlite configuration error: {0}")]
+    Configuration(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +51,51 @@ pub async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<(), Error> {
         .map_err(Error::from)
 }
 
+pub fn reset_database(database_url: &str) -> Result<Vec<PathBuf>, Error> {
+    let Some(path) = sqlite_database_path(database_url)? else {
+        return Ok(Vec::new());
+    };
+
+    let mut removed_paths = Vec::new();
+    for candidate in sqlite_sidecar_paths(&path) {
+        match std::fs::remove_file(&candidate) {
+            Ok(()) => removed_paths.push(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(Error::Io(error)),
+        }
+    }
+
+    Ok(removed_paths)
+}
+
+fn sqlite_database_path(database_url: &str) -> Result<Option<PathBuf>, Error> {
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str(database_url)
+        .map_err(|error| Error::Configuration(error.to_string()))?;
+    let filename = options.get_filename();
+    if is_in_memory_database(database_url, filename) {
+        return Ok(None);
+    }
+    Ok(Some(filename.to_path_buf()))
+}
+
+fn is_in_memory_database(database_url: &str, filename: &Path) -> bool {
+    filename == Path::new(":memory:")
+        || filename
+            .to_string_lossy()
+            .starts_with("file:sqlx-in-memory-")
+        || database_url.trim_start().starts_with("sqlite::memory:")
+        || database_url.contains("mode=memory")
+}
+
+fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 3] {
+    let base = path.to_path_buf();
+    [
+        base.clone(),
+        PathBuf::from(format!("{}-shm", base.display())),
+        PathBuf::from(format!("{}-wal", base.display())),
+    ]
+}
+
 #[async_trait]
 impl StateStore for SqliteStateStore {
     async fn bootstrap(&self) -> Result<StoreBootstrap, CoreError> {
@@ -55,7 +109,7 @@ impl StateStore for SqliteStateStore {
             serde_json::from_str(&payload).map_err(|error| CoreError::Store(error.to_string()))
         })
         .transpose()?;
-        let run_history = self.load_run_history().await?;
+        let agent_run_history = self.load_agent_run_history().await?;
         let mut bootstrap = StoreBootstrap {
             snapshot: snapshot.clone(),
             retrying: Default::default(),
@@ -63,10 +117,10 @@ impl StateStore for SqliteStateStore {
             budgets: Default::default(),
             saved_contexts: Default::default(),
             recent_events: Vec::new(),
-            movements: Default::default(),
+            runs: Default::default(),
             tasks: Default::default(),
             reviewed_pull_request_heads: Default::default(),
-            run_history,
+            agent_run_history,
         };
 
         if let Some(snapshot) = snapshot {
@@ -93,11 +147,11 @@ impl StateStore for SqliteStateStore {
             bootstrap.recent_events = snapshot.recent_events;
         }
 
-        let movements = self.load_movements().await?;
-        bootstrap.movements = movements.into_iter().map(|m| (m.id.clone(), m)).collect();
+        let runs = self.load_runs().await?;
+        bootstrap.runs = runs.into_iter().map(|m| (m.id.clone(), m)).collect();
 
-        for movement_id in bootstrap.movements.keys().cloned().collect::<Vec<_>>() {
-            let tasks = self.load_tasks_for_movement(&movement_id).await?;
+        for run_id in bootstrap.runs.keys().cloned().collect::<Vec<_>>() {
+            let tasks = self.load_tasks_for_run(&run_id).await?;
             for task in tasks {
                 bootstrap.tasks.insert(task.id.clone(), task);
             }
@@ -136,12 +190,12 @@ impl StateStore for SqliteStateStore {
         Ok(())
     }
 
-    async fn record_run(&self, run: &PersistedRunRecord) -> Result<(), CoreError> {
+    async fn record_agent_run(&self, run: &PersistedAgentRunRecord) -> Result<(), CoreError> {
         let payload =
             serde_json::to_string(run).map_err(|error| CoreError::Store(error.to_string()))?;
         sqlx::query(
             r#"
-            insert into run_records (
+            insert into agent_run_records (
               issue_id,
               issue_identifier,
               session_id,
@@ -182,21 +236,21 @@ impl StateStore for SqliteStateStore {
         Ok(())
     }
 
-    async fn save_movement(&self, movement: &Movement) -> Result<(), CoreError> {
+    async fn save_run(&self, run: &Run) -> Result<(), CoreError> {
         let payload =
-            serde_json::to_string(movement).map_err(|error| CoreError::Store(error.to_string()))?;
+            serde_json::to_string(run).map_err(|error| CoreError::Store(error.to_string()))?;
         sqlx::query(
             r#"
-            insert or replace into movements (
-              movement_id, issue_id, status, created_at, updated_at, payload
+            insert or replace into runs (
+              run_id, issue_id, status, created_at, updated_at, payload
             ) values (?1, ?2, ?3, ?4, ?5, ?6)
             "#,
         )
-        .bind(&movement.id)
-        .bind(&movement.issue_id)
-        .bind(movement.status.to_string())
-        .bind(movement.created_at.to_rfc3339())
-        .bind(movement.updated_at.to_rfc3339())
+        .bind(&run.id)
+        .bind(&run.issue_id)
+        .bind(run.status.to_string())
+        .bind(run.created_at.to_rfc3339())
+        .bind(run.updated_at.to_rfc3339())
         .bind(payload)
         .execute(&self.pool)
         .await
@@ -210,12 +264,12 @@ impl StateStore for SqliteStateStore {
         sqlx::query(
             r#"
             insert or replace into tasks (
-              task_id, movement_id, status, ordinal, created_at, updated_at, payload
+              task_id, run_id, status, ordinal, created_at, updated_at, payload
             ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )
         .bind(&task.id)
-        .bind(&task.movement_id)
+        .bind(&task.run_id)
         .bind(task.status.to_string())
         .bind(task.ordinal)
         .bind(task.created_at.to_rfc3339())
@@ -227,10 +281,10 @@ impl StateStore for SqliteStateStore {
         Ok(())
     }
 
-    async fn load_movements(&self) -> Result<Vec<Movement>, CoreError> {
+    async fn load_runs(&self) -> Result<Vec<Run>, CoreError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             r#"
-            select payload from movements
+            select payload from runs
             order by created_at asc
             "#,
         )
@@ -245,15 +299,15 @@ impl StateStore for SqliteStateStore {
             .collect()
     }
 
-    async fn load_tasks_for_movement(&self, movement_id: &str) -> Result<Vec<Task>, CoreError> {
+    async fn load_tasks_for_run(&self, run_id: &str) -> Result<Vec<Task>, CoreError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             r#"
             select payload from tasks
-            where movement_id = ?1
+            where run_id = ?1
             order by ordinal asc
             "#,
         )
-        .bind(movement_id)
+        .bind(run_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|error| CoreError::Store(error.to_string()))?;
@@ -309,10 +363,10 @@ impl StateStore for SqliteStateStore {
 }
 
 impl SqliteStateStore {
-    async fn load_run_history(&self) -> Result<Vec<PersistedRunRecord>, CoreError> {
+    async fn load_agent_run_history(&self) -> Result<Vec<PersistedAgentRunRecord>, CoreError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             r#"
-            select payload from run_records
+            select payload from agent_run_records
             order by id desc
             "#,
         )
@@ -330,15 +384,17 @@ impl SqliteStateStore {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::path::PathBuf;
+
     use chrono::Utc;
     use polyphony_core::{
-        AttemptStatus, CodexTotals, DispatchMode, LoadingState, Movement, MovementKind,
-        MovementStatus, PersistedRunRecord, ReviewProviderKind, ReviewTarget,
-        ReviewedPullRequestHead, RuntimeCadence, RuntimeSnapshot, SnapshotCounts, StateStore,
-        TokenUsage, TrackerKind,
+        AttemptStatus, CodexTotals, DispatchMode, LoadingState, PersistedAgentRunRecord,
+        ReviewProviderKind, ReviewTarget, ReviewedPullRequestHead, Run, RunKind, RunStatus,
+        RuntimeCadence, RuntimeSnapshot, SnapshotCounts, StateStore, TokenUsage, TrackerKind,
     };
+    use tempfile::tempdir;
 
-    use super::SqliteStateStore;
+    use super::{SqliteStateStore, reset_database, sqlite_database_path};
 
     #[tokio::test]
     async fn persists_reviewed_pull_request_heads() {
@@ -356,7 +412,7 @@ mod tests {
                 checkout_ref: Some("refs/pull/42/head".into()),
             },
             reviewed_at: Utc::now(),
-            movement_id: Some("mov-1".into()),
+            run_id: Some("run-1".into()),
         };
 
         store
@@ -371,17 +427,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_restores_snapshot_run_history_and_terminal_movements() {
+    async fn bootstrap_restores_snapshot_run_history_and_terminal_runs() {
         let store = SqliteStateStore::connect("sqlite::memory:").await.unwrap();
         let snapshot = RuntimeSnapshot {
+            repo_ids: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
-            visible_issues: Vec::new(),
-            visible_triggers: Vec::new(),
-            approved_issue_keys: Vec::new(),
+            tracker_issues: Vec::new(),
+            inbox_items: Vec::new(),
+            approved_inbox_keys: Vec::new(),
             running: Vec::new(),
-            agent_history: Vec::new(),
+            agent_run_history: Vec::new(),
             retrying: Vec::new(),
             codex_totals: CodexTotals::default(),
             rate_limits: None,
@@ -391,7 +448,7 @@ mod tests {
             saved_contexts: Vec::new(),
             recent_events: Vec::new(),
             pending_user_interactions: Vec::new(),
-            movements: Vec::new(),
+            runs: Vec::new(),
             tasks: Vec::new(),
             loading: LoadingState::default(),
             dispatch_mode: DispatchMode::default(),
@@ -402,7 +459,8 @@ mod tests {
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
         };
-        let run = PersistedRunRecord {
+        let persisted_run = PersistedAgentRunRecord {
+            repo_id: String::new(),
             issue_id: "issue-1".into(),
             issue_identifier: "GH-1".into(),
             agent_name: "codex".into(),
@@ -425,13 +483,13 @@ mod tests {
             error: None,
             saved_context: None,
         };
-        let movement = Movement {
-            id: "mov-1".into(),
-            kind: MovementKind::IssueDelivery,
+        let run = Run {
+            id: "run-1".into(),
+            kind: RunKind::IssueDelivery,
             issue_id: Some("issue-1".into()),
             issue_identifier: Some("GH-1".into()),
             title: "Deliver it".into(),
-            status: MovementStatus::Delivered,
+            status: RunStatus::Delivered,
             pipeline_stage: None,
             manual_dispatch_directives: None,
             workspace_key: None,
@@ -446,23 +504,94 @@ mod tests {
         };
 
         store.save_snapshot(&snapshot).await.unwrap();
-        store.record_run(&run).await.unwrap();
-        store.save_movement(&movement).await.unwrap();
+        store.record_agent_run(&persisted_run).await.unwrap();
+        store.save_run(&run).await.unwrap();
 
         let bootstrap = store.bootstrap().await.unwrap();
         assert!(bootstrap.snapshot.is_some());
-        assert_eq!(bootstrap.run_history.len(), 1);
-        assert_eq!(bootstrap.movements.len(), 1);
+        assert_eq!(bootstrap.agent_run_history.len(), 1);
+        assert_eq!(bootstrap.runs.len(), 1);
         assert_eq!(
             bootstrap
-                .run_history
+                .agent_run_history
                 .first()
                 .map(|entry| entry.agent_name.as_str()),
             Some("codex")
         );
         assert_eq!(
-            bootstrap.movements.get("mov-1").map(|entry| entry.status),
-            Some(MovementStatus::Delivered)
+            bootstrap.runs.get("run-1").map(|entry| entry.status),
+            Some(RunStatus::Delivered)
         );
+    }
+
+    #[test]
+    fn sqlite_database_path_skips_in_memory_urls() {
+        assert_eq!(sqlite_database_path("sqlite::memory:").unwrap(), None);
+        assert_eq!(sqlite_database_path("sqlite://?mode=memory").unwrap(), None);
+    }
+
+    #[test]
+    fn sqlite_database_path_returns_file_path() {
+        assert_eq!(
+            sqlite_database_path("sqlite://.polyphony/polyphony.db?mode=rwc").unwrap(),
+            Some(PathBuf::from(".polyphony/polyphony.db"))
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_database_removes_sqlite_file_and_sidecars() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("polyphony.db");
+        let database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let store = SqliteStateStore::connect(&database_url).await.unwrap();
+
+        let snapshot = RuntimeSnapshot {
+            repo_ids: Vec::new(),
+            generated_at: Utc::now(),
+            counts: SnapshotCounts::default(),
+            cadence: RuntimeCadence::default(),
+            tracker_issues: Vec::new(),
+            inbox_items: Vec::new(),
+            approved_inbox_keys: Vec::new(),
+            running: Vec::new(),
+            agent_run_history: Vec::new(),
+            retrying: Vec::new(),
+            codex_totals: CodexTotals::default(),
+            rate_limits: None,
+            throttles: Vec::new(),
+            budgets: Vec::new(),
+            agent_catalogs: Vec::new(),
+            saved_contexts: Vec::new(),
+            recent_events: Vec::new(),
+            pending_user_interactions: Vec::new(),
+            runs: Vec::new(),
+            tasks: Vec::new(),
+            loading: LoadingState::default(),
+            dispatch_mode: DispatchMode::default(),
+            tracker_kind: TrackerKind::None,
+            tracker_connection: None,
+            from_cache: false,
+            cached_at: None,
+            agent_profile_names: Vec::new(),
+            agent_profiles: Vec::new(),
+        };
+
+        store.save_snapshot(&snapshot).await.unwrap();
+        drop(store);
+
+        std::fs::write(format!("{}-wal", db_path.display()), "").unwrap();
+        std::fs::write(format!("{}-shm", db_path.display()), "").unwrap();
+
+        let removed = reset_database(&database_url).unwrap();
+        assert_eq!(removed.len(), 3);
+        assert!(!db_path.exists());
+        assert!(!PathBuf::from(format!("{}-wal", db_path.display())).exists());
+        assert!(!PathBuf::from(format!("{}-shm", db_path.display())).exists());
+
+        let reopened = SqliteStateStore::connect(&database_url).await.unwrap();
+        let bootstrap = reopened.bootstrap().await.unwrap();
+        assert!(bootstrap.snapshot.is_none());
+        assert!(bootstrap.runs.is_empty());
+        assert!(bootstrap.agent_run_history.is_empty());
     }
 }
