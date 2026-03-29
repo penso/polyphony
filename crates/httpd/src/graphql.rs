@@ -858,10 +858,8 @@ mod tests {
     }
 
     // Runs page mutation strings
-    const JS_MUTATION_RESOLVE: &str =
-        r#"mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }"#;
-    const JS_MUTATION_RETRY: &str =
-        r#"mutation($id: String!) { retryRun(runId: $id) }"#;
+    const JS_MUTATION_RESOLVE: &str = r#"mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }"#;
+    const JS_MUTATION_RETRY: &str = r#"mutation($id: String!) { retryRun(runId: $id) }"#;
 
     #[tokio::test]
     async fn js_mutation_resolve_validates() {
@@ -891,10 +889,7 @@ mod tests {
         .await;
         let cmd = rx.try_recv().expect("expected a command");
         match cmd {
-            polyphony_orchestrator::RuntimeCommand::ResolveRunDeliverable {
-                run_id,
-                decision,
-            } => {
+            polyphony_orchestrator::RuntimeCommand::ResolveRunDeliverable { run_id, decision } => {
                 assert_eq!(run_id, "run-42");
                 assert_eq!(decision, polyphony_core::DeliverableDecision::Rejected);
             },

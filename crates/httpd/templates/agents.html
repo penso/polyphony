@@ -23,7 +23,7 @@
       <span>Started</span>
     </div>
     {% for a in running %}
-    <div class="grid-row cols-agents active">
+    <div class="grid-row cols-agents active" data-agent-running="{{ loop.index0 }}" style="cursor: pointer;">
       <span class="col-accent">&#x2819;</span>
       <span class="col-agent">{{ a.agent_name }}</span>
       <span class="col-title">{{ a.issue_identifier }}</span>
@@ -35,6 +35,97 @@
     {% endfor %}
   </div>
 </div>
+
+{# Detail modals for running agents #}
+{% for a in running %}
+<div class="modal-overlay" id="modal-agent-running-{{ loop.index0 }}">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>{{ a.agent_name }} &mdash; {{ a.issue_identifier }}</h2>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">status:</span>
+          <span class="meta-value accent">&#x2819; {{ a.state }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">agent:</span>
+          <span class="meta-value accent">{{ a.agent_name }}</span>
+        </span>
+        {% if a.model %}
+        <span class="meta-item">
+          <span class="meta-label">model:</span>
+          <span class="meta-value">{{ a.model }}</span>
+        </span>
+        {% endif %}
+        <span class="meta-item">
+          <span class="meta-label">turns:</span>
+          <span class="meta-value">{{ a.turn_count }}/{{ a.max_turns }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">issue:</span>
+          <span class="meta-value">{{ a.issue_identifier }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">started:</span>
+          <span class="meta-value muted"><time datetime="{{ a.started_at }}">{{ a.started_at }}</time></span>
+        </span>
+        {% if a.session_id %}
+        <span class="meta-item">
+          <span class="meta-label">session:</span>
+          <span class="meta-value muted"><code>{{ a.session_id }}</code></span>
+        </span>
+        {% endif %}
+        {% if a.tokens and a.tokens.total_tokens > 0 %}
+        <span class="meta-item">
+          <span class="meta-label">tokens:</span>
+          <span class="meta-value muted">{{ a.tokens.total_tokens }} (in: {{ a.tokens.input_tokens }}, out: {{ a.tokens.output_tokens }})</span>
+        </span>
+        {% endif %}
+        {% if a.attempt %}
+        <span class="meta-item">
+          <span class="meta-label">attempt:</span>
+          <span class="meta-value muted">{{ a.attempt }}</span>
+        </span>
+        {% endif %}
+      </div>
+
+      {# Last event #}
+      {% if a.last_event %}
+      <div class="modal-section">
+        <h3>Last Event</h3>
+        <div style="font-size: 0.78rem; color: var(--secondary);">
+          {{ a.last_event }}
+          {% if a.last_event_at %}<span class="col-muted" style="margin-left: 0.5rem;"><time datetime="{{ a.last_event_at }}">{{ a.last_event_at }}</time></span>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Last message #}
+      {% if a.last_message %}
+      <div class="modal-section">
+        <h3>Last Message</h3>
+        <div class="modal-description">{{ a.last_message }}</div>
+      </div>
+      {% endif %}
+
+      {# Recent log output #}
+      {% if a.recent_log %}
+      <div class="modal-section">
+        <h3>Live Output</h3>
+        <div class="log-stream" style="max-height: 20rem; overflow-y: auto; border-radius: 6px;">
+          {% for line in a.recent_log %}
+          <div class="log-line"><span class="log-msg">{{ line }}</span></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endfor %}
 {% endif %}
 
 {% if agent_run_history %}
@@ -54,10 +145,11 @@
       <span>Finished</span>
     </div>
     {% for a in agent_run_history %}
-    <div class="grid-row cols-agents">
+    <div class="grid-row cols-agents" data-agent-history="{{ loop.index0 }}" style="cursor: pointer;">
       <span>
         {% if a.status == "Succeeded" %}<span class="col-success">&#x2713;</span>
         {% elif a.status == "Failed" %}<span class="col-danger">&#x2715;</span>
+        {% elif a.status == "CancelledByReconciliation" %}<span class="col-warning">&#x2298;</span>
         {% else %}<span class="col-warning">&#x25F7;</span>{% endif %}
       </span>
       <span class="col-agent">{{ a.agent_name }}</span>
@@ -74,9 +166,153 @@
     </div>
   </div>
 </div>
+
+{# Detail modals for history agents #}
+{% for a in agent_run_history %}
+<div class="modal-overlay" id="modal-agent-history-{{ loop.index0 }}">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>{{ a.agent_name }} &mdash; {{ a.issue_identifier }}</h2>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">status:</span>
+          <span class="meta-value {% if a.status == 'Succeeded' %}success{% elif a.status == 'Failed' %}danger{% else %}warning{% endif %}">
+            {% if a.status == "Succeeded" %}&#x2713;{% elif a.status == "Failed" %}&#x2715;{% elif a.status == "CancelledByReconciliation" %}&#x2298;{% else %}&#x25CF;{% endif %}
+            {{ a.status }}
+          </span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">agent:</span>
+          <span class="meta-value accent">{{ a.agent_name }}</span>
+        </span>
+        {% if a.model %}
+        <span class="meta-item">
+          <span class="meta-label">model:</span>
+          <span class="meta-value">{{ a.model }}</span>
+        </span>
+        {% endif %}
+        <span class="meta-item">
+          <span class="meta-label">turns:</span>
+          <span class="meta-value">{{ a.turn_count }}/{{ a.max_turns }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">issue:</span>
+          <span class="meta-value">{{ a.issue_identifier }}</span>
+        </span>
+        {% if a.attempt %}
+        <span class="meta-item">
+          <span class="meta-label">attempt:</span>
+          <span class="meta-value muted">{{ a.attempt }}</span>
+        </span>
+        {% endif %}
+        <span class="meta-item">
+          <span class="meta-label">started:</span>
+          <span class="meta-value muted"><time datetime="{{ a.started_at }}">{{ a.started_at }}</time></span>
+        </span>
+        {% if a.finished_at %}
+        <span class="meta-item">
+          <span class="meta-label">finished:</span>
+          <span class="meta-value muted"><time datetime="{{ a.finished_at }}">{{ a.finished_at }}</time></span>
+        </span>
+        {% endif %}
+        {% if a.session_id %}
+        <span class="meta-item">
+          <span class="meta-label">session:</span>
+          <span class="meta-value muted"><code>{{ a.session_id }}</code></span>
+        </span>
+        {% endif %}
+        {% if a.tokens and a.tokens.total_tokens > 0 %}
+        <span class="meta-item">
+          <span class="meta-label">tokens:</span>
+          <span class="meta-value muted">{{ a.tokens.total_tokens }} (in: {{ a.tokens.input_tokens }}, out: {{ a.tokens.output_tokens }})</span>
+        </span>
+        {% endif %}
+        {% if a.workspace_path %}
+        <span class="meta-item">
+          <span class="meta-label">workspace:</span>
+          <span class="meta-value muted"><code>{{ a.workspace_path }}</code></span>
+        </span>
+        {% endif %}
+      </div>
+
+      {# Error #}
+      {% if a.error %}
+      <div class="modal-section">
+        <h3>Error</h3>
+        <div style="font-size: 0.78rem; color: var(--danger); white-space: pre-wrap; word-break: break-word; padding: 0.5rem 0.75rem; background: var(--badge-failed-bg); border-radius: 6px;">{{ a.error }}</div>
+      </div>
+      {% endif %}
+
+      {# Last message #}
+      {% if a.last_message %}
+      <div class="modal-section">
+        <h3>Last Message</h3>
+        <div class="modal-description">{{ a.last_message }}</div>
+      </div>
+      {% endif %}
+
+      {# Transcript (saved context) #}
+      {% if a.saved_context and a.saved_context.transcript %}
+      <div class="modal-section">
+        <h3>Transcript</h3>
+        <div class="log-stream" style="max-height: 24rem; overflow-y: auto; border-radius: 6px;">
+          {% for entry in a.saved_context.transcript %}
+          <div class="log-line">
+            <span class="log-scope log-scope-Agent" style="min-width: 8rem;">{{ entry.kind }}</span>
+            <span class="log-msg">{% if entry.message %}{{ entry.message }}{% else %}&mdash;{% endif %}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endfor %}
 {% else %}
 {% if not running %}
 <div class="card"><div class="empty">No agent activity yet.</div></div>
 {% endif %}
 {% endif %}
+
+<script>
+(function() {
+  // Running agent modals
+  document.querySelectorAll('.grid-row[data-agent-running]').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var idx = row.getAttribute('data-agent-running');
+      var modal = document.getElementById('modal-agent-running-' + idx);
+      if (modal) modal.classList.add('open');
+    });
+  });
+
+  // History agent modals
+  document.querySelectorAll('.grid-row[data-agent-history]').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var idx = row.getAttribute('data-agent-history');
+      var modal = document.getElementById('modal-agent-history-' + idx);
+      if (modal) modal.classList.add('open');
+    });
+  });
+
+  // Close on overlay click
+  document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.classList.remove('open');
+    });
+  });
+
+  // Close on Escape
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.open').forEach(function(m) {
+        m.classList.remove('open');
+      });
+    }
+  });
+})();
+</script>
 {% endblock %}
