@@ -14,6 +14,7 @@ use polyphony_core::RuntimeSnapshot;
 use polyphony_orchestrator::RuntimeCommand;
 use polyphony_workflow::WebhooksConfig;
 use tokio::sync::{mpsc, watch};
+use tower_http::services::ServeDir;
 use tower_sessions::SessionManagerLayer;
 use tower_sessions_sqlx_store::SqliteStore;
 
@@ -47,8 +48,15 @@ pub fn build_router(
         template_env: template_env.clone(),
     };
 
+    // Static file serving (CSS, JS, etc.)
+    let static_dir = template_dir
+        .parent()
+        .map(|p| p.join("static"))
+        .unwrap_or_else(|| template_dir.join("../static"));
+
     // SSR + GraphQL pages
     let dashboard_routes = Router::new()
+        .nest_service("/static", ServeDir::new(static_dir))
         .route("/", get(page_index))
         .route("/inbox", get(page_inbox))
         .route("/runs", get(page_runs))

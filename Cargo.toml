@@ -89,6 +89,7 @@ sha2 = "0.10"
 subtle = "2"
 time = "0.3"
 tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
 tower-sessions = { version = "0.14", default-features = false }
 tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
 vt100 = "0.15.2"
