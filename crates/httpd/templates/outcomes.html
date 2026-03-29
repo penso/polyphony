@@ -1,0 +1,229 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Outcomes{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  {% set ns = namespace(count=0) %}
+  {% for m in runs %}{% if m.deliverable %}{% set ns.count = ns.count + 1 %}{% endif %}{% endfor %}
+  <span class="meta">{{ ns.count }} deliverables</span>
+</div>
+
+{% set ns = namespace(has_deliverables=false) %}
+{% for m in runs %}{% if m.deliverable %}{% set ns.has_deliverables = true %}{% endif %}{% endfor %}
+
+{% if ns.has_deliverables %}
+<div class="card">
+  <div class="grid-table">
+    <div class="grid-header" style="grid-template-columns: 10rem 1fr 8rem 3rem 3rem;">
+      <span>Created</span>
+      <span>Title</span>
+      <span>Output</span>
+      <span title="Pull request status: … pending, ● open, ✓ merged, ✕ closed">PR</span>
+      <span title="Decision: ◷ waiting, ✓ accepted, ✕ rejected">Dec</span>
+    </div>
+    {% for m in runs %}
+    {% if m.deliverable %}
+    <div class="grid-row{% if m.deliverable.decision == 'Waiting' or m.deliverable.decision == 'waiting' %} active{% endif %}" style="grid-template-columns: 10rem 1fr 8rem 3rem 3rem; cursor: pointer;" data-outcome-run="{{ m.id }}">
+      <span class="col-muted"><time datetime="{{ m.created_at }}">{{ m.created_at }}</time></span>
+      <span class="col-title">{{ m.title }}</span>
+      <span>
+        {% if m.deliverable.url %}<a href="{{ m.deliverable.url }}" target="_blank" onclick="event.stopPropagation()">{{ m.deliverable.kind }}</a>
+        {% else %}{{ m.deliverable.kind }}{% endif %}
+      </span>
+      <span>
+        {% if m.deliverable.status == "Pending" or m.deliverable.status == "pending" %}<span class="col-accent" title="Pending">&#x2026;</span>
+        {% elif m.deliverable.status == "Open" or m.deliverable.status == "open" %}<span class="col-success" title="Open">&#x25CF;</span>
+        {% elif m.deliverable.status == "Merged" or m.deliverable.status == "merged" %}<span class="col-accent" title="Merged">&#x2713;</span>
+        {% elif m.deliverable.status == "Closed" or m.deliverable.status == "closed" %}<span class="col-muted" title="Closed">&#x2715;</span>
+        {% elif m.deliverable.status == "Reviewed" or m.deliverable.status == "reviewed" %}<span class="col-success" title="Reviewed">&#x2713;</span>
+        {% else %}<span class="col-muted">&#xB7;</span>{% endif %}
+      </span>
+      <span>
+        {% if m.deliverable.decision == "Waiting" or m.deliverable.decision == "waiting" %}<span class="col-warning" title="Waiting">&#x25F7;</span>
+        {% elif m.deliverable.decision == "Accepted" or m.deliverable.decision == "accepted" %}<span class="col-success" title="Accepted">&#x2713;</span>
+        {% elif m.deliverable.decision == "Rejected" or m.deliverable.decision == "rejected" %}<span class="col-danger" title="Rejected">&#x2715;</span>
+        {% endif %}
+      </span>
+    </div>
+    {% endif %}
+    {% endfor %}
+    <div class="grid-footer">
+      <span>{{ ns.count }} deliverables</span>
+      <span></span>
+    </div>
+    <div class="legend">
+      <span><span class="col-accent">&#x2026;</span> pending</span>
+      <span><span class="col-success">&#x25CF;</span> open</span>
+      <span><span class="col-accent">&#x2713;</span> merged</span>
+      <span><span class="col-muted">&#x2715;</span> closed</span>
+      <span style="margin-left: 1rem;"><span class="col-warning">&#x25F7;</span> waiting</span>
+      <span><span class="col-success">&#x2713;</span> accepted</span>
+      <span><span class="col-danger">&#x2715;</span> rejected</span>
+    </div>
+  </div>
+</div>
+
+{# Detail modals #}
+{% for m in runs %}
+{% if m.deliverable %}
+<div class="modal-overlay" id="modal-outcome-{{ m.id }}">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>{{ m.title }}</h2>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">decision:</span>
+          <span class="meta-value {% if m.deliverable.decision == 'Accepted' or m.deliverable.decision == 'accepted' %}success{% elif m.deliverable.decision == 'Rejected' or m.deliverable.decision == 'rejected' %}danger{% else %}warning{% endif %}">
+            {% if m.deliverable.decision == "Waiting" or m.deliverable.decision == "waiting" %}&#x25F7;{% elif m.deliverable.decision == "Accepted" or m.deliverable.decision == "accepted" %}&#x2713;{% elif m.deliverable.decision == "Rejected" or m.deliverable.decision == "rejected" %}&#x2715;{% endif %}
+            {{ m.deliverable.decision }}
+          </span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">status:</span>
+          <span class="meta-value">{{ m.deliverable.status }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">kind:</span>
+          <span class="meta-value muted">{{ m.deliverable.kind }}</span>
+        </span>
+        {% if m.issue_identifier %}
+        <span class="meta-item">
+          <span class="meta-label">source:</span>
+          <span class="meta-value">{{ m.issue_identifier }}</span>
+        </span>
+        {% endif %}
+        <span class="meta-item">
+          <span class="meta-label">created:</span>
+          <span class="meta-value muted"><time datetime="{{ m.created_at }}">{{ m.created_at }}</time></span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">tasks:</span>
+          <span class="meta-value">{{ m.tasks_completed }}/{{ m.task_count }}</span>
+        </span>
+        {% if m.workspace_key %}
+        <span class="meta-item">
+          <span class="meta-label">workspace:</span>
+          <span class="meta-value muted"><code>{{ m.workspace_key }}</code></span>
+        </span>
+        {% endif %}
+      </div>
+
+      {# URL #}
+      {% if m.deliverable.url %}
+      <div class="modal-section">
+        <a href="{{ m.deliverable.url }}" target="_blank" style="font-size: 0.85rem; font-weight: 500;">{{ m.deliverable.url }} &rarr;</a>
+      </div>
+      {% endif %}
+
+      {# Deliverable title & description #}
+      {% if m.deliverable.title %}
+      <div class="modal-section">
+        <h3>Title</h3>
+        <div style="font-size: 0.85rem; font-weight: 500;">{{ m.deliverable.title }}</div>
+      </div>
+      {% endif %}
+
+      {% if m.deliverable.description %}
+      <div class="modal-section">
+        <h3>Description</h3>
+        <div class="modal-description">{{ m.deliverable.description }}</div>
+      </div>
+      {% endif %}
+
+      {# Review target #}
+      {% if m.review_target %}
+      <div class="modal-section">
+        <h3>Review Target</h3>
+        <div class="modal-meta" style="border-bottom: none; padding-bottom: 0; margin-bottom: 0;">
+          <span class="meta-item">
+            <span class="meta-label">repo:</span>
+            <span class="meta-value">{{ m.review_target.repository }}</span>
+          </span>
+          <span class="meta-item">
+            <span class="meta-label">PR:</span>
+            <span class="meta-value">#{{ m.review_target.number }}</span>
+          </span>
+          <span class="meta-item">
+            <span class="meta-label">branches:</span>
+            <span class="meta-value muted">{{ m.review_target.head_branch }} &rarr; {{ m.review_target.base_branch }}</span>
+          </span>
+          <span class="meta-item">
+            <span class="meta-label">sha:</span>
+            <span class="meta-value muted"><code>{{ m.review_target.head_sha }}</code></span>
+          </span>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Action buttons #}
+      <div class="modal-actions">
+        {% if m.deliverable.decision == "Waiting" or m.deliverable.decision == "waiting" %}
+        <button class="btn btn-primary" onclick="outcomeAction.accept('{{ m.id }}', this)">Accept</button>
+        <button class="btn btn-danger" onclick="outcomeAction.reject('{{ m.id }}', this)">Reject</button>
+        {% endif %}
+        {% if m.deliverable.url %}
+        <a href="{{ m.deliverable.url }}" target="_blank" class="btn btn-secondary" onclick="event.stopPropagation()">Open &rarr;</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+<script>
+var outcomeAction = (function() {
+  var MUTATION_RESOLVE = 'mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }';
+
+  function gqlMutate(query, variables) {
+    return fetch('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query, variables: variables })
+    }).then(function(r) { return r.json(); });
+  }
+
+  return {
+    accept: function(runId, btn) {
+      btn.disabled = true; btn.textContent = 'Accepting...';
+      gqlMutate(MUTATION_RESOLVE, { id: runId, d: 'ACCEPTED' });
+    },
+    reject: function(runId, btn) {
+      btn.disabled = true; btn.textContent = 'Rejecting...';
+      gqlMutate(MUTATION_RESOLVE, { id: runId, d: 'REJECTED' });
+    }
+  };
+})();
+
+(function() {
+  document.querySelectorAll('.grid-row[data-outcome-run]').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var id = row.getAttribute('data-outcome-run');
+      var modal = document.getElementById('modal-outcome-' + id);
+      if (modal) modal.classList.add('open');
+    });
+  });
+
+  document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.classList.remove('open');
+    });
+  });
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.open').forEach(function(m) {
+        m.classList.remove('open');
+      });
+    }
+  });
+})();
+</script>
+
+{% else %}
+<div class="card"><div class="empty">No deliverables yet.</div></div>
+{% endif %}
+{% endblock %}

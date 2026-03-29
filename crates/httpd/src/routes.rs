@@ -61,6 +61,7 @@ pub fn build_router(
         .route("/inbox", get(page_inbox))
         .route("/runs", get(page_runs))
         .route("/agents", get(page_agents))
+        .route("/outcomes", get(page_outcomes))
         .route("/tasks", get(page_tasks))
         .route("/repos", get(page_repos))
         .route("/logs", get(page_logs))
@@ -125,6 +126,10 @@ async fn page_runs(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn page_agents(State(state): State<AppState>) -> impl IntoResponse {
     render_page(&state, "agents.html")
+}
+
+async fn page_outcomes(State(state): State<AppState>) -> impl IntoResponse {
+    render_page(&state, "outcomes.html")
 }
 
 async fn page_tasks(State(state): State<AppState>) -> impl IntoResponse {
