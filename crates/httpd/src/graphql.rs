@@ -137,6 +137,21 @@ impl From<polyphony_core::DeliverableDecision> for GqlDeliverableDecision {
 }
 
 #[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
+pub(crate) enum GqlApprovalState {
+    Approved,
+    Waiting,
+}
+
+impl From<polyphony_core::DispatchApprovalState> for GqlApprovalState {
+    fn from(s: polyphony_core::DispatchApprovalState) -> Self {
+        match s {
+            polyphony_core::DispatchApprovalState::Approved => Self::Approved,
+            polyphony_core::DispatchApprovalState::Waiting => Self::Waiting,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
 pub(crate) enum GqlInboxItemKind {
     Issue,
     PullRequestReview,
@@ -200,11 +215,13 @@ struct GqlInboxItem {
     identifier: String,
     title: String,
     status: String,
+    approval_state: GqlApprovalState,
     priority: Option<i32>,
     labels: Vec<String>,
     description: Option<String>,
     url: Option<String>,
     author: Option<String>,
+    parent_id: Option<String>,
     has_workspace: bool,
     updated_at: Option<DateTime<Utc>>,
     created_at: Option<DateTime<Utc>>,
@@ -219,11 +236,13 @@ impl From<&polyphony_core::InboxItemRow> for GqlInboxItem {
             identifier: r.identifier.clone(),
             title: r.title.clone(),
             status: r.status.clone(),
+            approval_state: r.approval_state.into(),
             priority: r.priority,
             labels: r.labels.clone(),
             description: r.description.clone(),
             url: r.url.clone(),
             author: r.author.clone(),
+            parent_id: r.parent_id.clone(),
             has_workspace: r.has_workspace,
             updated_at: r.updated_at,
             created_at: r.created_at,
@@ -514,6 +533,34 @@ impl MutationRoot {
     async fn refresh(&self, ctx: &Context<'_>) -> bool {
         let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
         tx.send(polyphony_orchestrator::RuntimeCommand::Refresh)
+            .is_ok()
+    }
+
+    async fn approve_inbox_item(&self, ctx: &Context<'_>, item_id: String, source: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::ApproveInboxItem { item_id, source })
+            .is_ok()
+    }
+
+    async fn dispatch_pull_request_inbox_item(
+        &self,
+        ctx: &Context<'_>,
+        item_id: String,
+        directives: Option<String>,
+    ) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(
+            polyphony_orchestrator::RuntimeCommand::DispatchPullRequestInboxItem {
+                item_id,
+                directives,
+            },
+        )
+        .is_ok()
+    }
+
+    async fn close_tracker_issue(&self, ctx: &Context<'_>, issue_id: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::CloseTrackerIssue { issue_id })
             .is_ok()
     }
 }

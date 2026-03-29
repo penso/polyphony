@@ -45,6 +45,7 @@
       <span title="Last updated timestamp">Updated</span>
       <span title="Issue or PR title">Title</span>
       <span title="Tracker status: ● open, ○ todo, ◷ waiting, ✓ done, ⊘ cancelled"></span>
+      <span title="Dispatch approval: ✓ approved, ◷ waiting">Appr</span>
       <span title="Issue priority (lower = higher priority)">Priority</span>
     </div>
     {% for t in inbox_items[:5] %}
@@ -65,7 +66,12 @@
         {% elif t.status == "cancelled" or t.status == "canceled" %}<span class="col-muted" title="{{ t.status }}">&#x2298;</span>
         {% else %}<span class="col-muted" title="{{ t.status }}">&#xB7;</span>{% endif %}
       </span>
-      <span class="col-muted">{% if t.priority %}P{{ t.priority }}{% else %}&mdash;{% endif %}</span>
+      <span>
+        {% if t.approval_state == "Approved" %}<span class="col-success" title="Approved">&#x2713;</span>
+        {% elif t.approval_state == "Waiting" %}<span class="col-warning" title="Waiting">&#x25F7;</span>
+        {% endif %}
+      </span>
+      <span class="col-muted">{% if t.priority is not none %}P{{ t.priority }}{% else %}&mdash;{% endif %}</span>
     </div>
     {% endfor %}
     {% if inbox_items | length > 5 %}
