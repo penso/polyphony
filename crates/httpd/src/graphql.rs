@@ -656,3 +656,177 @@ pub(crate) fn build_schema(
         .data(command_tx)
         .finish()
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// Build a test schema with real channels so mutations can send commands.
+    fn test_schema() -> (
+        PolyphonySchema,
+        tokio::sync::mpsc::UnboundedReceiver<polyphony_orchestrator::RuntimeCommand>,
+    ) {
+        let snapshot: RuntimeSnapshot = serde_json::from_value(serde_json::json!({
+            "generated_at": "2026-01-01T00:00:00Z",
+            "counts": { "running": 0, "retrying": 0, "runs": 0, "tasks_pending": 0, "tasks_in_progress": 0, "tasks_completed": 0, "worktrees": 0 },
+            "running": [],
+            "retrying": [],
+            "codex_totals": { "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "seconds_running": 0.0 },
+            "rate_limits": null,
+            "throttles": [],
+            "budgets": [],
+            "agent_catalogs": [],
+            "saved_contexts": [],
+            "recent_events": []
+        }))
+        .expect("minimal snapshot should deserialize");
+        let (snap_tx, snap_rx) = watch::channel(snapshot);
+        drop(snap_tx);
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let schema = build_schema(snap_rx, cmd_tx);
+        (schema, cmd_rx)
+    }
+
+    /// The exact mutation strings used in inbox.html JavaScript.
+    /// If a query here fails to validate, the frontend mutation is broken.
+    const JS_MUTATION_APPROVE: &str = r#"mutation($itemId: String!, $source: String!) { approveInboxItem(itemId: $itemId, source: $source) }"#;
+    const JS_MUTATION_DISPATCH_ISSUE: &str =
+        r#"mutation($id: String!, $d: String) { dispatchIssue(issueId: $id, directives: $d) }"#;
+    const JS_MUTATION_DISPATCH_PR: &str = r#"mutation($id: String!, $d: String) { dispatchPullRequestInboxItem(itemId: $id, directives: $d) }"#;
+    const JS_MUTATION_CLOSE: &str = r#"mutation($id: String!) { closeTrackerIssue(issueId: $id) }"#;
+
+    /// Execute a mutation and assert it succeeds (no GraphQL errors).
+    async fn assert_mutation_ok(
+        schema: &PolyphonySchema,
+        query: &str,
+        variables: serde_json::Value,
+    ) {
+        let vars: async_graphql::Variables = async_graphql::Variables::from_json(variables);
+        let request = async_graphql::Request::new(query).variables(vars);
+        let response = schema.execute(request).await;
+        assert!(
+            response.errors.is_empty(),
+            "GraphQL errors for query {query:?}: {:?}",
+            response.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn js_mutation_approve_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_APPROVE,
+            json!({"itemId": "test-1", "source": "github"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_dispatch_issue_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_DISPATCH_ISSUE,
+            json!({"id": "test-1", "d": "fix the bug"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_dispatch_pr_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_DISPATCH_PR,
+            json!({"id": "test-1", "d": null}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_close_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_CLOSE, json!({"id": "test-1"})).await;
+    }
+
+    #[tokio::test]
+    async fn approve_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_APPROVE,
+            json!({"itemId": "issue-42", "source": "github"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::ApproveInboxItem { item_id, source } => {
+                assert_eq!(item_id, "issue-42");
+                assert_eq!(source, "github");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn close_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_CLOSE, json!({"id": "issue-42"})).await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::CloseTrackerIssue { issue_id } => {
+                assert_eq!(issue_id, "issue-42");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_issue_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_DISPATCH_ISSUE,
+            json!({"id": "issue-42", "d": "fix it"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::DispatchIssue {
+                issue_id,
+                directives,
+                ..
+            } => {
+                assert_eq!(issue_id, "issue-42");
+                assert_eq!(directives.as_deref(), Some("fix it"));
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_pr_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_DISPATCH_PR,
+            json!({"id": "pr-1", "d": null}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::DispatchPullRequestInboxItem {
+                item_id,
+                directives,
+            } => {
+                assert_eq!(item_id, "pr-1");
+                assert!(directives.is_none());
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+}
