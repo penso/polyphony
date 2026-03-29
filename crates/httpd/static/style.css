@@ -341,10 +341,8 @@ td.title-col { font-weight: 500; }
 }
 .log-line {
   display: flex; gap: 0; padding: 0 0.75rem;
-  border-bottom: 1px solid var(--border-subtle);
   transition: background 0.1s;
 }
-.log-line:last-child { border-bottom: none; }
 .log-line:hover { background: var(--hover-bg); }
 .log-ts {
   color: var(--muted); flex-shrink: 0; min-width: 8rem;

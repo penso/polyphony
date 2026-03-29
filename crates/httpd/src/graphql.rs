@@ -563,6 +563,33 @@ impl MutationRoot {
         tx.send(polyphony_orchestrator::RuntimeCommand::CloseTrackerIssue { issue_id })
             .is_ok()
     }
+
+    async fn resolve_run_deliverable(
+        &self,
+        ctx: &Context<'_>,
+        run_id: String,
+        decision: GqlDeliverableDecision,
+    ) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        let core_decision = match decision {
+            GqlDeliverableDecision::Waiting => polyphony_core::DeliverableDecision::Waiting,
+            GqlDeliverableDecision::Accepted => polyphony_core::DeliverableDecision::Accepted,
+            GqlDeliverableDecision::Rejected => polyphony_core::DeliverableDecision::Rejected,
+        };
+        tx.send(
+            polyphony_orchestrator::RuntimeCommand::ResolveRunDeliverable {
+                run_id,
+                decision: core_decision,
+            },
+        )
+        .is_ok()
+    }
+
+    async fn retry_run(&self, ctx: &Context<'_>, run_id: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::RetryRun { run_id })
+            .is_ok()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +852,64 @@ mod tests {
             } => {
                 assert_eq!(item_id, "pr-1");
                 assert!(directives.is_none());
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    // Runs page mutation strings
+    const JS_MUTATION_RESOLVE: &str =
+        r#"mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }"#;
+    const JS_MUTATION_RETRY: &str =
+        r#"mutation($id: String!) { retryRun(runId: $id) }"#;
+
+    #[tokio::test]
+    async fn js_mutation_resolve_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_RESOLVE,
+            json!({"id": "run-1", "d": "ACCEPTED"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_retry_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_RETRY, json!({"id": "run-1"})).await;
+    }
+
+    #[tokio::test]
+    async fn resolve_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_RESOLVE,
+            json!({"id": "run-42", "d": "REJECTED"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::ResolveRunDeliverable {
+                run_id,
+                decision,
+            } => {
+                assert_eq!(run_id, "run-42");
+                assert_eq!(decision, polyphony_core::DeliverableDecision::Rejected);
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_RETRY, json!({"id": "run-42"})).await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::RetryRun { run_id } => {
+                assert_eq!(run_id, "run-42");
             },
             other => panic!("unexpected command: {other:?}"),
         }
