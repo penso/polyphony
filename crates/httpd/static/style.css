@@ -332,6 +332,50 @@ td.title-col { font-weight: 500; }
 .source-icon svg { vertical-align: text-bottom; }
 .author-avatar { width: 16px; height: 16px; border-radius: 50%; vertical-align: text-bottom; margin-right: 2px; }
 
+/* ===== Log stream (Grafana-style) ===== */
+.log-stream {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+  font-size: 0.72rem; line-height: 1.7;
+}
+.log-line {
+  display: flex; gap: 0; padding: 0 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.1s;
+}
+.log-line:last-child { border-bottom: none; }
+.log-line:hover { background: var(--hover-bg); }
+.log-ts {
+  color: var(--muted); flex-shrink: 0; min-width: 8rem;
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--border-subtle);
+  user-select: none;
+}
+.log-scope {
+  flex-shrink: 0; min-width: 6rem; padding: 0 0.75rem;
+  text-transform: uppercase; font-size: 0.65rem; font-weight: 600;
+  letter-spacing: 0.03em;
+  border-right: 1px solid var(--border-subtle);
+  display: flex; align-items: center;
+}
+.log-msg { padding-left: 0.75rem; flex: 1; word-break: break-word; color: var(--fg); }
+
+/* Scope colors */
+.log-scope-Agent    { color: var(--accent); }
+.log-scope-Dispatch { color: var(--success); }
+.log-scope-Handoff  { color: var(--success); }
+.log-scope-Retry    { color: var(--warning); }
+.log-scope-Throttle { color: var(--warning); }
+.log-scope-Tracker  { color: #3b82f6; }
+.dark .log-scope-Tracker { color: #60a5fa; }
+.log-scope-Worker   { color: var(--accent); }
+.log-scope-Reconcile { color: var(--muted); }
+.log-scope-Workflow { color: var(--fg); }
+.log-scope-Startup  { color: var(--muted); }
+.log-scope-Feedback { color: #ec4899; }
+.dark .log-scope-Feedback { color: #f472b6; }
+
 /* ===== Empty state ===== */
 .empty { color: var(--muted); padding: 3rem; text-align: center; font-size: 0.85rem; }
 

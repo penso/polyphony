@@ -7,25 +7,14 @@
 </div>
 
 {% if recent_events %}
-<div class="card">
-  <div class="grid-table">
-    <div class="grid-header cols-logs">
-      <span>Time</span>
-      <span>Scope</span>
-      <span>Message</span>
-    </div>
-    {% for e in recent_events | reverse %}
-    <div class="grid-row cols-logs">
-      <span class="col-muted"><time datetime="{{ e.at }}">{{ e.at }}</time></span>
-      <span><span class="badge badge-pending">{{ e.scope }}</span></span>
-      <span>{{ e.message }}</span>
-    </div>
-    {% endfor %}
-    <div class="grid-footer">
-      <span>{{ recent_events | length }} events</span>
-      <span></span>
-    </div>
+<div class="log-stream">
+  {% for e in recent_events | reverse %}
+  <div class="log-line">
+    <span class="log-ts"><time datetime="{{ e.at }}">{{ e.at }}</time></span>
+    <span class="log-scope log-scope-{{ e.scope }}">{{ e.scope }}</span>
+    <span class="log-msg">{{ e.message }}</span>
   </div>
+  {% endfor %}
 </div>
 {% else %}
 <div class="card"><div class="empty">No events yet.</div></div>
