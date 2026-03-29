@@ -2,43 +2,246 @@
 {% block title %}Polyphony &mdash; Inbox{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Inbox</h1>
+<div class="page-header">
+  <span class="meta">{{ inbox_items | length }} items</span>
+</div>
 
 {% if inbox_items %}
 <div class="card">
-  <table>
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>Kind</th>
-        <th>Source</th>
-        <th>Title</th>
-        <th>Status</th>
-        <th>Priority</th>
-        <th>Labels</th>
-        <th>Updated</th>
-      </tr>
-    </thead>
-    <tbody>
+  <div class="grid-table">
+    <div class="grid-header cols-inbox">
+      <span title="Activity: spinner when running, dot when workspace exists"></span>
+      <span title="Last updated timestamp">Updated</span>
+      <span title="Issue or PR title">Title</span>
+      <span title="Tracker status: ● open, ○ todo, ◷ waiting, ✓ done, ⊘ cancelled"></span>
+      <span title="Issue priority (lower = higher priority)">Priority</span>
+    </div>
     {% for t in inbox_items %}
-    <tr>
-      <td style="color: var(--muted);">{{ t.identifier }}</td>
-      <td>{{ t.kind }}</td>
-      <td style="color: var(--muted);">{{ t.source }}</td>
-      <td>
-        {% if t.url %}<a href="{{ t.url }}" target="_blank">{{ t.title }}</a>
+    <div class="grid-row cols-inbox{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" style="cursor: pointer;">
+      <span>
+        {% if t.has_workspace %}<span class="col-accent" title="Has workspace">&#x25CF;</span>
+        {% else %}<span class="col-muted"> </span>{% endif %}
+      </span>
+      <span class="col-muted">{% if t.updated_at %}<time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time>{% else %}&mdash;{% endif %}</span>
+      <span class="col-title">
+        {% if t.parent_id %}<span class="tree-prefix">├── </span>{% endif %}
+        {% if t.url %}<a href="{{ t.url }}" target="_blank" onclick="event.stopPropagation()">{{ t.title }}</a>
         {% else %}{{ t.title }}{% endif %}
-      </td>
-      <td><span class="badge badge-pending">{{ t.status }}</span></td>
-      <td>{{ t.priority }}</td>
-      <td style="color: var(--muted);">{{ t.labels | join(", ") }}</td>
-      <td style="color: var(--muted);">{{ t.updated_at }}</td>
-    </tr>
+      </span>
+      <span>
+        {% if t.status == "open" or t.status == "in_progress" or t.status == "started" or t.status == "in progress" or t.status == "ready" %}<span class="col-success" title="{{ t.status }}">&#x25CF;</span>
+        {% elif t.status == "todo" or t.status == "unstarted" or t.status == "backlog" %}<span class="col-accent" title="{{ t.status }}">&#x25CB;</span>
+        {% elif t.status == "debouncing" or t.status == "waiting_label" %}<span class="col-accent" title="{{ t.status }}">&#x25F7;</span>
+        {% elif t.status == "closed" or t.status == "done" or t.status == "completed" or t.status == "reviewed" or t.status == "already_fixed" %}<span class="col-muted" title="{{ t.status }}">&#x2713;</span>
+        {% elif t.status == "cancelled" or t.status == "canceled" or t.status == "ignored_author" or t.status == "ignored_bot" or t.status == "ignored_label" %}<span class="col-muted" title="{{ t.status }}">&#x2298;</span>
+        {% elif t.status == "retrying" %}<span class="col-warning" title="{{ t.status }}">&#x21BB;</span>
+        {% elif t.status == "draft" %}<span class="col-warning" title="{{ t.status }}">&#x25CC;</span>
+        {% else %}<span class="col-muted" title="{{ t.status }}">&#xB7;</span>{% endif %}
+      </span>
+      <span class="col-muted">{% if t.priority %}P{{ t.priority }}{% else %}&mdash;{% endif %}</span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+    <div class="grid-footer">
+      <span>{{ inbox_items | length }} items</span>
+      <span></span>
+    </div>
+    <div class="legend">
+      <span><span class="col-accent">&#x25CF;</span> workspace</span>
+      <span><span class="col-success">&#x25CF;</span> open</span>
+      <span><span class="col-accent">&#x25CB;</span> todo</span>
+      <span><span class="col-accent">&#x25F7;</span> waiting</span>
+      <span><span class="col-muted">&#x2713;</span> done</span>
+      <span><span class="col-muted">&#x2298;</span> cancelled</span>
+      <span><span class="col-warning">&#x21BB;</span> retrying</span>
+    </div>
+  </div>
 </div>
+
+{# Server-rendered detail modals for each inbox item #}
+{% for t in inbox_items %}
+<div class="modal-overlay" id="modal-{{ t.item_id }}">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>{{ t.title }}</h2>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">status:</span>
+          <span class="meta-value">
+            {% if t.status == "open" or t.status == "in_progress" or t.status == "started" or t.status == "ready" %}<span class="col-success">&#x25CF;</span>
+            {% elif t.status == "todo" or t.status == "unstarted" or t.status == "backlog" %}<span class="col-accent">&#x25CB;</span>
+            {% elif t.status == "closed" or t.status == "done" or t.status == "completed" %}<span class="col-muted">&#x2713;</span>
+            {% elif t.status == "cancelled" or t.status == "canceled" %}<span class="col-muted">&#x2298;</span>
+            {% else %}<span class="col-muted">&#xB7;</span>{% endif %}
+            {{ t.status }}
+          </span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">priority:</span>
+          <span class="meta-value {% if t.priority == 0 %}danger{% elif t.priority == 1 %}warning{% elif t.priority == 2 %}accent{% else %}muted{% endif %}">{% if t.priority is not none %}P{{ t.priority }}{% else %}&mdash;{% endif %}</span>
+        </span>
+        {% if t.author %}
+        <span class="meta-item">
+          <span class="meta-label">author:</span>
+          <span class="meta-value accent">@{{ t.author }}</span>
+        </span>
+        {% endif %}
+        {% if t.labels %}
+        <span class="meta-item">
+          <span class="meta-label">labels:</span>
+          <span class="meta-value">{% for l in t.labels %}<span class="modal-label">{{ l }}</span> {% endfor %}</span>
+        </span>
+        {% endif %}
+        <span class="meta-item">
+          <span class="meta-label">source:</span>
+          <span class="meta-value muted">{{ t.source }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">kind:</span>
+          <span class="meta-value muted">{{ t.kind }}</span>
+        </span>
+        {% if t.created_at %}
+        <span class="meta-item">
+          <span class="meta-label">created:</span>
+          <span class="meta-value muted"><time datetime="{{ t.created_at }}">{{ t.created_at }}</time></span>
+        </span>
+        {% endif %}
+        {% if t.updated_at %}
+        <span class="meta-item">
+          <span class="meta-label">updated:</span>
+          <span class="meta-value muted"><time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time></span>
+        </span>
+        {% endif %}
+        {% if t.has_workspace %}
+        <span class="meta-item">
+          <span class="meta-label">workspace:</span>
+          <span class="meta-value"><span class="col-accent">&#x25CF;</span> active</span>
+        </span>
+        {% endif %}
+      </div>
+
+      <div class="modal-description">{{ t.description }}</div>
+
+      {# Related runs #}
+      {% set ns = namespace(has_runs=false) %}
+      {% for m in runs %}{% if m.issue_identifier == t.identifier %}{% set ns.has_runs = true %}{% endif %}{% endfor %}
+      {% if ns.has_runs %}
+      <div class="modal-section">
+        <h3>Related Runs</h3>
+        <div class="grid-table">
+          {% for m in runs %}
+          {% if m.issue_identifier == t.identifier %}
+          <div class="grid-row" style="grid-template-columns: 1fr; padding: 0.3rem 0;">
+            <div class="run-child" style="padding-left: 0;">
+              {% if m.status == "delivered" %}<span class="col-success">&#x2713;</span>
+              {% elif m.status == "failed" %}<span class="col-danger">&#x2715;</span>
+              {% elif m.status == "cancelled" %}<span class="col-danger">&#x2298;</span>
+              {% elif m.status == "in_progress" or m.status == "planning" %}<span class="col-accent">&#x2819;</span>
+              {% else %}<span class="col-muted">&#x25CB;</span>{% endif %}
+              <span class="child-title">{{ m.title }}</span>
+              <span class="child-meta">{{ m.tasks_completed }}/{{ m.task_count }}</span>
+              <span class="child-meta"><time datetime="{{ m.created_at }}">{{ m.created_at }}</time></span>
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Running agents #}
+      {% set ns = namespace(has_running=false) %}
+      {% for a in running %}{% if a.issue_identifier == t.identifier %}{% set ns.has_running = true %}{% endif %}{% endfor %}
+      {% if ns.has_running %}
+      <div class="modal-section">
+        <h3>Running Agents</h3>
+        <div class="grid-table">
+          {% for a in running %}
+          {% if a.issue_identifier == t.identifier %}
+          <div class="grid-row" style="grid-template-columns: 1fr; padding: 0.3rem 0;">
+            <div class="run-child" style="padding-left: 0;">
+              <span class="col-accent">&#x2819;</span>
+              <span class="col-agent">{{ a.agent_name }}</span>
+              {% if a.model %}<span class="child-meta">({{ a.model }})</span>{% endif %}
+              <span class="child-meta">{{ a.turn_count }}/{{ a.max_turns }}t</span>
+              <span class="child-meta"><time datetime="{{ a.started_at }}">{{ a.started_at }}</time></span>
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Agent history #}
+      {% set ns = namespace(has_history=false) %}
+      {% for a in agent_run_history %}{% if a.issue_identifier == t.identifier %}{% set ns.has_history = true %}{% endif %}{% endfor %}
+      {% if ns.has_history %}
+      <div class="modal-section">
+        <h3>Agent History</h3>
+        <div class="grid-table">
+          {% for a in agent_run_history %}
+          {% if a.issue_identifier == t.identifier %}
+          <div class="grid-row" style="grid-template-columns: 1fr; padding: 0.3rem 0;">
+            <div class="run-child" style="padding-left: 0;">
+              {% if a.status == "Succeeded" %}<span class="col-success">&#x2713;</span>
+              {% elif a.status == "Failed" %}<span class="col-danger">&#x2715;</span>
+              {% elif a.status == "CancelledByReconciliation" %}<span class="col-warning">&#x2298;</span>
+              {% else %}<span class="col-muted">&#x25CF;</span>{% endif %}
+              <span class="col-agent">{{ a.agent_name }}</span>
+              {% if a.model %}<span class="child-meta">({{ a.model }})</span>{% endif %}
+              <span class="child-meta">{{ a.turn_count }}/{{ a.max_turns }}t</span>
+              {% if a.finished_at %}<span class="child-meta"><time datetime="{{ a.finished_at }}">{{ a.finished_at }}</time></span>{% endif %}
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if t.url %}
+      <div class="modal-section" style="padding-top: 0.5rem; border-top: 1px solid var(--border-subtle);">
+        <a href="{{ t.url }}" target="_blank" style="font-size: 0.8rem;">Open in tracker &rarr;</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<script>
+(function() {
+  // Click rows to open modal
+  document.querySelectorAll('.grid-row[data-item-id]').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var id = row.getAttribute('data-item-id');
+      var modal = document.getElementById('modal-' + id);
+      if (modal) modal.classList.add('open');
+    });
+  });
+
+  // Close on overlay click
+  document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.classList.remove('open');
+    });
+  });
+
+  // Close on Escape
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.open').forEach(function(m) {
+        m.classList.remove('open');
+      });
+    }
+  });
+})();
+</script>
+
 {% else %}
-<div class="empty">Inbox is empty.</div>
+<div class="card"><div class="empty">Inbox is empty.</div></div>
 {% endif %}
 {% endblock %}

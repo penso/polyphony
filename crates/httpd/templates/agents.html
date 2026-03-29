@@ -2,77 +2,81 @@
 {% block title %}Polyphony &mdash; Agents{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Agents</h1>
+<div class="page-header">
+  {% if running %}<span class="meta">{{ running | length }} running</span>{% endif %}
+</div>
 
 {% if running %}
 <div class="card">
-  <h2>Running ({{ running | length }})</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Issue</th>
-        <th>Agent</th>
-        <th>Model</th>
-        <th>Turns</th>
-        <th>State</th>
-        <th>Last Event</th>
-        <th>Started</th>
-      </tr>
-    </thead>
-    <tbody>
+  <div class="card-header">
+    <h2>Running</h2>
+    <span class="count">{{ running | length }} active</span>
+  </div>
+  <div class="grid-table">
+    <div class="grid-header cols-agents">
+      <span></span>
+      <span>Agent</span>
+      <span>Issue</span>
+      <span>Model</span>
+      <span>Turns</span>
+      <span>State</span>
+      <span>Started</span>
+    </div>
     {% for a in running %}
-    <tr>
-      <td>{{ a.issue_identifier }}</td>
-      <td>{{ a.agent_name }}</td>
-      <td style="color: var(--muted);">{{ a.model }}</td>
-      <td style="color: var(--muted);">{{ a.turn_count }}/{{ a.max_turns }}</td>
-      <td><span class="badge badge-running">{{ a.state }}</span></td>
-      <td style="color: var(--muted);">{{ a.last_event }}</td>
-      <td style="color: var(--muted);">{{ a.started_at }}</td>
-    </tr>
+    <div class="grid-row cols-agents active">
+      <span class="col-accent">&#x2819;</span>
+      <span class="col-agent">{{ a.agent_name }}</span>
+      <span class="col-title">{{ a.issue_identifier }}</span>
+      <span class="col-muted">{{ a.model }}</span>
+      <span class="col-muted">{{ a.turn_count }}/{{ a.max_turns }}</span>
+      <span class="col-accent">{{ a.state }}</span>
+      <span class="col-muted"><time datetime="{{ a.started_at }}">{{ a.started_at }}</time></span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+  </div>
 </div>
 {% endif %}
 
 {% if agent_run_history %}
 <div class="card">
-  <h2>History ({{ agent_run_history | length }})</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Issue</th>
-        <th>Agent</th>
-        <th>Model</th>
-        <th>Status</th>
-        <th>Attempt</th>
-        <th>Turns</th>
-        <th>Started</th>
-        <th>Finished</th>
-      </tr>
-    </thead>
-    <tbody>
+  <div class="card-header">
+    <h2>History</h2>
+    <span class="count">{{ agent_run_history | length }} runs</span>
+  </div>
+  <div class="grid-table">
+    <div class="grid-header cols-agents">
+      <span></span>
+      <span>Agent</span>
+      <span>Issue</span>
+      <span>Model</span>
+      <span>Attempt</span>
+      <span>Turns</span>
+      <span>Finished</span>
+    </div>
     {% for a in agent_run_history %}
-    <tr>
-      <td>{{ a.issue_identifier }}</td>
-      <td>{{ a.agent_name }}</td>
-      <td style="color: var(--muted);">{{ a.model }}</td>
-      <td>
-        {% if a.status == "Succeeded" %}<span class="badge badge-success">{{ a.status }}</span>
-        {% elif a.status == "Failed" %}<span class="badge badge-failed">{{ a.status }}</span>
-        {% else %}<span class="badge badge-warning">{{ a.status }}</span>{% endif %}
-      </td>
-      <td style="color: var(--muted);">{{ a.attempt }}</td>
-      <td style="color: var(--muted);">{{ a.turn_count }}/{{ a.max_turns }}</td>
-      <td style="color: var(--muted);">{{ a.started_at }}</td>
-      <td style="color: var(--muted);">{{ a.finished_at }}</td>
-    </tr>
+    <div class="grid-row cols-agents">
+      <span>
+        {% if a.status == "Succeeded" %}<span class="col-success">&#x2713;</span>
+        {% elif a.status == "Failed" %}<span class="col-danger">&#x2715;</span>
+        {% else %}<span class="col-warning">&#x25F7;</span>{% endif %}
+      </span>
+      <span class="col-agent">{{ a.agent_name }}</span>
+      <span class="col-title">{{ a.issue_identifier }}</span>
+      <span class="col-muted">{{ a.model }}</span>
+      <span class="col-muted">{{ a.attempt }}</span>
+      <span class="col-muted">{{ a.turn_count }}/{{ a.max_turns }}</span>
+      <span class="col-muted">{% if a.finished_at %}<time datetime="{{ a.finished_at }}">{{ a.finished_at }}</time>{% else %}&mdash;{% endif %}</span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+    <div class="grid-footer">
+      <span>{{ agent_run_history | length }} runs</span>
+      <span></span>
+    </div>
+  </div>
 </div>
 {% else %}
-<div class="empty">No agent history yet.</div>
+{% if not running %}
+<div class="card"><div class="empty">No agent activity yet.</div></div>
+{% endif %}
 {% endif %}
 {% endblock %}

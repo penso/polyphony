@@ -2,49 +2,47 @@
 {% block title %}Polyphony &mdash; Tasks{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Tasks</h1>
+<div class="page-header">
+  <span class="meta">{{ tasks | length }} tasks</span>
+</div>
 
 {% if tasks %}
 <div class="card">
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Run</th>
-        <th>Title</th>
-        <th>Category</th>
-        <th>Status</th>
-        <th>Agent</th>
-        <th>Turns</th>
-        <th>Tokens</th>
-        <th>Started</th>
-        <th>Finished</th>
-      </tr>
-    </thead>
-    <tbody>
+  <div class="grid-table">
+    <div class="grid-header cols-tasks">
+      <span></span>
+      <span>#</span>
+      <span>Run</span>
+      <span>Title</span>
+      <span>Category</span>
+      <span>Agent</span>
+      <span>Turns</span>
+      <span>Tokens</span>
+    </div>
     {% for t in tasks %}
-    <tr>
-      <td style="color: var(--muted);">{{ t.ordinal }}</td>
-      <td style="color: var(--muted);">{{ t.run_id }}</td>
-      <td>{{ t.title }}</td>
-      <td style="color: var(--muted);">{{ t.category }}</td>
-      <td>
-        {% if t.status == "completed" %}<span class="badge badge-success">{{ t.status }}</span>
-        {% elif t.status == "failed" or t.status == "cancelled" %}<span class="badge badge-failed">{{ t.status }}</span>
-        {% elif t.status == "in_progress" %}<span class="badge badge-running">{{ t.status }}</span>
-        {% else %}<span class="badge badge-pending">{{ t.status }}</span>{% endif %}
-      </td>
-      <td>{{ t.agent_name }}</td>
-      <td style="color: var(--muted);">{{ t.turns_completed }}</td>
-      <td style="color: var(--muted);">{{ t.total_tokens }}</td>
-      <td style="color: var(--muted);">{{ t.started_at }}</td>
-      <td style="color: var(--muted);">{{ t.finished_at }}</td>
-    </tr>
+    <div class="grid-row cols-tasks{% if t.status == 'in_progress' %} active{% endif %}">
+      <span>
+        {% if t.status == "completed" %}<span class="col-success">&#x2713;</span>
+        {% elif t.status == "failed" or t.status == "cancelled" %}<span class="col-danger">&#x2715;</span>
+        {% elif t.status == "in_progress" %}<span class="col-accent">&#x2819;</span>
+        {% else %}<span class="col-muted">&#x25CB;</span>{% endif %}
+      </span>
+      <span class="col-muted">{{ t.ordinal }}</span>
+      <span class="col-muted">{{ t.run_id }}</span>
+      <span class="col-title">{{ t.title }}</span>
+      <span class="col-muted">{{ t.category }}</span>
+      <span class="col-agent">{{ t.agent_name }}</span>
+      <span class="col-muted">{{ t.turns_completed }}</span>
+      <span class="col-muted">{{ t.total_tokens }}</span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+    <div class="grid-footer">
+      <span>{{ tasks | length }} tasks</span>
+      <span></span>
+    </div>
+  </div>
 </div>
 {% else %}
-<div class="empty">No tasks yet.</div>
+<div class="card"><div class="empty">No tasks yet.</div></div>
 {% endif %}
 {% endblock %}

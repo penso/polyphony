@@ -2,87 +2,106 @@
 {% block title %}Polyphony &mdash; Dashboard{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Dashboard</h1>
+<div class="page-header">
+  <span class="meta">{{ dispatch_mode }} &middot; {{ tracker_kind }}</span>
+</div>
 
-<div class="counts">
-  <div class="count-box">
-    <div class="number">{{ counts.running }}</div>
+<div class="stats">
+  <div class="stat">
+    <div class="value{% if counts.running > 0 %} accent{% endif %}">{{ counts.running }}</div>
     <div class="label">Running</div>
   </div>
-  <div class="count-box">
-    <div class="number">{{ counts.retrying }}</div>
+  <div class="stat">
+    <div class="value{% if counts.retrying > 0 %} warning{% endif %}">{{ counts.retrying }}</div>
     <div class="label">Retrying</div>
   </div>
-  <div class="count-box">
-    <div class="number">{{ counts.runs }}</div>
+  <div class="stat">
+    <div class="value">{{ counts.runs }}</div>
     <div class="label">Runs</div>
   </div>
-  <div class="count-box">
-    <div class="number">{{ counts.tasks_in_progress }}</div>
-    <div class="label">Tasks Active</div>
+  <div class="stat">
+    <div class="value">{{ counts.tasks_in_progress }}</div>
+    <div class="label">Active</div>
   </div>
-  <div class="count-box">
-    <div class="number">{{ counts.tasks_completed }}</div>
-    <div class="label">Tasks Done</div>
+  <div class="stat">
+    <div class="value{% if counts.tasks_completed > 0 %} success{% endif %}">{{ counts.tasks_completed }}</div>
+    <div class="label">Done</div>
   </div>
-  <div class="count-box">
-    <div class="number">{{ counts.worktrees }}</div>
+  <div class="stat">
+    <div class="value">{{ counts.worktrees }}</div>
     <div class="label">Worktrees</div>
   </div>
 </div>
 
-<div class="card" style="margin-top: 1rem;">
-  <h2>Status</h2>
-  <table>
-    <tr><td style="color: var(--muted);">Dispatch Mode</td><td>{{ dispatch_mode }}</td></tr>
-    <tr><td style="color: var(--muted);">Tracker</td><td>{{ tracker_kind }}</td></tr>
-    {% if tracker_connection %}
-    <tr><td style="color: var(--muted);">Connection</td>
-        <td>{{ tracker_connection.state }}{% if tracker_connection.label %} &mdash; {{ tracker_connection.label }}{% endif %}</td></tr>
-    {% endif %}
-  </table>
-</div>
-
 {% if inbox_items %}
 <div class="card">
-  <h2>Inbox ({{ inbox_items | length }})</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Kind</th><th>Title</th><th>Priority</th></tr></thead>
-    <tbody>
-    {% for t in inbox_items[:5] %}
-    <tr>
-      <td style="color: var(--muted);">{{ t.identifier }}</td>
-      <td>{{ t.kind }}</td>
-      <td><a href="/inbox">{{ t.title }}</a></td>
-      <td>{{ t.priority }}</td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% if inbox_items | length > 5 %}
-  <div style="padding: 0.5rem; color: var(--muted); font-size: 0.8rem;">
-    &hellip; and {{ inbox_items | length - 5 }} more. <a href="/inbox">View all</a>
+  <div class="card-header">
+    <h2>Inbox</h2>
+    <span class="count">{{ inbox_items | length }} items</span>
   </div>
-  {% endif %}
+  <div class="grid-table">
+    <div class="grid-header cols-inbox">
+      <span title="Activity: dot when workspace exists"></span>
+      <span title="Last updated timestamp">Updated</span>
+      <span title="Issue or PR title">Title</span>
+      <span title="Tracker status: ● open, ○ todo, ◷ waiting, ✓ done, ⊘ cancelled"></span>
+      <span title="Issue priority (lower = higher priority)">Priority</span>
+    </div>
+    {% for t in inbox_items[:5] %}
+    <div class="grid-row cols-inbox{% if t.parent_id %} child{% endif %}">
+      <span>
+        {% if t.has_workspace %}<span class="col-accent" title="Has workspace">&#x25CF;</span>
+        {% else %}<span class="col-muted"> </span>{% endif %}
+      </span>
+      <span class="col-muted">{% if t.updated_at %}<time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time>{% else %}&mdash;{% endif %}</span>
+      <span class="col-title">
+        {% if t.parent_id %}<span class="tree-prefix">├── </span>{% endif %}
+        <a href="/inbox">{{ t.title }}</a>
+      </span>
+      <span>
+        {% if t.status == "open" or t.status == "in_progress" or t.status == "started" or t.status == "in progress" or t.status == "ready" %}<span class="col-success" title="{{ t.status }}">&#x25CF;</span>
+        {% elif t.status == "todo" or t.status == "unstarted" or t.status == "backlog" %}<span class="col-accent" title="{{ t.status }}">&#x25CB;</span>
+        {% elif t.status == "closed" or t.status == "done" or t.status == "completed" %}<span class="col-muted" title="{{ t.status }}">&#x2713;</span>
+        {% elif t.status == "cancelled" or t.status == "canceled" %}<span class="col-muted" title="{{ t.status }}">&#x2298;</span>
+        {% else %}<span class="col-muted" title="{{ t.status }}">&#xB7;</span>{% endif %}
+      </span>
+      <span class="col-muted">{% if t.priority %}P{{ t.priority }}{% else %}&mdash;{% endif %}</span>
+    </div>
+    {% endfor %}
+    {% if inbox_items | length > 5 %}
+    <div class="grid-footer">
+      <span>Showing 5 of {{ inbox_items | length }}</span>
+      <a href="/inbox">View all</a>
+    </div>
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 
 {% if running %}
 <div class="card">
-  <h2>Running Agents ({{ running | length }})</h2>
-  <table>
-    <thead><tr><th>Issue</th><th>Agent</th><th>Turns</th><th>State</th></tr></thead>
-    <tbody>
+  <div class="card-header">
+    <h2>Running Agents</h2>
+    <span class="count">{{ running | length }} active</span>
+  </div>
+  <div class="grid-table">
+    <div class="grid-header" style="grid-template-columns: 2rem 1fr 6rem 5rem 6rem;">
+      <span></span>
+      <span>Issue</span>
+      <span>Agent</span>
+      <span>Turns</span>
+      <span>State</span>
+    </div>
     {% for a in running %}
-    <tr>
-      <td>{{ a.issue_identifier }}</td>
-      <td>{{ a.agent_name }}</td>
-      <td style="color: var(--muted);">{{ a.turn_count }}/{{ a.max_turns }}</td>
-      <td><span class="badge badge-running">{{ a.state }}</span></td>
-    </tr>
+    <div class="grid-row active" style="grid-template-columns: 2rem 1fr 6rem 5rem 6rem;">
+      <span class="col-accent">&#x2819;</span>
+      <span class="col-title">{{ a.issue_identifier }}</span>
+      <span class="col-agent">{{ a.agent_name }}</span>
+      <span class="col-muted">{{ a.turn_count }}/{{ a.max_turns }}</span>
+      <span class="col-accent">{{ a.state }}</span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

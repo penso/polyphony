@@ -2,11 +2,12 @@
 {% block title %}Polyphony &mdash; Repos{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Repositories</h1>
+<div class="page-header">
+  <span class="meta">{{ repo_ids | length }} repos</span>
+</div>
 
 {% if repo_ids %}
 <div class="card">
-  <h2>Managed Repositories ({{ repo_ids | length }})</h2>
   <table>
     <thead>
       <tr>
@@ -18,9 +19,9 @@
     <tbody>
     {% for repo_id in repo_ids %}
     <tr>
-      <td>{{ repo_id }}</td>
-      <td style="color: var(--muted);">&mdash;</td>
-      <td style="color: var(--muted);">&mdash;</td>
+      <td class="title-col">{{ repo_id }}</td>
+      <td class="muted">&mdash;</td>
+      <td class="muted">&mdash;</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -28,7 +29,7 @@
 </div>
 {% else %}
 <div class="card">
-  <p style="color: var(--muted);">No repositories registered. Use <code>polyphony repo add</code> to add one.</p>
+  <div class="empty">No repositories registered. Use <code>polyphony repo add</code> to add one.</div>
 </div>
 {% endif %}
 {% endblock %}

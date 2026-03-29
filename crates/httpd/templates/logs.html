@@ -2,30 +2,32 @@
 {% block title %}Polyphony &mdash; Logs{% endblock %}
 
 {% block content %}
-<h1 style="margin-bottom: 1rem;">Recent Events</h1>
+<div class="page-header">
+  <span class="meta">{{ recent_events | length }} events</span>
+</div>
 
 {% if recent_events %}
 <div class="card">
-  <table>
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Scope</th>
-        <th>Message</th>
-      </tr>
-    </thead>
-    <tbody>
+  <div class="grid-table">
+    <div class="grid-header cols-logs">
+      <span>Time</span>
+      <span>Scope</span>
+      <span>Message</span>
+    </div>
     {% for e in recent_events | reverse %}
-    <tr>
-      <td style="color: var(--muted); white-space: nowrap;">{{ e.at }}</td>
-      <td><span class="badge badge-pending">{{ e.scope }}</span></td>
-      <td>{{ e.message }}</td>
-    </tr>
+    <div class="grid-row cols-logs">
+      <span class="col-muted"><time datetime="{{ e.at }}">{{ e.at }}</time></span>
+      <span><span class="badge badge-pending">{{ e.scope }}</span></span>
+      <span>{{ e.message }}</span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+    <div class="grid-footer">
+      <span>{{ recent_events | length }} events</span>
+      <span></span>
+    </div>
+  </div>
 </div>
 {% else %}
-<div class="empty">No events yet.</div>
+<div class="card"><div class="empty">No events yet.</div></div>
 {% endif %}
 {% endblock %}
