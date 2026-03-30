@@ -25,6 +25,7 @@ struct AppState {
     schema: graphql::PolyphonySchema,
     snapshot_rx: watch::Receiver<RuntimeSnapshot>,
     template_env: Arc<Environment<'static>>,
+    webhooks_config: Option<WebhooksConfig>,
 }
 
 /// Build the full httpd router.
@@ -46,6 +47,7 @@ pub fn build_router(
         schema: schema.clone(),
         snapshot_rx,
         template_env: template_env.clone(),
+        webhooks_config: webhooks_config.clone(),
     };
 
     // Static file serving (CSS, JS, etc.)
@@ -64,6 +66,7 @@ pub fn build_router(
         .route("/outcomes", get(page_outcomes))
         .route("/tasks", get(page_tasks))
         .route("/repos", get(page_repos))
+        .route("/webhooks-config", get(page_webhooks))
         .route("/logs", get(page_logs))
         .route("/graphql", get(graphql_playground).post(graphql_handler))
         .route_service("/graphql/ws", GraphQLSubscription::new(schema))
@@ -138,6 +141,60 @@ async fn page_tasks(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn page_repos(State(state): State<AppState>) -> impl IntoResponse {
     render_page(&state, "repos.html")
+}
+
+async fn page_webhooks(
+    State(state): State<AppState>,
+) -> Result<Html<String>, (StatusCode, String)> {
+    let snapshot = state.snapshot_rx.borrow().clone();
+
+    let providers: Vec<serde_json::Value> = state
+        .webhooks_config
+        .as_ref()
+        .filter(|c| c.enabled)
+        .map(|c| {
+            c.providers
+                .iter()
+                .map(|(name, p)| {
+                    serde_json::json!({
+                        "name": name,
+                        "auth": p.auth,
+                        "header": p.header,
+                        "has_secret": !p.secret.is_empty(),
+                        "endpoint": format!("/webhooks/{name}"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let webhooks_enabled = state.webhooks_config.as_ref().is_some_and(|c| c.enabled);
+
+    let ctx = serde_json::json!({
+        "webhooks_enabled": webhooks_enabled,
+        "webhook_providers": providers,
+        "dispatch_mode": snapshot.dispatch_mode,
+        "generated_at": snapshot.generated_at,
+    });
+
+    let tmpl = state
+        .template_env
+        .get_template("webhooks.html")
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("template error: {e}"),
+            )
+        })?;
+    let rendered = tmpl
+        .render(minijinja::Value::from_serialize(&ctx))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("render error: {e}"),
+            )
+        })?;
+    Ok(Html(rendered))
 }
 
 async fn page_logs(State(state): State<AppState>) -> impl IntoResponse {

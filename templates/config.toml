@@ -292,5 +292,64 @@ offered = []
 # url = "https://example.com/polyphony/handoff"
 # bearer_token = "$HANDOFF_WEBHOOK_TOKEN"
 
+# ─── Daemon & Web UI ──────────────────────────────────────────────────────
+# The daemon section controls the built-in HTTP server (web UI + API).
+# Also configurable via env: POLYPHONY_DAEMON__LISTEN_PORT, etc.
+
+[daemon]
+# listen_address = "127.0.0.1"       # bind address (use 0.0.0.0 for all interfaces)
+# listen_port = 8080                  # set to 0 to disable the web UI
+# auth_token = "$POLYPHONY_AUTH_TOKEN"  # optional: require this token to access the web UI
+
+# Users for web UI login (only used when auth_token is not set).
+# [[daemon.users]]
+# username = "admin"
+# token = "$POLYPHONY_ADMIN_TOKEN"
+
+# ─── Inbound Webhooks ────────────────────────────────────────────────────
+# Receive push events from GitHub, GitLab, Linear, or custom services.
+# When a webhook fires, Polyphony immediately re-polls the tracker instead
+# of waiting for the next polling interval — giving near-instant response
+# to new issues, PR events, and comments.
+#
+# Webhook URL pattern: POST /webhooks/{provider_name}
+# Example: POST https://your-host:8080/webhooks/github
+#
+# Auto-provision with: polyphony webhook setup --url https://your-public-url
+#
+# Auth strategies:
+#   hmac_sha256        — GitHub-style: X-Hub-Signature-256 header with sha256=<hex>
+#   hmac_sha256_header — Linear-style: custom header with raw hex HMAC (no prefix)
+#   token_header       — GitLab-style: secret sent as-is in a custom header
+#   bearer             — generic: Authorization: Bearer <token>
+
+[daemon.webhooks]
+# enabled = true
+
+# GitHub: HMAC-SHA256 signature in X-Hub-Signature-256 header.
+# Configure the same secret in GitHub repo → Settings → Webhooks.
+# [daemon.webhooks.providers.github]
+# auth = "hmac_sha256"
+# secret = "$GITHUB_WEBHOOK_SECRET"
+
+# GitLab: secret token sent in X-Gitlab-Token header.
+# Configure in GitLab project → Settings → Webhooks.
+# [daemon.webhooks.providers.gitlab]
+# auth = "token_header"
+# secret = "$GITLAB_WEBHOOK_SECRET"
+# header = "X-Gitlab-Token"
+
+# Linear: HMAC-SHA256 in Linear-Signature header (raw hex, no sha256= prefix).
+# Configure in Linear → Settings → API → Webhooks.
+# [daemon.webhooks.providers.linear]
+# auth = "hmac_sha256_header"
+# secret = "$LINEAR_WEBHOOK_SECRET"
+# header = "Linear-Signature"
+
+# Custom provider: bearer token in Authorization header.
+# [daemon.webhooks.providers.custom]
+# auth = "bearer"
+# secret = "$CUSTOM_WEBHOOK_TOKEN"
+
 [server]
 # port = 8080

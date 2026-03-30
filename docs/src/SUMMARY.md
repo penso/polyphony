@@ -7,6 +7,7 @@
 - [Architecture](./architecture.md)
   - [Architecture Diagrams](./architecture-diagrams.md)
 - [Workflow Configuration](./workflow.md)
+- [Webhooks](./webhooks.md)
 - [Agent Configuration](./agents.md)
 - [Built-In Tools](./tools.md)
 - [Workspace Crates](./crates.md)

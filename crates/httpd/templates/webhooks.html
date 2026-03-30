@@ -1,0 +1,133 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Webhooks{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <span class="meta">
+    {% if webhooks_enabled %}
+      <span class="col-success">&#x25CF;</span> enabled &middot; {{ webhook_providers | length }} providers
+    {% else %}
+      <span class="col-muted">&#x25CB;</span> disabled
+    {% endif %}
+  </span>
+</div>
+
+{% if webhooks_enabled and webhook_providers %}
+<div class="card">
+  <div class="card-header">
+    <h2>Configured Providers</h2>
+    <span class="count">{{ webhook_providers | length }} active</span>
+  </div>
+  <div class="grid-table">
+    <div class="grid-header" style="grid-template-columns: 1fr 8rem 10rem 1fr;">
+      <span>Provider</span>
+      <span>Auth</span>
+      <span>Header</span>
+      <span>Endpoint</span>
+    </div>
+    {% for p in webhook_providers %}
+    <div class="grid-row" style="grid-template-columns: 1fr 8rem 10rem 1fr;">
+      <span class="col-title">{{ p.name }}</span>
+      <span>
+        {% if p.auth == "hmac_sha256" %}<span class="badge badge-success">HMAC</span>
+        {% elif p.auth == "hmac_sha256_header" %}<span class="badge badge-success">HMAC</span>
+        {% elif p.auth == "token_header" %}<span class="badge badge-running">Token</span>
+        {% elif p.auth == "bearer" %}<span class="badge badge-warning">Bearer</span>
+        {% else %}<span class="badge badge-pending">{{ p.auth }}</span>{% endif %}
+      </span>
+      <span class="col-muted">{% if p.header %}{{ p.header }}{% else %}default{% endif %}</span>
+      <span><code>POST {{ p.endpoint }}</code></span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% elif webhooks_enabled %}
+<div class="card"><div class="empty">Webhooks are enabled but no providers are configured.</div></div>
+{% endif %}
+
+{# How to configure #}
+<div class="card">
+  <div class="card-header">
+    <h2>{% if not webhooks_enabled %}Enable Webhooks{% else %}Add a Provider{% endif %}</h2>
+  </div>
+  <div style="padding: 1rem; font-size: 0.82rem;">
+    {% if not webhooks_enabled %}
+    <p style="color: var(--secondary); margin-bottom: 1rem;">Webhooks give Polyphony instant notification when issues, PRs, or comments change in your tracker &mdash; instead of waiting for the next poll cycle.</p>
+    {% endif %}
+
+    <p style="color: var(--secondary); margin-bottom: 0.75rem;"><strong>Option 1:</strong> Auto-provision via CLI</p>
+    <pre style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-size: 0.78rem; overflow-x: auto; margin-bottom: 1rem;"><code>polyphony webhook setup --url https://your-public-url.com</code></pre>
+
+    <p style="color: var(--secondary); margin-bottom: 0.75rem;"><strong>Option 2:</strong> Manual configuration</p>
+    <p style="color: var(--muted); font-size: 0.78rem; margin-bottom: 0.5rem;">Add one of these to your <code>config.toml</code> or <code>WORKFLOW.md</code> front matter, then restart Polyphony:</p>
+
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('github')">GitHub</button>
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('gitlab')">GitLab</button>
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('linear')">Linear</button>
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('custom')">Custom</button>
+    </div>
+
+    <pre id="snippet-area" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-size: 0.75rem; overflow-x: auto; display: none; position: relative;"><code id="snippet-code"></code><button class="btn btn-secondary" style="position: absolute; top: 0.5rem; right: 0.5rem; font-size: 0.65rem; padding: 0.15rem 0.4rem;" onclick="copySnippet()">Copy</button></pre>
+  </div>
+</div>
+
+{# Auth strategy reference #}
+<div class="card">
+  <div class="card-header">
+    <h2>Auth Strategies</h2>
+  </div>
+  <div class="grid-table">
+    <div class="grid-header" style="grid-template-columns: 10rem 1fr 8rem;">
+      <span>Strategy</span>
+      <span>How it works</span>
+      <span>Used by</span>
+    </div>
+    <div class="grid-row" style="grid-template-columns: 10rem 1fr 8rem;">
+      <span><code>hmac_sha256</code></span>
+      <span class="col-muted">HMAC-SHA256 over body, compared with <code>sha256=&lt;hex&gt;</code> in header</span>
+      <span class="col-muted">GitHub</span>
+    </div>
+    <div class="grid-row" style="grid-template-columns: 10rem 1fr 8rem;">
+      <span><code>hmac_sha256_header</code></span>
+      <span class="col-muted">HMAC-SHA256 over body, raw hex in custom header (no prefix)</span>
+      <span class="col-muted">Linear</span>
+    </div>
+    <div class="grid-row" style="grid-template-columns: 10rem 1fr 8rem;">
+      <span><code>token_header</code></span>
+      <span class="col-muted">Secret sent as-is in a custom header, constant-time comparison</span>
+      <span class="col-muted">GitLab</span>
+    </div>
+    <div class="grid-row" style="grid-template-columns: 10rem 1fr 8rem;">
+      <span><code>bearer</code></span>
+      <span class="col-muted">Token from <code>Authorization: Bearer &lt;token&gt;</code> header</span>
+      <span class="col-muted">Generic</span>
+    </div>
+  </div>
+</div>
+
+<script>
+var snippets = {
+  github: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.github]\nauth = "hmac_sha256"\nsecret = "your-github-webhook-secret"',
+  gitlab: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.gitlab]\nauth = "token_header"\nsecret = "your-gitlab-webhook-secret"\nheader = "X-Gitlab-Token"',
+  linear: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.linear]\nauth = "hmac_sha256_header"\nsecret = "your-linear-webhook-secret"\nheader = "Linear-Signature"',
+  custom: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.my-service]\nauth = "bearer"\nsecret = "your-bearer-token"'
+};
+
+function showSnippet(provider) {
+  var area = document.getElementById('snippet-area');
+  var code = document.getElementById('snippet-code');
+  code.textContent = snippets[provider] || '';
+  area.style.display = 'block';
+}
+
+function copySnippet() {
+  var code = document.getElementById('snippet-code');
+  navigator.clipboard.writeText(code.textContent).then(function() {
+    var btn = document.querySelector('#snippet-area .btn');
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+</script>
+{% endblock %}
