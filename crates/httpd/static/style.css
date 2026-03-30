@@ -430,6 +430,19 @@ select.dispatch-textarea {
 .search-input::placeholder { color: var(--muted); }
 .search-count { font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
 
+/* Repo filter pills */
+.repo-pills {
+  display: flex; gap: 0.35rem; padding: 0.4rem 0.75rem; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.repo-pill {
+  padding: 0.2rem 0.6rem; border-radius: 10px; font-size: 0.7rem; font-weight: 500;
+  cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); transition: all 0.15s; font-family: inherit;
+}
+.repo-pill:hover { border-color: var(--accent); color: var(--fg); }
+.repo-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* ===== Sortable column headers ===== */
 .grid-header .sortable {
   cursor: pointer; user-select: none;

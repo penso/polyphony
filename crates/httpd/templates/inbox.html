@@ -54,30 +54,39 @@
     <input type="text" class="search-input" id="inbox-search" placeholder="Filter by title, status, author, label..." autocomplete="off">
     <span class="search-count" id="inbox-filter-count"></span>
   </div>
-  <div class="grid-table" id="inbox-table">
-    {# Detect multi-repo mode #}
-    {% set ns = namespace(multi_repo=false) %}
-    {% if inbox_items | length > 1 %}
-      {% set first_repo = inbox_items[0].repo_id %}
-      {% for t in inbox_items %}{% if t.repo_id != first_repo %}{% set ns.multi_repo = true %}{% endif %}{% endfor %}
+  {# Repo filter pills #}
+  {% set ns_repos = namespace(repos=[]) %}
+  {% for t in inbox_items %}
+    {% if t.repo_id and t.repo_id not in ns_repos.repos %}
+      {% set ns_repos.repos = ns_repos.repos + [t.repo_id] %}
     {% endif %}
-    <div class="grid-header {% if ns.multi_repo %}cols-inbox-multi{% else %}cols-inbox{% endif %}">
+  {% endfor %}
+  {% if ns_repos.repos | length > 1 %}
+  <div class="repo-pills" id="repo-pills">
+    <button class="repo-pill active" data-repo="all" onclick="filterRepo('all', this)">All</button>
+    {% for repo in ns_repos.repos %}
+    <button class="repo-pill" data-repo="{{ repo }}" onclick="filterRepo('{{ repo }}', this)">{{ repo }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="grid-table" id="inbox-table">
+    <div class="grid-header cols-inbox-multi">
       <span></span>
       <span class="sortable" data-sort="updated" title="Sort by updated date">Updated <span class="sort-arrow" id="sort-updated">&#x25BC;</span></span>
-      {% if ns.multi_repo %}<span class="sortable" data-sort="repo" title="Sort by repository">Repo <span class="sort-arrow" id="sort-repo">&#x25BC;</span></span>{% endif %}
+      <span class="sortable" data-sort="repo" title="Sort by repository">Repo <span class="sort-arrow" id="sort-repo">&#x25BC;</span></span>
       <span class="sortable" data-sort="title" title="Sort by title">Title <span class="sort-arrow" id="sort-title">&#x25BC;</span></span>
       <span class="sortable" data-sort="status" title="Sort by status">St <span class="sort-arrow" id="sort-status">&#x25BC;</span></span>
       <span class="sortable" data-sort="approval" title="Sort by approval">Appr <span class="sort-arrow" id="sort-approval">&#x25BC;</span></span>
       <span class="sortable" data-sort="priority" title="Sort by priority">Priority <span class="sort-arrow" id="sort-priority">&#x25BC;</span></span>
     </div>
     {% for t in inbox_items %}
-    <div class="grid-row {% if ns.multi_repo %}cols-inbox-multi{% else %}cols-inbox{% endif %} inbox-row{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" data-title="{{ t.title }}" data-status="{{ t.status }}" data-approval="{{ t.approval_state }}" data-priority="{{ t.priority }}" data-updated="{{ t.updated_at }}" data-author="{{ t.author }}" data-labels="{{ t.labels | join(',') }}" data-repo="{{ t.repo_id }}" style="cursor: pointer;">
+    <div class="grid-row cols-inbox-multi inbox-row{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" data-title="{{ t.title }}" data-status="{{ t.status }}" data-approval="{{ t.approval_state }}" data-priority="{{ t.priority }}" data-updated="{{ t.updated_at }}" data-author="{{ t.author }}" data-labels="{{ t.labels | join(',') }}" data-repo="{{ t.repo_id }}" style="cursor: pointer;">
       <span>
         {% if t.has_workspace %}<span class="col-accent" title="Has workspace">&#x25CF;</span>
         {% else %}<span class="col-muted"> </span>{% endif %}
       </span>
       <span class="col-muted">{% if t.updated_at %}<time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time>{% else %}&mdash;{% endif %}</span>
-      {% if ns.multi_repo %}<span class="col-muted" title="{{ t.repo_id }}">{{ t.repo_id }}</span>{% endif %}
+      <span class="col-muted" title="{{ t.repo_id }}">{{ t.repo_id }}</span>
       <span class="col-title">
         {% if t.parent_id %}<span class="tree-prefix">├── </span>{% endif %}
         {% if t.url %}<a href="{{ t.url }}" target="_blank" onclick="event.stopPropagation()">{{ t.title }}</a>
@@ -342,12 +351,14 @@
   var rows = Array.from(table.querySelectorAll('.inbox-row'));
   var total = rows.length;
   var currentSort = { col: null, asc: true };
+  var activeRepo = 'all';
 
-  // Search/filter
+  // Combined search + repo filter
   function applyFilter() {
     var q = searchInput.value.toLowerCase().trim();
     var visible = 0;
     rows.forEach(function(row) {
+      var repoMatch = activeRepo === 'all' || (row.dataset.repo || '') === activeRepo;
       var text = (row.dataset.title || '') + ' ' +
                  (row.dataset.status || '') + ' ' +
                  (row.dataset.author || '') + ' ' +
@@ -355,11 +366,12 @@
                  (row.dataset.approval || '') + ' ' +
                  (row.dataset.priority || '') + ' ' +
                  (row.dataset.repo || '');
-      var match = !q || text.toLowerCase().indexOf(q) !== -1;
-      row.style.display = match ? '' : 'none';
-      if (match) visible++;
+      var textMatch = !q || text.toLowerCase().indexOf(q) !== -1;
+      var show = repoMatch && textMatch;
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
     });
-    if (q) {
+    if (q || activeRepo !== 'all') {
       filterCount.textContent = visible + ' of ' + total;
     } else {
       filterCount.textContent = '';
@@ -367,6 +379,11 @@
   }
 
   searchInput.addEventListener('input', applyFilter);
+
+  // Expose for repo pill filter
+  window.inboxFilter = {
+    setRepo: function(repo) { activeRepo = repo; applyFilter(); }
+  };
 
   // Focus search on / key
   document.addEventListener('keydown', function(e) {
@@ -431,6 +448,17 @@
     });
   });
 })();
+
+// Repo filter pills
+function filterRepo(repo, btn) {
+  // Update active pill
+  document.querySelectorAll('.repo-pill').forEach(function(p) { p.classList.remove('active'); });
+  btn.classList.add('active');
+  // Set global filter and re-apply
+  if (typeof inboxFilter !== 'undefined') {
+    inboxFilter.setRepo(repo);
+  }
+}
 
 // Auto-open create modal from nav link (#create)
 if (location.hash === '#create') {
