@@ -1,0 +1,85 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Polyphony
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We'd love to hear your ideas! Please describe what you need and why.
+
+        Before submitting, check if this has already been [requested](https://github.com/penso/polyphony/issues?q=is%3Aissue+label%3Aenhancement).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight Checklist
+      options:
+        - label: I have searched [existing requests](https://github.com/penso/polyphony/issues?q=is%3Aissue+label%3Aenhancement) and this hasn't been proposed yet
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem are you trying to solve? Focus on the problem, not the solution.
+      placeholder: |
+        I need to orchestrate agents across multiple repositories but
+        Polyphony currently only supports a single repo per instance...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this to work? Describe the ideal experience.
+      placeholder: |
+        A `polyphony repo add` command and web UI page to manage
+        multiple repos, each with their own tracker and agents...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds have you tried or other approaches have you considered?
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: What area does this feature relate to?
+      options:
+        - TUI (terminal dashboard)
+        - Web UI (httpd)
+        - Orchestrator / workflow engine
+        - Agent integration
+        - Tracker integration
+        - Workspace management
+        - Configuration
+        - CLI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this to your workflow?
+      options:
+        - Critical — blocking my use of Polyphony
+        - High — significant impact on productivity
+        - Medium — would be very helpful
+        - Low — nice to have
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Mockups, links to similar features in other tools, or anything else.

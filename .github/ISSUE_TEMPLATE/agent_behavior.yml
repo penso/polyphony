@@ -1,0 +1,109 @@
+name: Agent Behavior Issue
+description: Report unexpected AI agent behavior (wrong actions, stuck loops, failed dispatches)
+title: "[Agent]: "
+labels:
+  - agent-behavior
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when an orchestrated agent does something unexpected — makes unwanted changes, gets stuck in a retry loop, ignores the issue context, or produces a bad deliverable.
+
+        **Use this for:** dispatch issues, agent loops, bad PR output, wrong workspace changes.
+        **Not for:** crashes, API errors, or installation problems — use the Bug Report template instead.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight Checklist
+      options:
+        - label: I have searched [existing issues](https://github.com/penso/polyphony/issues?q=is%3Aissue+label%3Aagent-behavior) for similar reports
+          required: true
+        - label: This report does NOT contain sensitive information (API keys, tokens, passwords)
+          required: true
+
+  - type: dropdown
+    id: behavior_type
+    attributes:
+      label: Type of behavior issue
+      options:
+        - Agent performed wrong changes or unexpected actions
+        - Agent got stuck in a retry loop
+        - Agent ignored issue context or instructions
+        - Agent produced a bad or incomplete deliverable (PR)
+        - Dispatch chose the wrong agent or agent profile
+        - Agent ran out of budget or tokens unexpectedly
+        - Workspace conflicts or worktree issues
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe step-by-step what the agent did.
+      placeholder: |
+        1. Issue #42 "Fix auth token refresh" was dispatched to claude
+        2. Agent created a PR that deleted the entire auth module
+        3. After rejection, retry produced the same bad PR
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should the agent have done?
+    validations:
+      required: true
+
+  - type: input
+    id: agent
+    attributes:
+      label: Agent profile
+      description: Which agent was dispatched?
+      placeholder: "e.g., claude, codex, copilot"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model (if known)
+      description: Which model was the agent using?
+      placeholder: "e.g., claude-sonnet-4-5-20250929"
+
+  - type: dropdown
+    id: tracker
+    attributes:
+      label: Tracker
+      description: Which issue tracker is the repo using?
+      options:
+        - GitHub
+        - GitLab
+        - Linear
+        - Beads (local)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Polyphony version
+      placeholder: "e.g., polyphony 0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste TUI logs, agent output, or httpd event logs that show the behavior.
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Agent prompt files, polyphony.toml config (redact tokens), issue body, or anything else relevant.

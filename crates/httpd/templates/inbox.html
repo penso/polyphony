@@ -432,6 +432,13 @@
   });
 })();
 
+// Auto-open create modal from nav link (#create)
+if (location.hash === '#create') {
+  var m = document.getElementById('create-issue-modal');
+  if (m) m.classList.add('open');
+  history.replaceState(null, '', location.pathname);
+}
+
 // Create issue
 function createIssueAction() {
   var title = document.getElementById('new-issue-title').value.trim();

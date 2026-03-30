@@ -1,0 +1,134 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Polyphony
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this bug! Please fill out the sections below so we can reproduce and fix it.
+
+        Before submitting, please check:
+        - You're using the latest version of Polyphony (`polyphony --version`)
+        - This issue hasn't already been [reported](https://github.com/penso/polyphony/issues?q=is%3Aissue+label%3Abug)
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight Checklist
+      options:
+        - label: I have searched [existing issues](https://github.com/penso/polyphony/issues?q=is%3Aissue+label%3Abug) and this hasn't been reported yet
+          required: true
+        - label: I am using the latest version of Polyphony
+          required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly and concisely.
+      placeholder: |
+        When I start polyphony with a GitHub tracker configured, it panics
+        during the first poll cycle with "called unwrap() on a None value"...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide clear, numbered steps anyone can follow.
+      placeholder: |
+        1. Configure polyphony.toml with GitHub tracker
+        2. Run `polyphony`
+        3. Wait for the first poll cycle
+        4. Panic appears in the terminal
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages / logs
+      description: Paste any relevant error output, panics, or log lines. Run with `RUST_LOG=debug polyphony` for more detail.
+      render: shell
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      description: Did this work in a previous version?
+      options:
+        - "Yes, this worked before"
+        - "No, this never worked"
+        - "I don't know"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Polyphony version
+      description: Run `polyphony --version` and paste the output.
+      placeholder: "e.g., polyphony 0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Polyphony is affected?
+      options:
+        - TUI (terminal dashboard)
+        - Web UI (httpd)
+        - Orchestrator / dispatch
+        - Agent integration (Claude, Codex, Copilot, etc.)
+        - Tracker integration (GitHub, GitLab, Linear, Beads)
+        - Workspace / worktree management
+        - Configuration
+        - CLI commands
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Install method
+      options:
+        - Homebrew
+        - Cargo install
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Ubuntu / Debian
+        - Other Linux
+        - Windows (WSL)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, config snippets (redact tokens), polyphony.toml excerpts, or anything else that helps.
