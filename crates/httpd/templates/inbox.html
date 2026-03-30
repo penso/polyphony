@@ -15,9 +15,26 @@
       <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
     </div>
     <div class="modal-body">
+      {% if repo_registrations | length > 1 %}
+      <div style="margin-bottom: 0.75rem;">
+        <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Repository</label>
+        <select id="new-issue-repo" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;">
+          {% for r in repo_registrations %}
+          <option value="{{ r.repo_id }}">{{ r.label }} ({{ r.tracker_kind }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div style="margin-bottom: 0.75rem;">
+        <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Backend</label>
+        <select id="new-issue-backend" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;">
+          <option value="tracker">{{ tracker_kind }} (default tracker)</option>
+          <option value="beads">Beads (local)</option>
+        </select>
+      </div>
       <div style="margin-bottom: 0.75rem;">
         <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Title</label>
-        <input type="text" id="new-issue-title" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="Issue title" autofocus>
+        <input type="text" id="new-issue-title" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="Issue title">
       </div>
       <div style="margin-bottom: 0.75rem;">
         <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Description</label>
