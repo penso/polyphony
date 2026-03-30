@@ -6,16 +6,147 @@
   <span class="meta">{{ recent_events | length }} events</span>
 </div>
 
-{% if recent_events %}
-<div class="log-stream">
-  {% for e in recent_events | reverse %}
-  <div class="log-line">
-    <span class="log-ts"><time datetime="{{ e.at }}">{{ e.at }}</time></span>
-    <span class="log-scope log-scope-{{ e.scope }}">{{ e.scope }}</span>
-    <span class="log-msg">{{ e.message }}</span>
+{% if provider_budgets %}
+<div class="card">
+  <div class="card-header">
+    <h2>Provider Usage</h2>
+    <span class="count">{{ provider_budgets | length }} providers</span>
   </div>
-  {% endfor %}
+  <div class="detail-grid" style="padding: 0.9rem;">
+    {% for p in provider_budgets %}
+    <div class="detail-card">
+      <h4>{{ p.provider }}</h4>
+      <div class="detail-list">
+        <div class="detail-list-row"><span class="key">component</span><span><code>{{ p.component }}</code></span></div>
+        <div class="detail-list-row"><span class="key">session</span><span>{{ p.session_label }}</span></div>
+        <div class="detail-list-row"><span class="key">weekly</span><span>{{ p.weekly_label }}</span></div>
+        <div class="detail-list-row"><span class="key">pace</span><span>{{ p.weekly_pace_label }}</span></div>
+        <div class="detail-list-row"><span class="key">eta</span><span>{{ p.eta_label }}</span></div>
+        <div class="detail-list-row"><span class="key">reset</span><span>{% if p.weekly_reset_at %}<time datetime="{{ p.weekly_reset_at }}">{{ p.weekly_reset_at }}</time>{% elif p.session_reset_at %}<time datetime="{{ p.session_reset_at }}">{{ p.session_reset_at }}</time>{% else %}&mdash;{% endif %}</span></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
+{% endif %}
+{% if recent_events %}
+<div class="card">
+  <div class="search-bar">
+    <input type="text" class="search-input" id="log-search" placeholder="Filter by scope or message..." autocomplete="off">
+    <span class="search-count" id="log-filter-count"></span>
+  </div>
+  <div class="repo-pills" id="log-scope-pills">
+    <button class="repo-pill active" data-scope="all" onclick="filterLogScope('all', this)">All</button>
+    {% for scope in ['workflow', 'dispatch', 'handoff', 'agent', 'retry', 'tracker', 'feedback', 'worker', 'reconcile', 'startup', 'throttle'] %}
+    <button class="repo-pill" data-scope="{{ scope }}" onclick="filterLogScope('{{ scope }}', this)">{{ scope }}</button>
+    {% endfor %}
+  </div>
+  <div class="log-stream">
+    {% for e in recent_events | reverse %}
+    <div class="log-line" data-log-index="{{ loop.index0 }}" data-scope="{{ e.scope }}" data-message="{{ e.message }}">
+      <span class="log-ts"><time datetime="{{ e.at }}">{{ e.at }}</time></span>
+      <span class="log-scope log-scope-{{ e.scope }}">{{ e.scope }}</span>
+      <span class="log-msg">{{ e.message }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{% for e in recent_events | reverse %}
+<div class="modal-overlay" id="modal-log-{{ loop.index0 }}">
+  <div class="modal" style="max-width: 760px;">
+    <div class="modal-header">
+      <h2>{{ e.scope }}</h2>
+      <button class="modal-close" onclick="polyphony.closeModal(this.closest('.modal-overlay'))" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="detail-grid">
+        <div class="detail-card">
+          <h4>Event</h4>
+          <div class="detail-list">
+            <div class="detail-list-row"><span class="key">scope</span><span>{{ e.scope }}</span></div>
+            <div class="detail-list-row"><span class="key">time</span><span><time datetime="{{ e.at }}">{{ e.at }}</time></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-section">
+        <h3>Message</h3>
+        <div class="modal-description">{{ e.message }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<script>
+var activeLogScope = 'all';
+
+function filterLogScope(scope, btn) {
+  activeLogScope = scope;
+  document.querySelectorAll('#log-scope-pills .repo-pill').forEach(function(pill) {
+    pill.classList.remove('active');
+  });
+  btn.classList.add('active');
+  if (window.applyLogFilter) window.applyLogFilter();
+}
+
+(function() {
+  var searchInput = document.getElementById('log-search');
+  var filterCount = document.getElementById('log-filter-count');
+  var rows = Array.from(document.querySelectorAll('.log-line[data-log-index]'));
+  var total = rows.length;
+  var params = new URLSearchParams(location.search);
+  var initialQuery = params.get('q');
+  var initialScope = params.get('scope');
+  if (initialQuery) searchInput.value = initialQuery;
+  if (initialScope) {
+    activeLogScope = initialScope;
+    var activePill = document.querySelector('#log-scope-pills .repo-pill[data-scope="' + CSS.escape(initialScope) + '"]');
+    if (activePill) {
+      document.querySelectorAll('#log-scope-pills .repo-pill').forEach(function(pill) {
+        pill.classList.remove('active');
+      });
+      activePill.classList.add('active');
+    }
+  }
+
+  window.applyLogFilter = function() {
+    var q = searchInput.value.toLowerCase().trim();
+    var visible = 0;
+    rows.forEach(function(row) {
+      var scopeMatch = activeLogScope === 'all' || row.dataset.scope === activeLogScope;
+      var text = ((row.dataset.scope || '') + ' ' + (row.dataset.message || '')).toLowerCase();
+      var textMatch = !q || text.indexOf(q) !== -1;
+      var show = scopeMatch && textMatch;
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    filterCount.textContent = q || activeLogScope !== 'all' ? (visible + ' of ' + total) : '';
+  };
+
+  searchInput.addEventListener('input', window.applyLogFilter);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && document.activeElement !== searchInput && !document.querySelector('.modal-overlay.open')) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInput) {
+      searchInput.value = '';
+      searchInput.blur();
+      window.applyLogFilter();
+    }
+  });
+
+  rows.forEach(function(row) {
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', function() {
+      polyphony.openModal('modal-log-' + row.dataset.logIndex);
+    });
+  });
+  window.applyLogFilter();
+})();
+</script>
+
 {% else %}
 <div class="card"><div class="empty">No events yet.</div></div>
 {% endif %}

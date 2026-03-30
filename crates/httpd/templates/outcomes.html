@@ -13,9 +13,22 @@
 
 {% if ns.has_deliverables %}
 <div class="card">
+  <div class="search-bar">
+    <input type="text" class="search-input" id="outcome-search" placeholder="Filter by repo, title, issue, status, or decision..." autocomplete="off">
+    <span class="search-count" id="outcome-filter-count"></span>
+  </div>
+  {% if repo_registrations | length > 1 %}
+  <div class="repo-pills" id="outcome-repo-pills">
+    <button class="repo-pill active" data-repo="all" onclick="filterOutcomeRepo('all', this)">All</button>
+    {% for r in repo_registrations %}
+    <button class="repo-pill" data-repo="{{ r.repo_id }}" onclick="filterOutcomeRepo('{{ r.repo_id }}', this)">{{ r.label }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
   <div class="grid-table">
-    <div class="grid-header" style="grid-template-columns: 10rem 1fr 8rem 3rem 3rem;">
+    <div class="grid-header" style="grid-template-columns: 10rem 8rem 1fr 8rem 3rem 3rem;">
       <span>Created</span>
+      <span>Repo</span>
       <span>Title</span>
       <span>Output</span>
       <span title="Pull request status: … pending, ● open, ✓ merged, ✕ closed">PR</span>
@@ -23,8 +36,9 @@
     </div>
     {% for m in runs %}
     {% if m.deliverable %}
-    <div class="grid-row{% if m.deliverable.decision == 'Waiting' or m.deliverable.decision == 'waiting' %} active{% endif %}" style="grid-template-columns: 10rem 1fr 8rem 3rem 3rem; cursor: pointer;" data-outcome-run="{{ m.id }}">
+    <div class="grid-row{% if m.deliverable.decision == 'Waiting' or m.deliverable.decision == 'waiting' %} active{% endif %}" style="grid-template-columns: 10rem 8rem 1fr 8rem 3rem 3rem; cursor: pointer;" data-outcome-run="{{ m.id }}" data-repo="{{ m.repo_id }}" data-title="{{ m.title }}" data-status="{{ m.deliverable.status }}" data-decision="{{ m.deliverable.decision }}" data-issue="{{ m.issue_identifier or '' }}">
       <span class="col-muted"><time datetime="{{ m.created_at }}">{{ m.created_at }}</time></span>
+      <span class="col-muted">{% if m.repo_id %}{{ m.repo_id }}{% else %}&mdash;{% endif %}</span>
       <span class="col-title">{{ m.title }}</span>
       <span>
         {% if m.deliverable.url %}<a href="{{ m.deliverable.url }}" target="_blank" onclick="event.stopPropagation()">{{ m.deliverable.kind }}</a>
@@ -90,6 +104,10 @@
           <span class="meta-value muted">{{ m.deliverable.kind }}</span>
         </span>
         {% if m.issue_identifier %}
+        <span class="meta-item">
+          <span class="meta-label">repo:</span>
+          <span class="meta-value">{% if m.repo_id %}{{ m.repo_id }}{% else %}&mdash;{% endif %}</span>
+        </span>
         <span class="meta-item">
           <span class="meta-label">source:</span>
           <span class="meta-value">{{ m.issue_identifier }}</span>
@@ -164,8 +182,12 @@
         <button class="btn btn-primary" onclick="outcomeAction.accept('{{ m.id }}', this)">Accept</button>
         <button class="btn btn-danger" onclick="outcomeAction.reject('{{ m.id }}', this)">Reject</button>
         {% endif %}
+        {% if m.deliverable.status != "Merged" and m.deliverable.status != "merged" %}
+        <button class="btn btn-secondary" onclick="outcomeAction.merge('{{ m.id }}', this)">Merge</button>
+        {% endif %}
+        <button class="btn btn-ghost" onclick="outcomeAction.events('{{ m.issue_identifier or m.id }}')">Events</button>
         {% if m.deliverable.url %}
-        <a href="{{ m.deliverable.url }}" target="_blank" class="btn btn-secondary" onclick="event.stopPropagation()">Open &rarr;</a>
+        <a href="{{ m.deliverable.url }}" target="_blank" class="btn btn-ghost" onclick="event.stopPropagation()">Open &rarr;</a>
         {% endif %}
       </div>
     </div>
@@ -175,30 +197,95 @@
 {% endfor %}
 
 <script>
+var activeOutcomeRepo = 'all';
+
+function filterOutcomeRepo(repo, btn) {
+  activeOutcomeRepo = repo;
+  document.querySelectorAll('#outcome-repo-pills .repo-pill').forEach(function(pill) {
+    pill.classList.remove('active');
+  });
+  btn.classList.add('active');
+  if (window.applyOutcomeFilter) window.applyOutcomeFilter();
+}
+
 var outcomeAction = (function() {
   var MUTATION_RESOLVE = 'mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }';
+  var MUTATION_MERGE = 'mutation($id: String!) { mergeDeliverable(runId: $id) }';
 
   function gqlMutate(query, variables) {
-    return fetch('/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: query, variables: variables })
-    }).then(function(r) { return r.json(); });
+    return polyphony.mutate(query, variables, { reload: true, reloadDelay: 350 });
   }
 
   return {
     accept: function(runId, btn) {
-      btn.disabled = true; btn.textContent = 'Accepting...';
-      gqlMutate(MUTATION_RESOLVE, { id: runId, d: 'ACCEPTED' });
+      polyphony.withButton(btn, 'Accepting...', function() {
+        return gqlMutate(MUTATION_RESOLVE, { id: runId, d: 'ACCEPTED' });
+      });
     },
     reject: function(runId, btn) {
-      btn.disabled = true; btn.textContent = 'Rejecting...';
-      gqlMutate(MUTATION_RESOLVE, { id: runId, d: 'REJECTED' });
+      polyphony.withButton(btn, 'Rejecting...', function() {
+        return gqlMutate(MUTATION_RESOLVE, { id: runId, d: 'REJECTED' });
+      });
+    },
+    merge: function(runId, btn) {
+      polyphony.withButton(btn, 'Merging...', function() {
+        return gqlMutate(MUTATION_MERGE, { id: runId });
+      });
+    },
+    events: function(filter) {
+      location.href = '/logs?q=' + encodeURIComponent(filter);
     }
   };
 })();
 
 (function() {
+  var searchInput = document.getElementById('outcome-search');
+  var filterCount = document.getElementById('outcome-filter-count');
+  var rows = Array.from(document.querySelectorAll('.grid-row[data-outcome-run]'));
+  var total = rows.length;
+
+  window.applyOutcomeFilter = function() {
+    var q = searchInput.value.toLowerCase().trim();
+    var visible = 0;
+    rows.forEach(function(row) {
+      var repoMatch = activeOutcomeRepo === 'all' || row.dataset.repo === activeOutcomeRepo;
+      var text = [
+        row.dataset.repo,
+        row.dataset.title,
+        row.dataset.status,
+        row.dataset.decision,
+        row.dataset.issue
+      ].join(' ').toLowerCase();
+      var show = repoMatch && (!q || text.indexOf(q) !== -1);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    filterCount.textContent = q || activeOutcomeRepo !== 'all' ? (visible + ' of ' + total) : '';
+  };
+
+  var params = new URLSearchParams(location.search);
+  var initialQuery = params.get('q');
+  var initialRepo = params.get('repo');
+  if (initialQuery) searchInput.value = initialQuery;
+  if (initialRepo) {
+    var pill = document.querySelector('#outcome-repo-pills .repo-pill[data-repo="' + CSS.escape(initialRepo) + '"]');
+    if (pill) filterOutcomeRepo(initialRepo, pill);
+  }
+
+  searchInput.addEventListener('input', window.applyOutcomeFilter);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && document.activeElement !== searchInput && !document.querySelector('.modal-overlay.open')) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInput) {
+      searchInput.value = '';
+      searchInput.blur();
+      window.applyOutcomeFilter();
+    }
+  });
+  window.applyOutcomeFilter();
+
   document.querySelectorAll('.grid-row[data-outcome-run]').forEach(function(row) {
     row.addEventListener('click', function() {
       var id = row.getAttribute('data-outcome-run');

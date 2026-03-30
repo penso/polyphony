@@ -164,6 +164,20 @@ impl RuntimeService {
         self.pull_request_manager = components.pull_request_manager;
         self.pull_request_commenter = components.pull_request_commenter;
         self.feedback = components.feedback;
+        if let Some(repo) = self
+            .repos
+            .values_mut()
+            .find(|repo| repo.workflow.path == current_workflow.path)
+        {
+            repo.workflow = new_workflow.clone();
+            repo.tracker = self.tracker.clone();
+            repo.pull_request_event_source = self.pull_request_event_source.clone();
+            repo.agent = self.agent.clone();
+            repo.committer = self.committer.clone();
+            repo.pull_request_manager = self.pull_request_manager.clone();
+            repo.pull_request_commenter = self.pull_request_commenter.clone();
+            repo.feedback = self.feedback.clone();
+        }
 
         if old_tracker_key != new_tracker_key {
             self.state.throttles.remove(&old_tracker_key);

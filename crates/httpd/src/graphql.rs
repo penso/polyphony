@@ -634,9 +634,65 @@ impl MutationRoot {
             .is_ok()
     }
 
-    async fn create_issue(&self, ctx: &Context<'_>, title: String, description: String) -> bool {
+    async fn merge_deliverable(&self, ctx: &Context<'_>, run_id: String) -> bool {
         let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
-        tx.send(polyphony_orchestrator::RuntimeCommand::CreateIssue { title, description })
+        tx.send(polyphony_orchestrator::RuntimeCommand::MergeDeliverable { run_id })
+            .is_ok()
+    }
+
+    async fn resolve_task(&self, ctx: &Context<'_>, run_id: String, task_id: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::ResolveTask { run_id, task_id })
+            .is_ok()
+    }
+
+    async fn retry_task(&self, ctx: &Context<'_>, run_id: String, task_id: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::RetryTask { run_id, task_id })
+            .is_ok()
+    }
+
+    async fn stop_agent(&self, ctx: &Context<'_>, issue_id: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::StopAgent { issue_id })
+            .is_ok()
+    }
+
+    async fn create_issue(
+        &self,
+        ctx: &Context<'_>,
+        title: String,
+        description: String,
+        repo_id: Option<String>,
+    ) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::CreateIssue {
+            title,
+            description,
+            repo_id,
+        })
+        .is_ok()
+    }
+
+    async fn inject_run_feedback(
+        &self,
+        ctx: &Context<'_>,
+        run_id: String,
+        prompt: String,
+        agent_name: Option<String>,
+    ) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::InjectRunFeedback {
+            run_id,
+            prompt,
+            agent_name,
+        })
+        .is_ok()
+    }
+
+    async fn refresh_repo(&self, ctx: &Context<'_>, repo_id: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::RefreshRepo { repo_id })
             .is_ok()
     }
 
@@ -647,57 +703,34 @@ impl MutationRoot {
         source: String,
         branch: Option<String>,
     ) -> async_graphql::Result<bool> {
-        let registry_path = repo_registry_path();
+        let registry_path = polyphony_core::default_repo_registry_path();
         let mut registry = polyphony_core::load_repo_registry(&registry_path)
             .map_err(|e| async_graphql::Error::new(format!("loading registry: {e}")))?;
+        let registration = polyphony_core::build_repo_registration(&source, branch.as_deref())
+            .map_err(|e| async_graphql::Error::new(format!("building registration: {e}")))?;
 
-        let repo_id = derive_repo_id(&source);
-        if registry.contains(&repo_id) {
+        if registry.contains(&registration.repo_id) {
             return Err(async_graphql::Error::new(format!(
-                "repository '{repo_id}' is already registered"
+                "repository '{}' is already registered",
+                registration.repo_id
             )));
         }
 
-        let is_url = source.starts_with("https://")
-            || source.starts_with("http://")
-            || source.starts_with("git@")
-            || source.starts_with("ssh://");
-
-        let (worktree_path, clone_url, tracker_kind) = if is_url {
-            let worktree_path = default_repo_worktree_path(&repo_id);
-            let tracker_kind = detect_tracker_kind(&source);
-            (worktree_path, Some(source.clone()), tracker_kind)
-        } else {
-            let path = std::path::Path::new(&source)
-                .canonicalize()
-                .map_err(|e| async_graphql::Error::new(format!("invalid path: {e}")))?;
-            let tracker_kind = detect_tracker_kind_from_git_config(&path);
-            (path, None, tracker_kind)
-        };
-
-        let registration = polyphony_core::RepoRegistration {
-            repo_id: repo_id.clone(),
-            label: repo_id,
-            worktree_path,
-            clone_url,
-            default_branch: branch.unwrap_or_else(|| "main".into()),
-            tracker_kind,
-            added_at: chrono::Utc::now(),
-        };
-
-        registry.add(registration);
+        registry.add(registration.clone());
         polyphony_core::save_repo_registry(&registry_path, &registry)
             .map_err(|e| async_graphql::Error::new(format!("saving registry: {e}")))?;
 
-        // Also notify orchestrator (currently a stub)
         let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
-        let _ = tx.send(polyphony_orchestrator::RuntimeCommand::Refresh);
-        Ok(true)
+        Ok(tx
+            .send(polyphony_orchestrator::RuntimeCommand::AddRepo(
+                registration.clone(),
+            ))
+            .is_ok())
     }
 
     /// Remove a repository by ID.
     async fn remove_repo(&self, ctx: &Context<'_>, repo_id: String) -> async_graphql::Result<bool> {
-        let registry_path = repo_registry_path();
+        let registry_path = polyphony_core::default_repo_registry_path();
         let mut registry = polyphony_core::load_repo_registry(&registry_path)
             .map_err(|e| async_graphql::Error::new(format!("loading registry: {e}")))?;
 
@@ -709,73 +742,10 @@ impl MutationRoot {
             .map_err(|e| async_graphql::Error::new(format!("saving registry: {e}")))?;
 
         let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
-        let _ = tx.send(polyphony_orchestrator::RuntimeCommand::Refresh);
-        Ok(true)
+        Ok(tx
+            .send(polyphony_orchestrator::RuntimeCommand::RemoveRepo { repo_id })
+            .is_ok())
     }
-}
-
-// Repo registry helpers (mirrors cli/src/repo_manager.rs logic)
-fn repo_registry_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".polyphony")
-        .join("repos.json")
-}
-
-fn default_repo_worktree_path(repo_id: &str) -> std::path::PathBuf {
-    let sanitized = repo_id.replace('/', "_");
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".polyphony")
-        .join("repos")
-        .join(sanitized)
-        .join("main")
-}
-
-fn derive_repo_id(source: &str) -> String {
-    let url = source.strip_suffix(".git").unwrap_or(source);
-    for host in &["github.com/", "gitlab.com/", "bitbucket.org/"] {
-        if let Some(rest) = url.split_once(host).map(|(_, r)| r) {
-            let parts: Vec<&str> = rest.splitn(3, '/').collect();
-            if parts.len() >= 2 {
-                return format!("{}/{}", parts[0], parts[1]);
-            }
-        }
-    }
-    if let Some(rest) = url.split_once(':').map(|(_, r)| r)
-        && url.contains('@')
-    {
-        return rest.strip_suffix(".git").unwrap_or(rest).to_string();
-    }
-    std::path::Path::new(source)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(source)
-        .to_string()
-}
-
-fn detect_tracker_kind(source: &str) -> polyphony_core::TrackerKind {
-    let lower = source.to_ascii_lowercase();
-    if lower.contains("github.com") {
-        polyphony_core::TrackerKind::Github
-    } else if lower.contains("gitlab.com") || lower.contains("gitlab") {
-        polyphony_core::TrackerKind::Gitlab
-    } else {
-        polyphony_core::TrackerKind::None
-    }
-}
-
-fn detect_tracker_kind_from_git_config(path: &std::path::Path) -> polyphony_core::TrackerKind {
-    let git_config = path.join(".git").join("config");
-    if let Ok(contents) = std::fs::read_to_string(git_config) {
-        if contents.contains("github.com") {
-            return polyphony_core::TrackerKind::Github;
-        }
-        if contents.contains("gitlab.com") || contents.contains("gitlab") {
-            return polyphony_core::TrackerKind::Gitlab;
-        }
-    }
-    polyphony_core::TrackerKind::None
 }
 
 // ---------------------------------------------------------------------------
@@ -906,10 +876,10 @@ mod tests {
     /// The exact mutation strings used in inbox.html JavaScript.
     /// If a query here fails to validate, the frontend mutation is broken.
     const JS_MUTATION_APPROVE: &str = r#"mutation($itemId: String!, $source: String!) { approveInboxItem(itemId: $itemId, source: $source) }"#;
-    const JS_MUTATION_DISPATCH_ISSUE: &str =
-        r#"mutation($id: String!, $d: String) { dispatchIssue(issueId: $id, directives: $d) }"#;
+    const JS_MUTATION_DISPATCH_ISSUE: &str = r#"mutation($id: String!, $a: String, $d: String) { dispatchIssue(issueId: $id, agentName: $a, directives: $d) }"#;
     const JS_MUTATION_DISPATCH_PR: &str = r#"mutation($id: String!, $d: String) { dispatchPullRequestInboxItem(itemId: $id, directives: $d) }"#;
     const JS_MUTATION_CLOSE: &str = r#"mutation($id: String!) { closeTrackerIssue(issueId: $id) }"#;
+    const JS_MUTATION_REFRESH: &str = r#"mutation { refresh }"#;
 
     /// Execute a mutation and assert it succeeds (no GraphQL errors).
     async fn assert_mutation_ok(
@@ -944,7 +914,7 @@ mod tests {
         assert_mutation_ok(
             &schema,
             JS_MUTATION_DISPATCH_ISSUE,
-            json!({"id": "test-1", "d": "fix the bug"}),
+            json!({"id": "test-1", "a": "implementer", "d": "fix the bug"}),
         )
         .await;
     }
@@ -964,6 +934,12 @@ mod tests {
     async fn js_mutation_close_validates() {
         let (schema, _rx) = test_schema();
         assert_mutation_ok(&schema, JS_MUTATION_CLOSE, json!({"id": "test-1"})).await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_refresh_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_REFRESH, json!({})).await;
     }
 
     #[tokio::test]
@@ -999,22 +975,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_REFRESH, json!({})).await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::Refresh => {},
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn dispatch_issue_sends_correct_command() {
         let (schema, mut rx) = test_schema();
         assert_mutation_ok(
             &schema,
             JS_MUTATION_DISPATCH_ISSUE,
-            json!({"id": "issue-42", "d": "fix it"}),
+            json!({"id": "issue-42", "a": "implementer", "d": "fix it"}),
         )
         .await;
         let cmd = rx.try_recv().expect("expected a command");
         match cmd {
             polyphony_orchestrator::RuntimeCommand::DispatchIssue {
                 issue_id,
+                agent_name,
                 directives,
-                ..
             } => {
                 assert_eq!(issue_id, "issue-42");
+                assert_eq!(agent_name.as_deref(), Some("implementer"));
                 assert_eq!(directives.as_deref(), Some("fix it"));
             },
             other => panic!("unexpected command: {other:?}"),
@@ -1046,6 +1034,12 @@ mod tests {
     // Runs page mutation strings
     const JS_MUTATION_RESOLVE: &str = r#"mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }"#;
     const JS_MUTATION_RETRY: &str = r#"mutation($id: String!) { retryRun(runId: $id) }"#;
+    const JS_MUTATION_MERGE: &str = r#"mutation($id: String!) { mergeDeliverable(runId: $id) }"#;
+    const JS_MUTATION_INJECT_FEEDBACK: &str = r#"mutation($id: String!, $p: String!, $a: String) { injectRunFeedback(runId: $id, prompt: $p, agentName: $a) }"#;
+    const JS_MUTATION_RESOLVE_TASK: &str = r#"mutation($runId: String!, $taskId: String!) { resolveTask(runId: $runId, taskId: $taskId) }"#;
+    const JS_MUTATION_RETRY_TASK: &str = r#"mutation($runId: String!, $taskId: String!) { retryTask(runId: $runId, taskId: $taskId) }"#;
+    const JS_MUTATION_STOP_AGENT: &str = r#"mutation($id: String!) { stopAgent(issueId: $id) }"#;
+    const JS_MUTATION_REFRESH_REPO: &str = r#"mutation($id: String!) { refreshRepo(repoId: $id) }"#;
 
     #[tokio::test]
     async fn js_mutation_resolve_validates() {
@@ -1062,6 +1056,62 @@ mod tests {
     async fn js_mutation_retry_validates() {
         let (schema, _rx) = test_schema();
         assert_mutation_ok(&schema, JS_MUTATION_RETRY, json!({"id": "run-1"})).await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_merge_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_MERGE, json!({"id": "run-1"})).await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_inject_feedback_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_INJECT_FEEDBACK,
+            json!({"id": "run-1", "p": "please add tests", "a": "reviewer"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_resolve_task_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_RESOLVE_TASK,
+            json!({"runId": "run-1", "taskId": "task-1"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_retry_task_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_RETRY_TASK,
+            json!({"runId": "run-1", "taskId": "task-1"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_stop_agent_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_STOP_AGENT, json!({"id": "issue-1"})).await;
+    }
+
+    #[tokio::test]
+    async fn js_mutation_refresh_repo_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_REFRESH_REPO,
+            json!({"id": "owner/repo"}),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1096,9 +1146,114 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn merge_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_MERGE, json!({"id": "run-42"})).await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::MergeDeliverable { run_id } => {
+                assert_eq!(run_id, "run-42");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn inject_feedback_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_INJECT_FEEDBACK,
+            json!({"id": "run-42", "p": "please add a regression test", "a": "reviewer"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::InjectRunFeedback {
+                run_id,
+                prompt,
+                agent_name,
+            } => {
+                assert_eq!(run_id, "run-42");
+                assert_eq!(prompt, "please add a regression test");
+                assert_eq!(agent_name.as_deref(), Some("reviewer"));
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_task_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_RESOLVE_TASK,
+            json!({"runId": "run-42", "taskId": "task-9"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::ResolveTask { run_id, task_id } => {
+                assert_eq!(run_id, "run-42");
+                assert_eq!(task_id, "task-9");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_task_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_RETRY_TASK,
+            json!({"runId": "run-42", "taskId": "task-9"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::RetryTask { run_id, task_id } => {
+                assert_eq!(run_id, "run-42");
+                assert_eq!(task_id, "task-9");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_agent_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(&schema, JS_MUTATION_STOP_AGENT, json!({"id": "issue-42"})).await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::StopAgent { issue_id } => {
+                assert_eq!(issue_id, "issue-42");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_repo_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_REFRESH_REPO,
+            json!({"id": "owner/repo"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::RefreshRepo { repo_id } => {
+                assert_eq!(repo_id, "owner/repo");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
     // Create issue mutation
-    const JS_MUTATION_CREATE_ISSUE: &str =
-        r#"mutation($t: String!, $d: String!) { createIssue(title: $t, description: $d) }"#;
+    const JS_MUTATION_CREATE_ISSUE: &str = r#"mutation($t: String!, $d: String!, $r: String) { createIssue(title: $t, description: $d, repoId: $r) }"#;
 
     #[tokio::test]
     async fn js_mutation_create_issue_validates() {
@@ -1106,7 +1261,7 @@ mod tests {
         assert_mutation_ok(
             &schema,
             JS_MUTATION_CREATE_ISSUE,
-            json!({"t": "Fix bug", "d": "The thing is broken"}),
+            json!({"t": "Fix bug", "d": "The thing is broken", "r": null}),
         )
         .await;
     }
@@ -1117,14 +1272,19 @@ mod tests {
         assert_mutation_ok(
             &schema,
             JS_MUTATION_CREATE_ISSUE,
-            json!({"t": "New feature", "d": "Add dark mode"}),
+            json!({"t": "New feature", "d": "Add dark mode", "r": "owner/repo"}),
         )
         .await;
         let cmd = rx.try_recv().expect("expected a command");
         match cmd {
-            polyphony_orchestrator::RuntimeCommand::CreateIssue { title, description } => {
+            polyphony_orchestrator::RuntimeCommand::CreateIssue {
+                title,
+                description,
+                repo_id,
+            } => {
                 assert_eq!(title, "New feature");
                 assert_eq!(description, "Add dark mode");
+                assert_eq!(repo_id.as_deref(), Some("owner/repo"));
             },
             other => panic!("unexpected command: {other:?}"),
         }

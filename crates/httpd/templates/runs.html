@@ -8,9 +8,21 @@
 
 {% if runs %}
 <div class="card">
+  <div class="search-bar">
+    <input type="text" class="search-input" id="run-search" placeholder="Filter by repo, title, status, run kind, issue, or deliverable..." autocomplete="off">
+    <span class="search-count" id="run-filter-count"></span>
+  </div>
+  {% if repo_registrations | length > 1 %}
+  <div class="repo-pills" id="run-repo-pills">
+    <button class="repo-pill active" data-repo="all" onclick="filterRunRepo('all', this)">All</button>
+    {% for r in repo_registrations %}
+    <button class="repo-pill" data-repo="{{ r.repo_id }}" onclick="filterRunRepo('{{ r.repo_id }}', this)">{{ r.label }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
   <div class="grid-table">
     {% for m in runs %}
-    <div class="grid-row cols-runs{% if m.status == 'in_progress' or m.status == 'planning' %} active{% endif %}" data-run-id="{{ m.id }}" style="cursor: pointer;">
+    <div class="grid-row cols-runs{% if m.status == 'in_progress' or m.status == 'planning' %} active{% endif %}" data-run-id="{{ m.id }}" data-repo="{{ m.repo_id }}" data-title="{{ m.title }}" data-status="{{ m.status }}" data-kind="{{ m.kind }}" data-issue="{{ m.issue_identifier or '' }}" data-output="{% if m.deliverable %}{{ m.deliverable.kind }} {{ m.deliverable.status }} {{ m.deliverable.decision }}{% endif %}" style="cursor: pointer;">
       <div class="run-row-inner">
         <span class="run-time"><time datetime="{{ m.created_at }}">{{ m.created_at }}</time></span>
         <span class="run-status">
@@ -21,6 +33,7 @@
           {% elif m.status == "review" %}<span class="col-warning">&#x25F7;</span>
           {% else %}<span class="col-muted">&#x25CB;</span>{% endif %}
         </span>
+        <span class="run-meta">{% if m.repo_id %}{{ m.repo_id }}{% else %}&mdash;{% endif %}</span>
         <span class="run-title" title="{{ m.title }}">{{ m.title }}</span>
         {% if m.deliverable and m.deliverable.url %}
         <span class="run-meta"><a href="{{ m.deliverable.url }}" target="_blank" onclick="event.stopPropagation()">{{ m.deliverable.status }}</a></span>
@@ -127,6 +140,10 @@
         </span>
         {% endif %}
         {% if m.issue_identifier %}
+        <span class="meta-item">
+          <span class="meta-label">repo:</span>
+          <span class="meta-value">{% if m.repo_id %}{{ m.repo_id }}{% else %}&mdash;{% endif %}</span>
+        </span>
         <span class="meta-item">
           <span class="meta-label">issue:</span>
           <span class="meta-value">{{ m.issue_identifier }}</span>
@@ -327,6 +344,21 @@
       {% endif %}
       {% endif %}
 
+      {% if m.activity_log %}
+      <div class="modal-section">
+        <h3>Activity</h3>
+        <div class="log-stream" style="max-height: 16rem; overflow-y: auto;">
+          {% for entry in m.activity_log %}
+          <div class="log-line">
+            <span class="log-ts"><time datetime="{{ entry.at }}">{{ entry.at }}</time></span>
+            <span class="log-scope log-scope-Workflow">{{ entry.scope }}</span>
+            <span class="log-msg">{{ entry.message }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       {# Action buttons #}
       <div class="modal-actions">
         {% if m.deliverable and (m.deliverable.decision == "Waiting" or m.deliverable.decision == "waiting") %}
@@ -336,45 +368,171 @@
         {% if m.status == "failed" %}
         <button class="btn btn-secondary" onclick="runAction.retry('{{ m.id }}', this)">Retry</button>
         {% endif %}
+        {% if m.deliverable and m.deliverable.status != "Merged" and m.deliverable.status != "merged" %}
+        <button class="btn btn-secondary" onclick="runAction.merge('{{ m.id }}', this)">Merge</button>
+        {% endif %}
+        {% if m.workspace_path %}
+        <button class="btn btn-secondary" onclick="polyphony.openModal('feedback-run-{{ m.id }}')">Feedback</button>
+        {% endif %}
+        <button class="btn btn-ghost" onclick="runAction.events('{{ m.issue_identifier or m.id }}')">Events</button>
+        {% if m.deliverable and m.deliverable.url %}
+        <a href="{{ m.deliverable.url }}" target="_blank" class="btn btn-ghost" onclick="event.stopPropagation()">Open</a>
+        {% endif %}
       </div>
     </div>
   </div>
 </div>
+{% if m.workspace_path %}
+<div class="modal-overlay" id="feedback-run-{{ m.id }}">
+  <div class="modal" style="max-width: 640px;">
+    <div class="modal-header">
+      <h2>Inject Feedback</h2>
+      <button class="modal-close" onclick="polyphony.closeModal(this.closest('.modal-overlay'))" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <span class="meta-item"><span class="meta-label">run:</span><span class="meta-value"><code>{{ m.id }}</code></span></span>
+        <span class="meta-item"><span class="meta-label">repo:</span><span class="meta-value">{% if m.repo_id %}{{ m.repo_id }}{% else %}&mdash;{% endif %}</span></span>
+      </div>
+      {% if agent_profiles %}
+      <div style="margin-bottom: 0.75rem;">
+        <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Route To</label>
+        <select id="feedback-agent-{{ m.id }}" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;">
+          <option value="">Default feedback agent</option>
+          {% for profile in agent_profiles %}
+          <option value="{{ profile.name }}">{{ profile.name }} ({{ profile.kind }}, {{ profile.source }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div>
+        <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Prompt</label>
+        <textarea id="feedback-prompt-{{ m.id }}" class="dispatch-textarea" style="min-height: 8rem;" placeholder="Describe the additional work you want on this run..."></textarea>
+      </div>
+      <div class="modal-actions" style="border-top: none; padding-top: 0;">
+        <button class="btn btn-primary" onclick="runAction.feedback('{{ m.id }}', this)">Send Feedback</button>
+        <button class="btn btn-secondary" onclick="polyphony.closeModal('feedback-run-{{ m.id }}')">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endfor %}
 
 <script>
+var activeRunRepo = 'all';
+
+function filterRunRepo(repo, btn) {
+  activeRunRepo = repo;
+  document.querySelectorAll('#run-repo-pills .repo-pill').forEach(function(pill) {
+    pill.classList.remove('active');
+  });
+  btn.classList.add('active');
+  if (window.applyRunFilter) window.applyRunFilter();
+}
+
 var runAction = (function() {
   var MUTATIONS = {
     resolve: 'mutation($id: String!, $d: GqlDeliverableDecision!) { resolveRunDeliverable(runId: $id, decision: $d) }',
-    retry: 'mutation($id: String!) { retryRun(runId: $id) }'
+    retry: 'mutation($id: String!) { retryRun(runId: $id) }',
+    merge: 'mutation($id: String!) { mergeDeliverable(runId: $id) }',
+    feedback: 'mutation($id: String!, $p: String!, $a: String) { injectRunFeedback(runId: $id, prompt: $p, agentName: $a) }'
   };
 
   function gqlMutate(query, variables) {
-    return fetch('/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: query, variables: variables })
-    }).then(function(r) { return r.json(); });
+    return polyphony.mutate(query, variables, { reload: true, reloadDelay: 350 });
   }
 
   return {
     accept: function(runId, btn) {
-      btn.disabled = true; btn.textContent = 'Accepting...';
-      gqlMutate(MUTATIONS.resolve, { id: runId, d: 'ACCEPTED' });
+      polyphony.withButton(btn, 'Accepting...', function() {
+        return gqlMutate(MUTATIONS.resolve, { id: runId, d: 'ACCEPTED' });
+      });
     },
     reject: function(runId, btn) {
-      btn.disabled = true; btn.textContent = 'Rejecting...';
-      gqlMutate(MUTATIONS.resolve, { id: runId, d: 'REJECTED' });
+      polyphony.withButton(btn, 'Rejecting...', function() {
+        return gqlMutate(MUTATIONS.resolve, { id: runId, d: 'REJECTED' });
+      });
     },
     retry: function(runId, btn) {
-      btn.disabled = true; btn.textContent = 'Retrying...';
-      gqlMutate(MUTATIONS.retry, { id: runId });
+      polyphony.withButton(btn, 'Retrying...', function() {
+        return gqlMutate(MUTATIONS.retry, { id: runId });
+      });
+    },
+    merge: function(runId, btn) {
+      polyphony.withButton(btn, 'Merging...', function() {
+        return gqlMutate(MUTATIONS.merge, { id: runId });
+      });
+    },
+    events: function(filter) {
+      location.href = '/logs?q=' + encodeURIComponent(filter);
+    },
+    feedback: function(runId, btn) {
+      var prompt = document.getElementById('feedback-prompt-' + runId).value.trim();
+      var agentSelect = document.getElementById('feedback-agent-' + runId);
+      var agentName = agentSelect ? (agentSelect.value || null) : null;
+      if (!prompt) {
+        polyphony.toast('Feedback prompt is required', 'error');
+        document.getElementById('feedback-prompt-' + runId).focus();
+        return;
+      }
+      polyphony.withButton(btn, 'Sending...', function() {
+        return gqlMutate(MUTATIONS.feedback, { id: runId, p: prompt, a: agentName });
+      });
     }
   };
 })();
 
 // Modal open/close
 (function() {
+  var searchInput = document.getElementById('run-search');
+  var filterCount = document.getElementById('run-filter-count');
+  var rows = Array.from(document.querySelectorAll('.grid-row[data-run-id]'));
+  var total = rows.length;
+
+  window.applyRunFilter = function() {
+    var q = searchInput.value.toLowerCase().trim();
+    var visible = 0;
+    rows.forEach(function(row) {
+      var repoMatch = activeRunRepo === 'all' || row.dataset.repo === activeRunRepo;
+      var text = [
+        row.dataset.repo,
+        row.dataset.title,
+        row.dataset.status,
+        row.dataset.kind,
+        row.dataset.issue,
+        row.dataset.output
+      ].join(' ').toLowerCase();
+      var show = repoMatch && (!q || text.indexOf(q) !== -1);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    filterCount.textContent = q || activeRunRepo !== 'all' ? (visible + ' of ' + total) : '';
+  };
+
+  var params = new URLSearchParams(location.search);
+  var initialQuery = params.get('q');
+  var initialRepo = params.get('repo');
+  if (initialQuery) searchInput.value = initialQuery;
+  if (initialRepo) {
+    var pill = document.querySelector('#run-repo-pills .repo-pill[data-repo="' + CSS.escape(initialRepo) + '"]');
+    if (pill) filterRunRepo(initialRepo, pill);
+  }
+
+  searchInput.addEventListener('input', window.applyRunFilter);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && document.activeElement !== searchInput && !document.querySelector('.modal-overlay.open')) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInput) {
+      searchInput.value = '';
+      searchInput.blur();
+      window.applyRunFilter();
+    }
+  });
+  window.applyRunFilter();
+
   document.querySelectorAll('.grid-row[data-run-id]').forEach(function(row) {
     row.addEventListener('click', function() {
       var id = row.getAttribute('data-run-id');

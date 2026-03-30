@@ -1,6 +1,37 @@
 use crate::{prelude::*, *};
 
 impl RuntimeService {
+    fn rebuild_issue_repo_map(&mut self) {
+        for row in &self.state.tracker_issues {
+            if !row.repo_id.is_empty() {
+                self.state
+                    .issue_repo_map
+                    .insert(row.issue_id.clone(), row.repo_id.clone());
+            }
+        }
+        for row in &self.state.bootstrapped_tracker_issues {
+            if !row.repo_id.is_empty() {
+                self.state
+                    .issue_repo_map
+                    .insert(row.issue_id.clone(), row.repo_id.clone());
+            }
+        }
+        for retry in self.state.retrying.values() {
+            if !retry.row.repo_id.is_empty() {
+                self.state
+                    .issue_repo_map
+                    .insert(retry.row.issue_id.clone(), retry.row.repo_id.clone());
+            }
+        }
+        for context in self.state.saved_contexts.values() {
+            if !context.repo_id.is_empty() {
+                self.state
+                    .issue_repo_map
+                    .insert(context.issue_id.clone(), context.repo_id.clone());
+            }
+        }
+    }
+
     pub(crate) fn should_dispatch(&self, workflow: &LoadedWorkflow, issue: &Issue) -> bool {
         if issue.id.is_empty()
             || issue.identifier.is_empty()
@@ -90,10 +121,11 @@ impl RuntimeService {
             let delay = 10_000u64.saturating_mul(2u64.saturating_pow(exponent));
             delay.min(max_retry_backoff_ms)
         };
+        let retry_repo_id = self.repo_id_for_issue(&issue_id);
         self.claim_issue(issue_id.clone(), IssueClaimState::RetryQueued);
         self.state.retrying.insert(issue_id.clone(), RetryEntry {
             row: RetryRow {
-                repo_id: String::new(),
+                repo_id: retry_repo_id,
                 issue_id,
                 issue_identifier: issue_identifier.clone(),
                 attempt,
@@ -175,7 +207,10 @@ impl RuntimeService {
         let tracker_issues = issue_rows
             .iter()
             .map(|row| {
-                let mut row = self.resolved_tracker_issue_row(tracker_kind, row);
+                let mut row = self.resolved_tracker_issue_row(
+                    self.workflow_for_issue(&row.issue_id).config.tracker.kind,
+                    row,
+                );
                 let key = sanitize_workspace_key(&row.issue_identifier);
                 row.has_workspace = self.state.worktree_keys.contains(&key);
                 row
@@ -183,7 +218,12 @@ impl RuntimeService {
             .collect::<Vec<_>>();
         let mut inbox_items = tracker_issues
             .iter()
-            .map(|row| self.issue_inbox_item_row(tracker_kind, row))
+            .map(|row| {
+                self.issue_inbox_item_row(
+                    self.workflow_for_issue(&row.issue_id).config.tracker.kind,
+                    row,
+                )
+            })
             .collect::<Vec<_>>();
         let mut approved_inbox_keys = self
             .state
@@ -237,8 +277,17 @@ impl RuntimeService {
                     .cloned(),
             );
         }
+        let mut snapshot_repo_ids: Vec<String> = self.repos.keys().cloned().collect();
+        snapshot_repo_ids.sort();
+        let mut snapshot_repo_registrations = self
+            .repos
+            .values()
+            .map(|ctx| ctx.registration.clone())
+            .collect::<Vec<_>>();
+        snapshot_repo_registrations.sort_by(|left, right| left.repo_id.cmp(&right.repo_id));
         RuntimeSnapshot {
-            repo_ids: Vec::new(), repo_registrations: Vec::new(),
+            repo_ids: snapshot_repo_ids,
+            repo_registrations: snapshot_repo_registrations,
             generated_at: Utc::now(),
             counts: SnapshotCounts {
                 running: self.state.running.len(),
@@ -283,7 +332,7 @@ impl RuntimeService {
                 .running
                 .values()
                 .map(|running| RunningAgentRow {
-                    repo_id: String::new(),
+                    repo_id: self.repo_id_for_issue(&running.issue.id),
                     issue_id: running.issue.id.clone(),
                     issue_identifier: running.issue.identifier.clone(),
                     agent_name: running.agent_name.clone(),
@@ -353,7 +402,11 @@ impl RuntimeService {
                         })
                         .unwrap_or(0);
                     RunRow {
-                        repo_id: String::new(),
+                        repo_id: m
+                            .issue_id
+                            .as_deref()
+                            .map(|id| self.repo_id_for_issue(id))
+                            .unwrap_or_default(),
                         id: m.id.clone(),
                         kind: m.kind,
                         issue_identifier: m.issue_identifier.clone(),
@@ -379,7 +432,13 @@ impl RuntimeService {
                 .values()
                 .flat_map(|tasks| {
                     tasks.iter().map(|t| TaskRow {
-                        repo_id: String::new(),
+                        repo_id: self
+                            .state
+                            .runs
+                            .get(&t.run_id)
+                            .and_then(|m| m.issue_id.as_deref())
+                            .map(|id| self.repo_id_for_issue(id))
+                            .unwrap_or_default(),
                         id: t.id.clone(),
                         run_id: t.run_id.clone(),
                         title: t.title.clone(),
@@ -480,6 +539,7 @@ impl RuntimeService {
                     .insert(catalog.agent_name.clone(), catalog);
             }
         }
+        self.rebuild_issue_repo_map();
         self.state.from_cache = true;
         self.state.cached_at = cached.saved_at;
     }
@@ -604,6 +664,7 @@ impl RuntimeService {
                 },
             }
         }
+        self.rebuild_issue_repo_map();
     }
 
     pub(crate) fn register_throttle(&mut self, signal: RateLimitSignal) {
@@ -665,36 +726,76 @@ impl RuntimeService {
             .retain(|_, t| t.due_at > Instant::now());
         self.state.last_budget_poll_at = Some(Utc::now());
 
-        match self.tracker.fetch_budget().await {
-            Ok(Some(snapshot)) => self.record_budget(snapshot).await,
-            Ok(None) => {},
-            Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
-            Err(error) => warn!(%error, "tracker budget poll failed"),
+        let tracker_components = if self.repos.is_empty() {
+            vec![self.tracker.clone()]
+        } else {
+            self.repos
+                .values()
+                .map(|ctx| ctx.tracker.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut seen_tracker_components = HashSet::new();
+        for tracker in tracker_components {
+            let component_key = tracker.component_key();
+            if !seen_tracker_components.insert(component_key.clone()) {
+                continue;
+            }
+            match tracker.fetch_budget().await {
+                Ok(Some(snapshot)) => self.record_budget(snapshot).await,
+                Ok(None) => {},
+                Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
+                Err(error) => {
+                    warn!(%error, component = %component_key, "tracker budget poll failed")
+                },
+            }
         }
 
-        let workflow = self.workflow();
-        let all_agents = workflow.config.all_agents();
-        let agents: Vec<_> = all_agents
-            .into_iter()
-            .filter(|a| {
-                let throttle_key = format!("budget:{}", a.kind);
-                self.state
-                    .throttles
-                    .get(&throttle_key)
-                    .is_none_or(|t| t.due_at <= Instant::now())
-            })
-            .collect();
-        match self.agent.fetch_budgets(&agents).await {
-            Ok(poll_result) => {
-                for snapshot in poll_result.snapshots {
-                    self.record_budget(snapshot).await;
+        let agent_components = if self.repos.is_empty() {
+            vec![(self.agent.clone(), self.workflow())]
+        } else {
+            self.repos
+                .values()
+                .map(|ctx| (ctx.agent.clone(), ctx.workflow.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut grouped_agents = std::collections::HashMap::<
+            String,
+            (Arc<dyn AgentRuntime>, Vec<polyphony_core::AgentDefinition>),
+        >::new();
+        for (agent_runtime, workflow) in agent_components {
+            let component_key = agent_runtime.component_key();
+            let entry = grouped_agents
+                .entry(component_key)
+                .or_insert_with(|| (agent_runtime.clone(), Vec::new()));
+            for agent in workflow.config.all_agents() {
+                if entry.1.iter().all(|candidate| candidate.name != agent.name) {
+                    entry.1.push(agent);
                 }
-                for signal in poll_result.throttles {
-                    self.register_throttle(signal);
-                }
-            },
-            Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
-            Err(error) => warn!(%error, "agent budget poll failed"),
+            }
+        }
+        for (component_key, (agent_runtime, agents)) in grouped_agents {
+            let agents: Vec<_> = agents
+                .into_iter()
+                .filter(|a| {
+                    let throttle_key = format!("budget:{}", a.kind);
+                    self.state
+                        .throttles
+                        .get(&throttle_key)
+                        .is_none_or(|t| t.due_at <= Instant::now())
+                })
+                .collect();
+            match agent_runtime.fetch_budgets(&agents).await {
+                Ok(poll_result) => {
+                    for snapshot in poll_result.snapshots {
+                        self.record_budget(snapshot).await;
+                    }
+                    for signal in poll_result.throttles {
+                        self.register_throttle(signal);
+                    }
+                },
+                Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
+                Err(error) => warn!(%error, component = %component_key, "agent budget poll failed"),
+            }
         }
     }
 
@@ -776,30 +877,44 @@ impl RuntimeService {
             return;
         }
         self.state.last_model_discovery_at = Some(Utc::now());
-        let workflow = self.workflow();
-        match self
-            .agent
-            .discover_models(&workflow.config.all_agents())
-            .await
-        {
-            Ok(catalogs) => {
-                self.state.agent_catalogs = catalogs
-                    .into_iter()
-                    .map(|catalog| (catalog.agent_name.clone(), catalog))
-                    .collect();
-                for running in self.state.running.values_mut() {
-                    if let Some(selected_model) = self
-                        .state
-                        .agent_catalogs
-                        .get(&running.agent_name)
-                        .and_then(|catalog| catalog.selected_model.clone())
-                    {
-                        running.model = Some(selected_model);
+        let agent_components = if self.repos.is_empty() {
+            vec![(self.agent.clone(), self.workflow())]
+        } else {
+            self.repos
+                .values()
+                .map(|ctx| (ctx.agent.clone(), ctx.workflow.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut discovered_catalogs = std::collections::HashMap::new();
+        for (agent_runtime, workflow) in agent_components {
+            let component_key = agent_runtime.component_key();
+            match agent_runtime
+                .discover_models(&workflow.config.all_agents())
+                .await
+            {
+                Ok(catalogs) => {
+                    for catalog in catalogs {
+                        discovered_catalogs.insert(catalog.agent_name.clone(), catalog);
                     }
+                },
+                Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
+                Err(error) => {
+                    warn!(%error, component = %component_key, "agent model discovery failed")
+                },
+            }
+        }
+        if !discovered_catalogs.is_empty() {
+            self.state.agent_catalogs = discovered_catalogs;
+            for running in self.state.running.values_mut() {
+                if let Some(selected_model) = self
+                    .state
+                    .agent_catalogs
+                    .get(&running.agent_name)
+                    .and_then(|catalog| catalog.selected_model.clone())
+                {
+                    running.model = Some(selected_model);
                 }
-            },
-            Err(CoreError::RateLimited(signal)) => self.register_throttle(*signal),
-            Err(error) => warn!(%error, "agent model discovery failed"),
+            }
         }
     }
 

@@ -92,6 +92,10 @@ pub async fn run(
                         if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
                             app.create_issue_modal = None;
                         }
+                    } else if app.add_repo_modal.is_some() {
+                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
+                            app.add_repo_modal = None;
+                        }
                     } else if app.feedback_modal.is_some() {
                         if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
                             app.feedback_modal = None;
@@ -297,6 +301,11 @@ fn handle_key_event(
             tracing::info!(?command, "TUI sending command");
             let _ = command_tx.send(command);
         }
+    } else if app.add_repo_modal.is_some() {
+        if let Some(command) = handle_add_repo_modal_key(app, key) {
+            tracing::info!(?command, "TUI sending command");
+            let _ = command_tx.send(command);
+        }
     } else if app.feedback_modal.is_some() {
         if let Some(command) = handle_feedback_modal_key(app, key, snapshot) {
             tracing::info!(?command, "TUI sending command");
@@ -362,6 +371,7 @@ fn handle_key_event(
             KeyCode::Enter => {},
             KeyCode::Char('e')
             | KeyCode::Char('E')
+            | KeyCode::Char('d')
             | KeyCode::Char('c')
             | KeyCode::Char('f')
             | KeyCode::Char('w')
@@ -824,6 +834,13 @@ fn handle_key(
                     scroll: u16::MAX,
                     artifact_cache: Box::new(None),
                 });
+            } else if app.active_tab == app::ActiveTab::Repos
+                && let Some(repo) = app.selected_repo_registration(snapshot)
+            {
+                app.push_detail(crate::app::DetailView::Repo {
+                    repo_id: repo.repo_id.clone(),
+                    scroll: 0,
+                });
             }
         },
 
@@ -876,7 +893,12 @@ fn handle_key(
         // Dispatch selected item
         KeyCode::Char('n') => {
             if app.active_tab == app::ActiveTab::Inbox {
-                app.create_issue_modal = Some(crate::app::CreateIssueModalState::new());
+                let mut modal = crate::app::CreateIssueModalState::new();
+                modal.set_repo_options(snapshot.repo_ids.clone(), app.selected_repo.clone());
+                app.create_issue_modal = Some(modal);
+                return None;
+            } else if app.active_tab == app::ActiveTab::Repos {
+                app.add_repo_modal = Some(crate::app::AddRepoModalState::new());
                 return None;
             }
         },
@@ -885,6 +907,8 @@ fn handle_key(
                 && let Some(item) = app.selected_inbox_item(snapshot)
             {
                 return start_dispatch_for_inbox_item(app, item, None);
+            } else if app.active_tab == app::ActiveTab::Repos {
+                return remove_selected_repo(app, snapshot);
             }
         },
         KeyCode::Char('a') => {
@@ -982,6 +1006,9 @@ fn handle_key(
                 app::ActiveTab::Orchestrator => app
                     .selected_run(snapshot)
                     .and_then(|m| m.workspace_path.clone()),
+                app::ActiveTab::Repos => app
+                    .selected_repo_registration(snapshot)
+                    .map(|repo| repo.worktree_path.clone()),
                 app::ActiveTab::Agents => match app.selected_agent(snapshot) {
                     Some(app::SelectedAgentRow::Running(r)) => Some(r.workspace_path.clone()),
                     Some(app::SelectedAgentRow::History(h)) => h.workspace_path.clone(),
@@ -1518,6 +1545,36 @@ fn handle_detail_key(
             },
             _ => {},
         },
+        crate::app::DetailView::Repo { ref repo_id, .. } => match key {
+            KeyCode::Tab if in_split => {
+                app.split_focus = crate::app::SplitFocus::List;
+            },
+            KeyCode::Char('j') | KeyCode::Down => {
+                scroll_detail(app, 1);
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                scroll_detail_back(app, 1);
+            },
+            KeyCode::PageDown => {
+                scroll_detail(app, 8);
+            },
+            KeyCode::PageUp => {
+                scroll_detail_back(app, 8);
+            },
+            KeyCode::Char('w') => {
+                if let Some(repo) = snapshot
+                    .repo_registrations
+                    .iter()
+                    .find(|repo| repo.repo_id == *repo_id)
+                {
+                    open_terminal_at(&repo.worktree_path);
+                }
+            },
+            KeyCode::Char('d') => {
+                return remove_repo_by_id(app, repo_id);
+            },
+            _ => {},
+        },
         crate::app::DetailView::Events { .. } => match key {
             KeyCode::Char('j') | KeyCode::Down => {
                 scroll_detail(app, 1);
@@ -1884,6 +1941,13 @@ fn update_split_detail_from_selection(app: &mut AppState, snapshot: &RuntimeSnap
                     artifact_cache: Box::new(None),
                 })
         },
+        app::ActiveTab::Repos => {
+            app.selected_repo_registration(snapshot)
+                .map(|repo| crate::app::DetailView::Repo {
+                    repo_id: repo.repo_id.clone(),
+                    scroll: 0,
+                })
+        },
         _ => None,
     };
     if let Some(detail) = new_detail
@@ -2111,6 +2175,49 @@ fn request_cast_playback_from_detail(app: &mut AppState, snapshot: &RuntimeSnaps
         },
         _ => {},
     }
+}
+
+fn remove_selected_repo(app: &mut AppState, snapshot: &RuntimeSnapshot) -> Option<RuntimeCommand> {
+    let repo_id = app.selected_repo_registration(snapshot)?.repo_id.clone();
+    remove_repo_by_id(app, &repo_id)
+}
+
+fn remove_repo_by_id(app: &mut AppState, repo_id: &str) -> Option<RuntimeCommand> {
+    let registry_path = polyphony_core::default_repo_registry_path();
+    let mut registry = match polyphony_core::load_repo_registry(&registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            app.show_toast("Failed to load repo registry", Some(error.to_string()));
+            return None;
+        },
+    };
+    if registry.remove(repo_id).is_none() {
+        app.show_toast(
+            format!("Repo not found: {repo_id}"),
+            Some("The registry entry may already be gone.".into()),
+        );
+        return None;
+    }
+    if let Err(error) = polyphony_core::save_repo_registry(&registry_path, &registry) {
+        app.show_toast("Failed to save repo registry", Some(error.to_string()));
+        return None;
+    }
+    if app.selected_repo.as_deref() == Some(repo_id) {
+        app.selected_repo = None;
+    }
+    if matches!(
+        app.current_detail(),
+        Some(crate::app::DetailView::Repo {
+            repo_id: current_repo_id,
+            ..
+        }) if current_repo_id == repo_id
+    ) {
+        app.pop_detail();
+    }
+    app.show_toast(format!("Removed repo: {repo_id}"), None);
+    Some(RuntimeCommand::RemoveRepo {
+        repo_id: repo_id.to_string(),
+    })
 }
 
 /// Open the cast replay in the browser (non-blocking).
@@ -2718,12 +2825,106 @@ fn submit_create_issue_modal(app: &mut AppState) -> Option<RuntimeCommand> {
         app.show_toast("Title is required", None);
         return None;
     }
+    if modal.has_repo_selector() && modal.selected_repo_id().is_none() {
+        app.create_issue_modal = Some(modal);
+        app.show_toast("Select a repository", None);
+        return None;
+    }
     let title = modal.title.trim().to_string();
     app.show_toast(format!("Creating issue: {title}"), None);
     Some(RuntimeCommand::CreateIssue {
         title,
         description: modal.description.trim().to_string(),
+        repo_id: modal.selected_repo_id().map(ToOwned::to_owned),
     })
+}
+
+pub(crate) fn handle_add_repo_modal_key(
+    app: &mut AppState,
+    key: event::KeyEvent,
+) -> Option<RuntimeCommand> {
+    let control_held = key.modifiers.contains(event::KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => {
+            app.add_repo_modal = None;
+            None
+        },
+        KeyCode::Char('d') | KeyCode::Char('D') if control_held => submit_add_repo_modal(app),
+        KeyCode::Tab => {
+            if let Some(modal) = app.add_repo_modal.as_mut() {
+                modal.toggle_field();
+            }
+            None
+        },
+        key_code => {
+            let modal = app.add_repo_modal.as_mut()?;
+            match key_code {
+                KeyCode::Left => modal.move_left(),
+                KeyCode::Right => modal.move_right(),
+                KeyCode::Home => modal.move_home(),
+                KeyCode::End => modal.move_end(),
+                KeyCode::Backspace => modal.backspace(),
+                KeyCode::Up | KeyCode::Down | KeyCode::Enter => {},
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty() || key.modifiers == event::KeyModifiers::SHIFT =>
+                {
+                    modal.insert_char(c);
+                },
+                _ => {},
+            }
+            None
+        },
+    }
+}
+
+fn submit_add_repo_modal(app: &mut AppState) -> Option<RuntimeCommand> {
+    let modal = app.add_repo_modal.take()?;
+    if !modal.is_valid() {
+        app.add_repo_modal = Some(modal);
+        app.show_toast("Repository source is required", None);
+        return None;
+    }
+
+    let source = modal.source.trim().to_string();
+    let registration = match polyphony_core::build_repo_registration(
+        &source,
+        modal.normalized_branch().as_deref(),
+    ) {
+        Ok(registration) => registration,
+        Err(error) => {
+            app.add_repo_modal = Some(modal);
+            app.show_toast("Failed to prepare repository", Some(error.to_string()));
+            return None;
+        },
+    };
+
+    let registry_path = polyphony_core::default_repo_registry_path();
+    let mut registry = match polyphony_core::load_repo_registry(&registry_path) {
+        Ok(registry) => registry,
+        Err(error) => {
+            app.add_repo_modal = Some(modal);
+            app.show_toast("Failed to load repo registry", Some(error.to_string()));
+            return None;
+        },
+    };
+    if registry.contains(&registration.repo_id) {
+        app.add_repo_modal = Some(modal);
+        app.show_toast(
+            format!("Repo already registered: {}", registration.repo_id),
+            None,
+        );
+        return None;
+    }
+
+    registry.add(registration.clone());
+    if let Err(error) = polyphony_core::save_repo_registry(&registry_path, &registry) {
+        app.add_repo_modal = Some(modal);
+        app.show_toast("Failed to save repo registry", Some(error.to_string()));
+        return None;
+    }
+
+    app.show_toast(format!("Adding repo: {}", registration.repo_id), None);
+    Some(RuntimeCommand::AddRepo(registration))
 }
 
 pub(crate) fn handle_feedback_modal_key(
@@ -4073,6 +4274,58 @@ mod tests {
     }
 
     #[test]
+    fn repos_tab_opens_add_repo_modal() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.repo_ids = vec!["owner/repo".into()];
+        snapshot.repo_registrations = vec![polyphony_core::RepoRegistration {
+            repo_id: "owner/repo".into(),
+            label: "owner/repo".into(),
+            worktree_path: std::path::PathBuf::from("/tmp/owner-repo"),
+            clone_url: Some("https://github.com/owner/repo.git".into()),
+            default_branch: "main".into(),
+            tracker_kind: polyphony_core::TrackerKind::Github,
+            added_at: Utc::now(),
+        }];
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Repos;
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Char('n'), &snapshot);
+
+        assert!(command.is_none());
+        assert!(app.add_repo_modal.is_some());
+    }
+
+    #[test]
+    fn repos_tab_enter_opens_repo_detail() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut snapshot = test_snapshot_with_deliverable();
+        snapshot.repo_ids = vec!["owner/repo".into()];
+        snapshot.repo_registrations = vec![polyphony_core::RepoRegistration {
+            repo_id: "owner/repo".into(),
+            label: "owner/repo".into(),
+            worktree_path: std::path::PathBuf::from("/tmp/owner-repo"),
+            clone_url: Some("https://github.com/owner/repo.git".into()),
+            default_branch: "main".into(),
+            tracker_kind: polyphony_core::TrackerKind::Github,
+            added_at: Utc::now(),
+        }];
+        app.on_snapshot(&snapshot);
+        app.active_tab = crate::app::ActiveTab::Repos;
+        app.repos_state.select(Some(0));
+
+        let command = crate::event_loop::handle_key(&mut app, KeyCode::Enter, &snapshot);
+
+        assert!(command.is_none());
+        assert!(matches!(
+            app.current_detail(),
+            Some(crate::app::DetailView::Repo { repo_id, .. }) if repo_id == "owner/repo"
+        ));
+    }
+
+    #[test]
     fn create_issue_modal_submits_with_title() {
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
@@ -4108,10 +4361,67 @@ mod tests {
 
         assert!(matches!(
             command,
-            Some(polyphony_orchestrator::RuntimeCommand::CreateIssue { title, description })
-                if title == "Fix the bug" && description == "details here"
+            Some(polyphony_orchestrator::RuntimeCommand::CreateIssue {
+                title,
+                description,
+                repo_id: None
+            }) if title == "Fix the bug" && description == "details here"
         ));
         assert!(app.create_issue_modal.is_none());
+    }
+
+    #[test]
+    fn create_issue_modal_submits_selected_repo() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut modal = crate::app::CreateIssueModalState::new();
+        modal.set_repo_options(
+            vec!["owner/repo".into(), "owner/other".into()],
+            Some("owner/other".into()),
+        );
+        app.create_issue_modal = Some(modal);
+
+        for ch in "Repo scoped issue".chars() {
+            let _ = crate::event_loop::handle_create_issue_modal_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+            );
+        }
+
+        let command = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert!(matches!(
+            command,
+            Some(polyphony_orchestrator::RuntimeCommand::CreateIssue { repo_id, .. })
+                if repo_id.as_deref() == Some("owner/other")
+        ));
+    }
+
+    #[test]
+    fn create_issue_modal_requires_repo_selection_when_repo_picker_is_present() {
+        let mut app =
+            crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
+        let mut modal = crate::app::CreateIssueModalState::new();
+        modal.set_repo_options(vec!["owner/repo".into(), "owner/other".into()], None);
+        app.create_issue_modal = Some(modal);
+
+        for ch in "Repo scoped issue".chars() {
+            let _ = crate::event_loop::handle_create_issue_modal_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty()),
+            );
+        }
+
+        let command = crate::event_loop::handle_create_issue_modal_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+
+        assert!(command.is_none());
+        assert!(app.create_issue_modal.is_some());
     }
 
     #[test]

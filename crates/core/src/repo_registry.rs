@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::{prelude::*, *};
 
 /// A registered repository managed by the Polyphony daemon.
@@ -51,6 +53,138 @@ impl RepoRegistry {
     pub fn repo_ids(&self) -> Vec<String> {
         self.repos.iter().map(|r| r.repo_id.clone()).collect()
     }
+}
+
+/// Return the default path for the repo registry file.
+pub fn default_repo_registry_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("POLYPHONY_REPO_REGISTRY_PATH") {
+        return PathBuf::from(path);
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".polyphony")
+        .join("repos.json")
+}
+
+/// Derive a `repo_id` from a git remote URL or local path.
+pub fn derive_repo_id(source: &str) -> String {
+    if let Some(slug) = extract_slug_from_url(source) {
+        return slug;
+    }
+    Path::new(source)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(source)
+        .to_string()
+}
+
+/// Build a normalized repo registration from a remote URL or local path.
+pub fn build_repo_registration(
+    source: &str,
+    branch: Option<&str>,
+) -> Result<RepoRegistration, std::io::Error> {
+    let repo_id = derive_repo_id(source);
+    let is_url = source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("git@")
+        || source.starts_with("ssh://");
+
+    let (worktree_path, clone_url, tracker_kind) = if is_url {
+        (
+            default_managed_worktree_path(&repo_id),
+            Some(source.to_string()),
+            detect_tracker_kind(source),
+        )
+    } else {
+        let path = Path::new(source).canonicalize().map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("cannot resolve path '{source}': {error}"),
+            )
+        })?;
+        if !path.join(".git").exists() && !path.join("WORKFLOW.md").exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "'{}' does not appear to be a git repository",
+                    path.display()
+                ),
+            ));
+        }
+        (
+            path.clone(),
+            None,
+            detect_tracker_kind_from_local_path(&path),
+        )
+    };
+
+    Ok(RepoRegistration {
+        repo_id: repo_id.clone(),
+        label: repo_id,
+        worktree_path,
+        clone_url,
+        default_branch: branch.unwrap_or("main").to_string(),
+        tracker_kind,
+        added_at: Utc::now(),
+    })
+}
+
+fn extract_slug_from_url(url: &str) -> Option<String> {
+    let url = url.strip_suffix(".git").unwrap_or(url);
+
+    for host in ["github.com/", "gitlab.com/", "bitbucket.org/"] {
+        if let Some(rest) = url.split_once(host).map(|(_, rest)| rest) {
+            let parts: Vec<&str> = rest.splitn(3, '/').collect();
+            if parts.len() >= 2 {
+                return Some(format!("{}/{}", parts[0], parts[1]));
+            }
+        }
+    }
+
+    if let Some(rest) = url.split_once(':').map(|(_, rest)| rest)
+        && url.contains('@')
+    {
+        let rest = rest.strip_suffix(".git").unwrap_or(rest);
+        return Some(rest.to_string());
+    }
+
+    None
+}
+
+fn default_managed_worktree_path(repo_id: &str) -> PathBuf {
+    let sanitized = repo_id.replace('/', "_");
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".polyphony")
+        .join("repos")
+        .join(sanitized)
+        .join("main")
+}
+
+fn detect_tracker_kind(source: &str) -> TrackerKind {
+    let lower = source.to_ascii_lowercase();
+    if lower.contains("github.com") {
+        TrackerKind::Github
+    } else if lower.contains("gitlab.com") || lower.contains("gitlab") {
+        TrackerKind::Gitlab
+    } else {
+        TrackerKind::None
+    }
+}
+
+fn detect_tracker_kind_from_local_path(path: &Path) -> TrackerKind {
+    let git_config_path = path.join(".git").join("config");
+    if let Ok(contents) = std::fs::read_to_string(git_config_path) {
+        if contents.contains("github.com") {
+            return TrackerKind::Github;
+        }
+        if contents.contains("gitlab.com") || contents.contains("gitlab") {
+            return TrackerKind::Gitlab;
+        }
+    }
+    TrackerKind::None
 }
 
 /// Load the registry from the standard location.

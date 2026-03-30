@@ -4,44 +4,247 @@
 {% block content %}
 <div class="page-header">
   <span class="meta">{{ tasks | length }} tasks</span>
+  <div class="page-actions">
+    <span class="stat-inline">{{ counts.tasks_pending }} pending</span>
+    <span class="stat-inline">{{ counts.tasks_in_progress }} active</span>
+    <span class="stat-inline">{{ counts.tasks_completed }} done</span>
+  </div>
 </div>
 
 {% if tasks %}
 <div class="card">
-  <div class="grid-table">
-    <div class="grid-header cols-tasks">
+  <div class="search-bar">
+    <input type="text" class="search-input" id="task-search" placeholder="Filter by repo, title, run, status, category, or agent..." autocomplete="off">
+    <span class="search-count" id="task-filter-count"></span>
+  </div>
+  {% if repo_registrations | length > 1 %}
+  <div class="repo-pills" id="task-repo-pills">
+    <button class="repo-pill active" data-repo="all" onclick="filterTaskRepo('all', this)">All</button>
+    {% for r in repo_registrations %}
+    <button class="repo-pill" data-repo="{{ r.repo_id }}" onclick="filterTaskRepo('{{ r.repo_id }}', this)">{{ r.label }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="grid-table" id="tasks-table">
+    <div class="grid-header" style="grid-template-columns: 2rem 8rem 7rem 1fr 7rem 7rem 4rem 5rem 8rem;">
       <span></span>
-      <span>#</span>
+      <span>Repo</span>
       <span>Run</span>
       <span>Title</span>
+      <span>Status</span>
       <span>Category</span>
       <span>Agent</span>
       <span>Turns</span>
-      <span>Tokens</span>
+      <span>Updated</span>
     </div>
     {% for t in tasks %}
-    <div class="grid-row cols-tasks{% if t.status == 'in_progress' %} active{% endif %}">
+    <div
+      class="grid-row{% if t.status == 'in_progress' %} active{% endif %}"
+      style="grid-template-columns: 2rem 8rem 7rem 1fr 7rem 7rem 4rem 5rem 8rem; cursor: pointer;"
+      data-task-id="{{ t.id }}"
+      data-repo="{{ t.repo_id }}"
+      data-run="{{ t.run_id }}"
+      data-title="{{ t.title }}"
+      data-status="{{ t.status }}"
+      data-category="{{ t.category }}"
+      data-agent="{{ t.agent_name or '' }}"
+      data-updated="{{ t.updated_at }}"
+    >
       <span>
         {% if t.status == "completed" %}<span class="col-success">&#x2713;</span>
-        {% elif t.status == "failed" or t.status == "cancelled" %}<span class="col-danger">&#x2715;</span>
-        {% elif t.status == "in_progress" %}<span class="col-accent">&#x2819;</span>
-        {% else %}<span class="col-muted">&#x25CB;</span>{% endif %}
+        {% elif t.status == "failed" %}<span class="col-danger">&#x2715;</span>
+        {% elif t.status == "cancelled" %}<span class="col-muted">&#x2298;</span>
+        {% elif t.status == "in_progress" %}<span class="col-accent">&#x25D0;</span>
+        {% else %}<span class="col-muted">&#x2026;</span>{% endif %}
       </span>
-      <span class="col-muted">{{ t.ordinal }}</span>
+      <span class="col-muted">{% if t.repo_id %}{{ t.repo_id }}{% else %}&mdash;{% endif %}</span>
       <span class="col-muted">{{ t.run_id }}</span>
       <span class="col-title">{{ t.title }}</span>
+      <span class="col-muted">{{ t.status }}</span>
       <span class="col-muted">{{ t.category }}</span>
-      <span class="col-agent">{{ t.agent_name }}</span>
+      <span class="col-agent">{% if t.agent_name %}{{ t.agent_name }}{% else %}&mdash;{% endif %}</span>
       <span class="col-muted">{{ t.turns_completed }}</span>
-      <span class="col-muted">{{ t.total_tokens }}</span>
+      <span class="col-muted"><time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time></span>
     </div>
     {% endfor %}
     <div class="grid-footer">
       <span>{{ tasks | length }} tasks</span>
-      <span></span>
+      <span>open any row for task detail and controls</span>
     </div>
   </div>
 </div>
+
+{% for t in tasks %}
+<div class="modal-overlay" id="modal-task-{{ t.id }}">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>{{ t.title }}</h2>
+      <button class="modal-close" onclick="polyphony.closeModal(this.closest('.modal-overlay'))" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="detail-grid">
+        <div class="detail-card">
+          <h4>Task</h4>
+          <div class="detail-list">
+            <div class="detail-list-row"><span class="key">id</span><span><code>{{ t.id }}</code></span></div>
+            <div class="detail-list-row"><span class="key">repo</span><span>{% if t.repo_id %}{{ t.repo_id }}{% else %}&mdash;{% endif %}</span></div>
+            <div class="detail-list-row"><span class="key">run</span><span><code>{{ t.run_id }}</code></span></div>
+            <div class="detail-list-row"><span class="key">status</span><span>{{ t.status }}</span></div>
+            <div class="detail-list-row"><span class="key">category</span><span>{{ t.category }}</span></div>
+            <div class="detail-list-row"><span class="key">ordinal</span><span>#{{ t.ordinal }}</span></div>
+          </div>
+        </div>
+        <div class="detail-card">
+          <h4>Execution</h4>
+          <div class="detail-list">
+            <div class="detail-list-row"><span class="key">agent</span><span>{% if t.agent_name %}{{ t.agent_name }}{% else %}&mdash;{% endif %}</span></div>
+            <div class="detail-list-row"><span class="key">turns</span><span>{{ t.turns_completed }}</span></div>
+            <div class="detail-list-row"><span class="key">tokens</span><span>{{ t.total_tokens }}</span></div>
+            <div class="detail-list-row"><span class="key">created</span><span><time datetime="{{ t.created_at }}">{{ t.created_at }}</time></span></div>
+            <div class="detail-list-row"><span class="key">updated</span><span><time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time></span></div>
+            <div class="detail-list-row"><span class="key">started</span><span>{% if t.started_at %}<time datetime="{{ t.started_at }}">{{ t.started_at }}</time>{% else %}&mdash;{% endif %}</span></div>
+            <div class="detail-list-row"><span class="key">finished</span><span>{% if t.finished_at %}<time datetime="{{ t.finished_at }}">{{ t.finished_at }}</time>{% else %}&mdash;{% endif %}</span></div>
+          </div>
+        </div>
+      </div>
+
+      {% if t.description %}
+      <div class="modal-section">
+        <h3>Description</h3>
+        <div class="modal-description">{{ t.description }}</div>
+      </div>
+      {% endif %}
+
+      {% if t.activity_log %}
+      <div class="modal-section">
+        <h3>Activity</h3>
+        <div class="log-stream">
+          {% for line in t.activity_log %}
+          <div class="log-line">
+            <span class="log-scope log-scope-Workflow">task</span>
+            <span class="log-msg">{{ line }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if t.error %}
+      <div class="modal-section">
+        <h3>Error</h3>
+        <div class="modal-description" style="color: var(--danger);">{{ t.error }}</div>
+      </div>
+      {% endif %}
+
+      <div class="modal-actions">
+        {% if t.status == "failed" or t.status == "in_progress" %}
+        <button class="btn btn-secondary" onclick="taskAction.resolve('{{ t.run_id }}', '{{ t.id }}', this)">Resolve</button>
+        {% endif %}
+        {% if t.status == "failed" or t.status == "cancelled" or t.status == "pending" %}
+        <button class="btn btn-primary" onclick="taskAction.retry('{{ t.run_id }}', '{{ t.id }}', this)">Retry Task</button>
+        {% endif %}
+        <button class="btn btn-ghost" onclick="taskAction.events('{{ t.run_id }}')">Events</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<script>
+var activeTaskRepo = 'all';
+
+function filterTaskRepo(repo, btn) {
+  activeTaskRepo = repo;
+  document.querySelectorAll('#task-repo-pills .repo-pill').forEach(function(pill) {
+    pill.classList.remove('active');
+  });
+  btn.classList.add('active');
+  if (window.applyTaskFilter) window.applyTaskFilter();
+}
+
+var taskAction = (function() {
+  return {
+    resolve: function(runId, taskId, btn) {
+      polyphony.withButton(btn, 'Resolving...', function() {
+        return polyphony.mutate(
+          'mutation($runId: String!, $taskId: String!) { resolveTask(runId: $runId, taskId: $taskId) }',
+          { runId: runId, taskId: taskId },
+          { successMessage: 'Task marked resolved' }
+        );
+      });
+    },
+    retry: function(runId, taskId, btn) {
+      polyphony.withButton(btn, 'Retrying...', function() {
+        return polyphony.mutate(
+          'mutation($runId: String!, $taskId: String!) { retryTask(runId: $runId, taskId: $taskId) }',
+          { runId: runId, taskId: taskId },
+          { successMessage: 'Task retry queued' }
+        );
+      });
+    },
+    events: function(filter) {
+      location.href = '/logs?q=' + encodeURIComponent(filter);
+    }
+  };
+})();
+
+(function() {
+  var searchInput = document.getElementById('task-search');
+  var filterCount = document.getElementById('task-filter-count');
+  var rows = Array.from(document.querySelectorAll('.grid-row[data-task-id]'));
+  var total = rows.length;
+
+  window.applyTaskFilter = function() {
+    var q = searchInput.value.toLowerCase().trim();
+    var visible = 0;
+    rows.forEach(function(row) {
+      var repoMatch = activeTaskRepo === 'all' || row.dataset.repo === activeTaskRepo;
+      var text = [
+        row.dataset.repo,
+        row.dataset.run,
+        row.dataset.title,
+        row.dataset.status,
+        row.dataset.category,
+        row.dataset.agent
+      ].join(' ').toLowerCase();
+      var show = repoMatch && (!q || text.indexOf(q) !== -1);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    filterCount.textContent = q || activeTaskRepo !== 'all' ? (visible + ' of ' + total) : '';
+  };
+
+  var params = new URLSearchParams(location.search);
+  var initialQuery = params.get('q');
+  var initialRepo = params.get('repo');
+  if (initialQuery) searchInput.value = initialQuery;
+  if (initialRepo) {
+    var pill = document.querySelector('#task-repo-pills .repo-pill[data-repo="' + CSS.escape(initialRepo) + '"]');
+    if (pill) filterTaskRepo(initialRepo, pill);
+  }
+
+  searchInput.addEventListener('input', window.applyTaskFilter);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && document.activeElement !== searchInput && !document.querySelector('.modal-overlay.open')) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInput) {
+      searchInput.value = '';
+      searchInput.blur();
+      window.applyTaskFilter();
+    }
+  });
+  window.applyTaskFilter();
+
+  rows.forEach(function(row) {
+    row.addEventListener('click', function() {
+      polyphony.openModal('modal-task-' + row.dataset.taskId);
+    });
+  });
+})();
+</script>
+
 {% else %}
 <div class="card"><div class="empty">No tasks yet.</div></div>
 {% endif %}

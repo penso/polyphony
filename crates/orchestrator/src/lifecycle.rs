@@ -28,49 +28,64 @@ impl RuntimeService {
     }
 
     pub(crate) async fn startup_cleanup(&mut self) {
-        let workflow = self.workflow();
-        let terminal = workflow.config.tracker.terminal_states.clone();
         let cleanup_started = Instant::now();
-        let terminal_fetch_started = Instant::now();
-        let issues = match self
-            .tracker
-            .fetch_issues_by_states(workflow.config.tracker.project_slug.as_deref(), &terminal)
-            .await
-        {
-            Ok(issues) => issues,
-            Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(*signal);
-                return;
-            },
-            Err(error) => {
-                warn!(%error, "startup terminal cleanup skipped");
-                return;
-            },
+        let repo_entries = if self.repos.is_empty() {
+            vec![(String::new(), self.workflow(), self.tracker.clone())]
+        } else {
+            self.repos
+                .values()
+                .map(|ctx| {
+                    (
+                        ctx.registration.repo_id.clone(),
+                        ctx.workflow.clone(),
+                        ctx.tracker.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
         };
-        let terminal_fetch_elapsed = terminal_fetch_started.elapsed();
-        if terminal_fetch_elapsed >= SLOW_STARTUP_CLEANUP_WARN_THRESHOLD {
-            warn!(
-                elapsed_ms = terminal_fetch_elapsed.as_millis(),
-                issue_count = issues.len(),
-                "startup terminal issue fetch was slow"
-            );
-        }
-        let terminal_issue_ids = issues
-            .iter()
-            .map(|issue| issue.id.clone())
-            .collect::<HashSet<_>>();
-        let manager = self.build_workspace_manager(&workflow);
-        for issue in issues {
-            if let Err(error) = manager
-                .cleanup_workspace(
-                    &issue.identifier,
-                    issue.branch_name.clone(),
-                    &workflow.config.hooks,
-                )
+        let mut terminal_issue_ids = HashSet::new();
+        let mut workspace_managers = Vec::new();
+        for (repo_id, workflow, tracker) in repo_entries {
+            let terminal = workflow.config.tracker.terminal_states.clone();
+            let terminal_fetch_started = Instant::now();
+            let issues = match tracker
+                .fetch_issues_by_states(workflow.config.tracker.project_slug.as_deref(), &terminal)
                 .await
             {
-                warn!(%error, issue_identifier = %issue.identifier, "terminal cleanup failed");
+                Ok(issues) => issues,
+                Err(CoreError::RateLimited(signal)) => {
+                    self.register_throttle(*signal);
+                    continue;
+                },
+                Err(error) => {
+                    warn!(%error, repo_id, "startup terminal cleanup skipped");
+                    continue;
+                },
+            };
+            let terminal_fetch_elapsed = terminal_fetch_started.elapsed();
+            if terminal_fetch_elapsed >= SLOW_STARTUP_CLEANUP_WARN_THRESHOLD {
+                warn!(
+                    repo_id,
+                    elapsed_ms = terminal_fetch_elapsed.as_millis(),
+                    issue_count = issues.len(),
+                    "startup terminal issue fetch was slow"
+                );
             }
+            let manager = self.build_workspace_manager(&workflow);
+            for issue in issues {
+                terminal_issue_ids.insert(issue.id.clone());
+                if let Err(error) = manager
+                    .cleanup_workspace(
+                        &issue.identifier,
+                        issue.branch_name.clone(),
+                        &workflow.config.hooks,
+                    )
+                    .await
+                {
+                    warn!(%error, repo_id, issue_identifier = %issue.identifier, "terminal cleanup failed");
+                }
+            }
+            workspace_managers.push(manager);
         }
         let stale_accepted_runs = self
             .state
@@ -94,7 +109,10 @@ impl RuntimeService {
 
         // Scan remaining workspaces on disk and cache the keys.
         let workspace_scan_started = Instant::now();
-        let existing = manager.list_workspaces().await;
+        let mut existing = Vec::new();
+        for manager in &workspace_managers {
+            existing.extend(manager.list_workspaces().await);
+        }
         let workspace_scan_elapsed = workspace_scan_started.elapsed();
         if workspace_scan_elapsed >= SLOW_STARTUP_CLEANUP_WARN_THRESHOLD {
             warn!(
@@ -137,7 +155,7 @@ impl RuntimeService {
         cleanup_workspace: bool,
         reason: Option<&str>,
     ) {
-        let workflow = self.workflow();
+        let workflow = self.workflow_for_issue(issue_id);
         if let Some(running) = self.state.running.remove(issue_id) {
             running.handle.abort();
             self.release_issue(issue_id);
@@ -201,6 +219,7 @@ impl RuntimeService {
                 );
             }
             let run = build_persisted_agent_run_record(
+                self.repo_id_for_issue(issue_id),
                 &running,
                 outcome.status,
                 finished_at,
@@ -291,6 +310,7 @@ impl RuntimeService {
                 );
             }
             let run = build_persisted_agent_run_record(
+                self.repo_id_for_issue(issue_id),
                 &running,
                 outcome.status,
                 finished_at,

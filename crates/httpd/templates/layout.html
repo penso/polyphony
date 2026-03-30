@@ -70,18 +70,203 @@
         </div>
       </div>
     </div>
+    <div class="nav-actions">
+      <button class="nav-icon-btn" onclick="polyphony.refresh()" title="Refresh (r)">&#x21BB;</button>
+      <button class="nav-icon-btn" onclick="polyphony.toggleHelp()" title="Help (?)">?</button>
+    </div>
     <button id="theme-toggle" title="Theme: System">
       <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
       <svg id="theme-icon-system" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="hidden"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
   </nav>
+  {% if provider_budgets %}
+  <div class="provider-strip-shell">
+    <div class="provider-strip">
+      {% for p in provider_budgets %}
+      <div class="provider-chip{% if p.throttled %} provider-chip-throttled{% endif %}">
+        <span class="provider-chip-name">{{ p.provider }}</span>
+        <span class="provider-chip-metric">S {{ p.session_label }}</span>
+        <span class="provider-chip-metric">W {{ p.weekly_label }}</span>
+        <span class="provider-chip-metric">{{ p.weekly_pace_label }}</span>
+        <span class="provider-chip-metric">{{ p.eta_label }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   <main>
     {% block content %}{% endblock %}
   </main>
-  <footer>Polyphony &mdash; <time datetime="{{ generated_at }}">{{ generated_at }}</time></footer>
+  <footer>Polyphony &middot; <time datetime="{{ generated_at }}">{{ generated_at }}</time></footer>
+  <div class="modal-overlay" id="help-modal">
+    <div class="modal modal-help">
+      <div class="modal-header">
+        <h2>Web UI Shortcuts</h2>
+        <button class="modal-close" onclick="polyphony.closeModal('help-modal')" title="Close (Esc)">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-section">
+          <h3>Global</h3>
+          <div class="shortcut-list">
+            <div class="shortcut-row"><kbd>?</kbd><span>Open this help overlay</span></div>
+            <div class="shortcut-row"><kbd>r</kbd><span>Refresh the runtime snapshot</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span>Close modals, dropdowns, and popovers</span></div>
+            <div class="shortcut-row"><kbd>/</kbd><span>Focus search on pages that expose a filter bar</span></div>
+          </div>
+        </div>
+        <div class="modal-section">
+          <h3>Tabs</h3>
+          <div class="shortcut-list">
+            <div class="shortcut-row"><kbd>Inbox</kbd><span>Create issues, approve waiting items, dispatch work, and close tracker issues</span></div>
+            <div class="shortcut-row"><kbd>Runs</kbd><span>Inspect orchestration state, retry runs, merge deliverables, and inject feedback</span></div>
+            <div class="shortcut-row"><kbd>Tasks</kbd><span>Inspect task activity, resolve stuck tasks, and retry failed steps</span></div>
+            <div class="shortcut-row"><kbd>Outcomes</kbd><span>Review deliverables and accept, reject, or merge them</span></div>
+            <div class="shortcut-row"><kbd>Agents</kbd><span>Inspect live sessions and stop active agents</span></div>
+            <div class="shortcut-row"><kbd>Repos</kbd><span>Add, refresh, inspect, and remove repository registrations</span></div>
+            <div class="shortcut-row"><kbd>Logs</kbd><span>Filter recent runtime events by scope or message</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
 
   <script>
+    window.polyphony = (function() {
+      function isTypingTarget(target) {
+        if (!target) return false;
+        var tag = (target.tagName || '').toLowerCase();
+        return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+      }
+
+      function gql(query, variables) {
+        return fetch('/graphql', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: query, variables: variables || {} })
+        }).then(function(r) { return r.json(); }).then(function(payload) {
+          if (payload.errors && payload.errors.length) {
+            throw new Error(payload.errors[0].message);
+          }
+          return payload.data;
+        });
+      }
+
+      function toast(message, kind) {
+        var root = document.getElementById('toast-root');
+        if (!root) return;
+        var el = document.createElement('div');
+        el.className = 'toast' + (kind ? ' toast-' + kind : '');
+        el.textContent = message;
+        root.appendChild(el);
+        requestAnimationFrame(function() { el.classList.add('toast-show'); });
+        setTimeout(function() {
+          el.classList.remove('toast-show');
+          setTimeout(function() { el.remove(); }, 200);
+        }, 2600);
+      }
+
+      function openModal(idOrElement) {
+        var modal = typeof idOrElement === 'string'
+          ? document.getElementById(idOrElement)
+          : idOrElement;
+        if (modal) modal.classList.add('open');
+      }
+
+      function closeModal(idOrElement) {
+        var modal = typeof idOrElement === 'string'
+          ? document.getElementById(idOrElement)
+          : idOrElement;
+        if (modal) modal.classList.remove('open');
+      }
+
+      function closeAllModals() {
+        document.querySelectorAll('.modal-overlay.open').forEach(function(modal) {
+          modal.classList.remove('open');
+        });
+      }
+
+      function withButton(button, pendingLabel, fn) {
+        if (!button) return Promise.resolve().then(fn);
+        var oldText = button.textContent;
+        button.disabled = true;
+        if (pendingLabel) button.textContent = pendingLabel;
+        return Promise.resolve()
+          .then(fn)
+          .finally(function() {
+            button.disabled = false;
+            button.textContent = oldText;
+          });
+      }
+
+      function mutate(query, variables, options) {
+        options = options || {};
+        return gql(query, variables)
+          .then(function(data) {
+            if (options.successMessage) {
+              toast(options.successMessage, 'success');
+            }
+            if (options.reload !== false) {
+              setTimeout(function() { location.reload(); }, options.reloadDelay || 350);
+            }
+            return data;
+          })
+          .catch(function(error) {
+            toast(error.message || 'Request failed', 'error');
+            throw error;
+          });
+      }
+
+      function refresh() {
+        return mutate('mutation { refresh }', {}, {
+          successMessage: 'Refreshing snapshot',
+          reload: true,
+          reloadDelay: 250
+        });
+      }
+
+      function toggleHelp() {
+        var modal = document.getElementById('help-modal');
+        if (modal) modal.classList.toggle('open');
+      }
+
+      document.addEventListener('click', function(e) {
+        if (e.target.classList && e.target.classList.contains('modal-overlay')) {
+          closeModal(e.target);
+        }
+      });
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          closeAllModals();
+          var dropdown = document.getElementById('mode-dropdown');
+          if (dropdown) dropdown.classList.remove('open');
+          return;
+        }
+        if (isTypingTarget(e.target)) return;
+        if (e.key === '?') {
+          e.preventDefault();
+          toggleHelp();
+        } else if (e.key === 'r') {
+          e.preventDefault();
+          refresh();
+        }
+      });
+
+      return {
+        gql: gql,
+        mutate: mutate,
+        toast: toast,
+        openModal: openModal,
+        closeModal: closeModal,
+        closeAllModals: closeAllModals,
+        withButton: withButton,
+        refresh: refresh,
+        toggleHelp: toggleHelp
+      };
+    })();
+
     (function() {
       var themeCycle = ['light', 'system', 'dark'];
       var themeToggle = document.getElementById('theme-toggle');
@@ -126,16 +311,12 @@
       // Optimistic UI: update label immediately
       var labels = { MANUAL: 'manual', AUTOMATIC: 'automatic', NIGHTSHIFT: 'nightshift', IDLE: 'idle', STOP: 'stop' };
       document.getElementById('mode-label').textContent = labels[mode] || mode;
-      fetch('/graphql', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: 'mutation($m: GqlDispatchMode!) { setMode(mode: $m) }',
-          variables: { m: mode }
-        })
-      }).then(function() {
-        // Reload after a short delay to let the orchestrator process the mode change
-        setTimeout(function() { location.reload(); }, 500);
+      polyphony.mutate(
+        'mutation($m: GqlDispatchMode!) { setMode(mode: $m) }',
+        { m: mode },
+        { successMessage: 'Dispatch mode updated', reload: true, reloadDelay: 400 }
+      ).catch(function() {
+        location.reload();
       });
     }
     // Close dropdown on outside click

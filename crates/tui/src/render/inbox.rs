@@ -70,18 +70,18 @@ pub fn draw_inbox_tab(
                 .any(|(item, ..)| item.source != first.source)
         })
         .unwrap_or(false);
-    let multi_repo = item_data
-        .first()
-        .map(|(first, ..)| {
-            item_data
-                .iter()
-                .any(|(item, ..)| item.repo_id != first.repo_id)
-        })
-        .unwrap_or(false);
-    let repo_col_width: u16 = if multi_repo {
+    let show_repo_column = !snapshot.repo_ids.is_empty()
+        || item_data.iter().any(|(item, ..)| !item.repo_id.is_empty());
+    let repo_col_width: u16 = if show_repo_column {
         item_data
             .iter()
-            .map(|(item, ..)| item.repo_id.len())
+            .map(|(item, ..)| {
+                if item.repo_id.is_empty() {
+                    1
+                } else {
+                    item.repo_id.len()
+                }
+            })
             .max()
             .unwrap_or(4)
             .min(20) as u16
@@ -147,7 +147,7 @@ pub fn draw_inbox_tab(
             Style::default().fg(theme.muted),
         )));
     }
-    if multi_repo {
+    if show_repo_column {
         header_cells.push(Cell::from(Span::styled(
             "Repo",
             Style::default().fg(theme.muted),
@@ -277,9 +277,13 @@ pub fn draw_inbox_tab(
                         .alignment(Alignment::Right),
                 ));
             }
-            if multi_repo {
+            if show_repo_column {
                 let repo_label = truncate_with_ellipsis(
-                    &item.repo_id,
+                    if item.repo_id.is_empty() {
+                        "—"
+                    } else {
+                        &item.repo_id
+                    },
                     repo_col_width.saturating_sub(1) as usize,
                 );
                 cells.push(Cell::from(Span::styled(
@@ -380,7 +384,7 @@ pub fn draw_inbox_tab(
     if mixed_sources {
         col_constraints.push(Constraint::Length(source_col_width));
     }
-    if multi_repo {
+    if show_repo_column {
         col_constraints.push(Constraint::Length(repo_col_width));
     }
     col_constraints.push(Constraint::Fill(1));

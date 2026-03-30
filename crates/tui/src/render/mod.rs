@@ -5,12 +5,14 @@ pub(crate) mod detail_common;
 pub(crate) mod detail_deliverable;
 pub(crate) mod detail_inbox;
 pub(crate) mod detail_live_log;
+pub(crate) mod detail_repo;
 pub(crate) mod detail_run;
 pub(crate) mod detail_task;
 mod footer;
 mod header;
 mod inbox;
 pub(crate) mod logs;
+pub(crate) mod modal_add_repo;
 pub(crate) mod modal_create_issue;
 pub(crate) mod modal_feedback;
 mod orchestrator;
@@ -106,6 +108,10 @@ pub fn render(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, app: &
 
     if app.create_issue_modal.is_some() {
         modal_create_issue::draw_create_issue_modal(frame, app);
+    }
+
+    if app.add_repo_modal.is_some() {
+        modal_add_repo::draw_add_repo_modal(frame, app);
     }
 
     if app.feedback_modal.is_some() {
@@ -226,6 +232,9 @@ fn render_detail_view(
         },
         crate::app::DetailView::Deliverable { run_id, .. } => {
             detail_deliverable::draw_deliverable_detail(frame, area, run_id, snapshot, app);
+        },
+        crate::app::DetailView::Repo { repo_id, .. } => {
+            detail_repo::draw_repo_detail(frame, area, repo_id, snapshot, app);
         },
         crate::app::DetailView::Events { filter, .. } => {
             orchestrator::draw_filtered_events(frame, area, filter, snapshot, app);

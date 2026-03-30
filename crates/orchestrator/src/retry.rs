@@ -5,10 +5,10 @@ impl RuntimeService {
         if self.state.dispatch_mode == polyphony_core::DispatchMode::Stop {
             return;
         }
-        if self.workflow_reload_error().is_some() {
+        if self.repos.is_empty() && self.workflow_reload_error().is_some() {
             return;
         }
-        if self.workflow().config.validate().is_err() {
+        if self.repos.is_empty() && self.workflow().config.validate().is_err() {
             return;
         }
         let due_ids = self
@@ -33,7 +33,7 @@ impl RuntimeService {
         let Some(retry) = self.state.retrying.remove(&issue_id) else {
             return;
         };
-        let workflow = self.workflow();
+        let workflow = self.workflow_for_issue(&issue_id);
         if !workflow.config.has_dispatch_agents() {
             return;
         }
@@ -65,7 +65,8 @@ impl RuntimeService {
             return;
         }
         let query = workflow.config.tracker_query();
-        let issues = match self.tracker.fetch_candidate_issues(&query).await {
+        let tracker = self.tracker_for_issue(&issue_id);
+        let issues = match tracker.fetch_candidate_issues(&query).await {
             Ok(issues) => issues,
             Err(CoreError::RateLimited(signal)) => {
                 self.register_throttle(*signal);

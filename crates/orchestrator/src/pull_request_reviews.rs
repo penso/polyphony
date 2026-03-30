@@ -380,12 +380,12 @@ impl RuntimeService {
         worker_span_name: &'static str,
     ) -> Result<(), Error> {
         let command_tx = self.command_tx.clone();
-        let agent = self.agent.clone();
+        let agent = self.agent_for_issue(&issue.id);
         let hooks = workflow.config.hooks.clone();
         let active_states = workflow.config.tracker.active_states.clone();
         let max_turns = workflow.config.agent.max_turns;
         let provisioner = self.provisioner.clone();
-        let tracker = self.tracker.clone();
+        let tracker = self.tracker_for_issue(&issue.id);
         let selected_agent_name = review_agent.name.clone();
         let started_at = Utc::now();
         let issue_for_task = issue.clone();
@@ -997,6 +997,7 @@ impl RuntimeService {
             );
         }
         let persisted_run = build_persisted_agent_run_record(
+            self.repo_id_for_issue(&issue_id),
             &running,
             outcome.status,
             finished_at,
@@ -1016,7 +1017,7 @@ impl RuntimeService {
         // Pipeline worker handling
         if let Some(run_id) = running.run_id.clone() {
             let stopped = self.state.dispatch_mode == polyphony_core::DispatchMode::Stop;
-            let workflow = self.workflow();
+            let workflow = self.workflow_for_issue(&issue_id);
             let issue = running.issue.clone();
             let workspace_path = running.workspace_path.clone();
             let active_task_id = running.active_task_id.clone();
@@ -1199,7 +1200,7 @@ impl RuntimeService {
         }
 
         let stopped = self.state.dispatch_mode == polyphony_core::DispatchMode::Stop;
-        let workflow = self.workflow();
+        let workflow = self.workflow_for_issue(&issue_id);
         match outcome.status {
             AttemptStatus::Succeeded => {
                 let workflow_status = outcome
@@ -1208,7 +1209,7 @@ impl RuntimeService {
                     .unwrap_or_else(|| "Human Review".into());
                 if !workflow.config.is_active_state(&workflow_status) {
                     if let Err(error) = self
-                        .tracker
+                        .tracker_for_issue(&running.issue.id)
                         .update_issue_workflow_status(&running.issue, &workflow_status)
                         .await
                     {
@@ -1331,7 +1332,10 @@ impl RuntimeService {
                             attempt.unwrap_or(0) + 1,
                             Some(error.to_string()),
                             false,
-                            self.workflow().config.agent.max_retry_backoff_ms,
+                            self.workflow_for_issue(&issue_id)
+                                .config
+                                .agent
+                                .max_retry_backoff_ms,
                         );
                     }
                 } else {
@@ -1389,7 +1393,10 @@ impl RuntimeService {
                         attempt.unwrap_or(0) + 1,
                         outcome.error.clone(),
                         false,
-                        self.workflow().config.agent.max_retry_backoff_ms,
+                        self.workflow_for_issue(&issue_id)
+                            .config
+                            .agent
+                            .max_retry_backoff_ms,
                     );
                 }
             },
@@ -1416,8 +1423,8 @@ impl RuntimeService {
             )));
         }
         let verdict = parse_review_verdict(trimmed);
-        let comment_mode = self
-            .workflow()
+        let workflow = self.workflow_for_issue(&running.issue.id);
+        let comment_mode = workflow
             .config
             .review_events
             .pr_reviews
@@ -1428,11 +1435,13 @@ impl RuntimeService {
             .join(".polyphony")
             .join("review-comments.json");
         let review_comments = load_pull_request_review_comments(&review_comments_path).await?;
-        let commenter = self.pull_request_commenter.clone().ok_or_else(|| {
-            Error::Core(CoreError::Adapter(
-                "pull request commenter is not configured".into(),
-            ))
-        })?;
+        let commenter = self
+            .pull_request_commenter_for_repository(&review_target.repository)
+            .ok_or_else(|| {
+                Error::Core(CoreError::Adapter(
+                    "pull request commenter is not configured".into(),
+                ))
+            })?;
         let marker = running
             .review_comment_marker
             .clone()
@@ -1529,7 +1538,6 @@ impl RuntimeService {
                 )
             },
         );
-        let workflow = self.workflow();
         let manager = self.build_workspace_manager(&workflow);
         manager
             .run_after_outcome_best_effort(&workflow.config.hooks, &running.workspace_path)

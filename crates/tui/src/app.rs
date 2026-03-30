@@ -5,8 +5,8 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use polyphony_core::{
-    AgentContextSnapshot, AgentRunHistoryRow, InboxItemKind, InboxItemRow, RunRow, RunningAgentRow,
-    RuntimeSnapshot, TaskRow,
+    AgentContextSnapshot, AgentRunHistoryRow, InboxItemKind, InboxItemRow, RepoRegistration,
+    RunRow, RunningAgentRow, RuntimeSnapshot, TaskRow,
 };
 use ratatui::{layout::Rect, widgets::TableState};
 
@@ -164,7 +164,9 @@ impl DispatchModalState {
 pub(crate) struct CreateIssueModalState {
     pub title: String,
     pub description: String,
-    /// Which field has focus: 0 = title, 1 = description
+    pub repo_options: Vec<String>,
+    pub selected_repo_idx: Option<usize>,
+    /// Which field has focus: 0 = title, 1 = repo, 2 = description
     pub cursor_field: u8,
     /// Character cursor position within the focused field
     pub cursor_pos: usize,
@@ -175,9 +177,81 @@ impl CreateIssueModalState {
         Self {
             title: String::new(),
             description: String::new(),
+            repo_options: Vec::new(),
+            selected_repo_idx: None,
             cursor_field: 0,
             cursor_pos: 0,
         }
+    }
+
+    pub(crate) fn set_repo_options(
+        &mut self,
+        repo_options: Vec<String>,
+        selected_repo: Option<String>,
+    ) {
+        self.repo_options = repo_options;
+        self.selected_repo_idx = if self.repo_options.is_empty() {
+            None
+        } else if let Some(selected_repo) = selected_repo {
+            self.repo_options
+                .iter()
+                .position(|repo_id| repo_id == &selected_repo)
+        } else if self.repo_options.len() == 1 {
+            Some(0)
+        } else {
+            None
+        };
+    }
+
+    pub(crate) fn has_repo_selector(&self) -> bool {
+        !self.repo_options.is_empty()
+    }
+
+    pub(crate) fn selected_repo_id(&self) -> Option<&str> {
+        self.selected_repo_idx
+            .and_then(|idx| self.repo_options.get(idx))
+            .map(String::as_str)
+    }
+
+    pub(crate) fn cycle_repo_next(&mut self) {
+        if self.repo_options.is_empty() {
+            return;
+        }
+        self.selected_repo_idx = Some(match self.selected_repo_idx {
+            None => 0,
+            Some(idx) => (idx + 1) % self.repo_options.len(),
+        });
+    }
+
+    pub(crate) fn cycle_repo_previous(&mut self) {
+        if self.repo_options.is_empty() {
+            return;
+        }
+        self.selected_repo_idx = Some(match self.selected_repo_idx {
+            None => self.repo_options.len().saturating_sub(1),
+            Some(0) => self.repo_options.len().saturating_sub(1),
+            Some(idx) => idx.saturating_sub(1),
+        });
+    }
+
+    fn repo_field_index(&self) -> u8 {
+        if self.has_repo_selector() {
+            1
+        } else {
+            255
+        }
+    }
+
+    pub(crate) fn description_field_index(&self) -> u8 {
+        if self.has_repo_selector() {
+            2
+        } else {
+            1
+        }
+    }
+
+    pub(crate) fn focused_on_repo(&self) -> bool {
+        self.cursor_field == self.repo_field_index()
     }
 
     pub(crate) fn focused_text(&self) -> &str {
@@ -197,6 +271,9 @@ impl CreateIssueModalState {
     }
 
     pub(crate) fn insert_char(&mut self, ch: char) {
+        if self.focused_on_repo() {
+            return;
+        }
         let pos = self.cursor_pos;
         let text = self.focused_text_mut();
         let index = char_to_byte_index(text, pos);
@@ -205,9 +282,161 @@ impl CreateIssueModalState {
     }
 
     pub(crate) fn insert_newline(&mut self) {
-        if self.cursor_field == 1 {
+        if self.cursor_field == self.description_field_index() {
             self.insert_char('\n');
         }
+    }
+
+    pub(crate) fn backspace(&mut self) {
+        if self.focused_on_repo() {
+            return;
+        }
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let remove_at = self.cursor_pos - 1;
+        let cursor = self.cursor_pos;
+        let text = self.focused_text_mut();
+        let before = text.chars().take(remove_at);
+        let after = text.chars().skip(cursor);
+        *text = before.chain(after).collect();
+        self.cursor_pos = remove_at;
+    }
+
+    pub(crate) fn move_left(&mut self) {
+        if self.focused_on_repo() {
+            self.cycle_repo_previous();
+            return;
+        }
+        self.cursor_pos = self.cursor_pos.saturating_sub(1);
+    }
+
+    pub(crate) fn move_right(&mut self) {
+        if self.focused_on_repo() {
+            self.cycle_repo_next();
+            return;
+        }
+        let len = self.focused_text().chars().count();
+        self.cursor_pos = (self.cursor_pos + 1).min(len);
+    }
+
+    pub(crate) fn move_home(&mut self) {
+        if self.focused_on_repo() {
+            self.selected_repo_idx = if self.repo_options.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            return;
+        }
+        self.cursor_pos = line_start(self.focused_text(), self.cursor_pos);
+    }
+
+    pub(crate) fn move_end(&mut self) {
+        if self.focused_on_repo() {
+            self.selected_repo_idx = if self.repo_options.is_empty() {
+                None
+            } else {
+                Some(self.repo_options.len().saturating_sub(1))
+            };
+            return;
+        }
+        self.cursor_pos = line_end(self.focused_text(), self.cursor_pos);
+    }
+
+    pub(crate) fn move_up(&mut self) {
+        if self.focused_on_repo() {
+            self.cycle_repo_previous();
+            return;
+        }
+        let text = self.focused_text();
+        let current_start = line_start(text, self.cursor_pos);
+        if current_start == 0 {
+            return;
+        }
+        let column = self.cursor_pos.saturating_sub(current_start);
+        let previous_start = line_start(text, current_start - 1);
+        let previous_end = line_end(text, previous_start);
+        self.cursor_pos = previous_start + column.min(previous_end.saturating_sub(previous_start));
+    }
+
+    pub(crate) fn move_down(&mut self) {
+        if self.focused_on_repo() {
+            self.cycle_repo_next();
+            return;
+        }
+        let text = self.focused_text();
+        let current_start = line_start(text, self.cursor_pos);
+        let current_end = line_end(text, self.cursor_pos);
+        let total = text.chars().count();
+        let Some(next_start) = (current_end < total).then_some(current_end + 1) else {
+            return;
+        };
+        let column = self.cursor_pos.saturating_sub(current_start);
+        let next_end = line_end(text, next_start);
+        self.cursor_pos = next_start + column.min(next_end.saturating_sub(next_start));
+    }
+
+    pub(crate) fn toggle_field(&mut self) {
+        self.cursor_field = match self.cursor_field {
+            0 if self.has_repo_selector() => 1,
+            0 => 1,
+            1 if self.has_repo_selector() => 2,
+            _ => 0,
+        };
+        if !self.focused_on_repo() {
+            let len = self.focused_text().chars().count();
+            self.cursor_pos = self.cursor_pos.min(len);
+        }
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.title.trim().is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AddRepoModalState {
+    pub source: String,
+    pub branch: String,
+    /// Which field has focus: 0 = source, 1 = branch
+    pub cursor_field: u8,
+    /// Character cursor position within the focused field
+    pub cursor_pos: usize,
+}
+
+impl AddRepoModalState {
+    pub(crate) fn new() -> Self {
+        Self {
+            source: String::new(),
+            branch: "main".into(),
+            cursor_field: 0,
+            cursor_pos: 0,
+        }
+    }
+
+    pub(crate) fn focused_text(&self) -> &str {
+        if self.cursor_field == 0 {
+            &self.source
+        } else {
+            &self.branch
+        }
+    }
+
+    fn focused_text_mut(&mut self) -> &mut String {
+        if self.cursor_field == 0 {
+            &mut self.source
+        } else {
+            &mut self.branch
+        }
+    }
+
+    pub(crate) fn insert_char(&mut self, ch: char) {
+        let pos = self.cursor_pos;
+        let text = self.focused_text_mut();
+        let index = char_to_byte_index(text, pos);
+        text.insert(index, ch);
+        self.cursor_pos += 1;
     }
 
     pub(crate) fn backspace(&mut self) {
@@ -240,31 +469,6 @@ impl CreateIssueModalState {
         self.cursor_pos = line_end(self.focused_text(), self.cursor_pos);
     }
 
-    pub(crate) fn move_up(&mut self) {
-        let text = self.focused_text();
-        let current_start = line_start(text, self.cursor_pos);
-        if current_start == 0 {
-            return;
-        }
-        let column = self.cursor_pos.saturating_sub(current_start);
-        let previous_start = line_start(text, current_start - 1);
-        let previous_end = line_end(text, previous_start);
-        self.cursor_pos = previous_start + column.min(previous_end.saturating_sub(previous_start));
-    }
-
-    pub(crate) fn move_down(&mut self) {
-        let text = self.focused_text();
-        let current_start = line_start(text, self.cursor_pos);
-        let current_end = line_end(text, self.cursor_pos);
-        let total = text.chars().count();
-        let Some(next_start) = (current_end < total).then_some(current_end + 1) else {
-            return;
-        };
-        let column = self.cursor_pos.saturating_sub(current_start);
-        let next_end = line_end(text, next_start);
-        self.cursor_pos = next_start + column.min(next_end.saturating_sub(next_start));
-    }
-
     pub(crate) fn toggle_field(&mut self) {
         self.cursor_field = if self.cursor_field == 0 {
             1
@@ -276,7 +480,16 @@ impl CreateIssueModalState {
     }
 
     pub(crate) fn is_valid(&self) -> bool {
-        !self.title.trim().is_empty()
+        !self.source.trim().is_empty()
+    }
+
+    pub(crate) fn normalized_branch(&self) -> Option<String> {
+        let branch = self.branch.trim();
+        if branch.is_empty() {
+            None
+        } else {
+            Some(branch.to_string())
+        }
     }
 }
 
@@ -446,6 +659,10 @@ pub(crate) enum DetailView {
         run_id: String,
         scroll: u16,
     },
+    Repo {
+        repo_id: String,
+        scroll: u16,
+    },
     /// Full-screen filtered event log for a specific inbox item.
     Events {
         /// Filter key: events whose message contains this string are shown.
@@ -474,6 +691,7 @@ impl DetailView {
             | Self::Task { scroll, .. }
             | Self::Agent { scroll, .. }
             | Self::Deliverable { scroll, .. }
+            | Self::Repo { scroll, .. }
             | Self::Events { scroll, .. }
             | Self::LiveLog { scroll, .. } => *scroll,
         }
@@ -486,6 +704,7 @@ impl DetailView {
             | Self::Task { scroll, .. }
             | Self::Agent { scroll, .. }
             | Self::Deliverable { scroll, .. }
+            | Self::Repo { scroll, .. }
             | Self::Events { scroll, .. }
             | Self::LiveLog { scroll, .. } => scroll,
         }
@@ -706,6 +925,7 @@ pub struct AppState {
     pub agent_picker_issue_id: Option<String>,
     pub dispatch_modal: Option<DispatchModalState>,
     pub create_issue_modal: Option<CreateIssueModalState>,
+    pub add_repo_modal: Option<AddRepoModalState>,
     pub feedback_modal: Option<FeedbackModalState>,
     /// Last left-click time for double-click detection.
     pub last_click_at: Option<Instant>,
@@ -797,6 +1017,7 @@ impl AppState {
             agent_picker_issue_id: None,
             dispatch_modal: None,
             create_issue_modal: None,
+            add_repo_modal: None,
             feedback_modal: None,
             last_click_at: None,
             last_click_pos: (0, 0),
@@ -913,6 +1134,7 @@ impl AppState {
             **artifact_cache = None;
         }
         sync_selection(&mut self.tasks_state, snapshot.tasks.len());
+        sync_selection(&mut self.repos_state, snapshot.repo_registrations.len());
         let deliverable_count = snapshot
             .runs
             .iter()
@@ -999,6 +1221,10 @@ impl AppState {
                 DetailView::Run { run_id, .. } | DetailView::Deliverable { run_id, .. } => {
                     !snapshot.runs.iter().any(|m| m.id == *run_id)
                 },
+                DetailView::Repo { repo_id, .. } => !snapshot
+                    .repo_registrations
+                    .iter()
+                    .any(|repo| repo.repo_id == *repo_id),
                 DetailView::Task { task_id, .. } => {
                     !snapshot.tasks.iter().any(|t| t.id == *task_id)
                 },
@@ -1542,6 +1768,15 @@ impl AppState {
             .iter()
             .filter(|run| run.deliverable.is_some())
             .nth(selected)
+    }
+
+    pub fn selected_repo_registration<'a>(
+        &self,
+        snapshot: &'a RuntimeSnapshot,
+    ) -> Option<&'a RepoRegistration> {
+        self.repos_state
+            .selected()
+            .and_then(|index| snapshot.repo_registrations.get(index))
     }
 
     pub fn active_table_len(&self, snapshot: &RuntimeSnapshot) -> usize {

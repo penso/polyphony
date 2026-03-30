@@ -501,6 +501,47 @@ pub(crate) fn build_runtime_components(
     })
 }
 
+pub(crate) fn build_repo_context(
+    registration: &polyphony_core::RepoRegistration,
+    user_config_path: Option<&Path>,
+) -> Result<polyphony_orchestrator::RepoContext, Error> {
+    let workflow_path = registration.worktree_path.join("WORKFLOW.md");
+    let workflow =
+        polyphony_workflow::load_workflow_with_user_config(&workflow_path, user_config_path)?;
+    let components = build_runtime_components(&workflow)?;
+    Ok(polyphony_orchestrator::RepoContext::from_components(
+        registration.clone(),
+        workflow,
+        &components,
+    ))
+}
+
+pub(crate) fn build_repo_contexts_from_registry(
+    registry: &polyphony_core::RepoRegistry,
+    user_config_path: Option<&Path>,
+) -> Result<
+    std::collections::HashMap<polyphony_core::RepoId, polyphony_orchestrator::RepoContext>,
+    Error,
+> {
+    let mut repos = std::collections::HashMap::new();
+    for registration in &registry.repos {
+        match build_repo_context(registration, user_config_path) {
+            Ok(context) => {
+                repos.insert(registration.repo_id.clone(), context);
+            },
+            Err(error) => {
+                warn!(
+                    repo_id = %registration.repo_id,
+                    worktree = %registration.worktree_path.display(),
+                    %error,
+                    "skipping repo during multi-repo bootstrap"
+                );
+            },
+        }
+    }
+    Ok(repos)
+}
+
 pub(crate) fn build_runtime_tracker(
     workflow: &polyphony_workflow::LoadedWorkflow,
     workflow_root: &Path,

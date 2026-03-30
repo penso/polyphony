@@ -54,19 +54,41 @@ struct GithubViewerIdentity {
     login: String,
 }
 
-/// Per-repository context holding tracker, poll state, and PR event state.
-/// Each registered repo gets its own `RepoContext`; shared resources
-/// (agent runtime, provisioner, store, feedback) live on `RuntimeService`.
-#[allow(dead_code)]
+/// Per-repository runtime context.
 pub struct RepoContext {
-    pub repo_id: RepoId,
-    pub label: String,
+    pub registration: RepoRegistration,
+    pub workflow: LoadedWorkflow,
     pub tracker: Arc<dyn IssueTracker>,
     pub pull_request_event_source: Option<Arc<dyn PullRequestEventSource>>,
+    pub agent: Arc<dyn AgentRuntime>,
     pub committer: Option<Arc<dyn WorkspaceCommitter>>,
     pub pull_request_manager: Option<Arc<dyn PullRequestManager>>,
     pub pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
-    pub tracker_kind: polyphony_core::TrackerKind,
+    pub feedback: Option<Arc<FeedbackRegistry>>,
+}
+
+impl RepoContext {
+    pub fn from_components(
+        registration: RepoRegistration,
+        workflow: LoadedWorkflow,
+        components: &RuntimeComponents,
+    ) -> Self {
+        Self {
+            registration,
+            workflow,
+            tracker: components.tracker.clone(),
+            pull_request_event_source: components.pull_request_event_source.clone(),
+            agent: components.agent.clone(),
+            committer: components.committer.clone(),
+            pull_request_manager: components.pull_request_manager.clone(),
+            pull_request_commenter: components.pull_request_commenter.clone(),
+            feedback: components.feedback.clone(),
+        }
+    }
+
+    pub fn repo_id(&self) -> &RepoId {
+        &self.registration.repo_id
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +150,7 @@ pub enum RuntimeCommand {
     CreateIssue {
         title: String,
         description: String,
+        repo_id: Option<String>,
     },
     /// Inject feedback into a run as a new task, resuming the pipeline.
     InjectRunFeedback {
@@ -155,6 +178,8 @@ pub struct RuntimeComponents {
 
 pub type RuntimeComponentFactory =
     dyn Fn(&LoadedWorkflow) -> Result<RuntimeComponents, CoreError> + Send + Sync;
+pub type RepoContextFactory =
+    dyn Fn(&RepoRegistration) -> Result<RepoContext, CoreError> + Send + Sync;
 
 pub struct RuntimeService {
     tracker: Arc<dyn IssueTracker>,
@@ -165,6 +190,9 @@ pub struct RuntimeService {
     pull_request_manager: Option<Arc<dyn PullRequestManager>>,
     pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
     feedback: Option<Arc<FeedbackRegistry>>,
+    /// Per-repo contexts keyed by repo ID. The "default" single-repo setup
+    /// creates one entry; multi-repo adds more.
+    repos: HashMap<RepoId, RepoContext>,
     store: Option<Arc<dyn StateStore>>,
     cache: Option<Arc<dyn NetworkCache>>,
     workflow_rx: watch::Receiver<LoadedWorkflow>,
@@ -189,6 +217,7 @@ pub struct RuntimeService {
     state: RuntimeState,
     user_interactions: Arc<Mutex<HashMap<String, UserInteractionRequest>>>,
     reload_support: Option<WorkflowReloadSupport>,
+    repo_context_factory: Option<Arc<RepoContextFactory>>,
 }
 
 #[derive(Debug)]
@@ -222,6 +251,7 @@ struct ManualPullRequestInboxDispatchRequest {
 struct CreateIssueCommandRequest {
     title: String,
     description: String,
+    repo_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +373,8 @@ struct RuntimeState {
     reviewed_pull_request_heads: HashMap<String, ReviewedPullRequestHead>,
     pull_request_retry_events: HashMap<String, PullRequestEvent>,
     review_event_suppressions: HashMap<String, ReviewEventSuppression>,
+    /// Maps issue IDs to the repo that owns them (populated during multi-repo polling).
+    issue_repo_map: HashMap<String, RepoId>,
     /// Set to `true` after `restore_bootstrap` loads a persisted snapshot,
     /// so that `run()` preserves the restored dispatch mode instead of
     /// overwriting it with the config default.
@@ -393,6 +425,7 @@ impl Default for RuntimeState {
             reviewed_pull_request_heads: HashMap::new(),
             pull_request_retry_events: HashMap::new(),
             review_event_suppressions: HashMap::new(),
+            issue_repo_map: HashMap::new(),
             bootstrap_restored: false,
         }
     }

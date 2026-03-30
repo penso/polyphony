@@ -220,6 +220,83 @@ fn render_help_modal_mentions_close_issue_keybind() {
 }
 
 #[test]
+fn render_inbox_shows_repo_column_when_repo_context_exists() {
+    let backend = TestBackend::new(120, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.repo_ids = vec!["owner/repo".into()];
+    snapshot.inbox_items = vec![InboxItemRow {
+        repo_id: "owner/repo".into(),
+        item_id: "github-74".into(),
+        kind: InboxItemKind::Issue,
+        source: "github".into(),
+        identifier: "owner/repo#74".into(),
+        title: "Repo-aware inbox item".into(),
+        status: "Todo".into(),
+        approval_state: DispatchApprovalState::Approved,
+        priority: Some(2),
+        labels: vec![],
+        description: None,
+        url: None,
+        author: None,
+        parent_id: None,
+        updated_at: None,
+        created_at: None,
+        has_workspace: false,
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("Repo"), "{screen}");
+    assert!(screen.contains("owner/repo"), "{screen}");
+}
+
+#[test]
+fn render_repo_detail_shows_registration_fields() {
+    let backend = TestBackend::new(120, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut snapshot = test_snapshot(0);
+    snapshot.repo_ids = vec!["owner/repo".into()];
+    snapshot.repo_registrations = vec![polyphony_core::RepoRegistration {
+        repo_id: "owner/repo".into(),
+        label: "Owner Repo".into(),
+        worktree_path: "/tmp/owner-repo".into(),
+        clone_url: Some("https://github.com/owner/repo.git".into()),
+        default_branch: "main".into(),
+        tracker_kind: polyphony_core::TrackerKind::Github,
+        added_at: Utc::now(),
+    }];
+    let mut app = AppState::new(default_theme(), LogBuffer::default());
+    app.on_snapshot(&snapshot);
+    app.active_tab = app::ActiveTab::Repos;
+    app.push_detail(app::DetailView::Repo {
+        repo_id: "owner/repo".into(),
+        scroll: 0,
+    });
+
+    terminal
+        .draw(|frame| {
+            render::render(frame, &snapshot, &mut app);
+        })
+        .unwrap();
+
+    let screen = buffer_text(terminal.backend().buffer());
+    assert!(screen.contains("Owner Repo"), "{screen}");
+    assert!(screen.contains("/tmp/owner-repo"), "{screen}");
+    assert!(
+        screen.contains("https://github.com/owner/repo.git"),
+        "{screen}"
+    );
+}
+
+#[test]
 fn sticky_auth_toast_renders_until_interaction_clears() {
     let backend = TestBackend::new(120, 24);
     let mut terminal = Terminal::new(backend).unwrap();

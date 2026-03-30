@@ -119,7 +119,13 @@ pub fn draw_repos_tab(
                 Line::from(vec![
                     Span::styled(footer_info, Style::default().fg(theme.muted)),
                     Span::styled(" • ", Style::default().fg(theme.border)),
-                    Span::styled("n:add • d:remove", Style::default().fg(theme.highlight)),
+                    Span::styled("Enter:view", Style::default().fg(theme.highlight)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("n:add", Style::default().fg(theme.highlight)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("d:remove", Style::default().fg(theme.warning)),
+                    Span::styled(" • ", Style::default().fg(theme.border)),
+                    Span::styled("w:shell", Style::default().fg(theme.info)),
                 ])
                 .right_aligned(),
             )

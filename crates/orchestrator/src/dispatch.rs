@@ -2,7 +2,6 @@ use crate::{prelude::*, *};
 
 impl RuntimeService {
     pub(crate) async fn reconcile_running(&mut self) {
-        let workflow = self.workflow();
         let stale_ids = self
             .state
             .running
@@ -41,25 +40,38 @@ impl RuntimeService {
         if running_ids.is_empty() {
             return;
         }
-        if self.is_throttled(&self.tracker.component_key()) {
-            return;
+        let mut issues = Vec::new();
+        let mut running_ids_by_component =
+            std::collections::HashMap::<String, (Arc<dyn IssueTracker>, Vec<String>)>::new();
+        for issue_id in &running_ids {
+            let tracker = self.tracker_for_issue(issue_id);
+            let component_key = tracker.component_key();
+            running_ids_by_component
+                .entry(component_key)
+                .or_insert_with(|| (tracker, Vec::new()))
+                .1
+                .push(issue_id.clone());
         }
-        let issues = match self.tracker.fetch_issues_by_ids(&running_ids).await {
-            Ok(issues) => issues,
-            Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(*signal);
-                return;
-            },
-            Err(error) => {
-                warn!(%error, "running state refresh failed");
-                return;
-            },
-        };
+        for (component_key, (tracker, issue_ids)) in running_ids_by_component {
+            if self.is_throttled(&component_key) {
+                continue;
+            }
+            match tracker.fetch_issues_by_ids(&issue_ids).await {
+                Ok(refreshed) => issues.extend(refreshed),
+                Err(CoreError::RateLimited(signal)) => {
+                    self.register_throttle(*signal);
+                },
+                Err(error) => {
+                    warn!(%error, component = %component_key, "running state refresh failed");
+                },
+            }
+        }
         let refreshed_ids = issues
             .iter()
             .map(|issue| issue.id.clone())
             .collect::<HashSet<_>>();
         for issue in issues {
+            let workflow = self.workflow_for_issue(&issue.id);
             if workflow.config.is_terminal_state(&issue.state) {
                 let reason = format!("issue state changed to terminal: {}", issue.state);
                 self.stop_running(&issue.id, true, Some(&reason)).await;
@@ -124,10 +136,11 @@ impl RuntimeService {
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .map(ToOwned::to_owned);
+        let tracker = self.tracker_for_issue(&issue.id);
         // Acknowledge the issue on first dispatch so the reporter knows
         // Polyphony is looking at it (e.g. adds an eyes reaction on GitHub).
         if attempt.unwrap_or(0) == 0
-            && let Err(error) = self.tracker.acknowledge_issue(&issue).await
+            && let Err(error) = tracker.acknowledge_issue(&issue).await
         {
             warn!(
                 %error,
@@ -244,8 +257,8 @@ impl RuntimeService {
         let issue_identifier_for_task = issue_identifier.clone();
         let issue_for_task = issue.clone();
         let command_tx = self.command_tx.clone();
-        let agent = self.agent.clone();
-        let tracker = self.tracker.clone();
+        let agent = self.agent_for_issue(&issue.id);
+        let tracker = tracker.clone();
         let provisioner = self.provisioner.clone();
         let hooks = workflow.config.hooks.clone();
         let active_states = workflow.config.tracker.active_states.clone();
@@ -289,11 +302,10 @@ impl RuntimeService {
                 ),
             );
         }
-        if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
+        if let Err(error) = tracker.ensure_issue_workflow_tracking(&issue).await {
             warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
         }
-        if let Err(error) = self
-            .tracker
+        if let Err(error) = tracker
             .update_issue_workflow_status(&issue, "In Progress")
             .await
         {

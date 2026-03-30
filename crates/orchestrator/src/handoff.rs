@@ -114,12 +114,13 @@ impl RuntimeService {
         event: &AgentEvent,
         model: Option<String>,
     ) {
+        let repo_id = self.repo_id_for_issue(&event.issue_id);
         let context = self
             .state
             .saved_contexts
             .entry(event.issue_id.clone())
             .or_insert_with(|| AgentContextSnapshot {
-                repo_id: String::new(),
+                repo_id: repo_id.clone(),
                 issue_id: event.issue_id.clone(),
                 issue_identifier: event.issue_identifier.clone(),
                 updated_at: event.at,
@@ -134,6 +135,7 @@ impl RuntimeService {
                 usage: event.usage.clone().unwrap_or_default(),
                 transcript: Vec::new(),
             });
+        context.repo_id = repo_id;
         context.updated_at = event.at;
         context.agent_name = event.agent_name.clone();
         context.model = model.or_else(|| context.model.clone());
@@ -174,12 +176,13 @@ impl RuntimeService {
         running: &RunningTask,
         outcome: &AgentRunResult,
     ) {
+        let repo_id = self.repo_id_for_issue(issue_id);
         let context = self
             .state
             .saved_contexts
             .entry(issue_id.to_string())
             .or_insert_with(|| AgentContextSnapshot {
-                repo_id: String::new(),
+                repo_id: repo_id.clone(),
                 issue_id: issue_id.to_string(),
                 issue_identifier: issue_identifier.to_string(),
                 updated_at: Utc::now(),
@@ -194,6 +197,7 @@ impl RuntimeService {
                 usage: running.tokens.clone(),
                 transcript: Vec::new(),
             });
+        context.repo_id = repo_id;
         context.updated_at = Utc::now();
         context.issue_identifier = issue_identifier.to_string();
         context.agent_name = running.agent_name.clone();
@@ -231,12 +235,10 @@ impl RuntimeService {
             "starting automated handoff"
         );
         let committer = self
-            .committer
-            .clone()
+            .committer_for_issue(&running.issue.id)
             .ok_or_else(|| CoreError::Adapter("workspace committer is not configured".into()))?;
         let pull_request_manager = self
-            .pull_request_manager
-            .clone()
+            .pull_request_manager_for_issue(&running.issue.id)
             .ok_or_else(|| CoreError::Adapter("pull request manager is not configured".into()))?;
         let repository = workflow
             .config
@@ -448,7 +450,7 @@ impl RuntimeService {
                 .await;
             self.mark_step_running(&run_id, polyphony_core::StepKind::PostReviewComment)
                 .await;
-            if let Some(commenter) = &self.pull_request_commenter.clone() {
+            if let Some(commenter) = self.pull_request_commenter_for_issue(&running.issue.id) {
                 let _ = commenter
                     .comment_on_pull_request(&pull_request, &review_body)
                     .await;
@@ -563,7 +565,7 @@ impl RuntimeService {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let drain = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
         let result = self
-            .agent
+            .agent_for_issue(&running.issue.id)
             .run(
                 AgentRunSpec {
                     issue: running.issue.clone(),
@@ -622,7 +624,7 @@ impl RuntimeService {
         pull_request: &polyphony_core::PullRequestRef,
         commit_result: &polyphony_core::WorkspaceCommitResult,
     ) {
-        let Some(feedback) = &self.feedback else {
+        let Some(feedback) = self.feedback_for_issue(&running.issue.id) else {
             return;
         };
         if feedback.is_empty() {
@@ -834,7 +836,11 @@ impl RuntimeService {
             state: Some(terminal_state.clone()),
             ..Default::default()
         };
-        match self.tracker.update_issue(&request).await {
+        match self
+            .tracker_for_issue(&issue_id)
+            .update_issue(&request)
+            .await
+        {
             Ok(_) => {
                 self.push_event(
                     EventScope::Handoff,
@@ -950,7 +956,13 @@ impl RuntimeService {
                 merge_local_branch(&workspace, &branch).await
             },
             polyphony_core::DeliverableKind::GithubPullRequest => {
-                if let Some(pr_manager) = &self.pull_request_manager {
+                if let Some(pr_manager) = self
+                    .state
+                    .runs
+                    .get(run_id)
+                    .and_then(|run| run.issue_id.as_deref())
+                    .and_then(|issue_id| self.pull_request_manager_for_issue(issue_id))
+                {
                     merge_github_pr(pr_manager.as_ref(), &url).await
                 } else {
                     polyphony_core::MergeResult {

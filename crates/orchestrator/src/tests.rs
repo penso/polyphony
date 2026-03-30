@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs,
     path::Path,
     sync::{Arc, Mutex},
@@ -9,9 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use polyphony_core::{
-    AgentSession, Deliverable, DeliverableDecision, DeliverableKind, DeliverableStatus,
-    DispatchMode, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef, StoreBootstrap,
-    UpdateIssueRequest, Workspace, WorkspaceCommitResult, WorkspaceRequest,
+    AgentSession, CreateIssueRequest, Deliverable, DeliverableDecision, DeliverableKind,
+    DeliverableStatus, DispatchMode, IssueAuthor, IssueComment, IssueStateUpdate, PullRequestRef,
+    StoreBootstrap, UpdateIssueRequest, Workspace, WorkspaceCommitResult, WorkspaceRequest,
 };
 use polyphony_workflow::load_workflow;
 use serde_json::json;
@@ -29,6 +29,7 @@ struct TestTracker {
     fetch_by_ids_calls: Arc<Mutex<u32>>,
     issue_updates: Arc<Mutex<Vec<UpdateIssueRequest>>>,
     acknowledged_issues: Arc<Mutex<Vec<String>>>,
+    created_issues: Arc<Mutex<Vec<CreateIssueRequest>>>,
 }
 
 #[derive(Clone)]
@@ -102,6 +103,7 @@ impl TestTracker {
             fetch_by_ids_calls: Arc::new(Mutex::new(0)),
             issue_updates: Arc::new(Mutex::new(Vec::new())),
             acknowledged_issues: Arc::new(Mutex::new(Vec::new())),
+            created_issues: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -119,6 +121,10 @@ impl TestTracker {
 
     fn acknowledged_issues(&self) -> Vec<String> {
         self.acknowledged_issues.lock().unwrap().clone()
+    }
+
+    fn recorded_create_issues(&self) -> Vec<CreateIssueRequest> {
+        self.created_issues.lock().unwrap().clone()
     }
 }
 
@@ -227,6 +233,40 @@ impl IssueTracker for TestTracker {
             .unwrap()
             .push(issue.id.clone());
         Ok(())
+    }
+
+    async fn create_issue(
+        &self,
+        request: &CreateIssueRequest,
+    ) -> Result<Issue, polyphony_core::Error> {
+        let next = {
+            let mut created_issues = self.created_issues.lock().unwrap();
+            created_issues.push(request.clone());
+            created_issues.len()
+        };
+        let issue = Issue {
+            id: format!("created-{next}"),
+            identifier: format!("CREATED-{next}"),
+            title: request.title.clone(),
+            description: request.description.clone(),
+            priority: request.priority,
+            state: "Todo".into(),
+            branch_name: None,
+            url: None,
+            author: None,
+            labels: request.labels.clone(),
+            comments: Vec::new(),
+            blocked_by: Vec::new(),
+            approval_state: DispatchApprovalState::Approved,
+            parent_id: request.parent_id.clone(),
+            created_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
+        };
+        self.issues
+            .lock()
+            .unwrap()
+            .insert(issue.id.clone(), issue.clone());
+        Ok(issue)
     }
 }
 
@@ -3139,7 +3179,8 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
 
     service.restore_bootstrap(StoreBootstrap {
         snapshot: Some(RuntimeSnapshot {
-            repo_ids: Vec::new(), repo_registrations: Vec::new(),
+            repo_ids: Vec::new(),
+            repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
@@ -4585,7 +4626,8 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
     let now = Utc::now();
     service.restore_bootstrap(StoreBootstrap {
         snapshot: Some(RuntimeSnapshot {
-            repo_ids: Vec::new(), repo_registrations: Vec::new(),
+            repo_ids: Vec::new(),
+            repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
@@ -4807,5 +4849,309 @@ async fn normalize_restored_in_progress_runs_marks_first_pending_task_failed() {
     assert_eq!(
         review_task.error.as_deref(),
         Some("restored without an active agent session; retry the run to continue")
+    );
+}
+
+#[tokio::test]
+async fn tick_populates_repo_snapshot_metadata_for_registered_repos() {
+    let workspace_root = std::env::temp_dir().join(format!(
+        "polyphony-multi-repo-snapshot-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let primary_root = workspace_root.join("primary");
+    let secondary_root = workspace_root.join("secondary");
+    let primary_workflow = test_workflow(&primary_root);
+    let secondary_workflow = test_workflow(&secondary_root);
+    let issue = sample_issue("repo-issue-1", "REP-1", "Todo", "Secondary issue");
+    let registration = RepoRegistration {
+        repo_id: "owner/repo".into(),
+        label: "owner/repo".into(),
+        worktree_path: secondary_root.clone(),
+        clone_url: None,
+        default_branch: "main".into(),
+        tracker_kind: secondary_workflow.config.tracker.kind,
+        added_at: Utc::now(),
+    };
+    let secondary_components = RuntimeComponents {
+        tracker: Arc::new(TestTracker::new(vec![issue.clone()])),
+        pull_request_event_source: None,
+        agent: Arc::new(NoopAgent),
+        committer: None,
+        pull_request_manager: None,
+        pull_request_commenter: None,
+        feedback: None,
+    };
+    let mut repos = std::collections::HashMap::new();
+    repos.insert(
+        registration.repo_id.clone(),
+        RepoContext::from_components(
+            registration.clone(),
+            secondary_workflow,
+            &secondary_components,
+        ),
+    );
+    let (_tx, rx) = watch::channel(primary_workflow);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = RuntimeService::new_with_repos(
+        Arc::new(TestTracker::new(Vec::new())),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(provisioner),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+        repos,
+    )
+    .0;
+
+    assert!(!service.tick().await);
+    let snapshot = service.snapshot();
+    assert_eq!(snapshot.repo_ids, vec![registration.repo_id.clone()]);
+    assert_eq!(snapshot.repo_registrations.len(), 1);
+    assert_eq!(snapshot.repo_registrations[0].repo_id, registration.repo_id);
+    assert_eq!(snapshot.tracker_issues.len(), 1);
+    assert_eq!(snapshot.tracker_issues[0].repo_id, "owner/repo");
+    assert_eq!(snapshot.inbox_items.len(), 1);
+    assert_eq!(snapshot.inbox_items[0].repo_id, "owner/repo");
+}
+
+#[test]
+fn handle_add_repo_builds_context_via_factory() {
+    let workspace_root =
+        std::env::temp_dir().join(format!("polyphony-multi-repo-add-{}", uuid::Uuid::new_v4()));
+    let primary_root = workspace_root.join("primary");
+    let added_root = workspace_root.join("added");
+    let workflow = test_workflow(&primary_root);
+    let (_tx, rx) = watch::channel(workflow);
+    let provisioner = RecordingProvisioner::default();
+    let repo_factory: Arc<RepoContextFactory> = Arc::new(|registration| {
+        let workflow = test_workflow(&registration.worktree_path);
+        let components = RuntimeComponents {
+            tracker: Arc::new(TestTracker::new(Vec::new())),
+            pull_request_event_source: None,
+            agent: Arc::new(NoopAgent),
+            committer: None,
+            pull_request_manager: None,
+            pull_request_commenter: None,
+            feedback: None,
+        };
+        Ok(RepoContext::from_components(
+            registration.clone(),
+            workflow,
+            &components,
+        ))
+    });
+    let mut service = RuntimeService::new(
+        Arc::new(TestTracker::new(Vec::new())),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(provisioner),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+    )
+    .0
+    .with_repo_context_factory(repo_factory);
+    let registration = RepoRegistration {
+        repo_id: "owner/added".into(),
+        label: "owner/added".into(),
+        worktree_path: added_root,
+        clone_url: None,
+        default_branch: "main".into(),
+        tracker_kind: TrackerKind::Mock,
+        added_at: Utc::now(),
+    };
+
+    service.handle_add_repo(registration.clone());
+
+    assert!(service.repos.contains_key(&registration.repo_id));
+    assert!(service.pending_refresh);
+    assert_eq!(
+        service.repos[&registration.repo_id].registration.repo_id,
+        registration.repo_id
+    );
+}
+
+#[tokio::test]
+async fn process_pending_create_issues_routes_to_requested_repo() {
+    let workspace_root = unique_workspace_root("create-issue-routed");
+    let primary_root = workspace_root.join("primary");
+    let secondary_root = workspace_root.join("secondary");
+    let primary_workflow = test_workflow(&primary_root);
+    let secondary_workflow = test_workflow(&secondary_root);
+    let primary_tracker = Arc::new(TestTracker::new(Vec::new()));
+    let secondary_tracker = Arc::new(TestTracker::new(Vec::new()));
+    let secondary_registration = RepoRegistration {
+        repo_id: "owner/secondary".into(),
+        label: "owner/secondary".into(),
+        worktree_path: secondary_root,
+        clone_url: None,
+        default_branch: "main".into(),
+        tracker_kind: secondary_workflow.config.tracker.kind,
+        added_at: Utc::now(),
+    };
+    let mut repos = HashMap::new();
+    repos.insert(
+        secondary_registration.repo_id.clone(),
+        RepoContext::from_components(
+            secondary_registration.clone(),
+            secondary_workflow,
+            &RuntimeComponents {
+                tracker: secondary_tracker.clone(),
+                pull_request_event_source: None,
+                agent: Arc::new(NoopAgent),
+                committer: None,
+                pull_request_manager: None,
+                pull_request_commenter: None,
+                feedback: None,
+            },
+        ),
+    );
+    let (_tx, rx) = watch::channel(primary_workflow);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = RuntimeService::new_with_repos(
+        primary_tracker.clone(),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(provisioner),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+        repos,
+    )
+    .0;
+    service
+        .pending_create_issues
+        .push(CreateIssueCommandRequest {
+            title: "Routed issue".into(),
+            description: "details".into(),
+            repo_id: Some(secondary_registration.repo_id.clone()),
+        });
+
+    service.process_pending_create_issues().await;
+
+    assert!(service.pending_refresh);
+    assert!(primary_tracker.recorded_create_issues().is_empty());
+    assert_eq!(secondary_tracker.recorded_create_issues().len(), 1);
+    assert_eq!(
+        secondary_tracker.recorded_create_issues()[0].title,
+        "Routed issue"
+    );
+    assert_eq!(
+        service
+            .state
+            .issue_repo_map
+            .get("created-1")
+            .map(String::as_str),
+        Some("owner/secondary")
+    );
+}
+
+#[tokio::test]
+async fn process_pending_create_issues_rejects_ambiguous_repo_without_repo_id() {
+    let workspace_root = unique_workspace_root("create-issue-ambiguous");
+    let primary_root = workspace_root.join("primary");
+    let secondary_root = workspace_root.join("secondary");
+    let primary_workflow = test_workflow(&primary_root);
+    let secondary_workflow = test_workflow(&secondary_root);
+    let primary_tracker = Arc::new(TestTracker::new(Vec::new()));
+    let secondary_tracker = Arc::new(TestTracker::new(Vec::new()));
+    let secondary_registration = RepoRegistration {
+        repo_id: "owner/secondary".into(),
+        label: "owner/secondary".into(),
+        worktree_path: secondary_root,
+        clone_url: None,
+        default_branch: "main".into(),
+        tracker_kind: secondary_workflow.config.tracker.kind,
+        added_at: Utc::now(),
+    };
+    let mut repos = HashMap::new();
+    repos.insert(
+        secondary_registration.repo_id.clone(),
+        RepoContext::from_components(
+            secondary_registration,
+            secondary_workflow,
+            &RuntimeComponents {
+                tracker: secondary_tracker.clone(),
+                pull_request_event_source: None,
+                agent: Arc::new(NoopAgent),
+                committer: None,
+                pull_request_manager: None,
+                pull_request_commenter: None,
+                feedback: None,
+            },
+        ),
+    );
+    repos.insert(
+        "owner/primary".into(),
+        RepoContext::from_components(
+            RepoRegistration {
+                repo_id: "owner/primary".into(),
+                label: "owner/primary".into(),
+                worktree_path: primary_root.clone(),
+                clone_url: None,
+                default_branch: "main".into(),
+                tracker_kind: primary_workflow.config.tracker.kind,
+                added_at: Utc::now(),
+            },
+            primary_workflow.clone(),
+            &RuntimeComponents {
+                tracker: primary_tracker.clone(),
+                pull_request_event_source: None,
+                agent: Arc::new(NoopAgent),
+                committer: None,
+                pull_request_manager: None,
+                pull_request_commenter: None,
+                feedback: None,
+            },
+        ),
+    );
+    let (_tx, rx) = watch::channel(primary_workflow);
+    let provisioner = RecordingProvisioner::default();
+    let mut service = RuntimeService::new_with_repos(
+        primary_tracker.clone(),
+        None,
+        Arc::new(NoopAgent),
+        Arc::new(provisioner),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        rx,
+        repos,
+    )
+    .0;
+    service
+        .pending_create_issues
+        .push(CreateIssueCommandRequest {
+            title: "Ambiguous issue".into(),
+            description: "details".into(),
+            repo_id: None,
+        });
+
+    service.process_pending_create_issues().await;
+
+    assert!(!service.pending_refresh);
+    assert!(primary_tracker.recorded_create_issues().is_empty());
+    assert!(secondary_tracker.recorded_create_issues().is_empty());
+    assert!(
+        service.state.recent_events.iter().any(|event| event
+            .message
+            .contains("repo_id is required when multiple repositories are registered")),
+        "runtime should explain why issue creation was rejected"
     );
 }

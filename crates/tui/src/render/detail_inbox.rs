@@ -142,6 +142,14 @@ pub(crate) fn draw_inbox_detail(
             Style::default().fg(theme.highlight),
         ));
     }
+    if !issue.repo_id.is_empty() {
+        meta_spans.push(sep.clone());
+        meta_spans.push(Span::styled("repo:", Style::default().fg(theme.muted)));
+        meta_spans.push(Span::styled(
+            format!("{} ", issue.repo_id),
+            Style::default().fg(theme.info),
+        ));
+    }
     if let Some(updated) = issue.updated_at {
         meta_spans.push(sep);
         meta_spans.push(Span::styled("updated:", Style::default().fg(theme.muted)));

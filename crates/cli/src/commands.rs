@@ -649,6 +649,14 @@ async fn load_runtime_snapshot(
     sqlite_url: Option<&str>,
 ) -> Result<RuntimeSnapshot, Error> {
     let components = build_runtime_components(workflow)?;
+    let registry_path = crate::repo_manager::default_registry_path();
+    let registry = polyphony_core::load_repo_registry(&registry_path)
+        .unwrap_or_else(|_| polyphony_core::RepoRegistry::default());
+    let user_config_path = polyphony_workflow::user_config_path().ok();
+    let initial_repos = crate::tracker_factory::build_repo_contexts_from_registry(
+        &registry,
+        user_config_path.as_deref(),
+    )?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
         Arc::new(polyphony_git::GitWorkspaceProvisioner::default());
     let store = build_store(workflow_path, sqlite_url).await?;
@@ -659,7 +667,7 @@ async fn load_runtime_snapshot(
         polyphony_core::file_cache::FileNetworkCache::new(cache_path),
     ));
     let (_workflow_tx, workflow_rx) = watch::channel(workflow.clone());
-    let (service, handle) = RuntimeService::new(
+    let (service, handle) = RuntimeService::new_with_repos(
         components.tracker,
         components.pull_request_event_source,
         components.agent,
@@ -671,6 +679,7 @@ async fn load_runtime_snapshot(
         store,
         cache,
         workflow_rx,
+        initial_repos,
     );
     let mut snapshot_rx = handle.snapshot_rx.clone();
     let command_tx = handle.command_tx.clone();

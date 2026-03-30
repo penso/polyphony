@@ -33,6 +33,46 @@
   </div>
 </div>
 
+<div class="dashboard-grid">
+  <a class="dashboard-link" href="/inbox">
+    <span class="kicker">Inbox</span>
+    <span class="value">{{ inbox_items | length }} items</span>
+    <span class="desc">Tracker issues and PR inbox items waiting for approval or dispatch.</span>
+  </a>
+  <a class="dashboard-link" href="/runs">
+    <span class="kicker">Runs</span>
+    <span class="value">{{ runs | length }} runs</span>
+    <span class="desc">Active orchestration, delivery state, retry controls, and feedback injection.</span>
+  </a>
+  <a class="dashboard-link" href="/outcomes">
+    {% set ns_outcomes = namespace(count=0) %}
+    {% for m in runs %}{% if m.deliverable %}{% set ns_outcomes.count = ns_outcomes.count + 1 %}{% endif %}{% endfor %}
+    <span class="kicker">Outcomes</span>
+    <span class="value">{{ ns_outcomes.count }} deliverables</span>
+    <span class="desc">Accept, reject, open, and merge the outputs Polyphony produced.</span>
+  </a>
+  <a class="dashboard-link" href="/agents">
+    <span class="kicker">Agents</span>
+    <span class="value">{{ running | length }} live</span>
+    <span class="desc">Current sessions, model usage, logs, and stop controls.</span>
+  </a>
+  <a class="dashboard-link" href="/tasks">
+    <span class="kicker">Tasks</span>
+    <span class="value">{{ tasks | length }} tasks</span>
+    <span class="desc">Execution detail for each pipeline task, including errors and retries.</span>
+  </a>
+  <a class="dashboard-link" href="/repos">
+    <span class="kicker">Repos</span>
+    <span class="value">{{ repo_registrations | length }} repos</span>
+    <span class="desc">Managed repository registrations, tracker bindings, and per-repo refresh.</span>
+  </a>
+  <a class="dashboard-link" href="/logs">
+    <span class="kicker">Logs</span>
+    <span class="value">{{ recent_events | length }} events</span>
+    <span class="desc">Recent workflow, dispatch, agent, retry, and feedback events.</span>
+  </a>
+</div>
+
 {% if inbox_items %}
 <div class="card">
   <div class="card-header">

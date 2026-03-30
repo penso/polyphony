@@ -170,6 +170,14 @@ pub(crate) fn build_breadcrumb<'a>(app: &AppState, snapshot: &RuntimeSnapshot) -
                         .add_modifier(Modifier::BOLD),
                 ));
             },
+            DetailView::Repo { repo_id, .. } => {
+                spans.push(Span::styled(
+                    repo_id.clone(),
+                    Style::default()
+                        .fg(theme.highlight)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            },
             DetailView::Events { .. } => {
                 spans.push(Span::styled(
                     "Events",

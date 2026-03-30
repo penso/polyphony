@@ -511,9 +511,9 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         // (key, short, description)
         ("Navigation", "", ""),
         (
-            "1-6",
+            "1-7",
             "tabs",
-            "Switch between Inbox, Orchestration, Tasks, Outcomes, Agents, Logs",
+            "Switch between Inbox, Orchestration, Tasks, Outcomes, Agents, Repos, Logs",
         ),
         ("j / k", "navigate", "Move selection up/down in lists"),
         (
@@ -553,8 +553,13 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
         ),
         (
             "d",
-            "dispatch",
-            "Open dispatch modal for the selected inbox item, with optional operator directives",
+            "dispatch/remove",
+            "Dispatch the selected inbox item, or remove the selected repository on the Repos tab",
+        ),
+        (
+            "n",
+            "new issue/repo",
+            "Create an issue from Inbox, or register a repository from the Repos tab",
         ),
         ("", "", ""),
         ("Workflow", "", ""),
@@ -587,6 +592,12 @@ pub fn draw_help_modal(frame: &mut ratatui::Frame<'_>, app: &AppState) {
             "Open issue/PR in browser (o) or full URL (O)",
         ),
         ("s", "sort", "Toggle sort order in Agents tab"),
+        (
+            "w",
+            "shell",
+            "Open Terminal at the selected workspace or repository",
+        ),
+        ("\\", "repo filter", "Cycle the active repo filter"),
         ("r", "refresh", "Force refresh from trackers"),
         ("?", "help", "Show this help"),
         ("q", "quit", "Quit polyphony"),

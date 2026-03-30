@@ -3,8 +3,29 @@
 
 {% block content %}
 <div class="page-header">
-  {% if running %}<span class="meta">{{ running | length }} running</span>{% endif %}
+  <span class="meta">
+    {% if running %}{{ running | length }} running{% else %}0 running{% endif %}
+    {% if agent_run_history %}&middot; {{ agent_run_history | length }} history{% endif %}
+  </span>
 </div>
+
+{% if repo_registrations | length > 1 and (running or agent_run_history) %}
+<div class="repo-pills" id="agent-repo-pills" style="margin-bottom: 0.9rem;">
+  <button class="repo-pill active" data-repo="all" onclick="filterAgentRepo('all', this)">All</button>
+  {% for r in repo_registrations %}
+  <button class="repo-pill" data-repo="{{ r.repo_id }}" onclick="filterAgentRepo('{{ r.repo_id }}', this)">{{ r.label }}</button>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if running or agent_run_history %}
+<div class="card">
+  <div class="search-bar" style="margin-bottom: 0;">
+    <input type="text" class="search-input" id="agent-search" placeholder="Filter agents by repo, issue, model, state, or agent..." autocomplete="off">
+    <span class="search-count" id="agent-filter-count"></span>
+  </div>
+</div>
+{% endif %}
 
 {% if running %}
 <div class="card">
@@ -13,8 +34,9 @@
     <span class="count">{{ running | length }} active</span>
   </div>
   <div class="grid-table">
-    <div class="grid-header cols-agents">
+    <div class="grid-header" style="grid-template-columns: 2rem 8rem 1fr 8rem 6rem 5rem 6rem 7rem;">
       <span></span>
+      <span>Repo</span>
       <span>Agent</span>
       <span>Issue</span>
       <span>Model</span>
@@ -23,8 +45,9 @@
       <span>Started</span>
     </div>
     {% for a in running %}
-    <div class="grid-row cols-agents active" data-agent-running="{{ loop.index0 }}" style="cursor: pointer;">
+    <div class="grid-row active" data-agent-running="{{ loop.index0 }}" style="grid-template-columns: 2rem 8rem 1fr 8rem 6rem 5rem 6rem 7rem; cursor: pointer;" data-repo="{{ a.repo_id }}" data-agent="{{ a.agent_name }}" data-issue="{{ a.issue_identifier }}" data-model="{{ a.model or '' }}" data-state="{{ a.state }}">
       <span class="col-accent">&#x2819;</span>
+      <span class="col-muted">{% if a.repo_id %}{{ a.repo_id }}{% else %}&mdash;{% endif %}</span>
       <span class="col-agent">{{ a.agent_name }}</span>
       <span class="col-title">{{ a.issue_identifier }}</span>
       <span class="col-muted">{{ a.model }}</span>
@@ -42,10 +65,14 @@
   <div class="modal">
     <div class="modal-header">
       <h2>{{ a.agent_name }} &mdash; {{ a.issue_identifier }}</h2>
-      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+      <button class="modal-close" onclick="polyphony.closeModal(this.closest('.modal-overlay'))" title="Close (Esc)">&times;</button>
     </div>
     <div class="modal-body">
       <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">repo:</span>
+          <span class="meta-value muted">{% if a.repo_id %}{{ a.repo_id }}{% else %}&mdash;{% endif %}</span>
+        </span>
         <span class="meta-item">
           <span class="meta-label">status:</span>
           <span class="meta-value accent">&#x2819; {{ a.state }}</span>
@@ -90,6 +117,10 @@
           <span class="meta-value muted">{{ a.attempt }}</span>
         </span>
         {% endif %}
+        <span class="meta-item">
+          <span class="meta-label">workspace:</span>
+          <span class="meta-value muted"><code>{{ a.workspace_path }}</code></span>
+        </span>
       </div>
 
       {# Last event #}
@@ -122,6 +153,11 @@
         </div>
       </div>
       {% endif %}
+
+      <div class="modal-actions">
+        <button class="btn btn-danger" onclick="agentAction.stop('{{ a.issue_id }}', this)">Stop Agent</button>
+        <button class="btn btn-ghost" onclick="agentAction.events('{{ a.issue_identifier }}')">Events</button>
+      </div>
     </div>
   </div>
 </div>
@@ -135,28 +171,28 @@
     <span class="count">{{ agent_run_history | length }} runs</span>
   </div>
   <div class="grid-table">
-    <div class="grid-header cols-agents">
+    <div class="grid-header" style="grid-template-columns: 2rem 8rem 1fr 8rem 6rem 5rem 7rem;">
       <span></span>
+      <span>Repo</span>
       <span>Agent</span>
       <span>Issue</span>
       <span>Model</span>
       <span>Attempt</span>
-      <span>Turns</span>
       <span>Finished</span>
     </div>
     {% for a in agent_run_history %}
-    <div class="grid-row cols-agents" data-agent-history="{{ loop.index0 }}" style="cursor: pointer;">
+    <div class="grid-row" data-agent-history="{{ loop.index0 }}" style="grid-template-columns: 2rem 8rem 1fr 8rem 6rem 5rem 7rem; cursor: pointer;" data-repo="{{ a.repo_id }}" data-agent="{{ a.agent_name }}" data-issue="{{ a.issue_identifier }}" data-model="{{ a.model or '' }}" data-state="{{ a.status }}">
       <span>
         {% if a.status == "Succeeded" %}<span class="col-success">&#x2713;</span>
         {% elif a.status == "Failed" %}<span class="col-danger">&#x2715;</span>
         {% elif a.status == "CancelledByReconciliation" %}<span class="col-warning">&#x2298;</span>
         {% else %}<span class="col-warning">&#x25F7;</span>{% endif %}
       </span>
+      <span class="col-muted">{% if a.repo_id %}{{ a.repo_id }}{% else %}&mdash;{% endif %}</span>
       <span class="col-agent">{{ a.agent_name }}</span>
       <span class="col-title">{{ a.issue_identifier }}</span>
       <span class="col-muted">{{ a.model }}</span>
       <span class="col-muted">{{ a.attempt }}</span>
-      <span class="col-muted">{{ a.turn_count }}/{{ a.max_turns }}</span>
       <span class="col-muted">{% if a.finished_at %}<time datetime="{{ a.finished_at }}">{{ a.finished_at }}</time>{% else %}&mdash;{% endif %}</span>
     </div>
     {% endfor %}
@@ -173,10 +209,14 @@
   <div class="modal">
     <div class="modal-header">
       <h2>{{ a.agent_name }} &mdash; {{ a.issue_identifier }}</h2>
-      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+      <button class="modal-close" onclick="polyphony.closeModal(this.closest('.modal-overlay'))" title="Close (Esc)">&times;</button>
     </div>
     <div class="modal-body">
       <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">repo:</span>
+          <span class="meta-value muted">{% if a.repo_id %}{{ a.repo_id }}{% else %}&mdash;{% endif %}</span>
+        </span>
         <span class="meta-item">
           <span class="meta-label">status:</span>
           <span class="meta-value {% if a.status == 'Succeeded' %}success{% elif a.status == 'Failed' %}danger{% else %}warning{% endif %}">
@@ -279,6 +319,82 @@
 {% endif %}
 
 <script>
+var activeAgentRepo = 'all';
+
+function filterAgentRepo(repo, btn) {
+  activeAgentRepo = repo;
+  document.querySelectorAll('#agent-repo-pills .repo-pill').forEach(function(pill) {
+    pill.classList.remove('active');
+  });
+  btn.classList.add('active');
+  if (window.applyAgentFilter) window.applyAgentFilter();
+}
+
+(function() {
+  var searchInput = document.getElementById('agent-search');
+  var filterCount = document.getElementById('agent-filter-count');
+  var rows = Array.from(document.querySelectorAll('.grid-row[data-agent-running], .grid-row[data-agent-history]'));
+  if (searchInput && rows.length) {
+    var total = rows.length;
+    window.applyAgentFilter = function() {
+      var q = searchInput.value.toLowerCase().trim();
+      var visible = 0;
+      rows.forEach(function(row) {
+        var repoMatch = activeAgentRepo === 'all' || row.dataset.repo === activeAgentRepo;
+        var text = [
+          row.dataset.repo,
+          row.dataset.agent,
+          row.dataset.issue,
+          row.dataset.model,
+          row.dataset.state
+        ].join(' ').toLowerCase();
+        var show = repoMatch && (!q || text.indexOf(q) !== -1);
+        row.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      filterCount.textContent = q || activeAgentRepo !== 'all' ? (visible + ' of ' + total) : '';
+    };
+
+    var params = new URLSearchParams(location.search);
+    var initialQuery = params.get('q');
+    var initialRepo = params.get('repo');
+    if (initialQuery) searchInput.value = initialQuery;
+    if (initialRepo) {
+      var pill = document.querySelector('#agent-repo-pills .repo-pill[data-repo="' + CSS.escape(initialRepo) + '"]');
+      if (pill) filterAgentRepo(initialRepo, pill);
+    }
+
+    searchInput.addEventListener('input', window.applyAgentFilter);
+    document.addEventListener('keydown', function(e) {
+      if (e.key === '/' && document.activeElement !== searchInput && !document.querySelector('.modal-overlay.open')) {
+        e.preventDefault();
+        searchInput.focus();
+      }
+      if (e.key === 'Escape' && document.activeElement === searchInput) {
+        searchInput.value = '';
+        searchInput.blur();
+        window.applyAgentFilter();
+      }
+    });
+    window.applyAgentFilter();
+  }
+})();
+
+var agentAction = {
+  stop: function(issueId, btn) {
+    polyphony.withButton(btn, 'Stopping...', function() {
+      return polyphony.mutate(
+        'mutation($id: String!) { stopAgent(issueId: $id) }',
+        { id: issueId },
+        { successMessage: 'Agent stop requested' }
+      );
+    });
+  },
+  events: function(filter) {
+    location.href = '/logs?q=' + encodeURIComponent(filter);
+  }
+};
+
 (function() {
   // Running agent modals
   document.querySelectorAll('.grid-row[data-agent-running]').forEach(function(row) {

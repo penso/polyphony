@@ -3,31 +3,15 @@ use crate::{prelude::*, *};
 impl RuntimeService {
     pub(crate) async fn poll_pull_request_events(
         &mut self,
-        workflow: LoadedWorkflow,
-        allow_dispatch: bool,
+        sources: Vec<(String, LoadedWorkflow, Arc<dyn PullRequestEventSource>)>,
     ) {
-        let Some(source) = self.pull_request_event_source.clone() else {
-            return;
-        };
-        let source_component_key = source.component_key();
-        if self.is_throttled(&source_component_key) {
+        if sources.is_empty() {
+            self.state.pull_request_snapshot_loaded = true;
+            self.state.visible_review_events.clear();
+            self.state.visible_comment_events.clear();
+            self.state.visible_conflict_events.clear();
             return;
         }
-        let events = match source.fetch_events().await {
-            Ok(events) => events,
-            Err(CoreError::RateLimited(signal)) => {
-                self.register_throttle(*signal);
-                return;
-            },
-            Err(error) => {
-                self.push_event(
-                    EventScope::Tracker,
-                    format!("pull request event fetch failed: {error}"),
-                );
-                warn!(%error, "pull request event fetch failed");
-                return;
-            },
-        };
         let previous_events = self
             .state
             .visible_review_events
@@ -49,11 +33,52 @@ impl RuntimeService {
                     .map(PullRequestEvent::Conflict),
             )
             .collect::<Vec<_>>();
+        let mut fetches = tokio::task::JoinSet::new();
+        for (repo_id, workflow, source) in sources {
+            let source_component_key = source.component_key();
+            if self.is_throttled(&source_component_key) {
+                continue;
+            }
+            fetches.spawn(async move {
+                let result = source.fetch_events().await;
+                (repo_id, workflow, source_component_key, result)
+            });
+        }
+        let mut events = Vec::new();
+        while let Some(result) = fetches.join_next().await {
+            let Ok((repo_id, workflow, source_component_key, result)) = result else {
+                continue;
+            };
+            match result {
+                Ok(repo_events) => {
+                    for event in repo_events {
+                        if !repo_id.is_empty() {
+                            self.state
+                                .issue_repo_map
+                                .insert(event.synthetic_issue_id(), repo_id.clone());
+                        }
+                        events.push((repo_id.clone(), workflow.clone(), event));
+                    }
+                },
+                Err(CoreError::RateLimited(signal)) => {
+                    self.register_throttle(*signal);
+                },
+                Err(error) => {
+                    self.push_event(
+                        EventScope::Tracker,
+                        format!(
+                            "pull request event fetch failed for {source_component_key}: {error}"
+                        ),
+                    );
+                    warn!(%error, component = %source_component_key, "pull request event fetch failed");
+                },
+            }
+        }
         self.state.pull_request_snapshot_loaded = true;
         self.state.visible_review_events.clear();
         self.state.visible_comment_events.clear();
         self.state.visible_conflict_events.clear();
-        for event in &events {
+        for (_, _, event) in &events {
             match event {
                 PullRequestEvent::Review(event) => {
                     self.state
@@ -74,7 +99,7 @@ impl RuntimeService {
             self.state.discarded_inbox_items.remove(&event.dedupe_key());
         }
         let mut seen_event_keys = HashSet::new();
-        for event in events {
+        for (_, workflow, event) in events {
             seen_event_keys.insert(event.dedupe_key());
             if let Some(reason) = self.pull_request_event_suppression(&workflow, &event) {
                 self.record_review_event_suppression(event.dedupe_key(), reason);
@@ -84,6 +109,23 @@ impl RuntimeService {
             if matches!(event, PullRequestEvent::Conflict(_)) {
                 continue;
             }
+            let allow_dispatch = match self.state.dispatch_mode {
+                polyphony_core::DispatchMode::Manual | polyphony_core::DispatchMode::Stop => false,
+                polyphony_core::DispatchMode::Automatic
+                | polyphony_core::DispatchMode::Nightshift => true,
+                polyphony_core::DispatchMode::Idle => {
+                    match self.idle_dispatch_allowed_for_pr_reviews(&workflow) {
+                        Ok(allowed) => allowed,
+                        Err(error) => {
+                            self.push_event(
+                                EventScope::Dispatch,
+                                format!("idle PR review gate failed: {error}"),
+                            );
+                            false
+                        },
+                    }
+                },
+            };
             if !allow_dispatch {
                 continue;
             }

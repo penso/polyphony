@@ -168,6 +168,39 @@ impl RuntimeService {
         cache: Option<Arc<dyn NetworkCache>>,
         workflow_rx: watch::Receiver<LoadedWorkflow>,
     ) -> (Self, RuntimeHandle) {
+        Self::new_with_repos(
+            tracker,
+            pull_request_event_source,
+            agent,
+            provisioner,
+            committer,
+            pull_request_manager,
+            pull_request_commenter,
+            feedback,
+            store,
+            cache,
+            workflow_rx,
+            HashMap::new(),
+        )
+    }
+
+    /// Create a new runtime service with an initial set of per-repo contexts.
+    /// The single-repo fields (tracker, committer, etc.) act as the "default"
+    /// repo; additional repos in the map get polled independently.
+    pub fn new_with_repos(
+        tracker: Arc<dyn IssueTracker>,
+        pull_request_event_source: Option<Arc<dyn PullRequestEventSource>>,
+        agent: Arc<dyn AgentRuntime>,
+        provisioner: Arc<dyn WorkspaceProvisioner>,
+        committer: Option<Arc<dyn WorkspaceCommitter>>,
+        pull_request_manager: Option<Arc<dyn PullRequestManager>>,
+        pull_request_commenter: Option<Arc<dyn PullRequestCommenter>>,
+        feedback: Option<Arc<FeedbackRegistry>>,
+        store: Option<Arc<dyn StateStore>>,
+        cache: Option<Arc<dyn NetworkCache>>,
+        workflow_rx: watch::Receiver<LoadedWorkflow>,
+        repos: HashMap<RepoId, RepoContext>,
+    ) -> (Self, RuntimeHandle) {
         let (snapshot_tx, snapshot_rx) = watch::channel(empty_snapshot());
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (external_command_tx, external_command_rx) = mpsc::unbounded_channel();
@@ -187,7 +220,12 @@ impl RuntimeService {
         provisioner.set_interaction_reporter(Some(interaction_reporter.clone()));
         provisioner.set_progress_reporter(Some(progress_reporter));
         if let Some(ref committer) = committer {
-            committer.set_interaction_reporter(Some(interaction_reporter));
+            committer.set_interaction_reporter(Some(interaction_reporter.clone()));
+        }
+        for repo in repos.values() {
+            if let Some(committer) = &repo.committer {
+                committer.set_interaction_reporter(Some(interaction_reporter.clone()));
+            }
         }
         let initial_dispatch_mode = workflow_rx.borrow().config.startup_dispatch_mode();
         let state = RuntimeState {
@@ -204,6 +242,7 @@ impl RuntimeService {
                 pull_request_manager,
                 pull_request_commenter,
                 feedback,
+                repos,
                 store,
                 cache,
                 workflow_rx,
@@ -225,6 +264,7 @@ impl RuntimeService {
                 pending_create_issues: Vec::new(),
                 pending_feedback_injections: Vec::new(),
                 reload_support: None,
+                repo_context_factory: None,
                 state,
                 user_interactions,
             },
@@ -254,6 +294,11 @@ impl RuntimeService {
             component_factory,
             reload_error: None,
         });
+        self
+    }
+
+    pub fn with_repo_context_factory(mut self, factory: Arc<RepoContextFactory>) -> Self {
+        self.repo_context_factory = Some(factory);
         self
     }
 
@@ -412,11 +457,16 @@ impl RuntimeService {
                             self.stop_running_by_user(&issue_id).await;
                             let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::CreateIssue { title, description } => {
-                            info!(%title, "create issue requested");
+                        RuntimeCommand::CreateIssue {
+                            title,
+                            description,
+                            repo_id,
+                        } => {
+                            info!(%title, repo_id = ?repo_id, "create issue requested");
                             self.pending_create_issues.push(CreateIssueCommandRequest {
                                 title,
                                 description,
+                                repo_id,
                             });
                             self.process_pending_create_issues().await;
                             let _ = self.emit_snapshot().await;
@@ -436,13 +486,24 @@ impl RuntimeService {
                             let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::RefreshRepo { repo_id } => {
-                            info!(%repo_id, "repo refresh requested (not yet implemented)");
+                            info!(%repo_id, "repo refresh requested");
+                            self.push_event(
+                                EventScope::Tracker,
+                                format!("refresh requested for repo {repo_id}"),
+                            );
+                            // Trigger a full tick which will poll this repo's tracker.
+                            next_tick = Instant::now();
+                            let _ = self.emit_snapshot().await;
                         }
-                        RuntimeCommand::AddRepo(_registration) => {
-                            info!("add repo requested (not yet implemented)");
+                        RuntimeCommand::AddRepo(registration) => {
+                            info!(repo_id = %registration.repo_id, "add repo requested");
+                            self.handle_add_repo(registration);
+                            let _ = self.emit_snapshot().await;
                         }
                         RuntimeCommand::RemoveRepo { repo_id } => {
-                            info!(%repo_id, "remove repo requested (not yet implemented)");
+                            info!(%repo_id, "remove repo requested");
+                            self.handle_remove_repo(&repo_id);
+                            let _ = self.emit_snapshot().await;
                         }
                     }
                 }
@@ -470,6 +531,123 @@ impl RuntimeService {
                 }
             }
         }
+    }
+
+    pub(crate) fn repo_for_issue(&self, issue_id: &str) -> Option<&RepoContext> {
+        self.state
+            .issue_repo_map
+            .get(issue_id)
+            .and_then(|repo_id| self.repos.get(repo_id))
+    }
+
+    pub(crate) fn repo_for_pull_request_repository(
+        &self,
+        repository: &str,
+    ) -> Option<&RepoContext> {
+        self.repos.values().find(|ctx| {
+            ctx.registration.repo_id == repository
+                || ctx.workflow.config.tracker.repository.as_deref() == Some(repository)
+        })
+    }
+
+    pub(crate) fn repo_id_for_pull_request_repository(&self, repository: &str) -> Option<String> {
+        self.repo_for_pull_request_repository(repository)
+            .map(|ctx| ctx.registration.repo_id.clone())
+    }
+
+    pub(crate) fn repo_id_for_pull_request_event(&self, event: &PullRequestEvent) -> String {
+        let issue_id = event.synthetic_issue_id();
+        self.state
+            .issue_repo_map
+            .get(&issue_id)
+            .cloned()
+            .or_else(|| self.repo_id_for_pull_request_repository(&event.review_target().repository))
+            .unwrap_or_default()
+    }
+
+    /// Return the repo_id for the given issue, or an empty string if it belongs
+    /// to the default tracker.
+    pub(crate) fn repo_id_for_issue(&self, issue_id: &str) -> String {
+        self.state
+            .issue_repo_map
+            .get(issue_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Return the tracker for the given issue's repo, falling back to the
+    /// default tracker when no repo context is found.
+    pub(crate) fn tracker_for_issue(&self, issue_id: &str) -> Arc<dyn IssueTracker> {
+        self.repo_for_issue(issue_id)
+            .map(|ctx| ctx.tracker.clone())
+            .unwrap_or_else(|| self.tracker.clone())
+    }
+
+    pub(crate) fn workflow_for_issue(&self, issue_id: &str) -> LoadedWorkflow {
+        self.repo_for_issue(issue_id)
+            .map(|ctx| ctx.workflow.clone())
+            .unwrap_or_else(|| self.workflow())
+    }
+
+    pub(crate) fn workflow_for_pull_request_event(
+        &self,
+        event: &PullRequestEvent,
+    ) -> LoadedWorkflow {
+        self.repo_for_pull_request_repository(&event.review_target().repository)
+            .map(|ctx| ctx.workflow.clone())
+            .unwrap_or_else(|| self.workflow())
+    }
+
+    pub(crate) fn agent_for_issue(&self, issue_id: &str) -> Arc<dyn AgentRuntime> {
+        self.repo_for_issue(issue_id)
+            .map(|ctx| ctx.agent.clone())
+            .unwrap_or_else(|| self.agent.clone())
+    }
+
+    /// Return the committer for the given issue's repo, falling back to the
+    /// default committer.
+    pub(crate) fn committer_for_issue(
+        &self,
+        issue_id: &str,
+    ) -> Option<Arc<dyn WorkspaceCommitter>> {
+        self.repo_for_issue(issue_id)
+            .and_then(|ctx| ctx.committer.clone())
+            .or_else(|| self.committer.clone())
+    }
+
+    /// Return the PR manager for the given issue's repo, falling back to the default.
+    pub(crate) fn pull_request_manager_for_issue(
+        &self,
+        issue_id: &str,
+    ) -> Option<Arc<dyn PullRequestManager>> {
+        self.repo_for_issue(issue_id)
+            .and_then(|ctx| ctx.pull_request_manager.clone())
+            .or_else(|| self.pull_request_manager.clone())
+    }
+
+    /// Return the PR commenter for the given issue's repo, falling back to the default.
+    pub(crate) fn pull_request_commenter_for_issue(
+        &self,
+        issue_id: &str,
+    ) -> Option<Arc<dyn PullRequestCommenter>> {
+        self.repo_for_issue(issue_id)
+            .and_then(|ctx| ctx.pull_request_commenter.clone())
+            .or_else(|| self.pull_request_commenter.clone())
+    }
+
+    pub(crate) fn pull_request_commenter_for_repository(
+        &self,
+        repository: &str,
+    ) -> Option<Arc<dyn PullRequestCommenter>> {
+        self.repo_for_pull_request_repository(repository)
+            .and_then(|ctx| ctx.pull_request_commenter.clone())
+            .or_else(|| self.pull_request_commenter.clone())
+    }
+
+    pub(crate) fn feedback_for_issue(&self, issue_id: &str) -> Option<Arc<FeedbackRegistry>> {
+        self.repo_for_issue(issue_id)
+            .and_then(|ctx| ctx.feedback.clone())
+            .or_else(|| self.feedback.clone())
     }
 
     pub(crate) fn claim_issue(&mut self, issue_id: impl Into<String>, state: IssueClaimState) {
@@ -610,10 +788,17 @@ impl RuntimeService {
                     info!(%issue_id, "user-initiated agent stop queued");
                     self.pending_agent_stops.push(issue_id);
                 },
-                Ok(RuntimeCommand::CreateIssue { title, description }) => {
-                    info!(%title, "create issue queued");
-                    self.pending_create_issues
-                        .push(CreateIssueCommandRequest { title, description });
+                Ok(RuntimeCommand::CreateIssue {
+                    title,
+                    description,
+                    repo_id,
+                }) => {
+                    info!(%title, repo_id = ?repo_id, "create issue queued");
+                    self.pending_create_issues.push(CreateIssueCommandRequest {
+                        title,
+                        description,
+                        repo_id,
+                    });
                 },
                 Ok(RuntimeCommand::InjectRunFeedback {
                     run_id,
@@ -629,13 +814,21 @@ impl RuntimeService {
                         });
                 },
                 Ok(RuntimeCommand::RefreshRepo { repo_id }) => {
-                    info!(%repo_id, "repo refresh queued (not yet implemented)");
+                    info!(%repo_id, "repo refresh queued");
+                    self.push_event(
+                        EventScope::Tracker,
+                        format!("refresh queued for repo {repo_id}"),
+                    );
+                    // Will be handled on next tick.
+                    self.pending_refresh = true;
                 },
-                Ok(RuntimeCommand::AddRepo(_)) => {
-                    info!("add repo queued (not yet implemented)");
+                Ok(RuntimeCommand::AddRepo(registration)) => {
+                    info!(repo_id = %registration.repo_id, "add repo queued");
+                    self.handle_add_repo(registration);
                 },
                 Ok(RuntimeCommand::RemoveRepo { repo_id }) => {
-                    info!(%repo_id, "remove repo queued (not yet implemented)");
+                    info!(%repo_id, "remove repo queued");
+                    self.handle_remove_repo(&repo_id);
                 },
                 Err(_) => return false,
             }
@@ -647,7 +840,6 @@ impl RuntimeService {
         if approvals.is_empty() {
             return;
         }
-        let workflow = self.workflow();
         for (item_id, source) in approvals {
             let approval_key = issue_key_for_source(&source, &item_id);
             if !self.state.approved_inbox_keys.insert(approval_key.clone()) {
@@ -679,8 +871,18 @@ impl RuntimeService {
                 .state
                 .tracker_issues
                 .iter()
-                .find(|row| approval_key_for_row(workflow.config.tracker.kind, row) == approval_key)
-                .map(|row| self.resolved_tracker_issue_row(workflow.config.tracker.kind, row))
+                .find(|row| {
+                    approval_key_for_row(
+                        self.workflow_for_issue(&row.issue_id).config.tracker.kind,
+                        row,
+                    ) == approval_key
+                })
+                .map(|row| {
+                    self.resolved_tracker_issue_row(
+                        self.workflow_for_issue(&row.issue_id).config.tracker.kind,
+                        row,
+                    )
+                })
                 && self.should_dispatch_tracker_issue(&row)
             {
                 let issue_identifier = row.issue_identifier.clone();
@@ -710,16 +912,6 @@ impl RuntimeService {
         if closures.is_empty() {
             return;
         }
-        let workflow = self.workflow();
-        let tracker_kind = workflow.config.tracker.kind;
-        let terminal_state = workflow
-            .config
-            .tracker
-            .terminal_states
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "closed".into());
-
         for issue_id in closures {
             if self.state.running.contains_key(&issue_id) {
                 self.push_event(
@@ -728,13 +920,26 @@ impl RuntimeService {
                 );
                 continue;
             }
+            let workflow = self.workflow_for_issue(&issue_id);
+            let tracker_kind = workflow.config.tracker.kind;
+            let terminal_state = workflow
+                .config
+                .tracker
+                .terminal_states
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "closed".into());
 
             let request = polyphony_core::UpdateIssueRequest {
                 id: issue_id.clone(),
                 state: Some(terminal_state.clone()),
                 ..Default::default()
             };
-            let issue = match self.tracker.update_issue(&request).await {
+            let issue = match self
+                .tracker_for_issue(&issue_id)
+                .update_issue(&request)
+                .await
+            {
                 Ok(issue) => issue,
                 Err(error) => {
                     self.push_event(
@@ -801,11 +1006,11 @@ impl RuntimeService {
         // Manual dispatch always proceeds — the user explicitly requested it,
         // even in stop mode.
         info!(count = dispatches.len(), "processing manual dispatches");
-        let workflow = self.workflow();
         for request in dispatches {
             let issue_id = request.issue_id.clone();
+            let workflow = self.workflow_for_issue(&issue_id);
             let issues = match self
-                .tracker
+                .tracker_for_issue(&issue_id)
                 .fetch_issues_by_ids(std::slice::from_ref(&issue_id))
                 .await
             {
@@ -994,8 +1199,9 @@ impl RuntimeService {
                     created_at: None,
                     updated_at: None,
                 };
+                let workflow = self.workflow_for_issue(&issue.id);
                 if let Err(error) = self
-                    .dispatch_next_task(self.workflow(), issue, None, false, &run_id, &ws)
+                    .dispatch_next_task(workflow, issue, None, false, &run_id, &ws)
                     .await
                 {
                     warn!(%error, run_id, "failed to dispatch next task after manual resolution");
@@ -1063,13 +1269,37 @@ impl RuntimeService {
         }
 
         for request in requests {
+            let Some((selected_repo_id, tracker)) =
+                self.resolve_create_issue_tracker(request.repo_id.as_deref())
+            else {
+                let message = if let Some(repo_id) = request
+                    .repo_id
+                    .as_deref()
+                    .filter(|repo_id| !repo_id.is_empty())
+                {
+                    format!(
+                        "failed to create issue for repo {repo_id}: repository is not registered"
+                    )
+                } else if self.repos.len() > 1 {
+                    "failed to create issue: repo_id is required when multiple repositories are registered"
+                            .to_string()
+                } else {
+                    "failed to create issue: no tracker available".to_string()
+                };
+                self.push_event(EventScope::Dispatch, message.clone());
+                warn!(title = %request.title, %message, "failed to resolve tracker for issue creation");
+                continue;
+            };
             let create_req = polyphony_core::CreateIssueRequest {
                 title: request.title.clone(),
                 description: Some(request.description.clone()),
                 ..Default::default()
             };
-            match self.tracker.create_issue(&create_req).await {
+            match tracker.create_issue(&create_req).await {
                 Ok(issue) => {
+                    if let Some(repo_id) = selected_repo_id.clone() {
+                        self.state.issue_repo_map.insert(issue.id.clone(), repo_id);
+                    }
                     self.push_event(
                         EventScope::Dispatch,
                         format!("created issue {}: {}", issue.identifier, issue.title),
@@ -1077,7 +1307,12 @@ impl RuntimeService {
                     self.pending_refresh = true;
                 },
                 Err(error) => {
-                    warn!(%error, title = %request.title, "failed to create issue");
+                    warn!(
+                        %error,
+                        title = %request.title,
+                        repo_id = ?selected_repo_id,
+                        "failed to create issue"
+                    );
                     self.push_event(
                         EventScope::Dispatch,
                         format!("failed to create issue: {error}"),
@@ -1085,6 +1320,29 @@ impl RuntimeService {
                 },
             }
         }
+    }
+
+    fn resolve_create_issue_tracker(
+        &self,
+        requested_repo_id: Option<&str>,
+    ) -> Option<(Option<String>, Arc<dyn IssueTracker>)> {
+        if let Some(repo_id) = requested_repo_id.filter(|repo_id| !repo_id.is_empty()) {
+            return self
+                .repos
+                .get(repo_id)
+                .map(|ctx| (Some(repo_id.to_string()), ctx.tracker.clone()));
+        }
+        if self.repos.is_empty() {
+            return Some((None, self.tracker.clone()));
+        }
+        if self.repos.len() == 1 {
+            return self
+                .repos
+                .iter()
+                .next()
+                .map(|(repo_id, ctx)| (Some(repo_id.clone()), ctx.tracker.clone()));
+        }
+        None
     }
 
     pub(crate) async fn process_pending_feedback_injections(&mut self) {
@@ -1251,7 +1509,12 @@ impl RuntimeService {
                 self.retry_pipeline_task(&run, &failed_task).await?;
             },
             RunKind::PullRequestReview | RunKind::PullRequestCommentReview => {
-                self.retry_pull_request_run(self.workflow(), run_id, failed_task.ordinal)
+                let workflow = run
+                    .issue_id
+                    .as_deref()
+                    .map(|issue_id| self.workflow_for_issue(issue_id))
+                    .unwrap_or_else(|| self.workflow());
+                self.retry_pull_request_run(workflow, run_id, failed_task.ordinal)
                     .await?;
             },
         }
@@ -1413,7 +1676,7 @@ impl RuntimeService {
             updated_at: None,
         };
         self.dispatch_next_task(
-            self.workflow(),
+            self.workflow_for_issue(&issue.id),
             issue,
             None,
             false,
@@ -1570,9 +1833,10 @@ impl RuntimeService {
     }
 
     pub(crate) fn pull_request_inbox_item_row(&self, event: &PullRequestEvent) -> InboxItemRow {
+        let repo_id = self.repo_id_for_pull_request_event(event);
         match event {
             PullRequestEvent::Review(event) => InboxItemRow {
-                repo_id: String::new(),
+                repo_id: repo_id.clone(),
                 item_id: event.dedupe_key(),
                 kind: InboxItemKind::PullRequestReview,
                 source: event.provider.to_string(),
@@ -1602,7 +1866,7 @@ impl RuntimeService {
                     .contains(&sanitize_workspace_key(&event.display_identifier())),
             },
             PullRequestEvent::Comment(event) => InboxItemRow {
-                repo_id: String::new(),
+                repo_id: repo_id.clone(),
                 item_id: event.dedupe_key(),
                 kind: InboxItemKind::PullRequestComment,
                 source: event.provider.to_string(),
@@ -1649,7 +1913,7 @@ impl RuntimeService {
                     .contains(&sanitize_workspace_key(&event.display_identifier())),
             },
             PullRequestEvent::Conflict(event) => InboxItemRow {
-                repo_id: String::new(),
+                repo_id,
                 item_id: event.dedupe_key(),
                 kind: InboxItemKind::PullRequestConflict,
                 source: event.provider.to_string(),
@@ -1736,7 +2000,6 @@ impl RuntimeService {
             count = dispatches.len(),
             "processing manual pull request inbox dispatches"
         );
-        let workflow = self.workflow();
         for request in dispatches {
             let item_id = request.item_id;
             let Some(event) = self.visible_pull_request_event(&item_id) else {
@@ -1747,6 +2010,7 @@ impl RuntimeService {
                 warn!(%item_id, "pull request inbox item not found for manual dispatch");
                 continue;
             };
+            let workflow = self.workflow_for_pull_request_event(&event);
             if let Some(reason) = self.pull_request_event_suppression(&workflow, &event) {
                 let status = self.pull_request_event_status(&event);
                 self.push_event(
@@ -1885,6 +2149,73 @@ impl RuntimeService {
         Ok(self.idle_dispatch_allowed_for_agents(&candidate_agents))
     }
 
+    pub(crate) fn handle_add_repo(&mut self, registration: RepoRegistration) {
+        let repo_id = registration.repo_id.clone();
+        if self.repos.contains_key(&repo_id) {
+            self.push_event(
+                EventScope::Tracker,
+                format!("repo {repo_id} already registered, ignoring add"),
+            );
+            return;
+        }
+        let Some(factory) = self.repo_context_factory.clone() else {
+            self.push_event(
+                EventScope::Tracker,
+                format!(
+                    "repo {repo_id} could not be added, repo context factory is not configured"
+                ),
+            );
+            return;
+        };
+        match factory(&registration) {
+            Ok(context) => {
+                self.repos.insert(repo_id.clone(), context);
+                self.pending_refresh = true;
+            },
+            Err(error) => {
+                self.push_event(
+                    EventScope::Tracker,
+                    format!("repo {repo_id} failed to initialize: {error}"),
+                );
+                return;
+            },
+        }
+        self.push_event(EventScope::Tracker, format!("registered repo {repo_id}"));
+        info!(repo_id = %repo_id, "repo added to orchestrator");
+    }
+
+    /// Remove a repository from the orchestrator, cleaning up tracked state.
+    pub(crate) fn handle_remove_repo(&mut self, repo_id: &str) {
+        if self.repos.remove(repo_id).is_none() {
+            self.push_event(
+                EventScope::Tracker,
+                format!("repo {repo_id} not found, ignoring remove"),
+            );
+            return;
+        }
+        // Clean up issue_repo_map entries for this repo.
+        self.state.issue_repo_map.retain(|_, rid| rid != repo_id);
+        // Remove tracker_issue rows for this repo.
+        self.state
+            .tracker_issues
+            .retain(|row| row.repo_id != repo_id);
+        self.state
+            .visible_review_events
+            .retain(|_, event| event.repository != repo_id);
+        self.state
+            .visible_comment_events
+            .retain(|_, event| event.repository != repo_id);
+        self.state
+            .visible_conflict_events
+            .retain(|_, event| event.repository != repo_id);
+        self.state
+            .discarded_inbox_items
+            .retain(|_, entry| entry.row.repo_id != repo_id);
+        self.push_event(EventScope::Tracker, format!("removed repo {repo_id}"));
+        self.pending_refresh = true;
+        info!(repo_id = %repo_id, "repo removed from orchestrator");
+    }
+
     pub(crate) async fn tick(&mut self) -> bool {
         self.reload_workflow_from_disk(false, "poll_tick").await;
 
@@ -1944,100 +2275,163 @@ impl RuntimeService {
             return true;
         }
 
-        if self.workflow_reload_error().is_some() {
+        if self.workflow_reload_error().is_some() && self.repos.is_empty() {
             let _ = self.emit_snapshot().await;
             return false;
         }
-        let workflow = self.workflow();
-        if let Err(error) = workflow.config.validate() {
-            self.push_event(EventScope::Workflow, format!("validation failed: {error}"));
-            error!(%error, "workflow validation failed");
+        let mut repo_entries = if self.repos.is_empty() {
+            vec![(
+                String::new(),
+                self.workflow(),
+                self.tracker.clone(),
+                self.pull_request_event_source.clone(),
+            )]
+        } else {
+            self.repos
+                .values()
+                .map(|ctx| {
+                    (
+                        ctx.registration.repo_id.clone(),
+                        ctx.workflow.clone(),
+                        ctx.tracker.clone(),
+                        ctx.pull_request_event_source.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        repo_entries.retain(|(repo_id, workflow, ..)| match workflow.config.validate() {
+            Ok(()) => true,
+            Err(error) => {
+                let message = if repo_id.is_empty() {
+                    format!("validation failed: {error}")
+                } else {
+                    format!("repo {repo_id} validation failed: {error}")
+                };
+                self.push_event(EventScope::Workflow, message);
+                error!(%error, repo_id, "workflow validation failed");
+                false
+            },
+        });
+        if repo_entries.is_empty() {
             let _ = self.emit_snapshot().await;
             return false;
         }
-        if self.is_throttled(&self.tracker.component_key())
-            || self.is_throttled(&self.agent.component_key())
-        {
-            self.push_event(
-                EventScope::Throttle,
-                "dispatch skipped while a component is throttled".into(),
-            );
-            info!("tick: skipped — tracker or agent is throttled");
-            let _ = self.emit_snapshot().await;
-            return false;
-        }
-        let query = workflow.config.tracker_query();
-        let tracker_component = self.tracker.component_key();
         let tracker_fetch_started = Instant::now();
         self.state.last_tracker_poll_at = Some(Utc::now());
         self.state.loading.fetching_issues = true;
-        info!("tick: fetching issues from tracker");
+        info!(
+            repo_count = repo_entries.len(),
+            "tick: fetching issues from trackers"
+        );
         let _ = self.emit_snapshot().await;
-        let issues = match self.tracker.fetch_candidate_issues(&query).await {
-            Ok(issues) => issues,
-            Err(CoreError::RateLimited(signal)) => {
-                self.state.loading.fetching_issues = false;
-                let elapsed = tracker_fetch_started.elapsed();
-                warn!("tick: tracker returned rate-limited, re-throttling");
-                if elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
-                    warn!(
-                        component = %tracker_component,
+        let mut tracker_fetches = tokio::task::JoinSet::new();
+        let mut visible_pull_request_sources = Vec::new();
+        for (repo_id, workflow, tracker, pull_request_event_source) in repo_entries {
+            if let Some(source) = pull_request_event_source {
+                visible_pull_request_sources.push((repo_id.clone(), workflow.clone(), source));
+            }
+            let component_key = tracker.component_key();
+            if self.is_throttled(&component_key) {
+                info!(repo_id = %repo_id, component = %component_key, "tick: skipping throttled repo tracker");
+                continue;
+            }
+            let query = workflow.config.tracker_query();
+            tracker_fetches.spawn(async move {
+                let started = Instant::now();
+                let result = tracker.fetch_candidate_issues(&query).await;
+                (repo_id, component_key, workflow, started.elapsed(), result)
+            });
+        }
+
+        let mut issues = Vec::new();
+        while let Some(result) = tracker_fetches.join_next().await {
+            let Ok((repo_id, component_key, workflow, elapsed, result)) = result else {
+                continue;
+            };
+            match result {
+                Ok(repo_issues) => {
+                    info!(
+                        repo_id = %repo_id,
+                        component = %component_key,
+                        count = repo_issues.len(),
                         elapsed_ms = elapsed.as_millis(),
-                        "tracker candidate fetch was slow before rate limiting"
+                        "tick: fetched issues from repo tracker"
                     );
-                }
-                self.register_throttle(*signal);
-                let _ = self.emit_snapshot().await;
-                return false;
-            },
-            Err(error) => {
-                self.state.loading.fetching_issues = false;
-                let elapsed = tracker_fetch_started.elapsed();
-                self.push_event(
-                    EventScope::Tracker,
-                    format!("candidate fetch failed: {error}"),
-                );
-                if elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
-                    warn!(
-                        component = %tracker_component,
-                        elapsed_ms = elapsed.as_millis(),
-                        %error,
-                        "tracker candidate fetch failed after a slow request"
-                    );
-                }
-                error!(%error, "candidate fetch failed");
-                let _ = self.emit_snapshot().await;
-                return false;
-            },
-        };
+                    if elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
+                        warn!(
+                            repo_id = %repo_id,
+                            component = %component_key,
+                            count = repo_issues.len(),
+                            elapsed_ms = elapsed.as_millis(),
+                            "repo tracker candidate fetch exceeded the slow-fetch threshold"
+                        );
+                    }
+                    for issue in repo_issues {
+                        if !repo_id.is_empty() {
+                            self.state
+                                .issue_repo_map
+                                .insert(issue.id.clone(), repo_id.clone());
+                        }
+                        issues.push((repo_id.clone(), workflow.clone(), issue));
+                    }
+                },
+                Err(CoreError::RateLimited(signal)) => {
+                    warn!(repo_id = %repo_id, component = %component_key, "tick: repo tracker returned rate-limited");
+                    if elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
+                        warn!(
+                            repo_id = %repo_id,
+                            component = %component_key,
+                            elapsed_ms = elapsed.as_millis(),
+                            "repo tracker candidate fetch was slow before rate limiting"
+                        );
+                    }
+                    self.register_throttle(*signal);
+                },
+                Err(error) => {
+                    if repo_id.is_empty() {
+                        self.push_event(
+                            EventScope::Tracker,
+                            format!("candidate fetch failed: {error}"),
+                        );
+                    } else {
+                        self.push_event(
+                            EventScope::Tracker,
+                            format!("repo {repo_id} candidate fetch failed: {error}"),
+                        );
+                    }
+                    warn!(repo_id = %repo_id, component = %component_key, %error, "repo candidate fetch failed");
+                },
+            }
+        }
         let tracker_fetch_elapsed = tracker_fetch_started.elapsed();
         self.state.loading.fetching_issues = false;
         self.state.from_cache = false;
         self.state.cached_at = None;
         info!(
-            component = %tracker_component,
             count = issues.len(),
             elapsed_ms = tracker_fetch_elapsed.as_millis(),
-            "tick: fetched issues from tracker"
+            "tick: fetched issues from trackers"
         );
         if tracker_fetch_elapsed >= SLOW_TRACKER_FETCH_WARN_THRESHOLD {
             warn!(
-                component = %tracker_component,
                 count = issues.len(),
                 elapsed_ms = tracker_fetch_elapsed.as_millis(),
-                "tracker candidate fetch exceeded the slow-fetch threshold"
+                "multi-repo tracker candidate fetch exceeded the slow-fetch threshold"
             );
         }
 
         let previous_issue_rows = self.state.tracker_issues.clone();
-        let mut issues = issues;
-        issues.sort_by(dispatch_order);
+        issues.sort_by(|(_, _, left), (_, _, right)| dispatch_order(left, right));
         self.state.tracker_issue_snapshot_loaded = true;
-        let tracker_kind = workflow.config.tracker.kind;
         self.state.tracker_issues = issues
             .iter()
-            .map(summarize_issue)
-            .map(|row| self.resolved_tracker_issue_row(tracker_kind, &row))
+            .map(|(repo_id, workflow, issue)| {
+                let mut row = summarize_issue(issue);
+                if !repo_id.is_empty() {
+                    row.repo_id = repo_id.clone();
+                }
+                self.resolved_tracker_issue_row(workflow.config.tracker.kind, &row)
+            })
             .collect();
         let current_issue_ids = self
             .state
@@ -2053,6 +2447,16 @@ impl RuntimeService {
             if self.issue_is_actionable(&issue_row.issue_id) {
                 continue;
             }
+            let tracker_kind = issues
+                .iter()
+                .find(|(_, _, issue)| issue.id == issue_row.issue_id)
+                .map(|(_, workflow, _)| workflow.config.tracker.kind)
+                .unwrap_or_else(|| {
+                    self.workflow_for_issue(&issue_row.issue_id)
+                        .config
+                        .tracker
+                        .kind
+                });
             self.record_discarded_inbox_item(self.issue_inbox_item_row(tracker_kind, &issue_row));
         }
         self.prune_discarded_inbox_items();
@@ -2065,11 +2469,11 @@ impl RuntimeService {
         {
             let orphan_keys = std::mem::take(&mut self.state.orphan_dispatch_keys);
             let mut pending_orphan_keys = orphan_keys.clone();
-            for issue in &issues {
+            for (_, workflow, issue) in &issues {
                 let key = sanitize_workspace_key(&issue.identifier);
                 if orphan_keys.contains(&key)
                     && !self.is_claimed(&issue.id)
-                    && self.issue_is_approved(tracker_kind, issue)
+                    && self.issue_is_approved(workflow.config.tracker.kind, issue)
                 {
                     info!(
                         issue_identifier = %issue.identifier,
@@ -2096,28 +2500,13 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
         }
 
-        if self.pull_request_event_source.is_some() {
-            let allow_pull_request_dispatch = match self.state.dispatch_mode {
-                polyphony_core::DispatchMode::Manual | polyphony_core::DispatchMode::Stop => false,
-                polyphony_core::DispatchMode::Automatic
-                | polyphony_core::DispatchMode::Nightshift => true,
-                polyphony_core::DispatchMode::Idle => {
-                    match self.idle_dispatch_allowed_for_pr_reviews(&workflow) {
-                        Ok(allowed) => allowed,
-                        Err(error) => {
-                            self.push_event(
-                                EventScope::Dispatch,
-                                format!("idle PR review gate failed: {error}"),
-                            );
-                            false
-                        },
-                    }
-                },
-            };
-            self.poll_pull_request_events(workflow.clone(), allow_pull_request_dispatch)
-                .await;
-        }
-        if !workflow.config.has_dispatch_agents() {
+        self.poll_pull_request_events(visible_pull_request_sources)
+            .await;
+
+        if !issues
+            .iter()
+            .any(|(_, workflow, _)| workflow.config.has_dispatch_agents())
+        {
             let _ = self.emit_snapshot().await;
             return false;
         }
@@ -2129,8 +2518,11 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
             return false;
         }
-        for issue in issues {
-            if !self.issue_is_approved(tracker_kind, &issue) {
+        for (_, workflow, issue) in issues {
+            if !workflow.config.has_dispatch_agents() {
+                continue;
+            }
+            if !self.issue_is_approved(workflow.config.tracker.kind, &issue) {
                 continue;
             }
             if !self.should_dispatch(&workflow, &issue) {
@@ -2184,7 +2576,8 @@ mod tests {
     fn workspace_progress_updates_current_snapshot_immediately() {
         let now = Utc::now();
         let mut snapshot = RuntimeSnapshot {
-            repo_ids: Vec::new(), repo_registrations: Vec::new(),
+            repo_ids: Vec::new(),
+            repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),

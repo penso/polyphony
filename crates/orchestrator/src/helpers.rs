@@ -686,7 +686,8 @@ pub(crate) fn dispatch_order(left: &Issue, right: &Issue) -> std::cmp::Ordering 
 
 pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
     RuntimeSnapshot {
-        repo_ids: Vec::new(), repo_registrations: Vec::new(),
+        repo_ids: Vec::new(),
+        repo_registrations: Vec::new(),
         generated_at: Utc::now(),
         counts: SnapshotCounts::default(),
         cadence: RuntimeCadence::default(),
@@ -718,6 +719,7 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
 }
 
 pub(crate) fn build_persisted_agent_run_record(
+    repo_id: String,
     running: &RunningTask,
     status: AttemptStatus,
     finished_at: DateTime<Utc>,
@@ -725,7 +727,7 @@ pub(crate) fn build_persisted_agent_run_record(
     saved_context: Option<AgentContextSnapshot>,
 ) -> PersistedAgentRunRecord {
     PersistedAgentRunRecord {
-        repo_id: String::new(),
+        repo_id,
         issue_id: running.issue.id.clone(),
         issue_identifier: running.issue.identifier.clone(),
         agent_name: running.agent_name.clone(),

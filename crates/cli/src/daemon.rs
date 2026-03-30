@@ -40,6 +40,15 @@ pub(crate) enum DaemonRequest {
     Status,
     Snapshot,
     Refresh,
+    RefreshRepo {
+        repo_id: String,
+    },
+    AddRepo {
+        registration: polyphony_core::RepoRegistration,
+    },
+    RemoveRepo {
+        repo_id: String,
+    },
     SetMode {
         mode: String,
     },
@@ -243,6 +252,29 @@ fn dispatch_request(request: DaemonRequest, state: &ControlState) -> Result<Daem
             send_command(&state.command_tx, RuntimeCommand::Refresh)?;
             Ok(DaemonResponse::Accepted {
                 message: "refresh queued".into(),
+            })
+        },
+        DaemonRequest::RefreshRepo { repo_id } => {
+            send_command(&state.command_tx, RuntimeCommand::RefreshRepo {
+                repo_id: repo_id.clone(),
+            })?;
+            Ok(DaemonResponse::Accepted {
+                message: format!("refresh queued for repo {repo_id}"),
+            })
+        },
+        DaemonRequest::AddRepo { registration } => {
+            let repo_id = registration.repo_id.clone();
+            send_command(&state.command_tx, RuntimeCommand::AddRepo(registration))?;
+            Ok(DaemonResponse::Accepted {
+                message: format!("repo add queued for {repo_id}"),
+            })
+        },
+        DaemonRequest::RemoveRepo { repo_id } => {
+            send_command(&state.command_tx, RuntimeCommand::RemoveRepo {
+                repo_id: repo_id.clone(),
+            })?;
+            Ok(DaemonResponse::Accepted {
+                message: format!("repo remove queued for {repo_id}"),
             })
         },
         DaemonRequest::SetMode { mode } => {

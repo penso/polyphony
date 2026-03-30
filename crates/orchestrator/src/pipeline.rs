@@ -48,11 +48,11 @@ impl RuntimeService {
             .worktree_keys
             .insert(workspace.workspace_key.clone());
 
-        if let Err(error) = self.tracker.ensure_issue_workflow_tracking(&issue).await {
+        let tracker = self.tracker_for_issue(&issue.id);
+        if let Err(error) = tracker.ensure_issue_workflow_tracking(&issue).await {
             warn!(%error, issue_identifier = %issue.identifier, "issue workflow tracking setup failed");
         }
-        if let Err(error) = self
-            .tracker
+        if let Err(error) = tracker
             .update_issue_workflow_status(&issue, "In Progress")
             .await
         {
@@ -496,7 +496,7 @@ impl RuntimeService {
         // Build prior context from the task's stored session info for resume.
         let prior_context = if task.session_id.is_some() || task.thread_id.is_some() {
             Some(AgentContextSnapshot {
-                repo_id: String::new(),
+                repo_id: self.repo_id_for_issue(&issue.id),
                 issue_id: issue.id.clone(),
                 issue_identifier: issue.identifier.clone(),
                 updated_at: Utc::now(),
@@ -640,8 +640,8 @@ impl RuntimeService {
         let issue_identifier_for_task = issue_identifier.clone();
         let issue_for_task = issue.clone();
         let command_tx = self.command_tx.clone();
-        let agent = self.agent.clone();
-        let tracker = self.tracker.clone();
+        let agent = self.agent_for_issue(&issue.id);
+        let tracker = self.tracker_for_issue(&issue.id);
         let provisioner = self.provisioner.clone();
         let hooks = workflow.config.hooks.clone();
         let active_states = workflow.config.tracker.active_states.clone();

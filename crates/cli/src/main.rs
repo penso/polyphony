@@ -338,7 +338,9 @@ use crate::{
         TelemetryGuard, TracingOutput, init_run_log_sink, init_tracing, load_historical_log_lines,
         run_operator_surface,
     },
-    tracker_factory::build_runtime_components,
+    tracker_factory::{
+        build_repo_context, build_repo_contexts_from_registry, build_runtime_components,
+    },
     ui_support::{LogBuffer, prompt_workflow_initialization, run as run_tui, tui_available},
 };
 
@@ -840,7 +842,18 @@ async fn start_runtime(
         build_runtime_components(workflow)
             .map_err(|error: Error| polyphony_core::Error::Adapter(error.to_string()))
     });
+    let repo_context_factory: Arc<polyphony_orchestrator::RepoContextFactory> = {
+        let user_config_path = user_config_path.clone();
+        Arc::new(move |registration| {
+            build_repo_context(registration, Some(&user_config_path))
+                .map_err(|error: Error| polyphony_core::Error::Adapter(error.to_string()))
+        })
+    };
     let components = build_runtime_components(&workflow)?;
+    let registry_path = crate::repo_manager::default_registry_path();
+    let registry = polyphony_core::load_repo_registry(&registry_path)
+        .unwrap_or_else(|_| polyphony_core::RepoRegistry::default());
+    let initial_repos = build_repo_contexts_from_registry(&registry, Some(&user_config_path))?;
     let provisioner: Arc<dyn WorkspaceProvisioner> =
         Arc::new(polyphony_git::GitWorkspaceProvisioner::default());
     let store = build_store(workflow_path, cli.sqlite_url.as_deref()).await?;
@@ -853,7 +866,7 @@ async fn start_runtime(
         )))
     };
     let (workflow_tx, workflow_rx) = tokio::sync::watch::channel(workflow.clone());
-    let (service, handle) = RuntimeService::new(
+    let (service, handle) = RuntimeService::new_with_repos(
         components.tracker,
         components.pull_request_event_source,
         components.agent,
@@ -865,13 +878,16 @@ async fn start_runtime(
         store,
         cache,
         workflow_rx,
+        initial_repos,
     );
-    let service = service.with_workflow_reload(
-        workflow_path.to_path_buf(),
-        Some(user_config_path.clone()),
-        workflow_tx.clone(),
-        component_factory,
-    );
+    let service = service
+        .with_workflow_reload(
+            workflow_path.to_path_buf(),
+            Some(user_config_path.clone()),
+            workflow_tx.clone(),
+            component_factory,
+        )
+        .with_repo_context_factory(repo_context_factory);
     let _watcher = spawn_workflow_watcher(
         workflow_path.to_path_buf(),
         Some(user_config_path),

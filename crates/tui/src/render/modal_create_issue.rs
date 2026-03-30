@@ -27,6 +27,8 @@ pub(crate) fn draw_create_issue_modal(frame: &mut ratatui::Frame<'_>, app: &AppS
             Line::from(vec![
                 Span::styled("Tab", Style::default().fg(theme.highlight)),
                 Span::styled(":switch field  ", Style::default().fg(theme.muted)),
+                Span::styled("←/→", Style::default().fg(theme.highlight)),
+                Span::styled(":repo  ", Style::default().fg(theme.muted)),
                 Span::styled("^D", Style::default().fg(theme.highlight)),
                 Span::styled(":create  ", Style::default().fg(theme.muted)),
                 Span::styled("Esc", Style::default().fg(theme.highlight)),
@@ -48,6 +50,11 @@ pub(crate) fn draw_create_issue_modal(frame: &mut ratatui::Frame<'_>, app: &AppS
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Title field
+            Constraint::Length(if modal.has_repo_selector() {
+                3
+            } else {
+                0
+            }),
             Constraint::Length(1), // Spacer
             Constraint::Min(4),    // Description field
         ])
@@ -94,8 +101,52 @@ pub(crate) fn draw_create_issue_modal(frame: &mut ratatui::Frame<'_>, app: &AppS
         );
     }
 
+    let description_row = if modal.has_repo_selector() {
+        3
+    } else {
+        2
+    };
+
+    if modal.has_repo_selector() {
+        let repo_focused = modal.focused_on_repo();
+        let repo_border_color = if repo_focused {
+            theme.highlight
+        } else {
+            theme.border
+        };
+        let repo_block = Block::default()
+            .title(Line::from(Span::styled(
+                " Repository ",
+                Style::default().fg(if repo_focused {
+                    theme.info
+                } else {
+                    theme.muted
+                }),
+            )))
+            .borders(ratatui::widgets::Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(repo_border_color))
+            .style(Style::default().bg(theme.panel_alt));
+        let repo_inner = repo_block.inner(rows[1]);
+        frame.render_widget(repo_block, rows[1]);
+
+        let repo_text = modal
+            .selected_repo_id()
+            .map(|repo_id| format!("‹ {repo_id} ›"))
+            .unwrap_or_else(|| "‹ choose a repository ›".to_string());
+        let repo_style = if modal.selected_repo_id().is_some() {
+            Style::default().fg(theme.foreground)
+        } else {
+            Style::default().fg(theme.warning)
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(repo_text, repo_style)),
+            repo_inner,
+        );
+    }
+
     // Description field
-    let desc_focused = modal.cursor_field == 1;
+    let desc_focused = modal.cursor_field == modal.description_field_index();
     let desc_border_color = if desc_focused {
         theme.highlight
     } else {
@@ -114,8 +165,8 @@ pub(crate) fn draw_create_issue_modal(frame: &mut ratatui::Frame<'_>, app: &AppS
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(desc_border_color))
         .style(Style::default().bg(theme.panel_alt));
-    let desc_inner = desc_block.inner(rows[2]);
-    frame.render_widget(desc_block, rows[2]);
+    let desc_inner = desc_block.inner(rows[description_row]);
+    frame.render_widget(desc_block, rows[description_row]);
 
     if modal.description.is_empty() && !desc_focused {
         frame.render_widget(
@@ -139,9 +190,16 @@ pub(crate) fn draw_create_issue_modal(frame: &mut ratatui::Frame<'_>, app: &AppS
 
     // Cursor positioning
     let (cursor_area, text, pos) = if title_focused {
-        (title_inner, &modal.title, modal.cursor_pos)
+        (title_inner, modal.title.as_str(), modal.cursor_pos)
+    } else if modal.focused_on_repo() {
+        let repo_area = rows[1].inner(Margin {
+            vertical: 1,
+            horizontal: 1,
+        });
+        let repo_text = modal.selected_repo_id().unwrap_or("choose a repository");
+        (repo_area, repo_text, repo_text.chars().count())
     } else {
-        (desc_inner, &modal.description, modal.cursor_pos)
+        (desc_inner, modal.description.as_str(), modal.cursor_pos)
     };
     let (line, col) = super::popups::visual_cursor_position(text, pos, cursor_area.width as usize);
     let cursor_x = cursor_area.x + (col as u16).min(cursor_area.width.saturating_sub(1));
