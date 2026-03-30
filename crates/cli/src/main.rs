@@ -802,6 +802,40 @@ async fn start_runtime(
         return Ok(None);
     }
     let workflow = load_workflow_with_user_config(workflow_path, Some(&user_config_path))?;
+
+    // Auto-register the current working directory as a repo if not already registered.
+    if let Ok(cwd) = std::env::current_dir()
+        && cwd.join(".git").exists()
+    {
+        let registry_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".polyphony")
+            .join("repos.json");
+        if let Ok(mut registry) = polyphony_core::load_repo_registry(&registry_path)
+            && !registry.repos.iter().any(|r| r.worktree_path == cwd)
+        {
+            let repo_id = cwd
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("local")
+                .to_string();
+            registry.add(polyphony_core::RepoRegistration {
+                repo_id,
+                label: cwd
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("local")
+                    .to_string(),
+                worktree_path: cwd,
+                clone_url: None,
+                default_branch: "main".into(),
+                tracker_kind: workflow.config.tracker.kind,
+                added_at: chrono::Utc::now(),
+            });
+            let _ = polyphony_core::save_repo_registry(&registry_path, &registry);
+        }
+    }
+
     let component_factory: Arc<RuntimeComponentFactory> = Arc::new(|workflow| {
         build_runtime_components(workflow)
             .map_err(|error: Error| polyphony_core::Error::Adapter(error.to_string()))
