@@ -54,24 +54,12 @@
     <input type="text" class="search-input" id="inbox-search" placeholder="Filter by title, status, author, label..." autocomplete="off">
     <span class="search-count" id="inbox-filter-count"></span>
   </div>
-  {# Repo filter pills — derived from sources present in inbox items #}
-  {% set ns_sources = namespace(sources=[]) %}
-  {% for t in inbox_items %}
-    {% if t.source and t.source not in ns_sources.sources %}
-      {% set ns_sources.sources = ns_sources.sources + [t.source] %}
-    {% endif %}
-  {% endfor %}
-  {# Also add repo registrations that might not have inbox items yet #}
-  {% for r in repo_registrations %}
-    {% if r.repo_id and r.repo_id not in ns_sources.sources %}
-      {% set ns_sources.sources = ns_sources.sources + [r.repo_id] %}
-    {% endif %}
-  {% endfor %}
-  {% if ns_sources.sources | length > 1 %}
+  {# Repo filter pills — derived from registered repositories only #}
+  {% if repo_registrations | length > 1 %}
   <div class="repo-pills" id="repo-pills">
     <button class="repo-pill active" data-repo="all" onclick="filterRepo('all', this)">All</button>
-    {% for src in ns_sources.sources %}
-    <button class="repo-pill" data-repo="{{ src }}" onclick="filterRepo('{{ src }}', this)">{{ src }}</button>
+    {% for r in repo_registrations %}
+    <button class="repo-pill" data-repo="{{ r.repo_id }}" onclick="filterRepo('{{ r.repo_id }}', this)">{{ r.label }}</button>
     {% endfor %}
   </div>
   {% endif %}
@@ -92,7 +80,7 @@
         {% else %}<span class="col-muted"> </span>{% endif %}
       </span>
       <span class="col-muted">{% if t.updated_at %}<time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time>{% else %}&mdash;{% endif %}</span>
-      <span class="col-muted" title="{{ t.repo_id }}">{% if t.repo_id %}{{ t.repo_id }}{% else %}{{ t.source }}{% endif %}</span>
+      <span class="col-muted" title="{{ t.source }}">{% if t.repo_id %}{{ t.repo_id }}{% else %}{% set ns_matched = namespace(name=t.source) %}{% for r in repo_registrations %}{% if r.repo_id in t.source or r.repo_id in t.item_id %}{% set ns_matched.name = r.repo_id %}{% endif %}{% endfor %}{{ ns_matched.name }}{% endif %}</span>
       <span class="col-title">
         {% if t.parent_id %}<span class="tree-prefix">├── </span>{% endif %}
         {% if t.url %}<a href="{{ t.url }}" target="_blank" onclick="event.stopPropagation()">{{ t.title }}</a>
@@ -364,7 +352,10 @@
     var q = searchInput.value.toLowerCase().trim();
     var visible = 0;
     rows.forEach(function(row) {
-      var repoMatch = activeRepo === 'all' || (row.dataset.repo || '') === activeRepo || (row.dataset.source || '') === activeRepo;
+      var repoMatch = activeRepo === 'all'
+        || (row.dataset.repo || '') === activeRepo
+        || (row.dataset.source || '').indexOf(activeRepo) !== -1
+        || (row.dataset.itemId || '').indexOf(activeRepo) !== -1;
       var text = (row.dataset.title || '') + ' ' +
                  (row.dataset.status || '') + ' ' +
                  (row.dataset.author || '') + ' ' +
