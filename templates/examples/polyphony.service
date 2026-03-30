@@ -1,0 +1,22 @@
+[Unit]
+Description=Polyphony AI Orchestration Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/polyphony serve --port 8080 --address 0.0.0.0
+WorkingDirectory=/path/to/your/repo
+Restart=on-failure
+RestartSec=5
+Environment=GITHUB_TOKEN=ghp_your_token_here
+# Optional: set dispatch mode
+# Environment=POLYPHONY_DISPATCH_MODE=automatic
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/%u/.polyphony /home/%u/.config/polyphony
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -50,6 +50,15 @@ enum Commands {
         #[command(subcommand)]
         action: DaemonAction,
     },
+    /// Run as an HTTP-only server (no TUI) — ideal for systemd services
+    Serve {
+        /// HTTP listen port
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        /// HTTP listen address
+        #[arg(long, default_value = "0.0.0.0")]
+        address: String,
+    },
     /// Manage tracked repositories
     Repo {
         #[command(subcommand)]
@@ -346,7 +355,16 @@ async fn try_main() -> Result<(), Error> {
             action: DaemonAction::Run
         })
     );
-    let tui_mode = !daemon_foreground && tui_available() && !cli.no_tui;
+    let serve_mode = matches!(cli.command, Some(Commands::Serve { .. }));
+    // In serve mode, inject the listen port/address into env for the daemon config.
+    // SAFETY: called before any threads are spawned (single-threaded at this point).
+    if let Some(Commands::Serve { port, ref address }) = cli.command {
+        unsafe {
+            std::env::set_var("POLYPHONY_DAEMON__LISTEN_PORT", port.to_string());
+            std::env::set_var("POLYPHONY_DAEMON__LISTEN_ADDRESS", address);
+        }
+    }
+    let tui_mode = !daemon_foreground && !serve_mode && tui_available() && !cli.no_tui;
     if let Some(dir) = &cli.directory {
         std::env::set_current_dir(dir).map_err(|e| {
             Error::Config(format!("cannot change to directory {}: {e}", dir.display()))
