@@ -7,12 +7,12 @@
 </div>
 
 {# Add repo form #}
-<div class="card" style="padding: 1rem;">
+<div class="card" style="padding: 1rem; overflow: visible;">
   <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
     <div style="flex: 1; min-width: 16rem; position: relative;">
       <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Repository (local path or remote URL)</label>
       <input type="text" id="repo-source" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="/path/to/repo or https://github.com/owner/repo" autocomplete="off">
-      <div id="repo-autocomplete" style="display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; max-height: 12rem; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
+      <div id="repo-autocomplete" style="display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 50; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; max-height: 12rem; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.25);"></div>
     </div>
     <div style="width: 8rem;">
       <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Branch</label>

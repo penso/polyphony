@@ -15,6 +15,7 @@ pub(crate) mod modal_create_issue;
 pub(crate) mod modal_feedback;
 mod orchestrator;
 pub(crate) mod popups;
+mod repos;
 pub(crate) mod tasks;
 mod time;
 
@@ -198,6 +199,7 @@ fn render_tab_table(
         ActiveTab::Orchestrator => orchestrator::draw_orchestrator_tab(frame, area, snapshot, app),
         ActiveTab::Tasks => tasks::draw_tasks_tab(frame, area, snapshot, app),
         ActiveTab::Deliverables => deliverables::draw_deliverables_tab(frame, area, snapshot, app),
+        ActiveTab::Repos => repos::draw_repos_tab(frame, area, snapshot, app),
         ActiveTab::Logs => logs::draw_logs_tab(frame, area, snapshot, app),
     }
 }

@@ -14,7 +14,8 @@ use crate::{
 
 fn test_snapshot(visible: usize) -> RuntimeSnapshot {
     RuntimeSnapshot {
-        repo_ids: Vec::new(), repo_registrations: Vec::new(),
+        repo_ids: Vec::new(),
+        repo_registrations: Vec::new(),
         generated_at: Utc::now(),
         counts: SnapshotCounts {
             running: 0,
@@ -1027,6 +1028,9 @@ fn tab_switching() {
 
     app.active_tab = app.active_tab.next();
     assert_eq!(app.active_tab, app::ActiveTab::Agents);
+
+    app.active_tab = app.active_tab.next();
+    assert_eq!(app.active_tab, app::ActiveTab::Repos);
 
     app.active_tab = app.active_tab.next();
     assert_eq!(app.active_tab, app::ActiveTab::Logs);

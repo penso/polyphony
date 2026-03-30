@@ -499,16 +499,18 @@ pub enum ActiveTab {
     Tasks,
     Deliverables,
     Agents,
+    Repos,
     Logs,
 }
 
 impl ActiveTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Inbox,
         Self::Orchestrator,
         Self::Tasks,
         Self::Deliverables,
         Self::Agents,
+        Self::Repos,
         Self::Logs,
     ];
 
@@ -519,6 +521,7 @@ impl ActiveTab {
             Self::Tasks => "Tasks",
             Self::Deliverables => "Outcomes",
             Self::Agents => "Agents",
+            Self::Repos => "Repos",
             Self::Logs => "Logs",
         }
     }
@@ -530,7 +533,8 @@ impl ActiveTab {
             Self::Tasks => 2,
             Self::Deliverables => 3,
             Self::Agents => 4,
-            Self::Logs => 5,
+            Self::Repos => 5,
+            Self::Logs => 6,
         }
     }
 
@@ -673,6 +677,7 @@ pub struct AppState {
     pub search_active: bool,
     pub search_query: String,
     pub refresh_requested: bool,
+    pub repos_state: TableState,
     pub logs_state: TableState,
     pub runs_search_active: bool,
     pub runs_search_query: String,
@@ -768,6 +773,7 @@ impl AppState {
             search_active: false,
             search_query: String::new(),
             refresh_requested: false,
+            repos_state: TableState::default(),
             logs_state: TableState::default(),
             runs_search_active: false,
             runs_search_query: String::new(),
@@ -1549,6 +1555,7 @@ impl AppState {
                 .iter()
                 .filter(|m| m.deliverable.is_some())
                 .count(),
+            ActiveTab::Repos => snapshot.repo_registrations.len(),
             ActiveTab::Logs => self.filtered_log_count(),
         }
     }
@@ -1560,6 +1567,7 @@ impl AppState {
             ActiveTab::Orchestrator => &mut self.runs_state,
             ActiveTab::Tasks => &mut self.tasks_state,
             ActiveTab::Deliverables => &mut self.deliverables_state,
+            ActiveTab::Repos => &mut self.repos_state,
             ActiveTab::Logs => &mut self.logs_state,
         }
     }
