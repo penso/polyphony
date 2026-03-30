@@ -40,6 +40,35 @@
       <a href="/graphql">GraphQL</a>
     </div>
     <span class="spacer"></span>
+    <div class="nav-mode" id="nav-mode">
+      <button class="nav-mode-btn" id="mode-btn" onclick="document.getElementById('mode-dropdown').classList.toggle('open')" title="Dispatch mode">
+        <span class="mode-dot" id="mode-dot">&#x25CF;</span>
+        <span id="mode-label">{{ dispatch_mode }}</span>
+        <span style="font-size: 0.5rem; opacity: 0.5;">&#x25BC;</span>
+      </button>
+      <div class="mode-dropdown" id="mode-dropdown">
+        <div class="mode-option{% if dispatch_mode == 'manual' %} active{% endif %}" data-mode="MANUAL" onclick="setMode('MANUAL')">
+          <div class="mode-name">&#x25CF; Manual</div>
+          <div class="mode-desc">You choose which issues to dispatch</div>
+        </div>
+        <div class="mode-option{% if dispatch_mode == 'automatic' %} active{% endif %}" data-mode="AUTOMATIC" onclick="setMode('AUTOMATIC')">
+          <div class="mode-name">&#x25CF; Automatic</div>
+          <div class="mode-desc">Issues are dispatched automatically</div>
+        </div>
+        <div class="mode-option{% if dispatch_mode == 'nightshift' %} active{% endif %}" data-mode="NIGHTSHIFT" onclick="setMode('NIGHTSHIFT')">
+          <div class="mode-name">&#x25CF; Nightshift</div>
+          <div class="mode-desc">Auto + code improvements when idle</div>
+        </div>
+        <div class="mode-option{% if dispatch_mode == 'idle' %} active{% endif %}" data-mode="IDLE" onclick="setMode('IDLE')">
+          <div class="mode-name">&#x25CF; Idle</div>
+          <div class="mode-desc">Opportunistic dispatch when idle and budget allows</div>
+        </div>
+        <div class="mode-option{% if dispatch_mode == 'stop' %} active{% endif %}" data-mode="STOP" onclick="setMode('STOP')">
+          <div class="mode-name">&#x25CF; Stop</div>
+          <div class="mode-desc">Abort all agents, pause dispatching</div>
+        </div>
+      </div>
+    </div>
     <a href="/inbox#create" class="nav-new-issue" title="Create new issue">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
     </a>
@@ -92,6 +121,27 @@
         if ((localStorage.getItem('theme') || 'system') === 'system') applyTheme('system');
       });
     })();
+
+    // Dispatch mode selector
+    function setMode(mode) {
+      fetch('/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: 'mutation($m: GqlDispatchMode!) { setMode(mode: $m) }',
+          variables: { m: mode }
+        })
+      });
+      document.getElementById('mode-dropdown').classList.remove('open');
+    }
+    // Close dropdown on outside click
+    document.addEventListener('click', function(e) {
+      var dropdown = document.getElementById('mode-dropdown');
+      var btn = document.getElementById('mode-btn');
+      if (dropdown && !dropdown.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+        dropdown.classList.remove('open');
+      }
+    });
 
     // Highlight active nav link
     (function() {

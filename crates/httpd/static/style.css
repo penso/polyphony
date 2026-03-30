@@ -82,6 +82,39 @@ nav .nav-links a:hover { color: var(--fg); background: var(--hover-bg); text-dec
 nav .nav-links a.active { color: var(--accent); background: var(--active-row); font-weight: 600; }
 nav .spacer { flex: 1; }
 
+/* Mode selector */
+.nav-mode { position: relative; flex-shrink: 0; margin-right: 0.5rem; }
+.nav-mode-btn {
+  display: flex; align-items: center; gap: 0.35rem;
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.25rem 0.6rem; cursor: pointer;
+  font-size: 0.75rem; font-weight: 600; color: var(--fg);
+  font-family: inherit; transition: border-color 0.15s, background 0.15s;
+}
+.nav-mode-btn:hover { border-color: var(--accent); background: var(--hover-bg); }
+.mode-dot { font-size: 0.65rem; }
+.mode-dropdown {
+  display: none; position: absolute; top: calc(100% + 4px); right: 0;
+  z-index: 50; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; width: 260px; overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+}
+.mode-dropdown.open { display: block; }
+.mode-option {
+  padding: 0.5rem 0.75rem; cursor: pointer;
+  transition: background 0.1s; border-bottom: 1px solid var(--border-subtle);
+}
+.mode-option:last-child { border-bottom: none; }
+.mode-option:hover { background: var(--hover-bg); }
+.mode-option.active { background: var(--active-row); }
+.mode-option .mode-name { font-size: 0.78rem; font-weight: 600; }
+.mode-option .mode-desc { font-size: 0.68rem; color: var(--muted); margin-top: 0.1rem; }
+.mode-option[data-mode="MANUAL"] .mode-dot, .mode-option[data-mode="MANUAL"] .mode-name { color: var(--accent); }
+.mode-option[data-mode="AUTOMATIC"] .mode-name { color: var(--success); }
+.mode-option[data-mode="NIGHTSHIFT"] .mode-name { color: var(--accent); }
+.mode-option[data-mode="IDLE"] .mode-name { color: var(--warning); }
+.mode-option[data-mode="STOP"] .mode-name { color: var(--danger); }
+
 .nav-new-issue {
   display: flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 6px;
