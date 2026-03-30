@@ -4,6 +4,31 @@
 {% block content %}
 <div class="page-header">
   <span class="meta" id="inbox-count">{{ inbox_items | length }} items</span>
+  <button class="btn btn-primary" onclick="document.getElementById('create-issue-modal').classList.add('open')" style="padding: 0.3rem 0.7rem; font-size: 0.75rem;">+ New Issue</button>
+</div>
+
+{# Create issue modal #}
+<div class="modal-overlay" id="create-issue-modal">
+  <div class="modal" style="max-width: 560px;">
+    <div class="modal-header">
+      <h2>Create Issue</h2>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom: 0.75rem;">
+        <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Title</label>
+        <input type="text" id="new-issue-title" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="Issue title" autofocus>
+      </div>
+      <div style="margin-bottom: 0.75rem;">
+        <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Description</label>
+        <textarea id="new-issue-description" class="dispatch-textarea" style="min-height: 6rem;" placeholder="Describe the issue..."></textarea>
+      </div>
+      <div class="modal-actions" style="border-top: none; padding-top: 0; margin-top: 0;">
+        <button class="btn btn-primary" onclick="createIssueAction()">Create</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('create-issue-modal').classList.remove('open')">Cancel</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 {% if inbox_items %}
@@ -389,6 +414,24 @@
     });
   });
 })();
+
+// Create issue
+function createIssueAction() {
+  var title = document.getElementById('new-issue-title').value.trim();
+  var desc = document.getElementById('new-issue-description').value.trim();
+  if (!title) { document.getElementById('new-issue-title').focus(); return; }
+  fetch('/graphql', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: 'mutation($t: String!, $d: String!) { createIssue(title: $t, description: $d) }',
+      variables: { t: title, d: desc || '' }
+    })
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    if (res.errors) { alert(res.errors[0].message); }
+    else { location.reload(); }
+  });
+}
 
 // GraphQL mutation helper and action handlers
 var polyphonyAction = (function() {

@@ -106,6 +106,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   margin-bottom: 1rem; overflow: hidden;
   transition: background 0.2s, border-color 0.2s;
+  padding: 10px;
 }
 .card-header {
   padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-subtle);

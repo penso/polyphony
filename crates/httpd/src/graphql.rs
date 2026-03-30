@@ -634,6 +634,12 @@ impl MutationRoot {
             .is_ok()
     }
 
+    async fn create_issue(&self, ctx: &Context<'_>, title: String, description: String) -> bool {
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        tx.send(polyphony_orchestrator::RuntimeCommand::CreateIssue { title, description })
+            .is_ok()
+    }
+
     /// Add a repository by local path or remote URL.
     async fn add_repo(
         &self,
@@ -1085,6 +1091,40 @@ mod tests {
         match cmd {
             polyphony_orchestrator::RuntimeCommand::RetryRun { run_id } => {
                 assert_eq!(run_id, "run-42");
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    // Create issue mutation
+    const JS_MUTATION_CREATE_ISSUE: &str =
+        r#"mutation($t: String!, $d: String!) { createIssue(title: $t, description: $d) }"#;
+
+    #[tokio::test]
+    async fn js_mutation_create_issue_validates() {
+        let (schema, _rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_CREATE_ISSUE,
+            json!({"t": "Fix bug", "d": "The thing is broken"}),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn create_issue_sends_correct_command() {
+        let (schema, mut rx) = test_schema();
+        assert_mutation_ok(
+            &schema,
+            JS_MUTATION_CREATE_ISSUE,
+            json!({"t": "New feature", "d": "Add dark mode"}),
+        )
+        .await;
+        let cmd = rx.try_recv().expect("expected a command");
+        match cmd {
+            polyphony_orchestrator::RuntimeCommand::CreateIssue { title, description } => {
+                assert_eq!(title, "New feature");
+                assert_eq!(description, "Add dark mode");
             },
             other => panic!("unexpected command: {other:?}"),
         }
