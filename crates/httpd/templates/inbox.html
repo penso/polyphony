@@ -54,18 +54,24 @@
     <input type="text" class="search-input" id="inbox-search" placeholder="Filter by title, status, author, label..." autocomplete="off">
     <span class="search-count" id="inbox-filter-count"></span>
   </div>
-  {# Repo filter pills #}
-  {% set ns_repos = namespace(repos=[]) %}
+  {# Repo filter pills — derived from sources present in inbox items #}
+  {% set ns_sources = namespace(sources=[]) %}
   {% for t in inbox_items %}
-    {% if t.repo_id and t.repo_id not in ns_repos.repos %}
-      {% set ns_repos.repos = ns_repos.repos + [t.repo_id] %}
+    {% if t.source and t.source not in ns_sources.sources %}
+      {% set ns_sources.sources = ns_sources.sources + [t.source] %}
     {% endif %}
   {% endfor %}
-  {% if ns_repos.repos | length > 1 %}
+  {# Also add repo registrations that might not have inbox items yet #}
+  {% for r in repo_registrations %}
+    {% if r.repo_id and r.repo_id not in ns_sources.sources %}
+      {% set ns_sources.sources = ns_sources.sources + [r.repo_id] %}
+    {% endif %}
+  {% endfor %}
+  {% if ns_sources.sources | length > 1 %}
   <div class="repo-pills" id="repo-pills">
     <button class="repo-pill active" data-repo="all" onclick="filterRepo('all', this)">All</button>
-    {% for repo in ns_repos.repos %}
-    <button class="repo-pill" data-repo="{{ repo }}" onclick="filterRepo('{{ repo }}', this)">{{ repo }}</button>
+    {% for src in ns_sources.sources %}
+    <button class="repo-pill" data-repo="{{ src }}" onclick="filterRepo('{{ src }}', this)">{{ src }}</button>
     {% endfor %}
   </div>
   {% endif %}
@@ -80,13 +86,13 @@
       <span class="sortable" data-sort="priority" title="Sort by priority">Priority <span class="sort-arrow" id="sort-priority">&#x25BC;</span></span>
     </div>
     {% for t in inbox_items %}
-    <div class="grid-row cols-inbox-multi inbox-row{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" data-title="{{ t.title }}" data-status="{{ t.status }}" data-approval="{{ t.approval_state }}" data-priority="{{ t.priority }}" data-updated="{{ t.updated_at }}" data-author="{{ t.author }}" data-labels="{{ t.labels | join(',') }}" data-repo="{{ t.repo_id }}" style="cursor: pointer;">
+    <div class="grid-row cols-inbox-multi inbox-row{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" data-title="{{ t.title }}" data-status="{{ t.status }}" data-approval="{{ t.approval_state }}" data-priority="{{ t.priority }}" data-updated="{{ t.updated_at }}" data-author="{{ t.author }}" data-labels="{{ t.labels | join(',') }}" data-repo="{{ t.repo_id }}" data-source="{{ t.source }}" style="cursor: pointer;">
       <span>
         {% if t.has_workspace %}<span class="col-accent" title="Has workspace">&#x25CF;</span>
         {% else %}<span class="col-muted"> </span>{% endif %}
       </span>
       <span class="col-muted">{% if t.updated_at %}<time datetime="{{ t.updated_at }}">{{ t.updated_at }}</time>{% else %}&mdash;{% endif %}</span>
-      <span class="col-muted" title="{{ t.repo_id }}">{{ t.repo_id }}</span>
+      <span class="col-muted" title="{{ t.repo_id }}">{% if t.repo_id %}{{ t.repo_id }}{% else %}{{ t.source }}{% endif %}</span>
       <span class="col-title">
         {% if t.parent_id %}<span class="tree-prefix">├── </span>{% endif %}
         {% if t.url %}<a href="{{ t.url }}" target="_blank" onclick="event.stopPropagation()">{{ t.title }}</a>
@@ -358,7 +364,7 @@
     var q = searchInput.value.toLowerCase().trim();
     var visible = 0;
     rows.forEach(function(row) {
-      var repoMatch = activeRepo === 'all' || (row.dataset.repo || '') === activeRepo;
+      var repoMatch = activeRepo === 'all' || (row.dataset.repo || '') === activeRepo || (row.dataset.source || '') === activeRepo;
       var text = (row.dataset.title || '') + ' ' +
                  (row.dataset.status || '') + ' ' +
                  (row.dataset.author || '') + ' ' +
