@@ -3139,7 +3139,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
 
     service.restore_bootstrap(StoreBootstrap {
         snapshot: Some(RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
@@ -4585,7 +4585,7 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
     let now = Utc::now();
     service.restore_bootstrap(StoreBootstrap {
         snapshot: Some(RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),

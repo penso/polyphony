@@ -2184,7 +2184,7 @@ mod tests {
     fn workspace_progress_updates_current_snapshot_immediately() {
         let now = Utc::now();
         let mut snapshot = RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),

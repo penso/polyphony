@@ -430,7 +430,7 @@ mod tests {
     async fn bootstrap_restores_snapshot_run_history_and_terminal_runs() {
         let store = SqliteStateStore::connect("sqlite::memory:").await.unwrap();
         let snapshot = RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
@@ -546,7 +546,7 @@ mod tests {
         let store = SqliteStateStore::connect(&database_url).await.unwrap();
 
         let snapshot = RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),

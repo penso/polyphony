@@ -1,35 +1,198 @@
 {% extends "layout.html" %}
-{% block title %}Polyphony &mdash; Repos{% endblock %}
+{% block title %}Polyphony &mdash; Repositories{% endblock %}
 
 {% block content %}
 <div class="page-header">
-  <span class="meta">{{ repo_ids | length }} repos</span>
+  <span class="meta">{{ repo_registrations | length }} repos</span>
 </div>
 
-{% if repo_ids %}
+{# Add repo form #}
+<div class="card" style="padding: 1rem;">
+  <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
+    <div style="flex: 1; min-width: 16rem;">
+      <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Repository (local path or remote URL)</label>
+      <input type="text" id="repo-source" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="/path/to/repo or https://github.com/owner/repo">
+    </div>
+    <div style="width: 8rem;">
+      <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Branch</label>
+      <input type="text" id="repo-branch" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="main" value="main">
+    </div>
+    <button class="btn btn-primary" onclick="repoAction.add()" style="height: 2.2rem;">Add Repository</button>
+  </div>
+</div>
+
+{% if repo_registrations %}
 <div class="card">
-  <table>
-    <thead>
-      <tr>
-        <th>Repository</th>
-        <th>Issues</th>
-        <th>Running</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for repo_id in repo_ids %}
-    <tr>
-      <td class="title-col">{{ repo_id }}</td>
-      <td class="muted">&mdash;</td>
-      <td class="muted">&mdash;</td>
-    </tr>
+  <div class="grid-table">
+    <div class="grid-header" style="grid-template-columns: 2rem 1fr 6rem 6rem 8rem 3rem;">
+      <span></span>
+      <span>Repository</span>
+      <span>Tracker</span>
+      <span>Branch</span>
+      <span>Added</span>
+      <span></span>
+    </div>
+    {% for r in repo_registrations %}
+    <div class="grid-row" style="grid-template-columns: 2rem 1fr 6rem 6rem 8rem 3rem; cursor: pointer;" data-repo-id="{{ r.repo_id }}">
+      <span>
+        {% if "github" in r.tracker_kind or r.tracker_kind == "Github" or r.tracker_kind == "github" %}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--muted);"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        {% elif "gitlab" in r.tracker_kind or r.tracker_kind == "Gitlab" or r.tracker_kind == "gitlab" %}
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--muted);"><path d="M8 14.5l2.89-8.9H5.11L8 14.5z"/><path d="M8 14.5L5.11 5.6H1.07L8 14.5z" opacity=".7"/><path d="M1.07 5.6l-.93 2.86c-.08.26.01.54.22.7L8 14.5 1.07 5.6z" opacity=".5"/><path d="M1.07 5.6h4.04L3.56.97c-.1-.3-.51-.3-.6 0L1.07 5.6z"/><path d="M8 14.5l2.89-8.9h4.04L8 14.5z" opacity=".7"/><path d="M14.93 5.6l.93 2.86c.08.26-.01.54-.22.7L8 14.5l6.93-8.9z" opacity=".5"/><path d="M14.93 5.6H10.9l1.55-4.63c.1-.3.51-.3.6 0l1.88 4.63z"/></svg>
+        {% else %}
+          <span class="col-muted">&#x25CB;</span>
+        {% endif %}
+      </span>
+      <span class="col-title">
+        {{ r.repo_id }}
+        {% if r.clone_url %}<span class="col-muted" style="font-size: 0.7rem; margin-left: 0.5rem;">{{ r.clone_url }}</span>{% endif %}
+      </span>
+      <span class="col-muted">{{ r.tracker_kind }}</span>
+      <span class="col-muted">{{ r.default_branch }}</span>
+      <span class="col-muted"><time datetime="{{ r.added_at }}">{{ r.added_at }}</time></span>
+      <span>
+        <button class="btn btn-danger" style="padding: 0.15rem 0.4rem; font-size: 0.68rem;" onclick="event.stopPropagation(); repoAction.remove('{{ r.repo_id }}', this)" title="Remove repository">&#x2715;</button>
+      </span>
+    </div>
     {% endfor %}
-    </tbody>
-  </table>
+    <div class="grid-footer">
+      <span>{{ repo_registrations | length }} repositories</span>
+      <span></span>
+    </div>
+  </div>
 </div>
+
+{# Detail modals #}
+{% for r in repo_registrations %}
+<div class="modal-overlay" id="modal-repo-{{ loop.index0 }}">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>{{ r.repo_id }}</h2>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open')" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <span class="meta-item">
+          <span class="meta-label">id:</span>
+          <span class="meta-value"><code>{{ r.repo_id }}</code></span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">label:</span>
+          <span class="meta-value">{{ r.label }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">tracker:</span>
+          <span class="meta-value muted">
+            {% if "github" in r.tracker_kind or r.tracker_kind == "Github" or r.tracker_kind == "github" %}
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            {% elif "gitlab" in r.tracker_kind or r.tracker_kind == "Gitlab" or r.tracker_kind == "gitlab" %}
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 14.5l2.89-8.9H5.11L8 14.5z"/><path d="M8 14.5L5.11 5.6H1.07L8 14.5z" opacity=".7"/><path d="M1.07 5.6l-.93 2.86c-.08.26.01.54.22.7L8 14.5 1.07 5.6z" opacity=".5"/><path d="M1.07 5.6h4.04L3.56.97c-.1-.3-.51-.3-.6 0L1.07 5.6z"/><path d="M8 14.5l2.89-8.9h4.04L8 14.5z" opacity=".7"/><path d="M14.93 5.6l.93 2.86c.08.26-.01.54-.22.7L8 14.5l6.93-8.9z" opacity=".5"/><path d="M14.93 5.6H10.9l1.55-4.63c.1-.3.51-.3.6 0l1.88 4.63z"/></svg>
+            {% endif %}
+            {{ r.tracker_kind }}
+          </span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">branch:</span>
+          <span class="meta-value muted">{{ r.default_branch }}</span>
+        </span>
+        <span class="meta-item">
+          <span class="meta-label">added:</span>
+          <span class="meta-value muted"><time datetime="{{ r.added_at }}">{{ r.added_at }}</time></span>
+        </span>
+      </div>
+
+      {% if r.clone_url %}
+      <div class="modal-section">
+        <h3>Clone URL</h3>
+        <code style="font-size: 0.8rem; word-break: break-all;">{{ r.clone_url }}</code>
+      </div>
+      {% endif %}
+
+      <div class="modal-section">
+        <h3>Worktree Path</h3>
+        <code style="font-size: 0.8rem; word-break: break-all;">{{ r.worktree_path }}</code>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-danger" onclick="repoAction.remove('{{ r.repo_id }}', this)">Remove Repository</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
 {% else %}
-<div class="card">
-  <div class="empty">No repositories registered. Use <code>polyphony repo add</code> to add one.</div>
-</div>
+<div class="card"><div class="empty">No repositories registered. Add one above or use <code>polyphony repo add</code>.</div></div>
 {% endif %}
+
+<script>
+var repoAction = (function() {
+  function gqlMutate(query, variables) {
+    return fetch('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query, variables: variables })
+    }).then(function(r) { return r.json(); });
+  }
+
+  return {
+    add: function() {
+      var source = document.getElementById('repo-source').value.trim();
+      var branch = document.getElementById('repo-branch').value.trim() || null;
+      if (!source) return;
+      gqlMutate(
+        'mutation($s: String!, $b: String) { addRepo(source: $s, branch: $b) }',
+        { s: source, b: branch }
+      ).then(function(res) {
+        if (res.errors) {
+          alert(res.errors[0].message);
+        } else {
+          location.reload();
+        }
+      });
+    },
+
+    remove: function(repoId, btn) {
+      if (!confirm('Remove repository "' + repoId + '"?')) return;
+      btn.disabled = true;
+      gqlMutate(
+        'mutation($id: String!) { removeRepo(repoId: $id) }',
+        { id: repoId }
+      ).then(function(res) {
+        if (res.errors) {
+          alert(res.errors[0].message);
+          btn.disabled = false;
+        } else {
+          location.reload();
+        }
+      });
+    }
+  };
+})();
+
+// Modal open/close
+(function() {
+  var repoIndices = {};
+  document.querySelectorAll('.grid-row[data-repo-id]').forEach(function(row, idx) {
+    row.addEventListener('click', function() {
+      var modal = document.getElementById('modal-repo-' + idx);
+      if (modal) modal.classList.add('open');
+    });
+  });
+
+  document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.classList.remove('open');
+    });
+  });
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.open').forEach(function(m) {
+        m.classList.remove('open');
+      });
+    }
+  });
+})();
+</script>
 {% endblock %}

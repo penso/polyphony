@@ -686,7 +686,7 @@ pub(crate) fn dispatch_order(left: &Issue, right: &Issue) -> std::cmp::Ordering 
 
 pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
     RuntimeSnapshot {
-        repo_ids: Vec::new(),
+        repo_ids: Vec::new(), repo_registrations: Vec::new(),
         generated_at: Utc::now(),
         counts: SnapshotCounts::default(),
         cadence: RuntimeCadence::default(),

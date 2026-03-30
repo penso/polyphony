@@ -238,7 +238,7 @@ impl RuntimeService {
             );
         }
         RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts {
                 running: self.state.running.len(),

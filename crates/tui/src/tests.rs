@@ -14,7 +14,7 @@ use crate::{
 
 fn test_snapshot(visible: usize) -> RuntimeSnapshot {
     RuntimeSnapshot {
-        repo_ids: Vec::new(),
+        repo_ids: Vec::new(), repo_registrations: Vec::new(),
         generated_at: Utc::now(),
         counts: SnapshotCounts {
             running: 0,

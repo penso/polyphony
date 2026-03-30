@@ -205,6 +205,8 @@ pub struct InboxItemRow {
 pub struct RuntimeSnapshot {
     #[serde(default)]
     pub repo_ids: Vec<String>,
+    #[serde(default)]
+    pub repo_registrations: Vec<crate::RepoRegistration>,
     pub generated_at: DateTime<Utc>,
     pub counts: SnapshotCounts,
     #[serde(default)]

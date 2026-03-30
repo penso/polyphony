@@ -328,7 +328,7 @@ mod tests {
         let path = dir.path().join("state.json");
         let store = JsonStateStore::new(path);
         let snapshot = RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: chrono::Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: RuntimeCadence::default(),
@@ -480,7 +480,7 @@ mod tests {
         };
         let data = super::JsonStateStoreData {
             snapshot: Some(RuntimeSnapshot {
-                repo_ids: Vec::new(),
+                repo_ids: Vec::new(), repo_registrations: Vec::new(),
                 generated_at: now,
                 counts: SnapshotCounts::default(),
                 cadence: RuntimeCadence::default(),

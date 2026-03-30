@@ -285,10 +285,6 @@ fn draw_runs_table(
     let excerpt_width = available_width.saturating_sub(child_indent + 25); // connector + label overhead
     let inline_excerpt_width = available_width / 2;
 
-    // Build task lookup for collapse indicator
-    let has_tasks: std::collections::HashSet<&str> =
-        snapshot.tasks.iter().map(|t| t.run_id.as_str()).collect();
-
     // Filter tree rows by search query (run-level matching).
     let search_q = app.runs_search_query.to_lowercase();
     let filtered_rows: Vec<&OrchestratorTreeRow> = if search_q.is_empty() {
@@ -364,7 +360,7 @@ fn draw_runs_table(
                 // Aggregate total tokens across all tasks and running agents for this run
                 let run_tokens = run_total_tokens(snapshot, &m.id);
 
-                let collapse_icon = if has_tasks.contains(m.id.as_str()) {
+                let collapse_icon = if app.runs_with_children.contains(&m.id) {
                     if app.collapsed_runs.contains(&m.id) {
                         "▶ "
                     } else {

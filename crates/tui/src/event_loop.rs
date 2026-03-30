@@ -3467,7 +3467,7 @@ mod tests {
 
     fn test_snapshot_with_deliverable() -> RuntimeSnapshot {
         RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: Utc::now(),
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
@@ -3527,7 +3527,7 @@ mod tests {
     fn test_snapshot_with_task(status: polyphony_core::TaskStatus) -> RuntimeSnapshot {
         let now = Utc::now();
         RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
@@ -3600,7 +3600,7 @@ mod tests {
     ) -> RuntimeSnapshot {
         let now = Utc::now();
         RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: Default::default(),
@@ -3787,7 +3787,7 @@ mod tests {
     fn orchestrator_retry_key_retries_stalled_run_with_pending_task() {
         let now = Utc::now();
         let stale_snapshot = RuntimeSnapshot {
-            repo_ids: Vec::new(),
+            repo_ids: Vec::new(), repo_registrations: Vec::new(),
             generated_at: now,
             counts: SnapshotCounts::default(),
             cadence: Default::default(),

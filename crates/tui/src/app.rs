@@ -717,6 +717,8 @@ pub struct AppState {
     /// Sorted run indices for the Orchestration tab.
     pub sorted_run_indices: Vec<usize>,
     pub orchestrator_tree_rows: Vec<OrchestratorTreeRow>,
+    /// Run IDs that have expandable children (inbox, sessions, tasks, logs, outcome).
+    pub runs_with_children: HashSet<String>,
     pub collapsed_runs: HashSet<String>,
     collapsed_runs_initialized: bool,
     /// Sorted agent indices: each entry is (is_running, original_index).
@@ -798,6 +800,7 @@ impl AppState {
             sorted_task_indices: Vec::new(),
             sorted_run_indices: Vec::new(),
             orchestrator_tree_rows: Vec::new(),
+            runs_with_children: HashSet::new(),
             collapsed_runs: HashSet::new(),
             collapsed_runs_initialized: false,
             sorted_agent_indices: Vec::new(),
@@ -1088,33 +1091,57 @@ impl AppState {
         }
 
         let mut rows = Vec::new();
+        let mut expandable_runs = HashSet::new();
         for &mov_idx in &self.sorted_run_indices {
             let run = &snapshot.runs[mov_idx];
             rows.push(OrchestratorTreeRow::Run {
                 snapshot_index: mov_idx,
             });
-            if !self.collapsed_runs.contains(&run.id) {
-                let task_indices = tasks_by_run.get(run.id.as_str());
-                let has_tasks = task_indices.is_some_and(|t| !t.is_empty());
-                let has_outcome = run.deliverable.is_some()
-                    || matches!(
-                        run.status,
-                        polyphony_core::RunStatus::Delivered | polyphony_core::RunStatus::Failed
-                    );
-                // Collect agent sessions for this run's issue
-                let issue_id = run.issue_identifier.as_deref().and_then(|ident| {
-                    snapshot
-                        .inbox_items
-                        .iter()
-                        .find(|t| t.identifier == ident)
-                        .map(|t| t.item_id.as_str())
-                });
-                let session_indices = issue_id.and_then(|id| sessions_by_issue.get(id));
-                let running_indices = issue_id.and_then(|id| running_by_issue.get(id));
-                let has_sessions = session_indices.is_some_and(|s| !s.is_empty());
-                let has_running = running_indices.is_some_and(|r| !r.is_empty());
-                let has_children = has_tasks || has_outcome || has_sessions || has_running;
 
+            // Determine whether this run has expandable children (needed for
+            // the collapse indicator even when collapsed).
+            let task_indices = tasks_by_run.get(run.id.as_str());
+            let has_tasks = task_indices.is_some_and(|t| !t.is_empty());
+            let has_outcome = run.deliverable.is_some()
+                || matches!(
+                    run.status,
+                    polyphony_core::RunStatus::Delivered | polyphony_core::RunStatus::Failed
+                );
+            let issue_id = run.issue_identifier.as_deref().and_then(|ident| {
+                snapshot
+                    .inbox_items
+                    .iter()
+                    .find(|t| t.identifier == ident)
+                    .map(|t| t.item_id.as_str())
+            });
+            let session_indices = issue_id.and_then(|id| sessions_by_issue.get(id));
+            let running_indices = issue_id.and_then(|id| running_by_issue.get(id));
+            let has_sessions = session_indices.is_some_and(|s| !s.is_empty());
+            let has_running = running_indices.is_some_and(|r| !r.is_empty());
+            // Collect run activity log entries (last 5) — computed early
+            // so that is_last_child calculations below account for them.
+            let log_entries: Vec<usize> = {
+                let total = run.activity_log.len();
+                let start = total.saturating_sub(5);
+                (start..total).collect()
+            };
+            let has_log_entries = !log_entries.is_empty();
+            let has_inbox = run
+                .issue_identifier
+                .as_deref()
+                .is_some_and(|id| item_by_identifier.contains_key(id));
+
+            let has_children = has_inbox
+                || has_tasks
+                || has_outcome
+                || has_sessions
+                || has_running
+                || has_log_entries;
+            if has_children {
+                expandable_runs.insert(run.id.clone());
+            }
+
+            if !self.collapsed_runs.contains(&run.id) {
                 // Inbox item row (first child)
                 if let Some(identifier) = run.issue_identifier.as_deref()
                     && let Some(&item_idx) = item_by_identifier.get(identifier)
@@ -1195,6 +1222,7 @@ impl AppState {
                 let total_remaining = sorted_tasks.len()
                     + sessions_per_task.iter().map(|s| s.len()).sum::<usize>()
                     + running_indices.map_or(0, |r| r.len())
+                    + log_entries.len()
                     + usize::from(has_outcome);
 
                 // Emit planning sessions
@@ -1208,8 +1236,9 @@ impl AppState {
                 }
 
                 // Emit tasks interleaved with their execution sessions
-                let remaining_after_tasks =
-                    running_indices.map_or(0, |r| r.len()) + usize::from(has_outcome);
+                let remaining_after_tasks = running_indices.map_or(0, |r| r.len())
+                    + log_entries.len()
+                    + usize::from(has_outcome);
                 for (ti, &task_idx) in sorted_tasks.iter().enumerate() {
                     let task_sessions = &sessions_per_task[ti];
                     let tasks_after = sorted_tasks.len() - ti - 1;
@@ -1231,14 +1260,6 @@ impl AppState {
                         });
                     }
                 }
-
-                // Collect run activity log entries (last 5)
-                let log_entries: Vec<usize> = {
-                    let total = run.activity_log.len();
-                    let start = total.saturating_sub(5);
-                    (start..total).collect()
-                };
-                let has_log_entries = !log_entries.is_empty();
 
                 // Running agent rows (after tasks, before outcome/log entries)
                 if let Some(running_indices) = running_indices {
@@ -1287,6 +1308,7 @@ impl AppState {
             }
         }
         self.orchestrator_tree_rows = rows;
+        self.runs_with_children = expandable_runs;
     }
 
     pub fn toggle_run_collapse(&mut self, run_id: &str) {

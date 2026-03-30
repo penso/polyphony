@@ -148,7 +148,17 @@ fn render_page(
     state: &AppState,
     template_name: &str,
 ) -> Result<Html<String>, (StatusCode, String)> {
-    let snapshot = state.snapshot_rx.borrow().clone();
+    let mut snapshot = state.snapshot_rx.borrow().clone();
+    // Enrich snapshot with repo registry data (read from disk)
+    if snapshot.repo_registrations.is_empty() {
+        let registry_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".polyphony")
+            .join("repos.json");
+        if let Ok(registry) = polyphony_core::load_repo_registry(&registry_path) {
+            snapshot.repo_registrations = registry.repos;
+        }
+    }
     let ctx = templates::snapshot_context(&snapshot);
     let tmpl = state
         .template_env

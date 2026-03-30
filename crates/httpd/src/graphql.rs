@@ -590,6 +590,143 @@ impl MutationRoot {
         tx.send(polyphony_orchestrator::RuntimeCommand::RetryRun { run_id })
             .is_ok()
     }
+
+    /// Add a repository by local path or remote URL.
+    async fn add_repo(
+        &self,
+        ctx: &Context<'_>,
+        source: String,
+        branch: Option<String>,
+    ) -> async_graphql::Result<bool> {
+        let registry_path = repo_registry_path();
+        let mut registry = polyphony_core::load_repo_registry(&registry_path)
+            .map_err(|e| async_graphql::Error::new(format!("loading registry: {e}")))?;
+
+        let repo_id = derive_repo_id(&source);
+        if registry.contains(&repo_id) {
+            return Err(async_graphql::Error::new(format!(
+                "repository '{repo_id}' is already registered"
+            )));
+        }
+
+        let is_url = source.starts_with("https://")
+            || source.starts_with("http://")
+            || source.starts_with("git@")
+            || source.starts_with("ssh://");
+
+        let (worktree_path, clone_url, tracker_kind) = if is_url {
+            let worktree_path = default_repo_worktree_path(&repo_id);
+            let tracker_kind = detect_tracker_kind(&source);
+            (worktree_path, Some(source.clone()), tracker_kind)
+        } else {
+            let path = std::path::Path::new(&source)
+                .canonicalize()
+                .map_err(|e| async_graphql::Error::new(format!("invalid path: {e}")))?;
+            let tracker_kind = detect_tracker_kind_from_git_config(&path);
+            (path, None, tracker_kind)
+        };
+
+        let registration = polyphony_core::RepoRegistration {
+            repo_id: repo_id.clone(),
+            label: repo_id,
+            worktree_path,
+            clone_url,
+            default_branch: branch.unwrap_or_else(|| "main".into()),
+            tracker_kind,
+            added_at: chrono::Utc::now(),
+        };
+
+        registry.add(registration);
+        polyphony_core::save_repo_registry(&registry_path, &registry)
+            .map_err(|e| async_graphql::Error::new(format!("saving registry: {e}")))?;
+
+        // Also notify orchestrator (currently a stub)
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        let _ = tx.send(polyphony_orchestrator::RuntimeCommand::Refresh);
+        Ok(true)
+    }
+
+    /// Remove a repository by ID.
+    async fn remove_repo(&self, ctx: &Context<'_>, repo_id: String) -> async_graphql::Result<bool> {
+        let registry_path = repo_registry_path();
+        let mut registry = polyphony_core::load_repo_registry(&registry_path)
+            .map_err(|e| async_graphql::Error::new(format!("loading registry: {e}")))?;
+
+        registry.remove(&repo_id).ok_or_else(|| {
+            async_graphql::Error::new(format!("repository '{repo_id}' not found"))
+        })?;
+
+        polyphony_core::save_repo_registry(&registry_path, &registry)
+            .map_err(|e| async_graphql::Error::new(format!("saving registry: {e}")))?;
+
+        let tx = ctx.data_unchecked::<tokio::sync::mpsc::UnboundedSender<polyphony_orchestrator::RuntimeCommand>>();
+        let _ = tx.send(polyphony_orchestrator::RuntimeCommand::Refresh);
+        Ok(true)
+    }
+}
+
+// Repo registry helpers (mirrors cli/src/repo_manager.rs logic)
+fn repo_registry_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".polyphony")
+        .join("repos.json")
+}
+
+fn default_repo_worktree_path(repo_id: &str) -> std::path::PathBuf {
+    let sanitized = repo_id.replace('/', "_");
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".polyphony")
+        .join("repos")
+        .join(sanitized)
+        .join("main")
+}
+
+fn derive_repo_id(source: &str) -> String {
+    let url = source.strip_suffix(".git").unwrap_or(source);
+    for host in &["github.com/", "gitlab.com/", "bitbucket.org/"] {
+        if let Some(rest) = url.split_once(host).map(|(_, r)| r) {
+            let parts: Vec<&str> = rest.splitn(3, '/').collect();
+            if parts.len() >= 2 {
+                return format!("{}/{}", parts[0], parts[1]);
+            }
+        }
+    }
+    if let Some(rest) = url.split_once(':').map(|(_, r)| r)
+        && url.contains('@')
+    {
+        return rest.strip_suffix(".git").unwrap_or(rest).to_string();
+    }
+    std::path::Path::new(source)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(source)
+        .to_string()
+}
+
+fn detect_tracker_kind(source: &str) -> polyphony_core::TrackerKind {
+    let lower = source.to_ascii_lowercase();
+    if lower.contains("github.com") {
+        polyphony_core::TrackerKind::Github
+    } else if lower.contains("gitlab.com") || lower.contains("gitlab") {
+        polyphony_core::TrackerKind::Gitlab
+    } else {
+        polyphony_core::TrackerKind::None
+    }
+}
+
+fn detect_tracker_kind_from_git_config(path: &std::path::Path) -> polyphony_core::TrackerKind {
+    let git_config = path.join(".git").join("config");
+    if let Ok(contents) = std::fs::read_to_string(git_config) {
+        if contents.contains("github.com") {
+            return polyphony_core::TrackerKind::Github;
+        }
+        if contents.contains("gitlab.com") || contents.contains("gitlab") {
+            return polyphony_core::TrackerKind::Gitlab;
+        }
+    }
+    polyphony_core::TrackerKind::None
 }
 
 // ---------------------------------------------------------------------------
