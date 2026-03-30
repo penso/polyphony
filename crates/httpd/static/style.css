@@ -374,6 +374,30 @@ td.title-col { font-weight: 500; }
 .log-scope-Feedback { color: #ec4899; }
 .dark .log-scope-Feedback { color: #f472b6; }
 
+/* ===== Search bar ===== */
+.search-bar {
+  padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.search-input {
+  flex: 1; padding: 0.35rem 0.6rem;
+  font-family: "JetBrains Mono", "SF Mono", monospace; font-size: 0.78rem;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; outline: none; transition: border-color 0.15s;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--muted); }
+.search-count { font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+
+/* ===== Sortable column headers ===== */
+.grid-header .sortable {
+  cursor: pointer; user-select: none;
+  display: inline-flex; align-items: center; gap: 0.25rem;
+}
+.grid-header .sortable:hover { color: var(--fg); }
+.grid-header .sort-arrow { font-size: 0.6rem; opacity: 0.4; }
+.grid-header .sort-arrow.active { opacity: 1; color: var(--accent); }
+
 /* ===== Empty state ===== */
 .empty { color: var(--muted); padding: 3rem; text-align: center; font-size: 0.85rem; }
 

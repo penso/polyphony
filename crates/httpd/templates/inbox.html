@@ -3,22 +3,26 @@
 
 {% block content %}
 <div class="page-header">
-  <span class="meta">{{ inbox_items | length }} items</span>
+  <span class="meta" id="inbox-count">{{ inbox_items | length }} items</span>
 </div>
 
 {% if inbox_items %}
 <div class="card">
-  <div class="grid-table">
+  <div class="search-bar">
+    <input type="text" class="search-input" id="inbox-search" placeholder="Filter by title, status, author, label..." autocomplete="off">
+    <span class="search-count" id="inbox-filter-count"></span>
+  </div>
+  <div class="grid-table" id="inbox-table">
     <div class="grid-header cols-inbox">
-      <span title="Activity: spinner when running, dot when workspace exists"></span>
-      <span title="Last updated timestamp">Updated</span>
-      <span title="Issue or PR title">Title</span>
-      <span title="Tracker status: ● open, ○ todo, ◷ waiting, ✓ done, ⊘ cancelled"></span>
-      <span title="Dispatch approval: ✓ approved, ◷ waiting">Appr</span>
-      <span title="Issue priority (lower = higher priority)">Priority</span>
+      <span></span>
+      <span class="sortable" data-sort="updated" title="Sort by updated date">Updated <span class="sort-arrow" id="sort-updated">&#x25BC;</span></span>
+      <span class="sortable" data-sort="title" title="Sort by title">Title <span class="sort-arrow" id="sort-title">&#x25BC;</span></span>
+      <span class="sortable" data-sort="status" title="Sort by status">St <span class="sort-arrow" id="sort-status">&#x25BC;</span></span>
+      <span class="sortable" data-sort="approval" title="Sort by approval">Appr <span class="sort-arrow" id="sort-approval">&#x25BC;</span></span>
+      <span class="sortable" data-sort="priority" title="Sort by priority">Priority <span class="sort-arrow" id="sort-priority">&#x25BC;</span></span>
     </div>
     {% for t in inbox_items %}
-    <div class="grid-row cols-inbox{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" style="cursor: pointer;">
+    <div class="grid-row cols-inbox inbox-row{% if t.parent_id %} child{% endif %}{% if t.status == 'open' or t.status == 'in_progress' or t.status == 'started' or t.status == 'ready' %} active{% endif %}" data-item-id="{{ t.item_id }}" data-title="{{ t.title }}" data-status="{{ t.status }}" data-approval="{{ t.approval_state }}" data-priority="{{ t.priority }}" data-updated="{{ t.updated_at }}" data-author="{{ t.author }}" data-labels="{{ t.labels | join(',') }}" style="cursor: pointer;">
       <span>
         {% if t.has_workspace %}<span class="col-accent" title="Has workspace">&#x25CF;</span>
         {% else %}<span class="col-muted"> </span>{% endif %}
@@ -47,9 +51,9 @@
       <span class="col-muted">{% if t.priority is not none %}P{{ t.priority }}{% else %}&mdash;{% endif %}</span>
     </div>
     {% endfor %}
-    <div class="grid-footer">
+    <div class="grid-footer" id="inbox-footer">
       <span>{{ inbox_items | length }} items</span>
-      <span></span>
+      <span id="inbox-sort-label"></span>
     </div>
     <div class="legend">
       <span><span class="col-accent">&#x25CF;</span> workspace</span>
@@ -280,6 +284,103 @@
 {% endfor %}
 
 <script>
+// Search and sort
+(function() {
+  var searchInput = document.getElementById('inbox-search');
+  var filterCount = document.getElementById('inbox-filter-count');
+  var table = document.getElementById('inbox-table');
+  var rows = Array.from(table.querySelectorAll('.inbox-row'));
+  var total = rows.length;
+  var currentSort = { col: null, asc: true };
+
+  // Search/filter
+  function applyFilter() {
+    var q = searchInput.value.toLowerCase().trim();
+    var visible = 0;
+    rows.forEach(function(row) {
+      var text = (row.dataset.title || '') + ' ' +
+                 (row.dataset.status || '') + ' ' +
+                 (row.dataset.author || '') + ' ' +
+                 (row.dataset.labels || '') + ' ' +
+                 (row.dataset.approval || '') + ' ' +
+                 (row.dataset.priority || '');
+      var match = !q || text.toLowerCase().indexOf(q) !== -1;
+      row.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    if (q) {
+      filterCount.textContent = visible + ' of ' + total;
+    } else {
+      filterCount.textContent = '';
+    }
+  }
+
+  searchInput.addEventListener('input', applyFilter);
+
+  // Focus search on / key
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && document.activeElement !== searchInput && !document.querySelector('.modal-overlay.open')) {
+      e.preventDefault();
+      searchInput.focus();
+    }
+    if (e.key === 'Escape' && document.activeElement === searchInput) {
+      searchInput.value = '';
+      searchInput.blur();
+      applyFilter();
+    }
+  });
+
+  // Sort
+  function sortRows(col, asc) {
+    var parent = rows[0] && rows[0].parentNode;
+    if (!parent) return;
+    rows.sort(function(a, b) {
+      var va = (a.dataset[col] || '').toLowerCase();
+      var vb = (b.dataset[col] || '').toLowerCase();
+      // Numeric sort for priority
+      if (col === 'priority') {
+        var na = va === 'none' || va === '' ? 999 : parseInt(va, 10);
+        var nb = vb === 'none' || vb === '' ? 999 : parseInt(vb, 10);
+        return asc ? na - nb : nb - na;
+      }
+      if (va < vb) return asc ? -1 : 1;
+      if (va > vb) return asc ? 1 : -1;
+      return 0;
+    });
+    // Re-insert in order (before footer)
+    var footer = document.getElementById('inbox-footer');
+    rows.forEach(function(row) { parent.insertBefore(row, footer); });
+  }
+
+  function updateSortArrows(activeCol, asc) {
+    document.querySelectorAll('.grid-header .sort-arrow').forEach(function(el) {
+      el.classList.remove('active');
+      el.textContent = '\u25BC'; // ▼
+    });
+    var arrow = document.getElementById('sort-' + activeCol);
+    if (arrow) {
+      arrow.classList.add('active');
+      arrow.textContent = asc ? '\u25B2' : '\u25BC'; // ▲ or ▼
+    }
+    var label = document.getElementById('inbox-sort-label');
+    if (label) label.textContent = 'sorted by ' + activeCol + (asc ? ' ↑' : ' ↓');
+  }
+
+  document.querySelectorAll('.grid-header .sortable').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var col = el.dataset.sort;
+      if (currentSort.col === col) {
+        currentSort.asc = !currentSort.asc;
+      } else {
+        currentSort.col = col;
+        currentSort.asc = true;
+      }
+      sortRows(col, currentSort.asc);
+      updateSortArrows(col, currentSort.asc);
+    });
+  });
+})();
+
 // GraphQL mutation helper and action handlers
 var polyphonyAction = (function() {
   // Mutation query strings (validated against schema in Rust tests)
