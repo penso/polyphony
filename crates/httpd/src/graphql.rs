@@ -491,6 +491,49 @@ impl QueryRoot {
         let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
         snap.borrow().dispatch_mode.into()
     }
+
+    /// List directories matching a prefix path, for repo autocomplete.
+    /// Returns directories that exist and contain a `.git` folder or are valid parent dirs.
+    async fn list_directories(&self, prefix: String) -> Vec<String> {
+        let path = std::path::Path::new(&prefix);
+
+        // Determine parent dir and filename prefix for filtering
+        let (parent, name_prefix) = if path.is_dir() {
+            (path.to_path_buf(), String::new())
+        } else {
+            let parent = path.parent().unwrap_or(std::path::Path::new("/"));
+            let name_prefix = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            (parent.to_path_buf(), name_prefix)
+        };
+
+        let Ok(entries) = std::fs::read_dir(&parent) else {
+            return vec![];
+        };
+
+        let mut results: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                !name.starts_with('.') && name.starts_with(name_prefix.as_str())
+            })
+            .map(|e| {
+                let mut p = e.path().to_string_lossy().to_string();
+                if !p.ends_with('/') {
+                    p.push('/');
+                }
+                p
+            })
+            .take(20)
+            .collect();
+        results.sort();
+        results
+    }
 }
 
 // ---------------------------------------------------------------------------

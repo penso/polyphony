@@ -9,9 +9,10 @@
 {# Add repo form #}
 <div class="card" style="padding: 1rem;">
   <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
-    <div style="flex: 1; min-width: 16rem;">
+    <div style="flex: 1; min-width: 16rem; position: relative;">
       <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Repository (local path or remote URL)</label>
-      <input type="text" id="repo-source" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="/path/to/repo or https://github.com/owner/repo">
+      <input type="text" id="repo-source" class="dispatch-textarea" style="min-height: auto; height: 2.2rem; margin-bottom: 0;" placeholder="/path/to/repo or https://github.com/owner/repo" autocomplete="off">
+      <div id="repo-autocomplete" style="display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 20; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; max-height: 12rem; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></div>
     </div>
     <div style="width: 8rem;">
       <label style="display: block; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem;">Branch</label>
@@ -191,6 +192,103 @@ var repoAction = (function() {
       document.querySelectorAll('.modal-overlay.open').forEach(function(m) {
         m.classList.remove('open');
       });
+      document.getElementById('repo-autocomplete').style.display = 'none';
+    }
+  });
+})();
+
+// Directory autocomplete
+(function() {
+  var input = document.getElementById('repo-source');
+  var dropdown = document.getElementById('repo-autocomplete');
+  var debounceTimer = null;
+  var selectedIdx = -1;
+
+  function gqlQuery(query, variables) {
+    return fetch('/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query, variables: variables })
+    }).then(function(r) { return r.json(); });
+  }
+
+  function fetchDirs(prefix) {
+    if (!prefix || prefix.startsWith('http') || prefix.startsWith('git@')) {
+      dropdown.style.display = 'none';
+      return;
+    }
+    gqlQuery('query($p: String!) { listDirectories(prefix: $p) }', { p: prefix })
+      .then(function(res) {
+        var dirs = (res.data && res.data.listDirectories) || [];
+        if (dirs.length === 0) { dropdown.style.display = 'none'; return; }
+        selectedIdx = -1;
+        var items = dirs.map(function(d, i) {
+          var isGit = false;
+          // Check if dir has .git by appending to see
+          var label = d;
+          return '<div class="ac-item" data-idx="' + i + '" data-path="' + d + '" ' +
+            'style="padding: 0.35rem 0.75rem; font-size: 0.78rem; font-family: \'JetBrains Mono\', monospace; cursor: pointer; transition: background 0.1s;">' +
+            d + '</div>';
+        });
+        dropdown.textContent = '';
+        var frag = document.createDocumentFragment();
+        dirs.forEach(function(d, i) {
+          var div = document.createElement('div');
+          div.className = 'ac-item';
+          div.dataset.idx = i;
+          div.dataset.path = d;
+          div.style.cssText = 'padding: 0.35rem 0.75rem; font-size: 0.78rem; font-family: "JetBrains Mono", monospace; cursor: pointer; transition: background 0.1s;';
+          div.textContent = d;
+          div.addEventListener('mouseenter', function() { div.style.background = 'var(--hover-bg)'; });
+          div.addEventListener('mouseleave', function() { div.style.background = ''; });
+          div.addEventListener('click', function() {
+            input.value = d;
+            dropdown.style.display = 'none';
+            input.focus();
+            // Trigger another fetch for subdirectories
+            fetchDirs(d);
+          });
+          frag.appendChild(div);
+        });
+        dropdown.appendChild(frag);
+        dropdown.style.display = 'block';
+      });
+  }
+
+  input.addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function() {
+      fetchDirs(input.value);
+    }, 150);
+  });
+
+  input.addEventListener('keydown', function(e) {
+    var items = dropdown.querySelectorAll('.ac-item');
+    if (!items.length || dropdown.style.display === 'none') return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+      items.forEach(function(el, i) { el.style.background = i === selectedIdx ? 'var(--hover-bg)' : ''; });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      selectedIdx = Math.max(selectedIdx - 1, 0);
+      items.forEach(function(el, i) { el.style.background = i === selectedIdx ? 'var(--hover-bg)' : ''; });
+    } else if (e.key === 'Tab' || e.key === 'Enter') {
+      if (selectedIdx >= 0 && selectedIdx < items.length) {
+        e.preventDefault();
+        var path = items[selectedIdx].dataset.path;
+        input.value = path;
+        dropdown.style.display = 'none';
+        fetchDirs(path);
+      }
+    }
+  });
+
+  // Close on click outside
+  document.addEventListener('click', function(e) {
+    if (!dropdown.contains(e.target) && e.target !== input) {
+      dropdown.style.display = 'none';
     }
   });
 })();

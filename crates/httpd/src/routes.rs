@@ -150,14 +150,37 @@ fn render_page(
 ) -> Result<Html<String>, (StatusCode, String)> {
     let mut snapshot = state.snapshot_rx.borrow().clone();
     // Enrich snapshot with repo registry data (read from disk)
-    if snapshot.repo_registrations.is_empty() {
-        let registry_path = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".polyphony")
-            .join("repos.json");
-        if let Ok(registry) = polyphony_core::load_repo_registry(&registry_path) {
-            snapshot.repo_registrations = registry.repos;
-        }
+    let registry_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".polyphony")
+        .join("repos.json");
+    if let Ok(registry) = polyphony_core::load_repo_registry(&registry_path) {
+        snapshot.repo_registrations = registry.repos;
+    }
+    // Include the current working directory as the default repo if not already registered
+    if let Ok(cwd) = std::env::current_dir()
+        && cwd.join(".git").exists()
+        && !snapshot
+            .repo_registrations
+            .iter()
+            .any(|r| r.worktree_path == cwd)
+    {
+        let repo_id = cwd
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("local")
+            .to_string();
+        snapshot
+            .repo_registrations
+            .insert(0, polyphony_core::RepoRegistration {
+                repo_id: repo_id.clone(),
+                label: format!("{repo_id} (current)"),
+                worktree_path: cwd,
+                clone_url: None,
+                default_branch: "main".into(),
+                tracker_kind: snapshot.tracker_kind,
+                added_at: chrono::Utc::now(),
+            });
     }
     let ctx = templates::snapshot_context(&snapshot);
     let tmpl = state
