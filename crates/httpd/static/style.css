@@ -224,6 +224,7 @@ td.title-col { font-weight: 500; }
 .run-child .child-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-child .child-meta { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 .cols-inbox { grid-template-columns: 2rem 10rem 1fr 2rem 2rem 3rem; }
+.cols-inbox-multi { grid-template-columns: 2rem 10rem 8rem 1fr 2rem 2rem 3rem; }
 .cols-agents { grid-template-columns: 2rem 1fr 6rem 5rem 5rem 6rem 6rem; }
 .cols-tasks { grid-template-columns: 2rem 2rem 5rem 1fr 5rem 5rem 4rem 5rem; }
 .cols-logs { grid-template-columns: 10rem 5rem 1fr; }

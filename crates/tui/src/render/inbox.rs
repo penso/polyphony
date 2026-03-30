@@ -70,6 +70,25 @@ pub fn draw_inbox_tab(
                 .any(|(item, ..)| item.source != first.source)
         })
         .unwrap_or(false);
+    let multi_repo = item_data
+        .first()
+        .map(|(first, ..)| {
+            item_data
+                .iter()
+                .any(|(item, ..)| item.repo_id != first.repo_id)
+        })
+        .unwrap_or(false);
+    let repo_col_width: u16 = if multi_repo {
+        item_data
+            .iter()
+            .map(|(item, ..)| item.repo_id.len())
+            .max()
+            .unwrap_or(4)
+            .min(20) as u16
+            + 1
+    } else {
+        0
+    };
     // Hide the Kind column when all items are the same kind (e.g. all issues).
     let all_same_kind = item_data
         .first()
@@ -128,6 +147,12 @@ pub fn draw_inbox_tab(
             Style::default().fg(theme.muted),
         )));
     }
+    if multi_repo {
+        header_cells.push(Cell::from(Span::styled(
+            "Repo",
+            Style::default().fg(theme.muted),
+        )));
+    }
     header_cells.push(Cell::from(Span::styled(
         "Title",
         Style::default().fg(theme.muted),
@@ -162,6 +187,7 @@ pub fn draw_inbox_tab(
             + workspace_col_width as usize
             + time_col_width as usize
             + source_col_width as usize
+            + repo_col_width as usize
             + kind_col_width as usize
             + status_col_width as usize
             + tasks_col_width as usize
@@ -250,6 +276,16 @@ pub fn draw_inbox_tab(
                     Line::from(Span::styled(source_label, Style::default().fg(theme.muted)))
                         .alignment(Alignment::Right),
                 ));
+            }
+            if multi_repo {
+                let repo_label = truncate_with_ellipsis(
+                    &item.repo_id,
+                    repo_col_width.saturating_sub(1) as usize,
+                );
+                cells.push(Cell::from(Span::styled(
+                    repo_label,
+                    Style::default().fg(theme.info),
+                )));
             }
             cells.push(Cell::from(Line::from(title_spans)));
             if !all_same_kind {
@@ -343,6 +379,9 @@ pub fn draw_inbox_tab(
     }
     if mixed_sources {
         col_constraints.push(Constraint::Length(source_col_width));
+    }
+    if multi_repo {
+        col_constraints.push(Constraint::Length(repo_col_width));
     }
     col_constraints.push(Constraint::Fill(1));
     if !all_same_kind {
