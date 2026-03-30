@@ -1,0 +1,147 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Docs{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <span class="meta">Reference documentation</span>
+</div>
+
+<div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+  <a href="#webhooks" class="btn btn-secondary" style="font-size: 0.72rem; text-decoration: none;">Webhooks</a>
+  <a href="#dispatch-modes" class="btn btn-secondary" style="font-size: 0.72rem; text-decoration: none;">Dispatch Modes</a>
+  <a href="#keyboard" class="btn btn-secondary" style="font-size: 0.72rem; text-decoration: none;">Keyboard Shortcuts</a>
+  <a href="#config" class="btn btn-secondary" style="font-size: 0.72rem; text-decoration: none;">Configuration</a>
+</div>
+
+{# ═══ Webhooks ═══ #}
+<div class="card" id="webhooks">
+  <div class="card-header">
+    <h2>Webhooks</h2>
+    <span class="count">{% if webhooks_enabled %}<span class="col-success">&#x25CF;</span> {{ webhook_providers | length }} providers{% else %}<span class="col-muted">&#x25CB;</span> disabled{% endif %}</span>
+  </div>
+  <div style="padding: 1rem; font-size: 0.82rem; color: var(--secondary);">
+    <p style="margin-bottom: 0.75rem;">Webhooks give Polyphony instant notification when issues, PRs, or comments change &mdash; instead of waiting for the next poll. URL pattern: <code>POST /webhooks/{provider}</code></p>
+
+    {% if webhooks_enabled and webhook_providers %}
+    <div class="grid-table" style="margin-bottom: 1rem;">
+      <div class="grid-header" style="grid-template-columns: 1fr 8rem 10rem 1fr;"><span>Provider</span><span>Auth</span><span>Header</span><span>Endpoint</span></div>
+      {% for p in webhook_providers %}
+      <div class="grid-row" style="grid-template-columns: 1fr 8rem 10rem 1fr;">
+        <span class="col-title">{{ p.name }}</span>
+        <span>{% if "hmac" in p.auth %}<span class="badge badge-success">HMAC</span>{% elif p.auth == "token_header" %}<span class="badge badge-running">Token</span>{% elif p.auth == "bearer" %}<span class="badge badge-warning">Bearer</span>{% else %}<span class="badge badge-pending">{{ p.auth }}</span>{% endif %}</span>
+        <span class="col-muted">{% if p.header %}{{ p.header }}{% else %}default{% endif %}</span>
+        <span><code>POST {{ p.endpoint }}</code></span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <p style="margin-bottom: 0.5rem;"><strong>Auto-provision:</strong> <code>polyphony webhook setup --url https://your-public-url</code></p>
+    <p style="margin-bottom: 0.5rem;"><strong>Manual:</strong> add to <code>config.toml</code>, then restart:</p>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('github')">GitHub</button>
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('gitlab')">GitLab</button>
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('linear')">Linear</button>
+      <button class="btn btn-secondary" style="font-size: 0.72rem;" onclick="showSnippet('custom')">Custom</button>
+    </div>
+    <pre id="snippet-area" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-size: 0.75rem; overflow-x: auto; display: none; position: relative;"><code id="snippet-code"></code><button class="btn btn-secondary" style="position: absolute; top: 0.5rem; right: 0.5rem; font-size: 0.65rem; padding: 0.15rem 0.4rem;" onclick="copySnippet()">Copy</button></pre>
+
+    <div style="margin-top: 1rem;">
+      <div style="font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.35rem; font-weight: 600;">Auth strategies</div>
+      <div class="grid-table">
+        <div class="grid-header" style="grid-template-columns: 10rem 1fr 6rem;"><span>Strategy</span><span>How it works</span><span>Used by</span></div>
+        <div class="grid-row" style="grid-template-columns: 10rem 1fr 6rem;"><span><code>hmac_sha256</code></span><span class="col-muted">HMAC-SHA256 over body, <code>sha256=&lt;hex&gt;</code> in header</span><span class="col-muted">GitHub</span></div>
+        <div class="grid-row" style="grid-template-columns: 10rem 1fr 6rem;"><span><code>hmac_sha256_header</code></span><span class="col-muted">HMAC-SHA256 over body, raw hex in custom header</span><span class="col-muted">Linear</span></div>
+        <div class="grid-row" style="grid-template-columns: 10rem 1fr 6rem;"><span><code>token_header</code></span><span class="col-muted">Secret as-is in a custom header</span><span class="col-muted">GitLab</span></div>
+        <div class="grid-row" style="grid-template-columns: 10rem 1fr 6rem;"><span><code>bearer</code></span><span class="col-muted"><code>Authorization: Bearer &lt;token&gt;</code></span><span class="col-muted">Generic</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ═══ Dispatch Modes ═══ #}
+<div class="card" id="dispatch-modes">
+  <div class="card-header">
+    <h2>Dispatch Modes</h2>
+    <span class="count">current: {{ dispatch_mode }}</span>
+  </div>
+  <div style="padding: 1rem; font-size: 0.82rem; color: var(--secondary);">
+    <p style="margin-bottom: 0.75rem;">Change via the nav bar selector, TUI (<code>m</code>), or CLI (<code>polyphony daemon mode &lt;mode&gt;</code>).</p>
+    <div class="grid-table">
+      <div class="grid-header" style="grid-template-columns: 8rem 1fr;"><span>Mode</span><span>Behavior</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span style="color: var(--accent); font-weight: 600;">Manual</span><span>You choose which issues to dispatch. Good for reviewing before agents start.</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span style="color: var(--success); font-weight: 600;">Automatic</span><span>Issues dispatched automatically by priority, labels, and agent capacity.</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span style="color: var(--accent); font-weight: 600;">Nightshift</span><span>Automatic + agents work on improvements when no issues are queued.</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span style="color: var(--warning); font-weight: 600;">Idle</span><span>Only dispatches when agents are idle and budget headroom exists.</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span style="color: var(--danger); font-weight: 600;">Stop</span><span>Abort all running agents and pause dispatching.</span></div>
+    </div>
+  </div>
+</div>
+
+{# ═══ Keyboard Shortcuts ═══ #}
+<div class="card" id="keyboard">
+  <div class="card-header"><h2>TUI Keyboard Shortcuts</h2></div>
+  <div style="padding: 1rem; font-size: 0.82rem;">
+    <div class="grid-table">
+      <div class="grid-header" style="grid-template-columns: 8rem 1fr;"><span>Key</span><span>Action</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>1-7</code></span><span>Switch tab (Inbox, Orchestration, Tasks, Outcomes, Agents, Repos, Logs)</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>Tab</code></span><span>Next / previous tab</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>j / k</code></span><span>Navigate down / up</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>Enter</code></span><span>Open detail view</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>Esc</code></span><span>Close detail / go back</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>d</code></span><span>Dispatch issue to agent</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>a</code></span><span>Approve issue for dispatch</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>m</code></span><span>Open mode selector</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>n</code></span><span>Create new issue</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>S</code></span><span>Stop agent on selected issue</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>s</code></span><span>Toggle sort</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>/</code></span><span>Search / filter</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>o</code></span><span>Open in browser</span></div>
+      <div class="grid-row" style="grid-template-columns: 8rem 1fr;"><span><code>q</code></span><span>Quit</span></div>
+    </div>
+  </div>
+</div>
+
+{# ═══ Configuration ═══ #}
+<div class="card" id="config">
+  <div class="card-header"><h2>Configuration</h2></div>
+  <div style="padding: 1rem; font-size: 0.82rem; color: var(--secondary);">
+    <p style="margin-bottom: 0.75rem;">Config layers (highest priority first):</p>
+    <ol style="margin: 0 0 1rem 1.5rem; line-height: 1.8;">
+      <li><strong>Environment variables</strong> &mdash; <code>POLYPHONY_DAEMON__LISTEN_PORT=8080</code></li>
+      <li><strong>Repo-local</strong> &mdash; <code>polyphony.toml</code></li>
+      <li><strong>User global</strong> &mdash; <code>~/.config/polyphony/config.toml</code></li>
+      <li><strong>WORKFLOW.md front matter</strong></li>
+      <li><strong>Built-in defaults</strong></li>
+    </ol>
+    <div class="grid-table">
+      <div class="grid-header" style="grid-template-columns: 1fr 1fr;"><span>File</span><span>Purpose</span></div>
+      <div class="grid-row" style="grid-template-columns: 1fr 1fr;"><span><code>~/.config/polyphony/config.toml</code></span><span class="col-muted">Agent profiles, tracker credentials, daemon config</span></div>
+      <div class="grid-row" style="grid-template-columns: 1fr 1fr;"><span><code>polyphony.toml</code></span><span class="col-muted">Repo-local: tracker, agents, automation rules</span></div>
+      <div class="grid-row" style="grid-template-columns: 1fr 1fr;"><span><code>WORKFLOW.md</code></span><span class="col-muted">Workflow contract with YAML front matter</span></div>
+      <div class="grid-row" style="grid-template-columns: 1fr 1fr;"><span><code>.polyphony/agents/*.md</code></span><span class="col-muted">Agent prompt files</span></div>
+      <div class="grid-row" style="grid-template-columns: 1fr 1fr;"><span><code>~/.polyphony/repos.json</code></span><span class="col-muted">Repository registry (multi-repo mode)</span></div>
+    </div>
+    <p style="margin-top: 1rem;"><a href="https://polyphony.to" target="_blank">Full documentation &rarr;</a></p>
+  </div>
+</div>
+
+<script>
+var snippets = {
+  github: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.github]\nauth = "hmac_sha256"\nsecret = "your-github-webhook-secret"',
+  gitlab: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.gitlab]\nauth = "token_header"\nsecret = "your-gitlab-webhook-secret"\nheader = "X-Gitlab-Token"',
+  linear: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.linear]\nauth = "hmac_sha256_header"\nsecret = "your-linear-webhook-secret"\nheader = "Linear-Signature"',
+  custom: '[daemon.webhooks]\nenabled = true\n\n[daemon.webhooks.providers.my-service]\nauth = "bearer"\nsecret = "your-bearer-token"'
+};
+function showSnippet(p) {
+  var a = document.getElementById('snippet-area'), c = document.getElementById('snippet-code');
+  c.textContent = snippets[p] || ''; a.style.display = 'block';
+}
+function copySnippet() {
+  navigator.clipboard.writeText(document.getElementById('snippet-code').textContent).then(function() {
+    var b = document.querySelector('#snippet-area .btn'); b.textContent = 'Copied!';
+    setTimeout(function() { b.textContent = 'Copy'; }, 1500);
+  });
+}
+</script>
+{% endblock %}

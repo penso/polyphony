@@ -66,7 +66,7 @@ pub fn build_router(
         .route("/outcomes", get(page_outcomes))
         .route("/tasks", get(page_tasks))
         .route("/repos", get(page_repos))
-        .route("/webhooks-config", get(page_webhooks))
+        .route("/docs", get(page_docs))
         .route("/logs", get(page_logs))
         .route("/graphql", get(graphql_playground).post(graphql_handler))
         .route_service("/graphql/ws", GraphQLSubscription::new(schema))
@@ -143,9 +143,7 @@ async fn page_repos(State(state): State<AppState>) -> impl IntoResponse {
     render_page(&state, "repos.html")
 }
 
-async fn page_webhooks(
-    State(state): State<AppState>,
-) -> Result<Html<String>, (StatusCode, String)> {
+async fn page_docs(State(state): State<AppState>) -> Result<Html<String>, (StatusCode, String)> {
     let snapshot = state.snapshot_rx.borrow().clone();
 
     let providers: Vec<serde_json::Value> = state
@@ -177,15 +175,12 @@ async fn page_webhooks(
         "generated_at": snapshot.generated_at,
     });
 
-    let tmpl = state
-        .template_env
-        .get_template("webhooks.html")
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("template error: {e}"),
-            )
-        })?;
+    let tmpl = state.template_env.get_template("docs.html").map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("template error: {e}"),
+        )
+    })?;
     let rendered = tmpl
         .render(minijinja::Value::from_serialize(&ctx))
         .map_err(|e| {
