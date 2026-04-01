@@ -10,6 +10,7 @@ use axum_login::{AuthManagerLayerBuilder, AuthUser, AuthnBackend, UserId};
 use minijinja::Environment;
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
+use tokio::sync::RwLock;
 use tower_sessions::SessionManagerLayer;
 use tower_sessions_sqlx_store::SqliteStore;
 
@@ -41,14 +42,18 @@ impl AuthUser for User {
 /// Authentication backend backed by a static list of users from config.
 #[derive(Debug, Clone)]
 pub struct Backend {
-    users: Arc<Vec<User>>,
+    users: Arc<RwLock<Vec<User>>>,
 }
 
 impl Backend {
     pub fn new(users: Vec<User>) -> Self {
         Self {
-            users: Arc::new(users),
+            users: Arc::new(RwLock::new(users)),
         }
+    }
+
+    pub(crate) async fn replace_users(&self, users: Vec<User>) {
+        *self.users.write().await = users;
     }
 }
 
@@ -67,7 +72,8 @@ impl AuthnBackend for Backend {
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        let found = self.users.iter().find(|u| {
+        let users = self.users.read().await;
+        let found = users.iter().find(|u| {
             u.username == creds.username
                 && bool::from(u.token.as_bytes().ct_eq(creds.token.as_bytes()))
         });
@@ -75,7 +81,8 @@ impl AuthnBackend for Backend {
     }
 
     async fn get_user(&self, user_id: &UserId<Self>) -> Result<Option<Self::User>, Self::Error> {
-        Ok(self.users.iter().find(|u| u.id() == *user_id).cloned())
+        let users = self.users.read().await;
+        Ok(users.iter().find(|u| u.id() == *user_id).cloned())
     }
 }
 
@@ -87,6 +94,7 @@ pub async fn build_auth_layer(
     session_db_url: &str,
 ) -> Result<
     (
+        Backend,
         axum_login::AuthManagerLayer<Backend, SqliteStore>,
         SessionManagerLayer<SqliteStore>,
     ),
@@ -108,9 +116,8 @@ pub async fn build_auth_layer(
         )));
 
     let backend = Backend::new(users);
-    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer.clone()).build();
-
-    Ok((auth_layer, session_layer))
+    let auth_layer = AuthManagerLayerBuilder::new(backend.clone(), session_layer.clone()).build();
+    Ok((backend, auth_layer, session_layer))
 }
 
 /// Render the login page.
@@ -165,5 +172,47 @@ fn render_login(env: &Environment<'_>, error: Option<&str>) -> impl IntoResponse
             format!("template error: {e}"),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn backend_reloads_users_in_place() {
+        let backend = Backend::new(vec![User::new("alice".into(), "token-a".into())]);
+
+        let first = backend
+            .authenticate(Credentials {
+                username: "alice".into(),
+                token: "token-a".into(),
+            })
+            .await
+            .expect("auth result");
+        assert!(first.is_some());
+
+        backend
+            .replace_users(vec![User::new("bob".into(), "token-b".into())])
+            .await;
+
+        let alice = backend
+            .authenticate(Credentials {
+                username: "alice".into(),
+                token: "token-a".into(),
+            })
+            .await
+            .expect("auth result");
+        assert!(alice.is_none());
+
+        let bob = backend
+            .authenticate(Credentials {
+                username: "bob".into(),
+                token: "token-b".into(),
+            })
+            .await
+            .expect("auth result");
+        assert!(bob.is_some());
     }
 }

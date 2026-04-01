@@ -648,6 +648,46 @@ footer { text-align: center; color: var(--muted); font-size: 0.7rem; padding: 2r
 .detail-list-row .key { color: var(--muted); }
 .detail-list-row code { word-break: break-all; }
 .stat-inline { color: var(--muted); font-size: 0.75rem; }
+.user-banner {
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.user-banner-success {
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border-subtle) 72%);
+  color: var(--success);
+}
+.user-banner-error {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--border-subtle) 72%);
+  color: var(--danger);
+}
+.user-form-shell {
+  padding: 0.85rem 1rem 0.95rem;
+}
+.user-form-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+.user-field {
+  display: grid;
+  gap: 0.35rem;
+}
+.user-field span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.token-input-shell {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+.user-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
 .toast-root {
   position: fixed;
   right: 1rem;
@@ -693,4 +733,6 @@ footer { text-align: center; color: var(--muted); font-size: 0.7rem; padding: 2r
   .run-row-inner { flex-wrap: wrap; }
   .run-child { flex-wrap: wrap; padding-left: 1rem; }
   .provider-strip { padding: 0.4rem 1rem; }
+  .token-input-shell { grid-template-columns: 1fr; }
+  .user-form-actions { justify-content: stretch; }
 }

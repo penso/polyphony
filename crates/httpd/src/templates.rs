@@ -12,7 +12,7 @@ pub(crate) fn build_env(template_dir: &Path) -> Environment<'static> {
     env
 }
 
-pub(crate) fn snapshot_context(snapshot: &RuntimeSnapshot) -> minijinja::Value {
+pub(crate) fn snapshot_context_object(snapshot: &RuntimeSnapshot) -> Map<String, Value> {
     let mut context = match serde_json::to_value(snapshot) {
         Ok(Value::Object(object)) => object,
         Ok(_) | Err(_) => Map::new(),
@@ -20,7 +20,11 @@ pub(crate) fn snapshot_context(snapshot: &RuntimeSnapshot) -> minijinja::Value {
     if let Ok(provider_budgets) = serde_json::to_value(provider_budget_summaries(snapshot)) {
         context.insert("provider_budgets".into(), provider_budgets);
     }
-    minijinja::Value::from_serialize(context)
+    context
+}
+
+pub(crate) fn snapshot_context(snapshot: &RuntimeSnapshot) -> minijinja::Value {
+    minijinja::Value::from_serialize(snapshot_context_object(snapshot))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -250,6 +254,7 @@ mod tests {
             "docs.html",
             "layout.html",
             "login.html",
+            "users.html",
         ] {
             env.get_template(name)
                 .unwrap_or_else(|e| panic!("template {name} failed to parse: {e}"));

@@ -30,6 +30,24 @@ pub fn load_workflow_with_user_config(
     })
 }
 
+pub fn load_daemon_config_from_workflow(path: impl AsRef<Path>) -> Result<DaemonConfig, Error> {
+    let definition = read_workflow_definition(path)?;
+    daemon_config_from_definition(&definition)
+}
+
+pub fn update_daemon_config_in_workflow(
+    path: impl AsRef<Path>,
+    update: impl FnOnce(&mut DaemonConfig),
+) -> Result<DaemonConfig, Error> {
+    let path = path.as_ref();
+    let mut definition = read_workflow_definition(path)?;
+    let mut daemon = daemon_config_from_definition(&definition)?;
+    update(&mut daemon);
+    write_daemon_config_to_definition(&mut definition, &daemon)?;
+    write_workflow_definition(path, &definition)?;
+    Ok(daemon)
+}
+
 pub fn user_config_path() -> Result<PathBuf, Error> {
     let home = dirs::home_dir()
         .ok_or_else(|| Error::Config("could not resolve ~/.config/polyphony/config.toml".into()))?;
@@ -232,6 +250,56 @@ pub fn default_repo_config_toml_with_default_agent(
         ),
         None => base,
     }
+}
+
+fn read_workflow_definition(path: impl AsRef<Path>) -> Result<WorkflowDefinition, Error> {
+    let path = path.as_ref();
+    let raw =
+        fs::read_to_string(path).map_err(|_| Error::MissingWorkflowFile(path.to_path_buf()))?;
+    parse_workflow(&raw)
+}
+
+fn daemon_config_from_definition(definition: &WorkflowDefinition) -> Result<DaemonConfig, Error> {
+    let YamlValue::Mapping(config) = &definition.config else {
+        return Err(Error::FrontMatterNotMap);
+    };
+    let Some(value) = config.get(YamlValue::String("daemon".into())) else {
+        return Ok(DaemonConfig::default());
+    };
+    serde_yaml::from_value::<DaemonConfig>(value.clone()).map_err(|error| {
+        Error::Config(format!(
+            "parsing daemon config from workflow failed: {error}"
+        ))
+    })
+}
+
+fn write_daemon_config_to_definition(
+    definition: &mut WorkflowDefinition,
+    daemon: &DaemonConfig,
+) -> Result<(), Error> {
+    let YamlValue::Mapping(config) = &mut definition.config else {
+        return Err(Error::FrontMatterNotMap);
+    };
+    let daemon_value =
+        serde_yaml::to_value(daemon).map_err(|error| Error::WorkflowParse(error.to_string()))?;
+    config.insert(YamlValue::String("daemon".into()), daemon_value);
+    Ok(())
+}
+
+fn write_workflow_definition(
+    path: impl AsRef<Path>,
+    definition: &WorkflowDefinition,
+) -> Result<(), Error> {
+    let path = path.as_ref();
+    let front_matter = serde_yaml::to_string(&definition.config)
+        .map_err(|error| Error::WorkflowParse(error.to_string()))?;
+    let contents = format!(
+        "---\n{}---\n\n{}\n",
+        front_matter,
+        definition.prompt_template.trim_end()
+    );
+    fs::write(path, contents)
+        .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))
 }
 
 /// Ensure the user config file exists, injecting detected agent profiles.
@@ -489,4 +557,51 @@ pub fn seed_repo_config_with_beads_and_default_agent(
     fs::write(path, content)
         .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))?;
     Ok(true)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_daemon_config_in_workflow_persists_users() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        fs::write(
+            &workflow_path,
+            "---\ndaemon:\n  auth_token: legacy-token\n---\nPrompt\n",
+        )
+        .expect("write workflow");
+
+        let daemon = update_daemon_config_in_workflow(&workflow_path, |daemon| {
+            daemon.auth_token = None;
+            daemon.users = vec![DaemonUserConfig {
+                username: "alice".into(),
+                token: "secret-1".into(),
+            }];
+        })
+        .expect("update daemon config");
+
+        assert!(daemon.auth_token.is_none());
+        assert_eq!(daemon.users.len(), 1);
+        assert_eq!(daemon.users[0].username, "alice");
+
+        let reloaded = load_daemon_config_from_workflow(&workflow_path).expect("reload daemon");
+        assert!(reloaded.auth_token.is_none());
+        assert_eq!(reloaded.users.len(), 1);
+        assert_eq!(reloaded.users[0].token, "secret-1");
+    }
+
+    #[test]
+    fn load_daemon_config_defaults_when_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        fs::write(&workflow_path, "---\ntracker:\n  kind: none\n---\nPrompt\n")
+            .expect("write workflow");
+
+        let daemon = load_daemon_config_from_workflow(&workflow_path).expect("load daemon");
+        assert!(daemon.users.is_empty());
+        assert!(daemon.auth_token.is_none());
+    }
 }

@@ -1,0 +1,205 @@
+{% extends "layout.html" %}
+{% block title %}Users · Polyphony{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Users</h1>
+    <div class="meta">Dashboard authentication for this daemon, backed by <code>WORKFLOW.md</code>.</div>
+  </div>
+</div>
+<div id="users-flash" data-success="{{ success_message }}" data-error="{{ error_message }}" hidden></div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="value accent">{{ users | length }}</div>
+    <div class="label">Dashboard Users</div>
+  </div>
+  <div class="stat">
+    <div class="value {% if auth_live %}success{% else %}warning{% endif %}">
+      {% if auth_live %}Live{% else %}Restart{% endif %}
+    </div>
+    <div class="label">Auth Reload</div>
+  </div>
+  <div class="stat">
+    <div class="value {% if legacy_mode %}warning{% else %}accent{% endif %}">
+      {% if legacy_mode %}Legacy{% else %}Users{% endif %}
+    </div>
+    <div class="label">Config Mode</div>
+  </div>
+</div>
+
+{% if success_message %}
+<div class="card">
+  <div class="detail-card user-banner user-banner-success">{{ success_message }}</div>
+</div>
+{% endif %}
+{% if error_message %}
+<div class="card">
+  <div class="detail-card user-banner user-banner-error">{{ error_message }}</div>
+</div>
+{% endif %}
+
+{% if legacy_mode %}
+<div class="card">
+  <div class="detail-card user-banner">
+    The daemon is still using legacy <code>daemon.auth_token</code> fallback. Any save from this page will migrate auth into named <code>daemon.users</code>.
+  </div>
+</div>
+{% endif %}
+
+{% if not auth_live %}
+<div class="card">
+  <div class="detail-card user-banner">
+    This process started without login middleware. You can add users here, but restart the daemon before the web UI actually requires sign-in.
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">
+    <h2>Add User</h2>
+    <span class="count">Writes through to daemon config</span>
+  </div>
+  <div class="user-form-shell">
+    <form method="post" action="/users/create" class="user-form-grid">
+      <label class="user-field">
+        <span>Username</span>
+        <input class="search-input" name="username" type="text" placeholder="alice" required>
+      </label>
+      <label class="user-field">
+        <span>Token</span>
+        <div class="token-input-shell">
+          <input class="search-input token-input" name="token" type="password" placeholder="polyphony-token-..." required>
+          <button class="btn btn-ghost token-toggle" type="button">Show</button>
+        </div>
+      </label>
+      <div class="user-form-actions">
+        <button class="btn btn-primary" type="submit">Add User</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Configured Users</h2>
+    <span class="count">{{ users | length }} total</span>
+  </div>
+  {% if users %}
+  <div class="grid-table">
+    <div class="grid-header" style="grid-template-columns: 2rem 1fr 8rem 10rem;">
+      <span></span>
+      <span>User</span>
+      <span>Source</span>
+      <span>Token</span>
+    </div>
+    {% for user in users %}
+    <div class="grid-row user-row{% if user.source == 'legacy' %} active{% endif %}" style="grid-template-columns: 2rem 1fr 8rem 10rem; cursor: pointer;" data-user-modal="modal-user-{{ loop.index0 }}">
+      <span class="col-muted">{% if user.source == 'legacy' %}!</span>{% else %}●</span>{% endif %}
+      <span class="col-title">{{ user.username }}</span>
+      <span class="{% if user.source == 'legacy' %}col-warning{% else %}col-muted{% endif %}">{{ user.source }}</span>
+      <span class="col-muted"><code>{{ user.masked_token }}</code></span>
+    </div>
+    {% endfor %}
+    <div class="grid-footer">
+      <span>{{ users | length }} configured login{% if users | length != 1 %}s{% endif %}</span>
+      <span>The last user cannot be removed here. That would be a funny way to lock yourself out.</span>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty">No dashboard users are configured yet.</div>
+  {% endif %}
+</div>
+
+{% for user in users %}
+<div class="modal-overlay" id="modal-user-{{ loop.index0 }}">
+  <div class="modal" style="max-width: 640px;">
+    <div class="modal-header">
+      <h2>{{ user.username }}</h2>
+      <button class="modal-close" onclick="polyphony.closeModal(this.closest('.modal-overlay'))" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta">
+        <div class="meta-item"><span class="meta-label">Source</span><span class="meta-value {% if user.source == 'legacy' %}warning{% else %}muted{% endif %}">{{ user.source }}</span></div>
+        <div class="meta-item"><span class="meta-label">Username</span><span class="meta-value accent">{{ user.username }}</span></div>
+      </div>
+
+      <form method="post" action="/users/update" class="user-form-grid">
+        <input type="hidden" name="original_username" value="{{ user.username }}">
+        <label class="user-field">
+          <span>Username</span>
+          <input class="search-input" name="username" type="text" value="{{ user.username }}" required>
+        </label>
+        <label class="user-field">
+          <span>Token</span>
+          <div class="token-input-shell">
+            <input class="search-input token-input" name="token" type="password" value="{{ user.token }}" required>
+            <button class="btn btn-ghost token-toggle" type="button">Show</button>
+            <button class="btn btn-ghost token-copy" type="button">Copy</button>
+          </div>
+        </label>
+        <div class="modal-actions" style="margin-top: 0.25rem;">
+          <button class="btn btn-primary" type="submit">Save User</button>
+        </div>
+      </form>
+
+      <div class="modal-section">
+        <h3>Danger Zone</h3>
+        <form method="post" action="/users/delete" onsubmit="return confirm('Remove dashboard user {{ user.username }}?');">
+          <input type="hidden" name="username" value="{{ user.username }}">
+          <button class="btn btn-danger" type="submit">Remove User</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block head %}
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var flash = document.getElementById('users-flash');
+    var success = flash ? flash.dataset.success : '';
+    var error = flash ? flash.dataset.error : '';
+    if (success) polyphony.toast(success, 'success');
+    if (error) polyphony.toast(error, 'error');
+
+    document.querySelectorAll('.token-toggle').forEach(function(button) {
+      button.addEventListener('click', function() {
+        var input = button.parentElement.querySelector('.token-input');
+        if (!input) return;
+        var reveal = input.type === 'password';
+        input.type = reveal ? 'text' : 'password';
+        button.textContent = reveal ? 'Hide' : 'Show';
+      });
+    });
+
+    document.querySelectorAll('.token-copy').forEach(function(button) {
+      button.addEventListener('click', function() {
+        var input = button.parentElement.querySelector('.token-input');
+        if (!input || !navigator.clipboard) return;
+        navigator.clipboard.writeText(input.value).then(function() {
+          polyphony.toast('Token copied.', 'success');
+        }).catch(function() {
+          polyphony.toast('Clipboard copy failed.', 'error');
+        });
+      });
+    });
+
+    document.querySelectorAll('.user-row[data-user-modal]').forEach(function(row) {
+      row.addEventListener('click', function() {
+        polyphony.openModal(row.dataset.userModal);
+      });
+    });
+
+    document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+      overlay.addEventListener('click', function(event) {
+        if (event.target === overlay) {
+          polyphony.closeModal(overlay);
+        }
+      });
+    });
+  });
+</script>
+{% endblock %}
