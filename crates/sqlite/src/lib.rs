@@ -459,6 +459,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         };
         let persisted_run = PersistedAgentRunRecord {
             repo_id: String::new(),
@@ -576,6 +577,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         };
 
         store.save_snapshot(&snapshot).await.unwrap();

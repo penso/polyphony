@@ -490,6 +490,7 @@ impl RuntimeService {
                     source: profile.source,
                 })
                 .collect(),
+            heartbeat: self.state.heartbeat_status.clone(),
         }
     }
 

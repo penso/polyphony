@@ -2518,18 +2518,20 @@ impl RuntimeService {
             let _ = self.emit_snapshot().await;
             return false;
         }
-        for (_, workflow, issue) in issues {
+        // Collect candidate issues that pass the mechanical dispatch gates.
+        let mut candidate_issues: Vec<(LoadedWorkflow, Issue)> = Vec::new();
+        for (_, workflow, issue) in &issues {
             if !workflow.config.has_dispatch_agents() {
                 continue;
             }
-            if !self.issue_is_approved(workflow.config.tracker.kind, &issue) {
+            if !self.issue_is_approved(workflow.config.tracker.kind, issue) {
                 continue;
             }
-            if !self.should_dispatch(&workflow, &issue) {
+            if !self.should_dispatch(workflow, issue) {
                 continue;
             }
             if self.state.dispatch_mode == polyphony_core::DispatchMode::Idle {
-                match self.idle_dispatch_allowed_for_issue(&workflow, &issue) {
+                match self.idle_dispatch_allowed_for_issue(workflow, issue) {
                     Ok(true) => {},
                     Ok(false) => continue,
                     Err(error) => {
@@ -2544,15 +2546,106 @@ impl RuntimeService {
                     },
                 }
             }
-            if !self.has_available_slot(&workflow, &issue.state) {
-                break;
+            candidate_issues.push((workflow.clone(), issue.clone()));
+        }
+
+        // Try heartbeat-driven dispatch if enabled and there are candidates.
+        let heartbeat_enabled = self.workflow_rx.borrow().config.heartbeat.enabled;
+        let mut heartbeat_handled = false;
+        if heartbeat_enabled && !candidate_issues.is_empty() {
+            match self.run_heartbeat_dispatch(&candidate_issues).await {
+                Ok(Some(decision)) => {
+                    heartbeat_handled = true;
+                    // Build a lookup from issue_id to (workflow, issue) for fast access.
+                    let candidate_map: std::collections::HashMap<String, (LoadedWorkflow, Issue)> =
+                        candidate_issues
+                            .iter()
+                            .map(|(w, i)| (i.id.clone(), (w.clone(), i.clone())))
+                            .collect();
+                    for dispatch_item in &decision.dispatch {
+                        let Some((workflow, issue)) = candidate_map.get(&dispatch_item.issue_id)
+                        else {
+                            self.push_event(
+                                EventScope::Heartbeat,
+                                format!(
+                                    "heartbeat dispatch skipped unknown issue: {}",
+                                    dispatch_item.issue_id,
+                                ),
+                            );
+                            continue;
+                        };
+                        // Validate hard constraints before dispatching.
+                        if !self.has_available_slot(workflow, &issue.state) {
+                            self.push_event(
+                                EventScope::Heartbeat,
+                                format!(
+                                    "heartbeat dispatch blocked (no slot): {}",
+                                    issue.identifier,
+                                ),
+                            );
+                            break;
+                        }
+                        // Validate the agent name from the LLM response.
+                        let agent_override = if workflow
+                            .config
+                            .agents
+                            .profiles
+                            .contains_key(&dispatch_item.agent)
+                        {
+                            Some(dispatch_item.agent.as_str())
+                        } else {
+                            self.push_event(
+                                EventScope::Heartbeat,
+                                format!(
+                                    "heartbeat suggested unknown agent `{}` for {}, using default",
+                                    dispatch_item.agent, issue.identifier,
+                                ),
+                            );
+                            None
+                        };
+                        if let Err(error) = self
+                            .dispatch_issue(
+                                workflow.clone(),
+                                issue.clone(),
+                                None,
+                                false,
+                                agent_override,
+                                false,
+                                None,
+                            )
+                            .await
+                        {
+                            self.push_event(
+                                EventScope::Dispatch,
+                                format!("heartbeat dispatch failed: {error}"),
+                            );
+                            error!(%error, "heartbeat dispatch failed");
+                        }
+                    }
+                },
+                Ok(None) => {
+                    // Heartbeat not configured or returned None — fall through to rule-based.
+                },
+                Err(error) => {
+                    warn!(%error, "heartbeat dispatch error, falling back to rule-based");
+                    self.push_event(EventScope::Heartbeat, format!("heartbeat error: {error}"));
+                },
             }
-            if let Err(error) = self
-                .dispatch_issue(workflow.clone(), issue, None, false, None, false, None)
-                .await
-            {
-                self.push_event(EventScope::Dispatch, format!("dispatch failed: {error}"));
-                error!(%error, "dispatch failed");
+        }
+
+        // Fall back to rule-based dispatch if heartbeat did not handle it.
+        if !heartbeat_handled {
+            for (workflow, issue) in candidate_issues {
+                if !self.has_available_slot(&workflow, &issue.state) {
+                    break;
+                }
+                if let Err(error) = self
+                    .dispatch_issue(workflow.clone(), issue, None, false, None, false, None)
+                    .await
+                {
+                    self.push_event(EventScope::Dispatch, format!("dispatch failed: {error}"));
+                    error!(%error, "dispatch failed");
+                }
             }
         }
         let _ = self.emit_snapshot().await;
@@ -2641,6 +2734,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         };
 
         apply_workspace_progress_to_snapshot(&mut snapshot, &WorkspaceProgressUpdate {

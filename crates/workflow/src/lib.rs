@@ -426,6 +426,14 @@ pub struct PipelineConfig {
     pub validation_agent: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct HeartbeatConfig {
+    pub enabled: bool,
+    pub agent: Option<String>,
+    pub prompt: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ServiceConfig {
     pub tracker: TrackerConfig,
@@ -443,6 +451,8 @@ pub struct ServiceConfig {
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
     pub daemon: DaemonConfig,
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -468,6 +478,8 @@ struct RawServiceConfig {
     pub feedback: FeedbackConfig,
     pub server: ServerConfig,
     pub daemon: DaemonConfig,
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

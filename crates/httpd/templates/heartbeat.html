@@ -1,0 +1,120 @@
+{% extends "layout.html" %}
+{% block title %}Polyphony &mdash; Heartbeat{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Heartbeat</h1>
+  <span class="meta">Prompt-driven dispatch decisions</span>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Status</h2>
+  </div>
+  <div class="detail-list" style="padding: 0.9rem;">
+    <div class="detail-list-row">
+      <span class="key">enabled</span>
+      <span>{% if heartbeat.enabled %}Yes{% else %}No{% endif %}</span>
+    </div>
+    <div class="detail-list-row">
+      <span class="key">agent</span>
+      <span>{% if heartbeat.agent_name %}<code>{{ heartbeat.agent_name }}</code>{% else %}&mdash;{% endif %}</span>
+    </div>
+    <div class="detail-list-row">
+      <span class="key">last run</span>
+      <span>{% if heartbeat.last_run_at %}<time datetime="{{ heartbeat.last_run_at }}">{{ heartbeat.last_run_at }}</time>{% else %}&mdash;{% endif %}</span>
+    </div>
+    <div class="detail-list-row">
+      <span class="key">total tokens</span>
+      <span>{{ heartbeat.total_tokens_used }}</span>
+    </div>
+    <div class="detail-list-row">
+      <span class="key">fallbacks</span>
+      <span>{{ heartbeat.fallback_count }}</span>
+    </div>
+  </div>
+</div>
+
+{% if heartbeat.last_decision %}
+<div class="card">
+  <div class="card-header">
+    <h2>Latest Decision</h2>
+    <span class="count"><time datetime="{{ heartbeat.last_decision.at }}">{{ heartbeat.last_decision.at }}</time> &middot; {{ heartbeat.last_decision.tokens_used }} tokens &middot; {{ heartbeat.last_decision.duration_ms }}ms</span>
+  </div>
+
+  {% if heartbeat.last_decision.dispatched | length > 0 %}
+  <h3 style="padding: 0.6rem 0.9rem 0;">Dispatched</h3>
+  <table class="data-table">
+    <thead>
+      <tr><th>Issue</th><th>Agent</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      {% for d in heartbeat.last_decision.dispatched %}
+      <tr>
+        <td><code>{{ d.issue_id }}</code></td>
+        <td><code>{{ d.agent }}</code></td>
+        <td>{{ d.reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if heartbeat.last_decision.skipped | length > 0 %}
+  <h3 style="padding: 0.6rem 0.9rem 0;">Skipped</h3>
+  <table class="data-table">
+    <thead>
+      <tr><th>Issue</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      {% for s in heartbeat.last_decision.skipped %}
+      <tr>
+        <td><code>{{ s.issue_id }}</code></td>
+        <td>{{ s.reason }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+
+{% set heartbeat_events = [] %}
+{% for e in recent_events %}
+  {% if e.scope == "heartbeat" %}
+    {% set_global heartbeat_events = heartbeat_events | concat(with=e) %}
+  {% endif %}
+{% endfor %}
+{% if heartbeat_events | length > 0 %}
+<div class="card">
+  <div class="card-header">
+    <h2>Recent Events</h2>
+    <span class="count">{{ heartbeat_events | length }} events</span>
+  </div>
+  <div class="log-stream">
+    {% for e in heartbeat_events | reverse %}
+    <div class="log-line">
+      <span class="log-ts"><time datetime="{{ e.at }}">{{ e.at }}</time></span>
+      <span class="log-scope log-scope-heartbeat">heartbeat</span>
+      <span class="log-msg">{{ e.message }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if not heartbeat.enabled %}
+<div class="card">
+  <div class="card-header">
+    <h2>Configuration</h2>
+  </div>
+  <div style="padding: 0.9rem;">
+    <p>Heartbeat is not enabled. Add to your workflow YAML:</p>
+    <pre><code>heartbeat:
+  enabled: true
+  agent: "triage"   # references an agent profile</code></pre>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

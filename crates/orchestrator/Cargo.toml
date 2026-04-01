@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+liquid.workspace = true
 notify.workspace = true
 reqwest.workspace = true
 serde.workspace = true

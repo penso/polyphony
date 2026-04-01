@@ -48,6 +48,7 @@ const DEFAULT_PULL_REQUEST_REVIEW_PROMPT: &str = include_str!("prompts/pull_requ
 const DEFAULT_PULL_REQUEST_COMMENT_REVIEW_PROMPT: &str =
     include_str!("prompts/pull_request_comment_review.md");
 const DEFAULT_PLANNER_PROMPT: &str = include_str!("prompts/planner.md");
+const DEFAULT_HEARTBEAT_PROMPT: &str = include_str!("prompts/heartbeat.md");
 
 #[derive(Debug, Deserialize)]
 struct GithubViewerIdentity {
@@ -379,6 +380,7 @@ struct RuntimeState {
     /// so that `run()` preserves the restored dispatch mode instead of
     /// overwriting it with the config default.
     bootstrap_restored: bool,
+    heartbeat_status: polyphony_core::HeartbeatStatus,
 }
 
 impl Default for RuntimeState {
@@ -427,6 +429,7 @@ impl Default for RuntimeState {
             review_event_suppressions: HashMap::new(),
             issue_repo_map: HashMap::new(),
             bootstrap_restored: false,
+            heartbeat_status: polyphony_core::HeartbeatStatus::default(),
         }
     }
 }
@@ -456,6 +459,7 @@ struct WorkflowReloadSupport {
 
 mod dispatch;
 mod handoff;
+mod heartbeat;
 mod helpers;
 mod lifecycle;
 mod pipeline;

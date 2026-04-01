@@ -59,6 +59,7 @@ pub enum EventScope {
     Tracker,
     Startup,
     Feedback,
+    Heartbeat,
 }
 
 impl fmt::Display for EventScope {
@@ -250,6 +251,40 @@ pub struct RuntimeSnapshot {
     pub agent_profile_names: Vec<String>,
     #[serde(default)]
     pub agent_profiles: Vec<AgentProfileSummary>,
+    #[serde(default)]
+    pub heartbeat: HeartbeatStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HeartbeatStatus {
+    pub enabled: bool,
+    pub agent_name: Option<String>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub last_decision: Option<HeartbeatDecisionSummary>,
+    pub total_tokens_used: u64,
+    pub fallback_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatDecisionSummary {
+    pub at: DateTime<Utc>,
+    pub dispatched: Vec<HeartbeatDispatchEntry>,
+    pub skipped: Vec<HeartbeatSkipEntry>,
+    pub tokens_used: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatDispatchEntry {
+    pub issue_id: String,
+    pub agent: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatSkipEntry {
+    pub issue_id: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

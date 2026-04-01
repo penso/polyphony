@@ -37,7 +37,7 @@
   </div>
   <div class="repo-pills" id="log-scope-pills">
     <button class="repo-pill active" data-scope="all" onclick="filterLogScope('all', this)">All</button>
-    {% for scope in ['workflow', 'dispatch', 'handoff', 'agent', 'retry', 'tracker', 'feedback', 'worker', 'reconcile', 'startup', 'throttle'] %}
+    {% for scope in ['workflow', 'dispatch', 'handoff', 'agent', 'retry', 'tracker', 'feedback', 'heartbeat', 'worker', 'reconcile', 'startup', 'throttle'] %}
     <button class="repo-pill" data-scope="{{ scope }}" onclick="filterLogScope('{{ scope }}', this)">{{ scope }}</button>
     {% endfor %}
   </div>

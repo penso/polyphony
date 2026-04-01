@@ -79,6 +79,7 @@ pub fn build_router(
         .route("/users/delete", post(delete_user))
         .route("/docs", get(page_docs))
         .route("/logs", get(page_logs))
+        .route("/heartbeat", get(page_heartbeat))
         .route("/graphql", get(graphql_playground).post(graphql_handler))
         .route_service("/graphql/ws", GraphQLSubscription::new(schema))
         .with_state(state);
@@ -207,6 +208,10 @@ async fn page_logs(State(state): State<AppState>) -> impl IntoResponse {
     render_page(&state, "logs.html")
 }
 
+async fn page_heartbeat(State(state): State<AppState>) -> impl IntoResponse {
+    render_page(&state, "heartbeat.html")
+}
+
 async fn page_users(
     State(state): State<AppState>,
     Query(query): Query<UsersPageQuery>,
@@ -278,7 +283,7 @@ async fn update_user(
             StatusCode::BAD_REQUEST,
         );
     };
-    match prepare_user_for_update(&form) {
+    match prepare_user_for_update(&form, &users[index]) {
         Ok(user) => users[index] = user,
         Err(error) => {
             return render_users_page(
@@ -504,10 +509,21 @@ fn prepare_user_for_create(form: &CreateUserForm) -> Result<DashboardUserRow, St
     ))
 }
 
-fn prepare_user_for_update(form: &UpdateUserForm) -> Result<DashboardUserRow, String> {
+fn prepare_user_for_update(
+    form: &UpdateUserForm,
+    current_user: &DashboardUserRow,
+) -> Result<DashboardUserRow, String> {
+    let token = form
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(sanitize_token)
+        .transpose()?
+        .unwrap_or_else(|| current_user.token.clone());
     Ok(DashboardUserRow::new(
         sanitize_username(&form.username)?,
-        sanitize_token(&form.token)?,
+        token,
         "user",
     ))
 }
@@ -586,7 +602,7 @@ struct CreateUserForm {
 struct UpdateUserForm {
     original_username: String,
     username: String,
-    token: String,
+    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -597,6 +613,7 @@ struct DeleteUserForm {
 #[derive(Debug, Clone, Serialize)]
 struct DashboardUserRow {
     username: String,
+    #[serde(skip_serializing)]
     token: String,
     masked_token: String,
     source: &'static str,
@@ -733,6 +750,7 @@ mod tests {
         assert!(html.contains("admin"));
         assert!(html.contains("legacy"));
         assert!(html.contains("daemon.auth_token"));
+        assert!(!html.contains("legacy-secret"));
     }
 
     #[tokio::test]
@@ -777,6 +795,53 @@ mod tests {
             username: "alice".into(),
             token: "secret-1".into(),
         }]);
+    }
+
+    #[tokio::test]
+    async fn update_user_keeps_existing_token_when_field_is_blank() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        std::fs::write(
+            &workflow_path,
+            "---\ndaemon:\n  users:\n    - username: alice\n      token: secret-1\n---\nPrompt\n",
+        )
+        .expect("write workflow");
+
+        let (snapshot_tx, snapshot_rx) = watch::channel(test_snapshot());
+        let _ = snapshot_tx;
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+        let router = build_router(
+            snapshot_rx,
+            command_tx,
+            template_dir(),
+            workflow_path.clone(),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/users/update")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "original_username=alice&username=alice-renamed&token=",
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let daemon = polyphony_workflow::load_daemon_config_from_workflow(&workflow_path)
+            .expect("load daemon");
+        assert_eq!(daemon.users.len(), 1);
+        assert_eq!(daemon.users[0].username, "alice-renamed");
+        assert_eq!(daemon.users[0].token, "secret-1");
     }
 
     #[test]

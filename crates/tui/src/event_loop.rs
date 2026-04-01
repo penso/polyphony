@@ -3727,6 +3727,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: vec![],
             agent_profiles: vec![],
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         }
     }
 
@@ -3798,6 +3799,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: vec![],
             agent_profiles: vec![],
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         }
     }
 
@@ -3872,6 +3874,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: vec![],
             agent_profiles: vec![],
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         }
     }
 
@@ -4081,6 +4084,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: vec![],
             agent_profiles: vec![],
+            heartbeat: polyphony_core::HeartbeatStatus::default(),
         };
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());

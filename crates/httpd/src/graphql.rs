@@ -183,6 +183,7 @@ pub(crate) enum GqlEventScope {
     Tracker,
     Startup,
     Feedback,
+    Heartbeat,
 }
 
 impl From<polyphony_core::EventScope> for GqlEventScope {
@@ -199,6 +200,7 @@ impl From<polyphony_core::EventScope> for GqlEventScope {
             polyphony_core::EventScope::Tracker => Self::Tracker,
             polyphony_core::EventScope::Startup => Self::Startup,
             polyphony_core::EventScope::Feedback => Self::Feedback,
+            polyphony_core::EventScope::Heartbeat => Self::Heartbeat,
         }
     }
 }
@@ -418,6 +420,72 @@ impl From<&polyphony_core::SnapshotCounts> for GqlCounts {
     }
 }
 
+#[derive(SimpleObject)]
+struct GqlHeartbeatDispatchEntry {
+    issue_id: String,
+    agent: String,
+    reason: String,
+}
+
+#[derive(SimpleObject)]
+struct GqlHeartbeatSkipEntry {
+    issue_id: String,
+    reason: String,
+}
+
+#[derive(SimpleObject)]
+struct GqlHeartbeatDecision {
+    at: DateTime<Utc>,
+    dispatched: Vec<GqlHeartbeatDispatchEntry>,
+    skipped: Vec<GqlHeartbeatSkipEntry>,
+    tokens_used: String,
+    duration_ms: String,
+}
+
+#[derive(SimpleObject)]
+struct GqlHeartbeatStatus {
+    enabled: bool,
+    agent_name: Option<String>,
+    last_run_at: Option<DateTime<Utc>>,
+    last_decision: Option<GqlHeartbeatDecision>,
+    total_tokens_used: String,
+    fallback_count: String,
+}
+
+impl From<&polyphony_core::HeartbeatStatus> for GqlHeartbeatStatus {
+    fn from(h: &polyphony_core::HeartbeatStatus) -> Self {
+        Self {
+            enabled: h.enabled,
+            agent_name: h.agent_name.clone(),
+            last_run_at: h.last_run_at,
+            last_decision: h.last_decision.as_ref().map(|d| GqlHeartbeatDecision {
+                at: d.at,
+                dispatched: d
+                    .dispatched
+                    .iter()
+                    .map(|e| GqlHeartbeatDispatchEntry {
+                        issue_id: e.issue_id.clone(),
+                        agent: e.agent.clone(),
+                        reason: e.reason.clone(),
+                    })
+                    .collect(),
+                skipped: d
+                    .skipped
+                    .iter()
+                    .map(|e| GqlHeartbeatSkipEntry {
+                        issue_id: e.issue_id.clone(),
+                        reason: e.reason.clone(),
+                    })
+                    .collect(),
+                tokens_used: d.tokens_used.to_string(),
+                duration_ms: d.duration_ms.to_string(),
+            }),
+            total_tokens_used: h.total_tokens_used.to_string(),
+            fallback_count: h.fallback_count.to_string(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Query root
 // ---------------------------------------------------------------------------
@@ -490,6 +558,11 @@ impl QueryRoot {
     async fn dispatch_mode(&self, ctx: &Context<'_>) -> GqlDispatchMode {
         let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
         snap.borrow().dispatch_mode.into()
+    }
+
+    async fn heartbeat(&self, ctx: &Context<'_>) -> GqlHeartbeatStatus {
+        let snap = ctx.data_unchecked::<watch::Receiver<RuntimeSnapshot>>();
+        GqlHeartbeatStatus::from(&snap.borrow().heartbeat)
     }
 
     /// List directories matching a prefix path, for repo autocomplete.

@@ -85,6 +85,7 @@ fn test_snapshot(visible: usize) -> RuntimeSnapshot {
         cached_at: None,
         agent_profile_names: vec![],
         agent_profiles: vec![],
+        heartbeat: polyphony_core::HeartbeatStatus::default(),
     }
 }
 

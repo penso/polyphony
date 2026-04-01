@@ -409,6 +409,7 @@ mod tests {
             cached_at: None,
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
+            heartbeat: crate::HeartbeatStatus::default(),
         };
         let run = crate::PersistedAgentRunRecord {
             repo_id: String::new(),
@@ -516,6 +517,7 @@ mod tests {
                 cached_at: None,
                 agent_profile_names: Vec::new(),
                 agent_profiles: Vec::new(),
+                heartbeat: crate::HeartbeatStatus::default(),
             }),
             agent_run_history: (0..300)
                 .map(|index| crate::PersistedAgentRunRecord {

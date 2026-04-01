@@ -193,6 +193,8 @@ impl ServiceConfig {
             .set_default("daemon.listen_address", "127.0.0.1")
             .map_err(config_error)?
             .set_default("daemon.listen_port", 0)
+            .map_err(config_error)?
+            .set_default("heartbeat.enabled", false)
             .map_err(config_error)?;
         if let Some(path) = user_config_path {
             let path = path.to_string_lossy().to_string();
@@ -230,6 +232,7 @@ impl ServiceConfig {
             feedback: raw.feedback,
             server: raw.server,
             daemon: raw.daemon,
+            heartbeat: raw.heartbeat,
         };
         config.hydrate_agents(raw.codex, raw.provider)?;
         config.resolve();
@@ -780,6 +783,14 @@ impl ServiceConfig {
                     "feedback.webhook.{name}.url must be non-empty"
                 )));
             }
+        }
+        if self.heartbeat.enabled
+            && let Some(agent_name) = &self.heartbeat.agent
+            && !self.agents.profiles.contains_key(agent_name)
+        {
+            return Err(Error::InvalidConfig(format!(
+                "heartbeat.agent `{agent_name}` is not defined"
+            )));
         }
         Ok(())
     }
