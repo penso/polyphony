@@ -40,11 +40,22 @@ pub fn update_daemon_config_in_workflow(
     update: impl FnOnce(&mut DaemonConfig),
 ) -> Result<DaemonConfig, Error> {
     let path = path.as_ref();
-    let mut definition = read_workflow_definition(path)?;
+    let workflow_source = read_workflow_source(path)?;
+    let definition = parse_workflow(&workflow_source.raw)?;
     let mut daemon = daemon_config_from_definition(&definition)?;
     update(&mut daemon);
-    write_daemon_config_to_definition(&mut definition, &daemon)?;
-    write_workflow_definition(path, &definition)?;
+    let updated_front_matter = upsert_daemon_block(
+        workflow_source.front_matter.as_deref().unwrap_or_default(),
+        &render_daemon_block(&daemon)?,
+    );
+    let _: YamlValue = serde_yaml::from_str(&updated_front_matter)
+        .map_err(|error| Error::WorkflowParse(error.to_string()))?;
+    let updated_source = WorkflowSource {
+        raw: compose_workflow_source(&updated_front_matter, &workflow_source.body),
+        front_matter: Some(updated_front_matter),
+        body: workflow_source.body,
+    };
+    write_workflow_source(path, &updated_source)?;
     Ok(daemon)
 }
 
@@ -253,10 +264,8 @@ pub fn default_repo_config_toml_with_default_agent(
 }
 
 fn read_workflow_definition(path: impl AsRef<Path>) -> Result<WorkflowDefinition, Error> {
-    let path = path.as_ref();
-    let raw =
-        fs::read_to_string(path).map_err(|_| Error::MissingWorkflowFile(path.to_path_buf()))?;
-    parse_workflow(&raw)
+    let workflow_source = read_workflow_source(path)?;
+    parse_workflow(&workflow_source.raw)
 }
 
 fn daemon_config_from_definition(definition: &WorkflowDefinition) -> Result<DaemonConfig, Error> {
@@ -273,33 +282,172 @@ fn daemon_config_from_definition(definition: &WorkflowDefinition) -> Result<Daem
     })
 }
 
-fn write_daemon_config_to_definition(
-    definition: &mut WorkflowDefinition,
-    daemon: &DaemonConfig,
-) -> Result<(), Error> {
-    let YamlValue::Mapping(config) = &mut definition.config else {
-        return Err(Error::FrontMatterNotMap);
-    };
-    let daemon_value =
-        serde_yaml::to_value(daemon).map_err(|error| Error::WorkflowParse(error.to_string()))?;
-    config.insert(YamlValue::String("daemon".into()), daemon_value);
-    Ok(())
+#[derive(Debug, Clone)]
+struct WorkflowSource {
+    raw: String,
+    front_matter: Option<String>,
+    body: String,
 }
 
-fn write_workflow_definition(
-    path: impl AsRef<Path>,
-    definition: &WorkflowDefinition,
-) -> Result<(), Error> {
+fn read_workflow_source(path: impl AsRef<Path>) -> Result<WorkflowSource, Error> {
     let path = path.as_ref();
-    let front_matter = serde_yaml::to_string(&definition.config)
-        .map_err(|error| Error::WorkflowParse(error.to_string()))?;
-    let contents = format!(
-        "---\n{}---\n\n{}\n",
-        front_matter,
-        definition.prompt_template.trim_end()
-    );
-    fs::write(path, contents)
+    let raw =
+        fs::read_to_string(path).map_err(|_| Error::MissingWorkflowFile(path.to_path_buf()))?;
+    split_workflow_source(&raw)
+}
+
+fn split_workflow_source(raw: &str) -> Result<WorkflowSource, Error> {
+    if !raw.starts_with("---") {
+        return Ok(WorkflowSource {
+            raw: raw.to_string(),
+            front_matter: None,
+            body: raw.to_string(),
+        });
+    }
+
+    let mut parts = raw.splitn(3, "---");
+    let _ = parts.next();
+    let front_matter = parts
+        .next()
+        .ok_or_else(|| Error::WorkflowParse("missing closing front matter".into()))?;
+    let body = parts
+        .next()
+        .ok_or_else(|| Error::WorkflowParse("missing body after front matter".into()))?;
+
+    Ok(WorkflowSource {
+        raw: raw.to_string(),
+        front_matter: Some(front_matter.trim_start_matches('\n').to_string()),
+        body: body.to_string(),
+    })
+}
+
+fn compose_workflow_source(front_matter: &str, body: &str) -> String {
+    let mut contents = String::from("---\n");
+    contents.push_str(front_matter.trim_end_matches('\n'));
+    contents.push_str("\n---");
+    if !body.starts_with('\n') {
+        contents.push('\n');
+    }
+    contents.push_str(body);
+    contents
+}
+
+fn write_workflow_source(path: impl AsRef<Path>, source: &WorkflowSource) -> Result<(), Error> {
+    let path = path.as_ref();
+    fs::write(path, &source.raw)
         .map_err(|error| Error::Config(format!("writing `{}` failed: {error}", path.display())))
+}
+
+fn render_daemon_block(daemon: &DaemonConfig) -> Result<String, Error> {
+    let daemon_yaml =
+        serde_yaml::to_string(daemon).map_err(|error| Error::WorkflowParse(error.to_string()))?;
+    let mut block = String::from("daemon:\n");
+    for line in daemon_yaml.lines() {
+        block.push_str("  ");
+        block.push_str(line);
+        block.push('\n');
+    }
+    Ok(block.trim_end_matches('\n').to_string())
+}
+
+fn upsert_daemon_block(front_matter: &str, daemon_block: &str) -> String {
+    if let Some((start, end)) = find_top_level_block(front_matter, "daemon") {
+        let mut updated = String::new();
+        updated.push_str(&front_matter[..start]);
+        updated.push_str(daemon_block);
+        if end < front_matter.len() && !front_matter[end..].starts_with('\n') {
+            updated.push('\n');
+        }
+        updated.push_str(&front_matter[end..]);
+        return updated;
+    }
+
+    let trimmed = front_matter.trim_end_matches('\n');
+    if trimmed.is_empty() {
+        daemon_block.to_string()
+    } else {
+        format!("{trimmed}\n{daemon_block}\n")
+    }
+}
+
+fn find_top_level_block(front_matter: &str, key: &str) -> Option<(usize, usize)> {
+    let lines = collect_lines(front_matter);
+    let start_index = lines
+        .iter()
+        .position(|line| top_level_key_name(line.text) == Some(key))?;
+    let start = lines[start_index].start;
+    let mut end = front_matter.len();
+
+    for idx in (start_index + 1)..lines.len() {
+        let line = lines[idx].text;
+        if top_level_key_name(line).is_some() {
+            end = lines[idx].start;
+            break;
+        }
+        if line_is_blank_or_comment(line)
+            && let Some(next_idx) = next_meaningful_line_index(&lines, idx + 1)
+            && top_level_key_name(lines[next_idx].text).is_some()
+        {
+            end = lines[idx].start;
+            break;
+        }
+    }
+
+    Some((start, end))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceLine<'a> {
+    start: usize,
+    text: &'a str,
+}
+
+fn collect_lines(source: &str) -> Vec<SourceLine<'_>> {
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for segment in source.split_inclusive('\n') {
+        lines.push(SourceLine {
+            start: offset,
+            text: segment,
+        });
+        offset += segment.len();
+    }
+    if !source.is_empty() && !source.ends_with('\n') {
+        let trailing = source[offset..].trim_end_matches('\n');
+        if !trailing.is_empty() {
+            lines.push(SourceLine {
+                start: offset,
+                text: trailing,
+            });
+        }
+    }
+    lines
+}
+
+fn next_meaningful_line_index(lines: &[SourceLine<'_>], start: usize) -> Option<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, line)| !line_is_blank_or_comment(line.text))
+        .map(|(index, _)| index)
+}
+
+fn line_is_blank_or_comment(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty() || trimmed.starts_with('#')
+}
+
+fn top_level_key_name(line: &str) -> Option<&str> {
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() || trimmed.starts_with([' ', '\t', '#']) {
+        return None;
+    }
+    let candidate = trimmed.split_once(':')?.0.trim_end();
+    if candidate.is_empty() || candidate.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(candidate)
 }
 
 /// Ensure the user config file exists, injecting detected agent profiles.
@@ -603,5 +751,44 @@ mod tests {
         let daemon = load_daemon_config_from_workflow(&workflow_path).expect("load daemon");
         assert!(daemon.users.is_empty());
         assert!(daemon.auth_token.is_none());
+    }
+
+    #[test]
+    fn update_daemon_config_preserves_unrelated_front_matter_and_body() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let original = "\
+---
+# keep me
+tracker:
+  kind: none
+
+# agent comment
+agents:
+  default: implementer
+
+daemon:
+  listen_port: 8080
+---
+Prompt body stays here.
+";
+        fs::write(&workflow_path, original).expect("write workflow");
+
+        update_daemon_config_in_workflow(&workflow_path, |daemon| {
+            daemon.listen_port = 9090;
+            daemon.users = vec![DaemonUserConfig {
+                username: "alice".into(),
+                token: "secret-1".into(),
+            }];
+        })
+        .expect("update daemon config");
+
+        let updated = fs::read_to_string(&workflow_path).expect("read workflow");
+        assert!(updated.contains("# keep me"));
+        assert!(updated.contains("tracker:\n  kind: none"));
+        assert!(updated.contains("# agent comment"));
+        assert!(updated.contains("agents:\n  default: implementer"));
+        assert!(updated.contains("listen_port: 9090"));
+        assert!(updated.contains("Prompt body stays here."));
     }
 }

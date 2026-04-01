@@ -131,11 +131,16 @@
           <input class="search-input" name="username" type="text" value="{{ user.username }}" required>
         </label>
         <label class="user-field">
-          <span>Token</span>
+          <span>Current Token</span>
+          <div class="detail-card">
+            <code>{{ user.masked_token }}</code>
+          </div>
+        </label>
+        <label class="user-field">
+          <span>Rotate Token</span>
           <div class="token-input-shell">
-            <input class="search-input token-input" name="token" type="password" value="{{ user.token }}" required>
+            <input class="search-input token-input" name="token" type="password" placeholder="Leave blank to keep the current token" autocomplete="new-password">
             <button class="btn btn-ghost token-toggle" type="button">Show</button>
-            <button class="btn btn-ghost token-copy" type="button">Copy</button>
           </div>
         </label>
         <div class="modal-actions" style="margin-top: 0.25rem;">
@@ -172,18 +177,6 @@
         var reveal = input.type === 'password';
         input.type = reveal ? 'text' : 'password';
         button.textContent = reveal ? 'Hide' : 'Show';
-      });
-    });
-
-    document.querySelectorAll('.token-copy').forEach(function(button) {
-      button.addEventListener('click', function() {
-        var input = button.parentElement.querySelector('.token-input');
-        if (!input || !navigator.clipboard) return;
-        navigator.clipboard.writeText(input.value).then(function() {
-          polyphony.toast('Token copied.', 'success');
-        }).catch(function() {
-          polyphony.toast('Clipboard copy failed.', 'error');
-        });
       });
     });
 
