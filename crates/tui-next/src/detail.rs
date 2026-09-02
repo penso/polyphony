@@ -77,7 +77,7 @@ fn draw_action_bar(frame: &mut ratatui::Frame<'_>, area: Rect, app: &AppState) {
         (
             "Enter dispatch",
             "p pause/resume",
-            "s stop  r retry  h hijack",
+            "s stop  r retry  x clear  h hijack",
         )
     };
 
@@ -110,20 +110,32 @@ fn draw_detail_footer(
     app: &AppState,
 ) {
     let state = issue_control_state(snapshot, item);
+    let session_active = current_session_work_active(snapshot, item);
+    let text_x = if session_active && area.width > 10 {
+        frame.render_widget(&app.loader, Rect::new(area.x, area.y, 8, 1));
+        area.x.saturating_add(10)
+    } else {
+        area.x
+    };
+    let text_area = Rect::new(
+        text_x,
+        area.y,
+        area.width.saturating_sub(text_x.saturating_sub(area.x)),
+        area.height,
+    );
     let mut spans = vec![
         Span::styled("Ctrl+P", Style::new().fg(theme::text()).bold()),
-        Span::styled(":commands  ", Style::new().fg(theme::muted())),
+        Span::styled(":commands ", Style::new().fg(theme::muted())),
+        Span::styled("y", Style::new().fg(theme::text()).bold()),
+        Span::styled(":copy session ", Style::new().fg(theme::muted())),
         Span::styled("Esc", Style::new().fg(theme::text()).bold()),
-        Span::styled(":back  ", Style::new().fg(theme::muted())),
-        Span::styled("m", Style::new().fg(theme::text()).bold()),
-        Span::styled(":mode  ", Style::new().fg(theme::muted())),
-        Span::styled("orchestrator ", Style::new().fg(theme::muted())),
-        Span::styled("•", Style::new().fg(orchestrator_status_color(snapshot))),
+        Span::styled(":back ", Style::new().fg(theme::muted())),
+        Span::styled("orchestrator:", Style::new().fg(theme::muted())),
         Span::styled(
-            format!("{}  ", snapshot.dispatch_mode),
-            Style::new().fg(theme::muted()),
+            format!("{} ", snapshot.dispatch_mode),
+            Style::new().fg(orchestrator_status_color(snapshot)),
         ),
-        Span::styled("state ", Style::new().fg(theme::muted())),
+        Span::styled("state:", Style::new().fg(theme::muted())),
         Span::styled(state, Style::new().fg(theme::primary())),
     ];
     if let Some(message) = app.status_message.as_deref() {
@@ -133,7 +145,28 @@ fn draw_detail_footer(
             Style::new().fg(theme::secondary()),
         ));
     }
-    Line::from(spans).render(area, frame.buffer_mut());
+    Line::from(spans).render(text_area, frame.buffer_mut());
+}
+
+fn current_session_work_active(snapshot: &RuntimeSnapshot, item: &InboxItemRow) -> bool {
+    snapshot.running.iter().any(|agent| {
+        repo_matches(agent.repo_id.as_str(), item.repo_id.as_str())
+            && (agent.issue_id == item.item_id || agent.issue_identifier == item.identifier)
+    }) || snapshot.runs.iter().any(|run| {
+        repo_matches(run.repo_id.as_str(), item.repo_id.as_str())
+            && run.issue_identifier.as_deref() == Some(item.identifier.as_str())
+            && matches!(
+                run.status,
+                RunStatus::Pending
+                    | RunStatus::Planning
+                    | RunStatus::InProgress
+                    | RunStatus::Review
+            )
+    })
+}
+
+fn repo_matches(left: &str, right: &str) -> bool {
+    left.is_empty() || right.is_empty() || left == right
 }
 
 fn orchestrator_status_color(snapshot: &RuntimeSnapshot) -> ratatui::style::Color {
@@ -163,17 +196,24 @@ fn draw_main(
         app.children_expanded,
         &app.interventions,
         &app.notices,
+        app.tick,
     );
     let panel_styles = session
         .blocks
         .iter()
-        .map(|block| block.style)
+        .map(|block| match block.lines.len() {
+            1 => session::SessionBlockStyle::Plain,
+            _ => block.style,
+        })
         .collect::<Vec<_>>();
     let panels = session
         .blocks
         .iter()
         .map(|block| {
             let mut panel = LeftRailPanel::new(block.lines.clone()).border_color(block.accent);
+            if app.settings.show_widget_timestamps {
+                panel = panel.timestamp_label(block.timestamp.map(widget_timestamp_label));
+            }
             if let Some(max_height) = block.max_height {
                 panel = panel.max_height(max_height);
             }
@@ -182,14 +222,13 @@ fn draw_main(
         .collect::<Vec<_>>();
 
     let panel_width = area.width.saturating_sub(2);
-    let max_panel_height = panel_max_height(area.height);
     let panel_heights = panels
         .iter()
         .zip(panel_styles.iter())
         .map(|(panel, style)| match style {
             session::SessionBlockStyle::Plain => panel.plain_height(panel_width) as usize,
             session::SessionBlockStyle::Subtle | session::SessionBlockStyle::Full => {
-                panel.visible_height(panel_width, max_panel_height) as usize
+                panel.visible_height(panel_width) as usize
             },
         })
         .collect::<Vec<_>>();
@@ -238,6 +277,13 @@ fn draw_main(
             app.detail_scroll as usize,
         );
     }
+}
+
+fn widget_timestamp_label(timestamp: chrono::DateTime<chrono::Utc>) -> String {
+    timestamp
+        .with_timezone(&chrono::Local)
+        .format("%H:%M:%S")
+        .to_string()
 }
 
 fn render_panels(
@@ -471,10 +517,6 @@ fn total_panel_height(panel_heights: &[usize]) -> usize {
         .copied()
         .sum::<usize>()
         .saturating_add(panel_heights.len().saturating_sub(1))
-}
-
-fn panel_max_height(viewport_height: u16) -> u16 {
-    viewport_height.saturating_sub(2).clamp(6, 12)
 }
 
 fn render_scrollbar(
@@ -819,7 +861,7 @@ fn issue_control_state(snapshot: &RuntimeSnapshot, item: &InboxItemRow) -> &'sta
         Some(
             RunStatus::Pending | RunStatus::Planning | RunStatus::InProgress | RunStatus::Review,
         ) => "orchestrating",
-        Some(RunStatus::Failed | RunStatus::Cancelled) => "paused/stopped",
+        Some(RunStatus::Failed | RunStatus::Cancelled) => "paused",
         Some(RunStatus::Delivered) => "delivered",
         None => "ready",
     }

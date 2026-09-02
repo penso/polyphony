@@ -173,7 +173,23 @@ mod error_tests {
 mod command_parse_tests {
     use clap::Parser;
 
-    use crate::{Cli, Commands, DaemonAction, DataAction, DispatchModeArg, IssueAction};
+    use crate::{
+        Cli, Commands, DaemonAction, DataAction, DispatchModeArg, IssueAction, TuiVariant,
+    };
+
+    #[test]
+    fn defaults_to_next_tui() {
+        let cli = Cli::try_parse_from(["polyphony"]).unwrap();
+
+        assert!(matches!(cli.tui, TuiVariant::Next));
+    }
+
+    #[test]
+    fn accepts_current_tui_override() {
+        let cli = Cli::try_parse_from(["polyphony", "--tui", "current"]).unwrap();
+
+        assert!(matches!(cli.tui, TuiVariant::Current));
+    }
 
     #[test]
     fn parses_data_events_command() {

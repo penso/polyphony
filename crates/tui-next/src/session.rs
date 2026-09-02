@@ -1,6 +1,8 @@
+use chrono::{DateTime, Utc};
 use polyphony_core::{
-    AgentContextEntry, AgentContextSnapshot, AgentEventKind, AgentRunHistoryRow, InboxItemRow,
-    RunRow, RunningAgentRow, RuntimeEvent, RuntimeSnapshot, StepStatus, TaskRow,
+    AgentContextEntry, AgentContextSnapshot, AgentEventKind, AgentModelCatalog, AgentProfileSource,
+    AgentProfileSummary, AgentRunHistoryRow, InboxItemRow, RunRow, RunStatus, RunningAgentRow,
+    RuntimeEvent, RuntimeSnapshot, StepStatus, TaskRow,
 };
 use ratatui::{
     style::{Color, Style},
@@ -27,6 +29,7 @@ pub(crate) struct SessionBlock {
     pub accent: Color,
     pub max_height: Option<u16>,
     pub style: SessionBlockStyle,
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +45,7 @@ pub(crate) fn build_issue_session(
     children_expanded: bool,
     interventions: &[IssueIntervention],
     notices: &[IssueNotice],
+    tick: u32,
 ) -> IssueSession {
     let mut blocks = Vec::new();
     blocks.push(issue_block(item));
@@ -88,15 +92,16 @@ pub(crate) fn build_issue_session(
         blocks.push(notice_block(notice));
     }
 
+    let mut timeline_blocks = Vec::new();
     let mut runs = runs_for_item(snapshot, item);
     runs.sort_by_key(|run| run.created_at);
     for run in runs {
-        blocks.push(run_block(run));
+        timeline_blocks.push(run_block(run));
 
         let mut steps = run.steps.iter().collect::<Vec<_>>();
         steps.sort_by_key(|step| step.ordinal);
         for step in steps {
-            blocks.push(step_block(snapshot, run, step));
+            timeline_blocks.push(step_block(snapshot, run, step));
         }
 
         let mut tasks = snapshot
@@ -106,13 +111,12 @@ pub(crate) fn build_issue_session(
             .collect::<Vec<_>>();
         tasks.sort_by_key(|task| task.ordinal);
         for task in tasks {
-            blocks.push(task_block(task));
+            timeline_blocks.push(task_block(task));
         }
 
         for agent in running_agents_for_run(snapshot, run) {
-            blocks.push(running_agent_block(agent));
+            timeline_blocks.push(running_agent_block(snapshot, agent, tick));
             if let Some(context) = saved_context_for_agent(snapshot, agent) {
-                let index = blocks.len();
                 let block = transcript_block(
                     "Live transcript",
                     Some(agent.agent_name.as_str()),
@@ -120,24 +124,16 @@ pub(crate) fn build_issue_session(
                     children_expanded,
                     true,
                 );
-                if block.max_height.is_some() && expand_block_index.is_none() {
-                    expand_block_index = Some(index);
-                }
-                blocks.push(block);
+                timeline_blocks.push(block);
             } else if !agent.recent_log.is_empty() {
-                let index = blocks.len();
                 let block = recent_log_block(agent, children_expanded);
-                if block.max_height.is_some() && expand_block_index.is_none() {
-                    expand_block_index = Some(index);
-                }
-                blocks.push(block);
+                timeline_blocks.push(block);
             }
         }
 
         for history in history_for_run(snapshot, run) {
-            blocks.push(agent_history_block(history));
+            timeline_blocks.push(agent_history_block(snapshot, history));
             if let Some(context) = history.saved_context.as_ref() {
-                let index = blocks.len();
                 let block = transcript_block(
                     "Transcript",
                     Some(history.agent_name.as_str()),
@@ -145,21 +141,34 @@ pub(crate) fn build_issue_session(
                     children_expanded,
                     false,
                 );
-                if block.max_height.is_some() && expand_block_index.is_none() {
-                    expand_block_index = Some(index);
-                }
-                blocks.push(block);
+                timeline_blocks.push(block);
             }
         }
 
         if let Some(deliverable) = &run.deliverable {
-            blocks.push(deliverable_block(run, deliverable));
+            timeline_blocks.push(deliverable_block(run, deliverable));
+        }
+        if matches!(
+            run.status,
+            RunStatus::Delivered | RunStatus::Failed | RunStatus::Cancelled
+        ) {
+            timeline_blocks.push(run_terminal_block(
+                run,
+                latest_run_activity_timestamp(snapshot, run).unwrap_or(run.created_at),
+            ));
         }
     }
 
     let events = events_for_item(snapshot, item);
-    if !events.is_empty() {
-        blocks.push(events_block(&events));
+    for event in events {
+        timeline_blocks.push(event_block(event));
+    }
+
+    timeline_blocks.sort_by_key(|block| block.timestamp);
+    blocks.extend(timeline_blocks);
+
+    if expand_block_index.is_none() {
+        expand_block_index = blocks.iter().position(|block| block.max_height.is_some());
     }
 
     IssueSession {
@@ -174,6 +183,7 @@ fn issue_block(item: &InboxItemRow) -> SessionBlock {
         accent: state_color(&item.status),
         max_height: None,
         style: SessionBlockStyle::Plain,
+        timestamp: item.created_at.or(item.updated_at),
         lines: vec![
             Line::from(vec![
                 Span::styled(
@@ -212,6 +222,7 @@ fn description_block(description: &str) -> SessionBlock {
         accent: theme::border(),
         max_height: None,
         style: SessionBlockStyle::Plain,
+        timestamp: None,
     }
 }
 
@@ -262,6 +273,7 @@ fn children_block(children: &[&InboxItemRow], expandable: bool, expanded: bool) 
             true => SessionBlockStyle::Subtle,
             false => SessionBlockStyle::Plain,
         },
+        timestamp: None,
     }
 }
 
@@ -269,11 +281,8 @@ fn run_block(run: &RunRow) -> SessionBlock {
     let progress = format!("{}/{} tasks", run.tasks_completed, run.task_count);
     let mut lines = vec![
         Line::from(vec![
-            Span::styled(
-                run.status.to_string(),
-                Style::new().fg(run_color(&run.status)).bold(),
-            ),
-            Span::styled(" run ", Style::new().fg(theme::muted())),
+            Span::styled("●", Style::new().fg(theme::primary())),
+            Span::styled(" run started ", Style::new().fg(theme::muted())),
             Span::styled(run.kind.to_string(), Style::new().fg(theme::primary())),
         ]),
         Line::from(vec![
@@ -281,12 +290,6 @@ fn run_block(run: &RunRow) -> SessionBlock {
             Span::styled(format!("  {progress}"), Style::new().fg(theme::muted())),
         ]),
     ];
-    if let Some(reason) = &run.cancel_reason {
-        lines.push(Line::from(vec![
-            Span::styled("stopped: ", Style::new().fg(theme::muted())),
-            Span::styled(reason.clone(), Style::new().fg(theme::secondary())),
-        ]));
-    }
     if let Some(branch) = &run.workspace_key {
         lines.push(Line::from(vec![
             Span::styled("workspace ", Style::new().fg(theme::muted())),
@@ -295,9 +298,80 @@ fn run_block(run: &RunRow) -> SessionBlock {
     }
     SessionBlock {
         lines,
-        accent: run_color(&run.status),
+        accent: theme::primary(),
         max_height: None,
         style: SessionBlockStyle::Full,
+        timestamp: Some(run.created_at),
+    }
+}
+
+fn run_terminal_block(run: &RunRow, timestamp: DateTime<Utc>) -> SessionBlock {
+    let accent = run_status_color(&run.status);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(run_status_icon(&run.status), Style::new().fg(accent)),
+        Span::styled(" run finished ", Style::new().fg(theme::muted())),
+        Span::styled(run.kind.to_string(), Style::new().fg(theme::text()).bold()),
+        Span::styled(format!("  {}", run.status), Style::new().fg(accent)),
+    ])];
+    lines.push(Line::from(vec![
+        Span::styled(
+            run.issue_identifier
+                .clone()
+                .unwrap_or_else(|| run.id.clone()),
+            Style::new().fg(theme::muted()),
+        ),
+        Span::styled(
+            format!("  {}/{} tasks", run.tasks_completed, run.task_count),
+            Style::new().fg(theme::muted()),
+        ),
+    ]));
+    if let Some(reason) = run
+        .cancel_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        lines.push(Line::styled(
+            reason.to_string(),
+            Style::new().fg(theme::secondary()),
+        ));
+    }
+    let message = match run.status {
+        RunStatus::Failed => "No more work will be dispatched for this run until it is retried.",
+        RunStatus::Cancelled => "This run was cancelled and will not continue.",
+        RunStatus::Delivered => "This run reached a terminal delivered state.",
+        _ => "",
+    };
+    if !message.is_empty() {
+        lines.push(Line::styled(message, Style::new().fg(theme::muted())));
+    }
+    SessionBlock {
+        lines,
+        accent,
+        max_height: None,
+        style: match run.status {
+            RunStatus::Failed | RunStatus::Cancelled => SessionBlockStyle::Full,
+            _ => SessionBlockStyle::Subtle,
+        },
+        timestamp: Some(timestamp),
+    }
+}
+
+fn run_status_icon(status: &RunStatus) -> &'static str {
+    match status {
+        RunStatus::Delivered => "✓",
+        RunStatus::Failed => "×",
+        RunStatus::Cancelled => "⊘",
+        RunStatus::InProgress | RunStatus::Planning | RunStatus::Review => "●",
+        RunStatus::Pending => "·",
+    }
+}
+
+fn run_status_color(status: &RunStatus) -> Color {
+    match status {
+        RunStatus::Delivered => theme::done(),
+        RunStatus::Failed | RunStatus::Cancelled => theme::error(),
+        RunStatus::InProgress | RunStatus::Planning | RunStatus::Review => theme::primary(),
+        RunStatus::Pending => theme::muted(),
     }
 }
 
@@ -363,9 +437,11 @@ fn step_block(
         accent: step_color(step.status),
         max_height: None,
         style: match step.status {
-            StepStatus::Running | StepStatus::Failed => SessionBlockStyle::Full,
-            _ => SessionBlockStyle::Subtle,
+            StepStatus::Failed => SessionBlockStyle::Full,
+            StepStatus::Running | StepStatus::Pending => SessionBlockStyle::Plain,
+            StepStatus::Succeeded | StepStatus::Skipped => SessionBlockStyle::Subtle,
         },
+        timestamp: step.finished_at.or(step.started_at),
     }
 }
 
@@ -404,6 +480,10 @@ fn task_block(task: &TaskRow) -> SessionBlock {
             },
             polyphony_core::TaskStatus::Pending => SessionBlockStyle::Plain,
         },
+        timestamp: task
+            .finished_at
+            .or(task.started_at)
+            .or(Some(task.updated_at)),
     }
 }
 
@@ -430,6 +510,7 @@ fn intervention_block(intervention: &IssueIntervention) -> SessionBlock {
         accent: theme::secondary(),
         max_height: None,
         style: SessionBlockStyle::Full,
+        timestamp: None,
     }
 }
 
@@ -442,12 +523,20 @@ fn notice_block(notice: &IssueNotice) -> SessionBlock {
         accent: theme::border(),
         max_height: None,
         style: SessionBlockStyle::Plain,
+        timestamp: None,
     }
 }
 
-fn running_agent_block(agent: &RunningAgentRow) -> SessionBlock {
+fn running_agent_block(
+    snapshot: &RuntimeSnapshot,
+    agent: &RunningAgentRow,
+    tick: u32,
+) -> SessionBlock {
+    let spinner = theme::BRAILLE_SPINNER[(tick / 4) as usize % theme::BRAILLE_SPINNER.len()];
+    let catalog = agent_catalog(snapshot, &agent.agent_name);
+    let profile = agent_profile(snapshot, &agent.agent_name);
     let mut lines = vec![Line::from(vec![
-        Span::styled("⠋", Style::new().fg(theme::primary())),
+        Span::styled(spinner, Style::new().fg(theme::primary())),
         Span::styled(" agent ", Style::new().fg(theme::muted())),
         Span::styled(
             agent.agent_name.clone(),
@@ -458,6 +547,19 @@ fn running_agent_block(agent: &RunningAgentRow) -> SessionBlock {
             Style::new().fg(theme::muted()),
         ),
     ])];
+    push_agent_metadata(
+        &mut lines,
+        catalog
+            .map(|catalog| catalog.provider_kind.as_str())
+            .or_else(|| profile.map(|profile| profile.kind.as_str())),
+        agent.model.as_deref(),
+        catalog
+            .and_then(|catalog| catalog.selected_model.as_deref())
+            .or_else(|| profile.and_then(|profile| profile.model.as_deref())),
+        agent.session_id.as_deref(),
+        agent.thread_id.as_deref(),
+        agent.turn_id.as_deref(),
+    );
     if let Some(message) = agent
         .last_message
         .as_deref()
@@ -473,6 +575,7 @@ fn running_agent_block(agent: &RunningAgentRow) -> SessionBlock {
         accent: theme::primary(),
         max_height: None,
         style: SessionBlockStyle::Full,
+        timestamp: Some(agent.last_event_at.unwrap_or(agent.started_at)),
     }
 }
 
@@ -562,6 +665,7 @@ fn transcript_block(
             true => SessionBlockStyle::Full,
             false => SessionBlockStyle::Subtle,
         },
+        timestamp: entries.last().map(|entry| entry.at),
     }
 }
 
@@ -605,7 +709,9 @@ fn agent_event_label(kind: AgentEventKind) -> (&'static str, Color) {
     }
 }
 
-fn agent_history_block(history: &AgentRunHistoryRow) -> SessionBlock {
+fn agent_history_block(snapshot: &RuntimeSnapshot, history: &AgentRunHistoryRow) -> SessionBlock {
+    let catalog = agent_catalog(snapshot, &history.agent_name);
+    let profile = agent_profile(snapshot, &history.agent_name);
     let mut lines = vec![Line::from(vec![
         Span::styled(
             history_icon(history.status),
@@ -621,6 +727,19 @@ fn agent_history_block(history: &AgentRunHistoryRow) -> SessionBlock {
             Style::new().fg(history_color(history.status)),
         ),
     ])];
+    push_agent_metadata(
+        &mut lines,
+        catalog
+            .map(|catalog| catalog.provider_kind.as_str())
+            .or_else(|| profile.map(|profile| profile.kind.as_str())),
+        history.model.as_deref(),
+        catalog
+            .and_then(|catalog| catalog.selected_model.as_deref())
+            .or_else(|| profile.and_then(|profile| profile.model.as_deref())),
+        history.session_id.as_deref(),
+        history.thread_id.as_deref(),
+        history.turn_id.as_deref(),
+    );
     if let Some(message) = history
         .last_message
         .as_deref()
@@ -636,6 +755,9 @@ fn agent_history_block(history: &AgentRunHistoryRow) -> SessionBlock {
             error.clone(),
             Style::new().fg(theme::secondary()),
         ));
+        if let Some(hint) = agent_failure_hint(error, profile) {
+            lines.push(Line::styled(hint, Style::new().fg(theme::secondary())));
+        }
     }
     SessionBlock {
         lines,
@@ -649,6 +771,128 @@ fn agent_history_block(history: &AgentRunHistoryRow) -> SessionBlock {
             | polyphony_core::AttemptStatus::TimedOut
             | polyphony_core::AttemptStatus::Stalled => SessionBlockStyle::Full,
         },
+        timestamp: history
+            .finished_at
+            .or(history.last_event_at)
+            .or(Some(history.started_at)),
+    }
+}
+
+fn push_agent_metadata(
+    lines: &mut Vec<Line<'static>>,
+    provider: Option<&str>,
+    model: Option<&str>,
+    selected_model: Option<&str>,
+    session_id: Option<&str>,
+    thread_id: Option<&str>,
+    turn_id: Option<&str>,
+) {
+    let mut spans = Vec::new();
+    if let Some(provider) = provider.filter(|value| !value.is_empty()) {
+        spans.push(Span::styled("provider ", Style::new().fg(theme::muted())));
+        spans.push(Span::styled(
+            provider.to_string(),
+            Style::new().fg(theme::primary()),
+        ));
+    }
+    if let Some(model) = model.or(selected_model).filter(|value| !value.is_empty()) {
+        if !spans.is_empty() {
+            spans.push(Span::styled("  ", Style::new().fg(theme::muted())));
+        }
+        spans.push(Span::styled("model ", Style::new().fg(theme::muted())));
+        spans.push(Span::styled(
+            model.to_string(),
+            Style::new().fg(theme::primary()),
+        ));
+    }
+    if let Some(session_id) = session_id.filter(|value| !value.is_empty()) {
+        if !spans.is_empty() {
+            spans.push(Span::styled("  ", Style::new().fg(theme::muted())));
+        }
+        spans.push(Span::styled("session ", Style::new().fg(theme::muted())));
+        spans.push(Span::styled(
+            short_id(session_id),
+            Style::new().fg(theme::secondary()),
+        ));
+    }
+    if let Some(thread_id) = thread_id.filter(|value| !value.is_empty()) {
+        if !spans.is_empty() {
+            spans.push(Span::styled("  ", Style::new().fg(theme::muted())));
+        }
+        spans.push(Span::styled("thread ", Style::new().fg(theme::muted())));
+        spans.push(Span::styled(
+            short_id(thread_id),
+            Style::new().fg(theme::secondary()),
+        ));
+    }
+    if let Some(turn_id) = turn_id.filter(|value| !value.is_empty()) {
+        if !spans.is_empty() {
+            spans.push(Span::styled("  ", Style::new().fg(theme::muted())));
+        }
+        spans.push(Span::styled("turn ", Style::new().fg(theme::muted())));
+        spans.push(Span::styled(
+            short_id(turn_id),
+            Style::new().fg(theme::secondary()),
+        ));
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+}
+
+fn agent_catalog<'a>(
+    snapshot: &'a RuntimeSnapshot,
+    agent_name: &str,
+) -> Option<&'a AgentModelCatalog> {
+    snapshot
+        .agent_catalogs
+        .iter()
+        .find(|catalog| catalog.agent_name == agent_name)
+}
+
+fn agent_profile<'a>(
+    snapshot: &'a RuntimeSnapshot,
+    agent_name: &str,
+) -> Option<&'a AgentProfileSummary> {
+    snapshot
+        .agent_profiles
+        .iter()
+        .find(|profile| profile.name == agent_name)
+}
+
+fn agent_failure_hint(error: &str, profile: Option<&AgentProfileSummary>) -> Option<String> {
+    let profile = profile?;
+    let command = profile
+        .command
+        .as_deref()
+        .filter(|value| !value.is_empty())?;
+    let executable = command.split_whitespace().next().unwrap_or(command);
+    let source = agent_profile_source_label(profile);
+    let prefix = if error.contains("401") {
+        "401 trying to run"
+    } else {
+        "failed trying to run"
+    };
+    Some(format!(
+        "{prefix} `{executable}` using {} provider defined in {source}",
+        profile.kind
+    ))
+}
+
+fn agent_profile_source_label(profile: &AgentProfileSummary) -> String {
+    match profile.source {
+        AgentProfileSource::Repository => format!(".polyphony/agents/{}.md", profile.name),
+        AgentProfileSource::UserGlobal => format!("~/.polyphony/agents/{}.md", profile.name),
+        AgentProfileSource::Config => "workflow config".to_string(),
+    }
+}
+
+fn short_id(value: &str) -> String {
+    const MAX: usize = 12;
+    if value.chars().count() <= MAX {
+        value.to_string()
+    } else {
+        format!("{}…", value.chars().take(MAX).collect::<String>())
     }
 }
 
@@ -682,28 +926,24 @@ fn deliverable_block(run: &RunRow, deliverable: &polyphony_core::Deliverable) ->
         accent: theme::primary(),
         max_height: None,
         style: SessionBlockStyle::Full,
+        timestamp: Some(run.created_at),
     }
 }
 
-fn events_block(events: &[&RuntimeEvent]) -> SessionBlock {
-    let mut lines = vec![Line::styled(
-        "Recent events",
-        Style::new().fg(theme::text()).bold(),
-    )];
-    for event in events.iter().rev().take(5) {
-        lines.push(Line::from(vec![
+fn event_block(event: &RuntimeEvent) -> SessionBlock {
+    SessionBlock {
+        lines: vec![Line::from(vec![
+            Span::styled("◷", Style::new().fg(theme::muted())),
             Span::styled(
-                format!("{} ", event.scope),
+                format!(" {} ", event.scope),
                 Style::new().fg(theme::primary()),
             ),
             Span::styled(event.message.clone(), Style::new().fg(theme::muted())),
-        ]));
-    }
-    SessionBlock {
-        lines,
+        ])],
         accent: theme::border(),
         max_height: None,
         style: SessionBlockStyle::Plain,
+        timestamp: Some(event.at),
     }
 }
 
@@ -735,19 +975,28 @@ fn running_agents_for_run<'a>(
     snapshot: &'a RuntimeSnapshot,
     run: &RunRow,
 ) -> Vec<&'a RunningAgentRow> {
-    snapshot
+    let mut agents = snapshot
         .running
         .iter()
         .filter(|agent| polyphony_core::running_agent_matches_run(run, agent))
-        .collect()
+        .collect::<Vec<_>>();
+    agents.sort_by_key(|agent| agent.last_event_at.unwrap_or(agent.started_at));
+    agents
 }
 
 fn history_for_run<'a>(snapshot: &'a RuntimeSnapshot, run: &RunRow) -> Vec<&'a AgentRunHistoryRow> {
-    snapshot
+    let mut history = snapshot
         .agent_run_history
         .iter()
         .filter(|history| polyphony_core::agent_history_matches_run(run, history))
-        .collect()
+        .collect::<Vec<_>>();
+    history.sort_by_key(|history| {
+        history
+            .finished_at
+            .or(history.last_event_at)
+            .unwrap_or(history.started_at)
+    });
+    history
 }
 
 fn saved_context_for_agent<'a>(
@@ -772,24 +1021,55 @@ fn events_for_item<'a>(
     snapshot: &'a RuntimeSnapshot,
     item: &InboxItemRow,
 ) -> Vec<&'a RuntimeEvent> {
-    snapshot
+    let mut events = snapshot
         .recent_events
         .iter()
         .filter(|event| {
             event.message.contains(&item.identifier) || event.message.contains(&item.item_id)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    events.sort_by_key(|event| event.at);
+    events
 }
 
-fn run_color(status: &polyphony_core::RunStatus) -> Color {
-    match status {
-        polyphony_core::RunStatus::Delivered => theme::done(),
-        polyphony_core::RunStatus::Failed | polyphony_core::RunStatus::Cancelled => theme::error(),
-        polyphony_core::RunStatus::InProgress
-        | polyphony_core::RunStatus::Planning
-        | polyphony_core::RunStatus::Review => theme::primary(),
-        polyphony_core::RunStatus::Pending => theme::muted(),
-    }
+fn latest_run_activity_timestamp(
+    snapshot: &RuntimeSnapshot,
+    run: &RunRow,
+) -> Option<DateTime<Utc>> {
+    let step_times = run
+        .steps
+        .iter()
+        .filter_map(|step| step.finished_at.or(step.started_at));
+    let task_times = snapshot
+        .tasks
+        .iter()
+        .filter(|task| task.run_id == run.id)
+        .map(|task| {
+            task.finished_at
+                .or(task.started_at)
+                .unwrap_or(task.updated_at)
+        });
+    let running_agent_times = snapshot
+        .running
+        .iter()
+        .filter(|agent| polyphony_core::running_agent_matches_run(run, agent))
+        .map(|agent| agent.last_event_at.unwrap_or(agent.started_at));
+    let history_times = snapshot
+        .agent_run_history
+        .iter()
+        .filter(|history| polyphony_core::agent_history_matches_run(run, history))
+        .map(|history| {
+            history
+                .finished_at
+                .or(history.last_event_at)
+                .unwrap_or(history.started_at)
+        });
+
+    step_times
+        .chain(task_times)
+        .chain(running_agent_times)
+        .chain(history_times)
+        .max()
 }
 
 fn step_icon(status: StepStatus) -> &'static str {

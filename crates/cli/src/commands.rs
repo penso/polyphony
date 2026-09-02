@@ -82,6 +82,7 @@ pub(crate) async fn handle_issue_command(
                 priority,
                 labels,
                 parent_id: parent,
+                tracker_source: None,
             };
             let issue = tracker.create_issue(&request).await?;
             println!(

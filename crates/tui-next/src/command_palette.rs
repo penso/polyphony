@@ -30,8 +30,8 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         section: "Inbox",
-        name: "Create new beads issue",
-        description: "Draft a local issue for this repo",
+        name: "Create new issue",
+        description: "Draft an issue in an enabled backend",
     },
     Command {
         section: "Inbox",
@@ -82,6 +82,11 @@ pub(crate) const COMMANDS: &[Command] = &[
         section: "Agents",
         name: "Dispatch reviewer",
         description: "Ask an agent to review the selected work",
+    },
+    Command {
+        section: "View",
+        name: "Toggle widget timestamps",
+        description: "Show or hide timestamps on session widgets",
     },
     Command {
         section: "View",

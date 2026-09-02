@@ -148,11 +148,17 @@ pub enum RuntimeCommand {
     StopAgent {
         issue_id: polyphony_core::IssueId,
     },
+    /// Explicitly reset local run/session state for an issue without closing it in the tracker.
+    ClearIssueSession {
+        issue_id: polyphony_core::IssueId,
+        issue_identifier: String,
+    },
     /// Create a new issue in the configured tracker.
     CreateIssue {
         title: String,
         description: String,
         repo_id: Option<String>,
+        tracker_source: Option<String>,
     },
     /// Inject feedback into a run as a new task, resuming the pipeline.
     InjectRunFeedback {
@@ -265,6 +271,7 @@ struct CreateIssueCommandRequest {
     title: String,
     description: String,
     repo_id: Option<String>,
+    tracker_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -393,6 +400,7 @@ struct RuntimeState {
     /// overwriting it with the config default.
     bootstrap_restored: bool,
     heartbeat_status: polyphony_core::HeartbeatStatus,
+    cleared_issue_sessions: HashMap<String, String>,
 }
 
 impl Default for RuntimeState {
@@ -442,6 +450,7 @@ impl Default for RuntimeState {
             issue_repo_map: HashMap::new(),
             bootstrap_restored: false,
             heartbeat_status: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: HashMap::new(),
         }
     }
 }

@@ -3758,6 +3758,9 @@ dependencies = [
  "polyphony-core",
  "polyphony-orchestrator",
  "ratatui",
+ "ratatui-opentui-loader",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4167,6 +4170,15 @@ checksum = "a7f1342a13e83e4bb9d0b793d0ea762be633f9582048c892ae9041ef39c936f4"
 dependencies = [
  "ratatui-core",
  "ratatui-widgets",
+]
+
+[[package]]
+name = "ratatui-opentui-loader"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e2a86d9dfd734b3802f560bd1c9be81e511e5a617910a2413fec87433670bd9"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]

@@ -1061,6 +1061,32 @@ fn unique_workspace_root(test_name: &str) -> PathBuf {
     ))
 }
 
+#[test]
+fn clear_issue_session_records_persisted_tombstone() {
+    let workspace_root = unique_workspace_root("clear-session");
+    let tracker = TestTracker::new(Vec::new());
+    let provisioner = RecordingProvisioner::default();
+    let mut service = test_service(tracker, provisioner, &workspace_root);
+
+    service.clear_issue_session_state("issue-1", "GH-1");
+
+    assert_eq!(
+        service
+            .state
+            .cleared_issue_sessions
+            .get("issue-1")
+            .map(String::as_str),
+        Some("GH-1")
+    );
+    assert!(
+        service
+            .snapshot()
+            .cleared_issue_sessions
+            .iter()
+            .any(|entry| { entry.issue_id == "issue-1" && entry.issue_identifier == "GH-1" })
+    );
+}
+
 async fn handle_next_worker_message(service: &mut RuntimeService) {
     let message = timeout(Duration::from_secs(5), service.command_rx.recv())
         .await
@@ -3279,6 +3305,7 @@ fn restore_bootstrap_rehydrates_saved_context_from_workspace_artifact() {
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: Vec::new(),
         }),
         retrying: std::collections::HashMap::new(),
         throttles: std::collections::HashMap::new(),
@@ -4725,6 +4752,7 @@ fn restore_bootstrap_preserves_persisted_dispatch_mode() {
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: Vec::new(),
         }),
         retrying: std::collections::HashMap::new(),
         throttles: std::collections::HashMap::new(),
@@ -5108,6 +5136,7 @@ async fn process_pending_create_issues_routes_to_requested_repo() {
             title: "Routed issue".into(),
             description: "details".into(),
             repo_id: Some(secondary_registration.repo_id.clone()),
+            tracker_source: None,
         });
 
     service.process_pending_create_issues().await;
@@ -5211,6 +5240,7 @@ async fn process_pending_create_issues_rejects_ambiguous_repo_without_repo_id() 
             title: "Ambiguous issue".into(),
             description: "details".into(),
             repo_id: None,
+            tracker_source: None,
         });
 
     service.process_pending_create_issues().await;

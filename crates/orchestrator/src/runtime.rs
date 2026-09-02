@@ -400,6 +400,7 @@ impl RuntimeService {
                             agent_name,
                             directives,
                         } => {
+                            self.state.cleared_issue_sessions.remove(&issue_id);
                             info!(%issue_id, ?agent_name, has_directives = directives.is_some(), "manual dispatch queued (event loop)");
                             self.pending_manual_dispatches.push(ManualDispatchRequest {
                                 issue_id,
@@ -468,16 +469,26 @@ impl RuntimeService {
                             self.stop_running_by_user(&issue_id).await;
                             let _ = self.emit_snapshot().await;
                         }
+                        RuntimeCommand::ClearIssueSession {
+                            issue_id,
+                            issue_identifier,
+                        } => {
+                            self.stop_running_by_user(&issue_id).await;
+                            self.clear_issue_session_state(&issue_id, &issue_identifier);
+                            let _ = self.emit_snapshot().await;
+                        }
                         RuntimeCommand::CreateIssue {
                             title,
                             description,
                             repo_id,
+                            tracker_source,
                         } => {
-                            info!(%title, repo_id = ?repo_id, "create issue requested");
+                            info!(%title, repo_id = ?repo_id, tracker_source = ?tracker_source, "create issue requested");
                             self.pending_create_issues.push(CreateIssueCommandRequest {
                                 title,
                                 description,
                                 repo_id,
+                                tracker_source,
                             });
                             self.process_pending_create_issues().await;
                             let _ = self.emit_snapshot().await;
@@ -760,6 +771,7 @@ impl RuntimeService {
                     agent_name,
                     directives,
                 }) => {
+                    self.state.cleared_issue_sessions.remove(&issue_id);
                     info!(%issue_id, ?agent_name, has_directives = directives.is_some(), "manual dispatch queued");
                     self.pending_manual_dispatches.push(ManualDispatchRequest {
                         issue_id,
@@ -808,16 +820,25 @@ impl RuntimeService {
                     info!(%issue_id, "user-initiated agent stop queued");
                     self.pending_agent_stops.push(issue_id);
                 },
+                Ok(RuntimeCommand::ClearIssueSession {
+                    issue_id,
+                    issue_identifier,
+                }) => {
+                    self.pending_agent_stops.push(issue_id.clone());
+                    self.clear_issue_session_state(&issue_id, &issue_identifier);
+                },
                 Ok(RuntimeCommand::CreateIssue {
                     title,
                     description,
                     repo_id,
+                    tracker_source,
                 }) => {
-                    info!(%title, repo_id = ?repo_id, "create issue queued");
+                    info!(%title, repo_id = ?repo_id, tracker_source = ?tracker_source, "create issue queued");
                     self.pending_create_issues.push(CreateIssueCommandRequest {
                         title,
                         description,
                         repo_id,
+                        tracker_source,
                     });
                 },
                 Ok(RuntimeCommand::InjectRunFeedback {
@@ -1384,6 +1405,7 @@ impl RuntimeService {
             let create_req = polyphony_core::CreateIssueRequest {
                 title: request.title.clone(),
                 description: Some(request.description.clone()),
+                tracker_source: request.tracker_source.clone(),
                 ..Default::default()
             };
             match tracker.create_issue(&create_req).await {
@@ -1391,6 +1413,12 @@ impl RuntimeService {
                     if let Some(repo_id) = selected_repo_id.clone() {
                         self.state.issue_repo_map.insert(issue.id.clone(), repo_id);
                     }
+                    let mut row = summarize_issue(&issue);
+                    row.repo_id = selected_repo_id.clone().unwrap_or_default();
+                    self.state
+                        .tracker_issues
+                        .retain(|existing| existing.issue_id != row.issue_id);
+                    self.state.tracker_issues.push(row);
                     self.push_event(
                         EventScope::Dispatch,
                         format!("created issue {}: {}", issue.identifier, issue.title),
@@ -1411,6 +1439,38 @@ impl RuntimeService {
                 },
             }
         }
+    }
+
+    pub(crate) fn clear_issue_session_state(&mut self, issue_id: &str, issue_identifier: &str) {
+        info!(%issue_id, %issue_identifier, "clearing local issue session state");
+        self.state
+            .cleared_issue_sessions
+            .insert(issue_id.to_string(), issue_identifier.to_string());
+        self.state.claim_states.remove(issue_id);
+        self.state.retrying.remove(issue_id);
+        self.state.completed.remove(issue_id);
+        self.state.saved_contexts.remove(issue_id);
+
+        let run_ids = self
+            .state
+            .runs
+            .iter()
+            .filter(|(_, run)| run.issue_identifier.as_deref() == Some(issue_identifier))
+            .map(|(run_id, _)| run_id.clone())
+            .collect::<Vec<_>>();
+        for run_id in &run_ids {
+            self.state.runs.remove(run_id);
+            self.state.tasks.remove(run_id);
+        }
+        self.state.agent_run_history.retain(|history| {
+            history.issue_id != issue_id && history.issue_identifier != issue_identifier
+        });
+        self.state
+            .workspace_setup_tasks_by_issue_identifier
+            .remove(issue_identifier);
+        self.state.recent_events.retain(|event| {
+            !event.message.contains(issue_id) && !event.message.contains(issue_identifier)
+        });
     }
 
     fn resolve_create_issue_tracker(
@@ -2827,6 +2887,7 @@ mod tests {
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: Vec::new(),
         };
 
         apply_workspace_progress_to_snapshot(&mut snapshot, &WorkspaceProgressUpdate {

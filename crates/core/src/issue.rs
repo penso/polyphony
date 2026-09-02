@@ -12,6 +12,7 @@ pub struct CreateIssueRequest {
     pub priority: Option<i32>,
     pub labels: Vec<String>,
     pub parent_id: Option<String>,
+    pub tracker_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -743,6 +743,7 @@ impl MutationRoot {
             title,
             description,
             repo_id,
+            tracker_source: None,
         })
         .is_ok()
     }
@@ -1354,10 +1355,12 @@ mod tests {
                 title,
                 description,
                 repo_id,
+                tracker_source,
             } => {
                 assert_eq!(title, "New feature");
                 assert_eq!(description, "Add dark mode");
                 assert_eq!(repo_id.as_deref(), Some("owner/repo"));
+                assert_eq!(tracker_source, None);
             },
             other => panic!("unexpected command: {other:?}"),
         }

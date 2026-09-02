@@ -66,6 +66,7 @@ impl LeftBorderPanel {
 pub(crate) struct LeftRailPanel {
     lines: Vec<Line<'static>>,
     max_height: Option<u16>,
+    timestamp_label: Option<String>,
     bg: Color,
     border_color: Color,
 }
@@ -254,6 +255,7 @@ impl LeftRailPanel {
         Self {
             lines,
             max_height: None,
+            timestamp_label: None,
             bg: theme::element(),
             border_color: theme::border(),
         }
@@ -266,6 +268,11 @@ impl LeftRailPanel {
 
     pub(crate) fn border_color(mut self, border_color: Color) -> Self {
         self.border_color = border_color;
+        self
+    }
+
+    pub(crate) fn timestamp_label(mut self, label: Option<String>) -> Self {
+        self.timestamp_label = label;
         self
     }
 
@@ -284,11 +291,13 @@ impl LeftRailPanel {
         let content_width = width
             .saturating_sub(Self::CONTENT_LEFT + Self::CONTENT_RIGHT)
             .max(1) as usize;
-        self.lines
+        let height = self
+            .lines
             .iter()
             .map(|line| line.width().div_ceil(content_width).max(1) as u16)
             .sum::<u16>()
-            .max(1)
+            .max(1);
+        height + u16::from(self.timestamp_label.is_some())
     }
 
     pub(crate) fn render_plain(&self, area: Rect, bg: Color, buf: &mut Buffer) {
@@ -308,6 +317,7 @@ impl LeftRailPanel {
             .wrap(Wrap { trim: false })
             .style(Style::new().bg(bg))
             .render(self.plain_content_area(area), buf);
+        self.render_timestamp(area, bg, buf);
     }
 
     pub(crate) fn render_plain_with_rail(&self, area: Rect, bg: Color, buf: &mut Buffer) {
@@ -331,6 +341,7 @@ impl LeftRailPanel {
             .wrap(Wrap { trim: false })
             .style(Style::new().bg(bg))
             .render(self.plain_content_area(area), buf);
+        self.render_timestamp(area, bg, buf);
     }
 
     fn plain_content_area(&self, area: Rect) -> Rect {
@@ -339,14 +350,33 @@ impl LeftRailPanel {
             area.y,
             area.width
                 .saturating_sub(Self::CONTENT_LEFT + Self::CONTENT_RIGHT),
-            area.height,
+            area.height
+                .saturating_sub(u16::from(self.timestamp_label.is_some())),
         )
     }
 
-    pub(crate) fn visible_height(&self, width: u16, max_height: u16) -> u16 {
-        self.height(width)
-            .min(self.max_height.unwrap_or(max_height))
-            .max(3)
+    fn render_timestamp(&self, area: Rect, bg: Color, buf: &mut Buffer) {
+        let Some(label) = self.timestamp_label.as_deref() else {
+            return;
+        };
+        if area.is_empty() {
+            return;
+        }
+        let width = label.chars().count() as u16;
+        let x = area
+            .x
+            .saturating_add(area.width.saturating_sub(width.saturating_add(1)));
+        let y = area.y.saturating_add(area.height.saturating_sub(1));
+        Line::styled(
+            label.to_string(),
+            Style::new().fg(theme::secondary()).bg(bg),
+        )
+        .render(Rect::new(x, y, width.min(area.width), 1), buf);
+    }
+
+    pub(crate) fn visible_height(&self, width: u16) -> u16 {
+        let height = self.height(width);
+        height.min(self.max_height.unwrap_or(height)).max(3)
     }
 
     pub(crate) fn render_clipped(&self, area: Rect, skip_rows: u16, buf: &mut Buffer) {
@@ -385,6 +415,7 @@ impl LeftRailPanel {
         Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: false })
             .render(inner, buf);
+        self.render_timestamp(area, bg, buf);
     }
 }
 

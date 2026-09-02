@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::{
     app::{AppState, Route, clamp_selection},
-    command_palette,
+    command_palette, create_issue_modal,
     detail::draw_detail,
     dispatch_mode_picker,
     format::{item_time_label, truncate},
@@ -50,6 +50,9 @@ pub(crate) fn draw(frame: &mut ratatui::Frame<'_>, snapshot: &RuntimeSnapshot, a
     }
     if app.dispatch_mode_picker_open {
         dispatch_mode_picker::render(frame, area, snapshot, app);
+    }
+    if app.create_issue_modal.is_some() {
+        create_issue_modal::render(frame, area, app);
     }
     draw_toast(frame, area, app);
 }
@@ -335,10 +338,12 @@ fn draw_table_footer(
         Span::styled(":search  ", Style::new().fg(theme::muted())),
         Span::styled("Enter", Style::new().fg(theme::text())),
         Span::styled(":open  ", Style::new().fg(theme::muted())),
+        Span::styled("n", Style::new().fg(theme::text())),
+        Span::styled(":new issue  ", Style::new().fg(theme::muted())),
         Span::styled("Ctrl+P", Style::new().fg(theme::text())),
         Span::styled(":commands", Style::new().fg(theme::muted())),
     ]);
-    let hint_width = 62u16;
+    let hint_width = 76u16.min(panel.width);
     let hint_x = panel.x + panel.width.saturating_sub(hint_width);
     hint.render(
         Rect::new(hint_x, list.y + list.height + 2, hint_width, 1),
@@ -436,7 +441,7 @@ fn activity_indicator<'a>(
         || item.status.eq_ignore_ascii_case("in progress")
     {
         (
-            theme::BRAILLE_SPINNER[(tick / 4) as usize % theme::BRAILLE_SPINNER.len()],
+            theme::BRAILLE_SPINNER[tick as usize % theme::BRAILLE_SPINNER.len()],
             theme::primary(),
         )
     } else if item.has_workspace {

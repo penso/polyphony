@@ -11,7 +11,7 @@ Git-native AI orchestration engine. Turn repository events into orchestrated age
 [![Edition 2024](https://img.shields.io/badge/edition-2024-blue)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 
-[Install](#install) - [Events](#events) - [Agents](#agents) - [Web UI](#web-ui) - [Documentation](#documentation) - [Development](#development)
+[Install](#install) - [Events](#events) - [Agents](#agents) - [Terminal UI](#terminal-ui) - [Web UI](#web-ui) - [Documentation](#documentation) - [Development](#development)
 
 ![Polyphony TUI](.github/media/screenshot.jpeg)
 
@@ -78,6 +78,12 @@ Plug in any combination of AI coding agents:
 - **ACP / ACPX** — Agent Communication Protocol agents and bridges
 
 Each agent gets its own workspace (worktree, directory, or clone), a shared workflow policy, retries with fallback chains, and budget-aware throttling.
+
+## Terminal UI
+
+The default terminal dashboard provides an issue inbox, detailed session timelines, live agent
+activity, issue creation across configured trackers, and controls for dispatching, pausing, and
+clearing local sessions. Use `--tui current` to launch the legacy dashboard.
 
 ## Web UI
 

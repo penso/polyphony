@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    BudgetSnapshot, Error, PersistedAgentRunRecord, ReviewedPullRequestHead, Run, RuntimeSnapshot,
-    StateStore, StoreBootstrap, Task,
+    BudgetSnapshot, ClearedIssueSession, Error, PersistedAgentRunRecord, ReviewedPullRequestHead,
+    Run, RuntimeSnapshot, StateStore, StoreBootstrap, Task,
 };
 
 const MAX_RECENT_EVENTS: usize = 256;
@@ -248,12 +248,40 @@ fn compact_state_store_data(data: &mut JsonStateStoreData) {
     if let Some(snapshot) = data.snapshot.take() {
         data.snapshot = Some(compact_snapshot_for_store(snapshot));
     }
+    let cleared = data
+        .snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.cleared_issue_sessions.as_slice())
+        .unwrap_or(&[]);
+    if !cleared.is_empty() {
+        data.runs.retain(|_, run| !run_was_cleared(run, cleared));
+        data.tasks
+            .retain(|_, task| data.runs.contains_key(&task.run_id));
+        data.agent_run_history
+            .retain(|history| !agent_history_was_cleared(history, cleared));
+    }
     data.agent_run_history = data
         .agent_run_history
         .drain(..)
         .take(MAX_RUN_HISTORY)
         .map(compact_persisted_agent_run_record)
         .collect();
+}
+
+fn run_was_cleared(run: &Run, cleared: &[ClearedIssueSession]) -> bool {
+    cleared.iter().any(|entry| {
+        run.issue_id.as_deref() == Some(entry.issue_id.as_str())
+            || run.issue_identifier.as_deref() == Some(entry.issue_identifier.as_str())
+    })
+}
+
+fn agent_history_was_cleared(
+    history: &PersistedAgentRunRecord,
+    cleared: &[ClearedIssueSession],
+) -> bool {
+    cleared.iter().any(|entry| {
+        history.issue_id == entry.issue_id || history.issue_identifier == entry.issue_identifier
+    })
 }
 
 fn compact_persisted_agent_run_record(mut run: PersistedAgentRunRecord) -> PersistedAgentRunRecord {
@@ -411,6 +439,7 @@ mod tests {
             agent_profile_names: Vec::new(),
             agent_profiles: Vec::new(),
             heartbeat: crate::HeartbeatStatus::default(),
+            cleared_issue_sessions: Vec::new(),
         };
         let run = crate::PersistedAgentRunRecord {
             repo_id: String::new(),
@@ -520,6 +549,7 @@ mod tests {
                 agent_profile_names: Vec::new(),
                 agent_profiles: Vec::new(),
                 heartbeat: crate::HeartbeatStatus::default(),
+                cleared_issue_sessions: Vec::new(),
             }),
             agent_run_history: (0..300)
                 .map(|index| crate::PersistedAgentRunRecord {

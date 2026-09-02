@@ -12,5 +12,8 @@ fuzzy-matcher.workspace = true
 polyphony-core = { path = "../core" }
 polyphony-orchestrator = { path = "../orchestrator" }
 ratatui.workspace = true
+ratatui-opentui-loader.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

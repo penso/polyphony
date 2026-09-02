@@ -1,5 +1,6 @@
 mod app;
 mod command_palette;
+mod create_issue_modal;
 mod detail;
 mod dispatch_mode_picker;
 mod event_loop;
@@ -7,6 +8,7 @@ mod format;
 mod render;
 mod rows;
 mod session;
+mod settings;
 mod status;
 mod theme;
 mod tracker;

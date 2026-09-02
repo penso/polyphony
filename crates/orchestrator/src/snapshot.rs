@@ -86,6 +86,18 @@ impl RuntimeService {
         best.map(|(id, _)| id.to_string())
     }
 
+    fn run_was_cleared(&self, run: &Run) -> bool {
+        run.issue_id
+            .as_deref()
+            .is_some_and(|issue_id| self.state.cleared_issue_sessions.contains_key(issue_id))
+            || run.issue_identifier.as_deref().is_some_and(|identifier| {
+                self.state
+                    .cleared_issue_sessions
+                    .values()
+                    .any(|cleared_identifier| cleared_identifier == identifier)
+            })
+    }
+
     pub(crate) fn has_available_slot(&self, workflow: &LoadedWorkflow, state: &str) -> bool {
         if self.state.running.len() >= workflow.config.agent.max_concurrent_agents {
             return false;
@@ -489,9 +501,21 @@ impl RuntimeService {
                     kind: profile.kind.clone(),
                     description: profile.description.clone(),
                     source: profile.source,
+                    transport: profile.transport.clone(),
+                    command: profile.command.clone(),
+                    model: profile.model.clone(),
                 })
                 .collect(),
             heartbeat: self.state.heartbeat_status.clone(),
+            cleared_issue_sessions: self
+                .state
+                .cleared_issue_sessions
+                .iter()
+                .map(|(issue_id, issue_identifier)| ClearedIssueSession {
+                    issue_id: issue_id.clone(),
+                    issue_identifier: issue_identifier.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -572,6 +596,11 @@ impl RuntimeService {
 
     pub(crate) fn restore_bootstrap(&mut self, bootstrap: polyphony_core::StoreBootstrap) {
         if let Some(snapshot) = bootstrap.snapshot {
+            self.state.cleared_issue_sessions = snapshot
+                .cleared_issue_sessions
+                .iter()
+                .map(|entry| (entry.issue_id.clone(), entry.issue_identifier.clone()))
+                .collect();
             self.state.bootstrapped_tracker_issues = snapshot.tracker_issues;
             self.state.bootstrapped_inbox_items = snapshot.inbox_items;
             self.state.agent_catalogs = snapshot
@@ -588,11 +617,28 @@ impl RuntimeService {
             self.state.bootstrap_restored = true;
         }
         self.state.recent_events = bootstrap.recent_events.into_iter().collect();
+        self.state.recent_events.retain(|event| {
+            !self
+                .state
+                .cleared_issue_sessions
+                .iter()
+                .any(|(issue_id, issue_identifier)| {
+                    event.message.contains(issue_id) || event.message.contains(issue_identifier)
+                })
+        });
         while self.state.recent_events.len() > MAX_RECENT_EVENTS {
             self.state.recent_events.pop_back();
         }
         self.state.budgets = bootstrap.budgets;
         self.state.saved_contexts = bootstrap.saved_contexts;
+        self.state.saved_contexts.retain(|issue_id, context| {
+            !self.state.cleared_issue_sessions.contains_key(issue_id)
+                && !self
+                    .state
+                    .cleared_issue_sessions
+                    .values()
+                    .any(|identifier| identifier == &context.issue_identifier)
+        });
         for context in self.state.saved_contexts.values_mut() {
             compact_saved_context_in_place(context);
         }
@@ -621,8 +667,15 @@ impl RuntimeService {
                 .retrying
                 .insert(issue_id, RetryEntry { row, due_at });
         }
-        self.state.runs = bootstrap.runs;
+        self.state.runs = bootstrap
+            .runs
+            .into_iter()
+            .filter(|(_, run)| !self.run_was_cleared(run))
+            .collect();
         for (_task_id, task) in bootstrap.tasks {
+            if !self.state.runs.contains_key(&task.run_id) {
+                continue;
+            }
             self.state
                 .tasks
                 .entry(task.run_id.clone())
@@ -633,7 +686,21 @@ impl RuntimeService {
             tasks.sort_by_key(|task| task.ordinal);
         }
         self.state.reviewed_pull_request_heads = bootstrap.reviewed_pull_request_heads;
-        self.state.agent_run_history = bootstrap.agent_run_history.into_iter().collect();
+        self.state.agent_run_history = bootstrap
+            .agent_run_history
+            .into_iter()
+            .filter(|history| {
+                !self
+                    .state
+                    .cleared_issue_sessions
+                    .contains_key(&history.issue_id)
+                    && !self
+                        .state
+                        .cleared_issue_sessions
+                        .values()
+                        .any(|identifier| identifier == &history.issue_identifier)
+            })
+            .collect();
         while self.state.agent_run_history.len() > MAX_RUN_HISTORY {
             self.state.agent_run_history.pop_back();
         }

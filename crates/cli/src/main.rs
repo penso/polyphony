@@ -38,7 +38,7 @@ struct Cli {
     #[arg(long, global = true)]
     no_tui: bool,
     /// TUI implementation to launch.
-    #[arg(long = "tui", value_enum, default_value_t = TuiVariant::Current, global = true)]
+    #[arg(long = "tui", value_enum, default_value_t = TuiVariant::Next, global = true)]
     tui: TuiVariant,
     #[arg(long, global = true)]
     log_json: bool,

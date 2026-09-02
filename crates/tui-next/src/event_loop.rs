@@ -10,15 +10,17 @@ use crossterm::{
 use futures_util::StreamExt;
 use polyphony_core::{DispatchMode, InboxItemKind, RunStatus, RuntimeSnapshot, TaskStatus};
 use polyphony_orchestrator::RuntimeCommand;
-use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect, text::Line};
+use ratatui_opentui_loader::KittLoader;
 use tokio::sync::{mpsc, watch};
 
 use crate::{
     Error,
     app::{AppState, Route, clamp_selection},
-    command_palette, dispatch_mode_picker,
+    command_palette, create_issue_modal, dispatch_mode_picker,
     render::draw,
     rows::display_rows_matching,
+    session, theme,
 };
 
 const DETAIL_MOUSE_SCROLL_ROWS: u16 = 5;
@@ -41,7 +43,11 @@ pub async fn run(
     let _ = command_tx.send(RuntimeCommand::Refresh);
 
     let mut event_stream = event::EventStream::new();
-    let mut app = AppState::default();
+    let mut app = AppState {
+        loader: KittLoader::build(theme::primary(), 8, 6, 4, 4, 0.25, 0.55),
+        settings: crate::settings::TuiSettings::load(),
+        ..AppState::default()
+    };
     let mut snapshot = snapshot_rx.borrow().clone();
     let mut needs_draw = true;
 
@@ -81,8 +87,12 @@ pub async fn run(
             }
             _ = tokio::time::sleep(Duration::from_millis(80)) => {
                 app.tick = app.tick.wrapping_add(1);
+                if runtime_work_active(&snapshot) {
+                    app.loader.tick();
+                    app.loader.tick();
+                }
                 let selection_scrolled = auto_scroll_session_selection(&mut app);
-                if selection_scrolled || app.route == Route::Inbox || app.toast_message.is_some() || !snapshot.running.is_empty() || snapshot.inbox_items.iter().any(|item| item.status.eq_ignore_ascii_case("in progress")) {
+                if selection_scrolled || app.route == Route::Inbox || app.toast_message.is_some() || runtime_work_active(&snapshot) {
                     needs_draw = true;
                 }
             }
@@ -91,6 +101,24 @@ pub async fn run(
 
     terminal.show_cursor()?;
     Ok(())
+}
+
+fn runtime_work_active(snapshot: &RuntimeSnapshot) -> bool {
+    !snapshot.running.is_empty()
+        || snapshot.loading.any_active()
+        || snapshot.runs.iter().any(|run| {
+            matches!(
+                run.status,
+                RunStatus::Pending
+                    | RunStatus::Planning
+                    | RunStatus::InProgress
+                    | RunStatus::Review
+            )
+        })
+        || snapshot
+            .inbox_items
+            .iter()
+            .any(|item| item.status.eq_ignore_ascii_case("in progress"))
 }
 
 fn auto_scroll_session_selection(app: &mut AppState) -> bool {
@@ -139,6 +167,10 @@ fn handle_key(
         return handle_command_palette_key(app, code, modifiers, snapshot, command_tx);
     }
 
+    if app.create_issue_modal.is_some() {
+        return handle_create_issue_modal_key(app, code, modifiers, command_tx);
+    }
+
     if app.dispatch_mode_picker_open {
         return handle_dispatch_mode_picker_key(app, code, modifiers, command_tx);
     }
@@ -173,11 +205,39 @@ fn handle_key(
         },
         KeyCode::Char('m')
             if app.detail_input_mode == crate::app::DetailInputMode::None
+                && app.route == Route::Detail
                 && !modifiers.intersects(
                     KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
                 ) =>
         {
             dispatch_mode_picker::open(app, snapshot.dispatch_mode);
+        },
+        KeyCode::Char('t')
+            if app.route == Route::Detail
+                && app.detail_input_mode == crate::app::DetailInputMode::None
+                && !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+        {
+            app.settings.show_widget_timestamps = !app.settings.show_widget_timestamps;
+            let _ = app.settings.save();
+            app.toast_message = Some(format!(
+                "timestamps {}",
+                if app.settings.show_widget_timestamps {
+                    "on"
+                } else {
+                    "off"
+                }
+            ));
+            app.toast_until_tick = app.tick.saturating_add(24);
+        },
+        KeyCode::Char('n')
+            if app.route == Route::Inbox
+                && !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+        {
+            create_issue_modal::open(app, snapshot);
         },
         KeyCode::Enter if app.route == Route::Inbox && !rows.is_empty() => {
             app.route = Route::Detail;
@@ -213,6 +273,18 @@ fn handle_key(
                 && app.detail_input_mode == crate::app::DetailInputMode::None =>
         {
             retry_selected(app, snapshot, command_tx);
+        },
+        KeyCode::Char('x')
+            if app.route == Route::Detail
+                && app.detail_input_mode == crate::app::DetailInputMode::None =>
+        {
+            clear_selected_session(app, snapshot, command_tx);
+        },
+        KeyCode::Char('y')
+            if app.route == Route::Detail
+                && app.detail_input_mode == crate::app::DetailInputMode::None =>
+        {
+            copy_full_session(app, snapshot);
         },
         KeyCode::Char('h')
             if app.route == Route::Detail
@@ -259,10 +331,8 @@ fn handle_key(
             app.selected = 0;
             app.scroll = 0;
         },
-        KeyCode::Up => app.selected = app.selected.saturating_sub(1),
-        KeyCode::Down => {
-            app.selected = (app.selected + 1).min(rows.len().saturating_sub(1));
-        },
+        KeyCode::Up => select_previous_wrapping(app, rows.len()),
+        KeyCode::Down => select_next_wrapping(app, rows.len()),
         KeyCode::PageUp => app.selected = app.selected.saturating_sub(app.visible_rows.max(1)),
         KeyCode::PageDown => {
             app.selected =
@@ -294,6 +364,123 @@ fn handle_dispatch_mode_picker_key(
         _ => {},
     }
     false
+}
+
+fn select_previous_wrapping(app: &mut AppState, row_count: usize) {
+    if row_count == 0 {
+        app.selected = 0;
+    } else if app.selected == 0 {
+        app.selected = row_count - 1;
+    } else {
+        app.selected -= 1;
+    }
+}
+
+fn select_next_wrapping(app: &mut AppState, row_count: usize) {
+    if row_count == 0 {
+        app.selected = 0;
+    } else {
+        app.selected = (app.selected + 1) % row_count;
+    }
+}
+
+fn handle_create_issue_modal_key(
+    app: &mut AppState,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    command_tx: &mpsc::UnboundedSender<RuntimeCommand>,
+) -> bool {
+    let control_held = modifiers.contains(KeyModifiers::CONTROL);
+    match code {
+        KeyCode::Char('c') if control_held => return true,
+        KeyCode::Esc => app.create_issue_modal = None,
+        KeyCode::Char('d') | KeyCode::Char('D') if control_held => {
+            submit_create_issue_modal(app, command_tx);
+        },
+        KeyCode::Tab => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.focus_next();
+            }
+        },
+        KeyCode::Enter => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.insert_newline();
+            }
+        },
+        KeyCode::Backspace => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.backspace();
+            }
+        },
+        KeyCode::Left => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.move_left();
+            }
+        },
+        KeyCode::Right => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.move_right();
+            }
+        },
+        KeyCode::Up => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.select_backend_previous();
+            }
+        },
+        KeyCode::Down => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.select_backend_next();
+            }
+        },
+        KeyCode::Home => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.move_home();
+            }
+        },
+        KeyCode::End => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.move_end();
+            }
+        },
+        KeyCode::Char(c) if is_search_char(c, modifiers) => {
+            if let Some(modal) = app.create_issue_modal.as_mut() {
+                modal.insert_char(c);
+            }
+        },
+        _ => {},
+    }
+    false
+}
+
+fn submit_create_issue_modal(
+    app: &mut AppState,
+    command_tx: &mpsc::UnboundedSender<RuntimeCommand>,
+) {
+    let Some(modal) = app.create_issue_modal.take() else {
+        return;
+    };
+    let title = modal.title.trim().to_string();
+    if title.is_empty() {
+        app.toast_message = Some("title is required".to_string());
+        app.toast_until_tick = app.tick.saturating_add(24);
+        app.create_issue_modal = Some(modal);
+        return;
+    }
+    let Some(backend) = modal.selected_backend().cloned() else {
+        app.toast_message = Some("no issue backend available".to_string());
+        app.toast_until_tick = app.tick.saturating_add(24);
+        app.create_issue_modal = Some(modal);
+        return;
+    };
+    let _ = command_tx.send(RuntimeCommand::CreateIssue {
+        title: title.clone(),
+        description: modal.description.trim().to_string(),
+        repo_id: backend.repo_id,
+        tracker_source: backend.tracker_source,
+    });
+    let _ = command_tx.send(RuntimeCommand::Refresh);
+    app.toast_message = Some(format!("creating issue: {title}"));
+    app.toast_until_tick = app.tick.saturating_add(24);
 }
 
 fn is_search_char(c: char, modifiers: KeyModifiers) -> bool {
@@ -433,6 +620,27 @@ fn retry_selected(
             "nothing failed or cancelled to retry".to_string(),
         );
     }
+}
+
+fn clear_selected_session(
+    app: &mut AppState,
+    snapshot: &RuntimeSnapshot,
+    command_tx: &mpsc::UnboundedSender<RuntimeCommand>,
+) {
+    let Some(item) = selected_item(snapshot, app) else {
+        app.status_message = Some("no inbox item selected".to_string());
+        return;
+    };
+    let _ = command_tx.send(RuntimeCommand::ClearIssueSession {
+        issue_id: item.item_id.clone(),
+        issue_identifier: item.identifier.clone(),
+    });
+    app.interventions
+        .retain(|intervention| intervention.issue_id != item.item_id);
+    app.notices.retain(|notice| notice.issue_id != item.item_id);
+    app.detail_follow_bottom = true;
+    app.toast_message = Some(format!("cleared local session for {}", item.identifier));
+    app.toast_until_tick = app.tick.saturating_add(24);
 }
 
 fn submit_hijack(
@@ -603,6 +811,23 @@ fn run_command_palette_selection(
             app.command_palette_open = false;
             dispatch_mode_picker::open(app, snapshot.dispatch_mode);
         },
+        Some("Create new issue") => {
+            app.command_palette_open = false;
+            create_issue_modal::open(app, snapshot);
+        },
+        Some("Toggle widget timestamps") => {
+            app.settings.show_widget_timestamps = !app.settings.show_widget_timestamps;
+            let _ = app.settings.save();
+            app.toast_message = Some(format!(
+                "timestamps {}",
+                if app.settings.show_widget_timestamps {
+                    "on"
+                } else {
+                    "off"
+                }
+            ));
+            app.toast_until_tick = app.tick.saturating_add(24);
+        },
         Some("Toggle dispatch start/stop") => {
             let mode = match snapshot.dispatch_mode {
                 DispatchMode::Stop => DispatchMode::Manual,
@@ -642,6 +867,10 @@ fn handle_mouse(app: &mut AppState, snapshot: &RuntimeSnapshot, mouse: event::Mo
         return;
     }
 
+    if app.create_issue_modal.is_some() {
+        return;
+    }
+
     let rows = display_rows_matching(snapshot, &app.search_query);
     match mouse.kind {
         MouseEventKind::ScrollDown => {
@@ -649,7 +878,7 @@ fn handle_mouse(app: &mut AppState, snapshot: &RuntimeSnapshot, mouse: event::Mo
                 app.detail_scroll = app.detail_scroll.saturating_add(DETAIL_MOUSE_SCROLL_ROWS);
                 app.detail_follow_bottom = false;
             } else {
-                app.selected = (app.selected + 1).min(rows.len().saturating_sub(1));
+                select_next_wrapping(app, rows.len());
             }
         },
         MouseEventKind::ScrollUp => {
@@ -657,7 +886,7 @@ fn handle_mouse(app: &mut AppState, snapshot: &RuntimeSnapshot, mouse: event::Mo
                 app.detail_scroll = app.detail_scroll.saturating_sub(DETAIL_MOUSE_SCROLL_ROWS);
                 app.detail_follow_bottom = false;
             } else {
-                app.selected = app.selected.saturating_sub(1);
+                select_previous_wrapping(app, rows.len());
             }
         },
         MouseEventKind::Down(event::MouseButton::Left)
@@ -799,6 +1028,55 @@ fn copy_session_selection(app: &mut AppState) {
             app.toast_until_tick = app.tick.saturating_add(24);
         },
     }
+}
+
+fn copy_full_session(app: &mut AppState, snapshot: &RuntimeSnapshot) {
+    let Some(item) = selected_item(snapshot, app) else {
+        app.toast_message = Some("no inbox item selected".to_string());
+        app.toast_until_tick = app.tick.saturating_add(24);
+        return;
+    };
+    let session = session::build_issue_session(
+        snapshot,
+        &item,
+        true,
+        &app.interventions,
+        &app.notices,
+        app.tick,
+    );
+    let text = session
+        .blocks
+        .iter()
+        .map(|block| {
+            block
+                .lines
+                .iter()
+                .map(line_plain_text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    match copy_to_clipboard(&text) {
+        Ok(()) => {
+            app.toast_message = Some("session copied".to_string());
+            app.toast_until_tick = app.tick.saturating_add(24);
+        },
+        Err(_) => {
+            app.toast_message = Some("copy failed".to_string());
+            app.toast_until_tick = app.tick.saturating_add(24);
+        },
+    }
+}
+
+fn line_plain_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 fn copy_sidebar_selection(app: &mut AppState) -> bool {

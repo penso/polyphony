@@ -716,6 +716,7 @@ pub(crate) fn empty_snapshot() -> RuntimeSnapshot {
         agent_profile_names: Vec::new(),
         agent_profiles: Vec::new(),
         heartbeat: polyphony_core::HeartbeatStatus::default(),
+        cleared_issue_sessions: Vec::new(),
     }
 }
 

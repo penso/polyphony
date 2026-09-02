@@ -2836,6 +2836,7 @@ fn submit_create_issue_modal(app: &mut AppState) -> Option<RuntimeCommand> {
         title,
         description: modal.description.trim().to_string(),
         repo_id: modal.selected_repo_id().map(ToOwned::to_owned),
+        tracker_source: None,
     })
 }
 
@@ -3729,6 +3730,7 @@ mod tests {
             agent_profile_names: vec![],
             agent_profiles: vec![],
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: vec![],
         }
     }
 
@@ -3801,6 +3803,7 @@ mod tests {
             agent_profile_names: vec![],
             agent_profiles: vec![],
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: vec![],
         }
     }
 
@@ -3876,6 +3879,7 @@ mod tests {
             agent_profile_names: vec![],
             agent_profiles: vec![],
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: vec![],
         }
     }
 
@@ -4086,6 +4090,7 @@ mod tests {
             agent_profile_names: vec![],
             agent_profiles: vec![],
             heartbeat: polyphony_core::HeartbeatStatus::default(),
+            cleared_issue_sessions: vec![],
         };
         let mut app =
             crate::app::AppState::new(crate::theme::default_theme(), LogBuffer::default());
@@ -4370,7 +4375,8 @@ mod tests {
             Some(polyphony_orchestrator::RuntimeCommand::CreateIssue {
                 title,
                 description,
-                repo_id: None
+                repo_id: None,
+                tracker_source: None,
             }) if title == "Fix the bug" && description == "details here"
         ));
         assert!(app.create_issue_modal.is_none());
@@ -4571,12 +4577,18 @@ mod tests {
                 kind: String::new(),
                 description: None,
                 source: Default::default(),
+                transport: None,
+                command: None,
+                model: None,
             },
             polyphony_core::AgentProfileSummary {
                 name: "reviewer".into(),
                 kind: String::new(),
                 description: None,
                 source: Default::default(),
+                transport: None,
+                command: None,
+                model: None,
             },
         ];
         app.feedback_modal = Some(crate::app::FeedbackModalState::new(

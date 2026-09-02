@@ -255,6 +255,14 @@ pub struct RuntimeSnapshot {
     pub agent_profiles: Vec<AgentProfileSummary>,
     #[serde(default)]
     pub heartbeat: HeartbeatStatus,
+    #[serde(default)]
+    pub cleared_issue_sessions: Vec<ClearedIssueSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClearedIssueSession {
+    pub issue_id: String,
+    pub issue_identifier: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -295,6 +303,12 @@ pub struct AgentProfileSummary {
     pub kind: String,
     pub description: Option<String>,
     pub source: AgentProfileSource,
+    #[serde(default)]
+    pub transport: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -338,6 +338,22 @@ impl IssueTracker for CompositeTracker {
         &self,
         request: &polyphony_core::CreateIssueRequest,
     ) -> Result<polyphony_core::Issue, polyphony_core::Error> {
+        if let Some(source) = request.tracker_source.as_deref() {
+            if source == self.primary.component_key() {
+                return self.primary.create_issue(request).await;
+            }
+            if let Some(supplemental) = self
+                .supplements
+                .iter()
+                .find(|supplemental| supplemental.tracker.component_key() == source)
+            {
+                return supplemental
+                    .tracker
+                    .create_issue(request)
+                    .await
+                    .map(|issue| supplemental.namespace_issue(issue));
+            }
+        }
         self.primary.create_issue(request).await
     }
 
