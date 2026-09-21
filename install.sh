@@ -13,7 +13,7 @@
 set -e
 
 GITHUB_REPO="penso/polyphony"
-HOMEBREW_TAP="penso/polyphony"
+HOMEBREW_TAP="penso/tap"
 BINARY_NAME="polyphony"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 

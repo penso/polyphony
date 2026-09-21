@@ -57,7 +57,7 @@ The release workflow renders `homebrew/Formula/polyphony.rb` and pushes it to th
 configured by `HOMEBREW_TAP_REPOSITORY`. The default is:
 
 ```text
-penso/homebrew-polyphony
+penso/homebrew-tap
 ```
 
 To enable automatic tap updates, add this repository secret:

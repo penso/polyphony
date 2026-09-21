@@ -26,7 +26,7 @@ Inspired by [OpenAI Symphony](https://github.com/openai/symphony), Polyphony bri
 ## Install
 
 ```bash
-brew install penso/polyphony/polyphony
+brew install penso/tap/polyphony
 ```
 
 Or build from source:
